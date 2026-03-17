@@ -9,5 +9,6 @@ out
 .env.production.local
 prisma/dev.db
 prisma/dev.db-journal
+prisma/schema.generated.prisma
 dist/
 release/

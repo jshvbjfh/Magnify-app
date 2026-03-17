@@ -7,10 +7,12 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "next dev -p 3001 -H 0.0.0.0",
-    "build": "prisma generate && next build",
-    "build:electron": "cross-env BUILD_TARGET=electron prisma generate && cross-env BUILD_TARGET=electron next build && node scripts/copy-standalone.mjs",
+    "prisma:prepare": "node scripts/prepare-prisma-schema.mjs",
+    "prisma:generate": "npm run prisma:prepare && prisma generate --schema prisma/schema.generated.prisma",
+    "build": "npm run prisma:generate && next build",
+    "build:electron": "npm run prisma:generate && cross-env BUILD_TARGET=electron next build && node scripts/copy-standalone.mjs",
     "start": "next start -p $PORT -H 0.0.0.0",
-    "postinstall": "prisma generate",
+    "postinstall": "npm run prisma:generate",
     "electron": "npm run build:electron && electron .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3001 && electron .\"",
     "electron:build": "npm run build:electron && electron-builder"
