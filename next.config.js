@@ -4,3 +4,4 @@ const nextConfig = {
   ...(process.env.BUILD_TARGET === 'electron' ? { output: 'standalone' } : {}),
 }
 module.exports = nextConfig
+
