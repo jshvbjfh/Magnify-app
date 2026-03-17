@@ -1,0 +1,29 @@
+import './globals.css'
+import AppSessionProvider from '@/components/SessionProvider'
+import { LanguageProvider } from '@/contexts/LanguageContext'
+
+export const metadata = {
+	title: 'Magnify - Personal Accountant',
+	description: 'AI-powered accounting from WhatsApp screenshots',
+	icons: {
+		icon: '/icon.svg'
+	}
+}
+
+export default function RootLayout({
+	children
+}: {
+	children: React.ReactNode
+}) {
+	return (
+		<html lang="en">
+			<body className="min-h-screen antialiased bg-white text-gray-900">
+				<AppSessionProvider>
+					<LanguageProvider>
+						{children}
+					</LanguageProvider>
+				</AppSessionProvider>
+			</body>
+		</html>
+	)
+}

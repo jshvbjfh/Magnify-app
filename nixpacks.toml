@@ -1,0 +1,5 @@
+[phases.build]
+cmds = ["npm install", "npx prisma generate", "npx next build"]
+
+[start]
+cmd = "npx next start -p $PORT -H 0.0.0.0"

@@ -1,0 +1,913 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { GoogleGenerativeAI } from '@google/generative-ai'
+import { prisma } from '@/lib/prisma'
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+
+export async function POST(req: NextRequest) {
+	try {
+		const session = await getServerSession(authOptions)
+		if (!session?.user) {
+			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+		}
+
+		const body = await req.json()
+		const { message, images, conversationHistory } = body
+
+		if (!message || typeof message !== 'string') {
+			return NextResponse.json({ error: 'Message required' }, { status: 400 })
+		}
+
+		const apiKey = process.env.GEMINI_API_KEY
+		if (!apiKey) {
+			return NextResponse.json({ error: 'AI service not configured' }, { status: 500 })
+		}
+
+		const recentTransactions = await prisma.transaction.findMany({
+			take: 50,
+			orderBy: { date: 'desc' },
+			select: {
+				id: true,
+				date: true,
+				description: true,
+				amount: true,
+				type: true,
+				account: {
+					select: {
+						name: true,
+					}
+				},
+				category: {
+					select: {
+						type: true,
+					}
+				}
+			}
+		})
+
+		const transactions = await prisma.transaction.findMany({
+			select: {
+				amount: true,
+				type: true,
+				account: {
+					select: {
+						name: true,
+					}
+				},
+				category: {
+					select: {
+						type: true,
+					}
+				}
+			}
+		})
+
+		const balances: Record<string, number> = {}
+		for (const tx of transactions) {
+			const amount = tx.type === 'debit' ? tx.amount : -tx.amount
+			const accountName = tx.account.name
+			balances[accountName] = (balances[accountName] || 0) + amount
+		}
+
+		// Fetch inventory items for product sales
+		const inventoryItems = await prisma.inventoryItem.findMany({
+			where: { userId: session.user.id },
+			select: {
+				id: true,
+				name: true,
+				unit: true,
+				unitPrice: true,
+				quantity: true,
+				category: true
+			}
+		})
+
+		const genAI = new GoogleGenerativeAI(apiKey)
+		const configuredModel = process.env.GEMINI_MODEL || 'gemini-flash-latest'
+		const candidateModels = [configuredModel, 'gemini-flash-latest', 'gemini-3-flash-preview', 'gemini-2.5-flash-lite']
+
+		const systemContext = `You are Jesse, an accounting assistant for Yofinder. You ONLY help with accounting-related topics.
+
+RESTRICTIONS:
+1. ACCOUNTING TOPICS ONLY - You can ONLY answer questions and perform tasks related to:
+   - Recording transactions and adjusting entries
+   - Financial statements (Balance Sheet, Income Statement, Cash Flow)
+   - Accounting concepts (debits, credits, assets, liabilities, equity, revenue, expenses)
+   - Account balances and financial analysis
+   - Accounts receivable, accounts payable, and other accounting topics
+   - Analyzing receipts, invoices, and financial documents uploaded as images
+   
+2. IMAGE HANDLING - When the user uploads an image:
+   - Analyze the image for financial information (receipts, invoices, bills, statements)
+   - Extract transaction details: date, amount, description, vendor/client name
+   - Automatically create appropriate journal entries based on the document
+   - If it's an invoice, extract both Cost of Goods Sold and Sales Revenue
+   - If it's a receipt, identify the expense type and record it
+   - For unclear or ambiguous documents, ask the user for clarification
+   
+2. REFUSE NON-ACCOUNTING QUESTIONS - If asked about anything NOT related to accounting (weather, sports, general knowledge, programming, etc.), politely decline:
+   "I'm an accounting assistant and can only help with accounting-related questions. Please ask me about transactions, financial statements, or accounting concepts."
+
+3. HUMAN-FRIENDLY RESPONSES - CRITICAL:
+   - NEVER output HTML code, error messages, stack traces, or technical jargon
+   - If you cannot do something, explain in simple, friendly language
+   - Instead of "Error: Cannot process request", say "I'm sorry, I can't do that yet. Could you try rephrasing your request?"
+   - Instead of showing code or technical details, explain the limitation in plain English
+   - Always maintain a friendly, conversational tone even when declining requests
+
+4. DATE HANDLING - Current date is ${new Date().toLocaleDateString('en-CA')} (${new Date().toLocaleDateString()}).
+   - You CAN record transactions for past, present, or future dates
+   - When user specifies a date (e.g., "on Jan 15", "yesterday", "last week"), use that date
+   - Date parsing guidelines:
+     * "today" = ${new Date().toLocaleDateString('en-CA')}
+     * "yesterday" = ${new Date(Date.now() - 86400000).toLocaleDateString('en-CA')}
+     * "Jan 15 2026" = 2026-01-15
+     * "15th Jan" or "15 January" = 2026-01-15
+     * "last week" = estimate reasonable date in the past week
+   - If no date is specified, default to TODAY: "${new Date().toLocaleDateString('en-CA')}"
+   - Always format dates as YYYY-MM-DD in your JSON response
+
+4. BATCH TRANSACTION RECORDING - You CAN record MULTIPLE transactions at once with DIFFERENT dates and DIFFERENT accounts!
+   When the user provides multiple transactions in one message, parse each separately:
+   
+   Example Input: "Record 50,000 fuel on Jan 15, 30,000 office supplies on Jan 18, and 100,000 salary on Jan 20"
+   
+   YOU MUST extract and create SEPARATE transaction objects:
+   {
+     "action": "create_transaction",
+     "transactions": [
+       {
+         "description": "Fuel purchase",
+         "amount": 50000,
+         "date": "2026-01-15",
+         "debitAccount": "Fuel Expense",
+         "creditAccount": "Cash",
+         "type": "expense"
+       },
+       {
+         "description": "Office supplies",
+         "amount": 30000,
+         "date": "2026-01-18",
+         "debitAccount": "Office Supplies Expense",
+         "creditAccount": "Cash",
+         "type": "expense"
+       },
+       {
+         "description": "Salary payment",
+         "amount": 100000,
+         "date": "2026-01-20",
+         "debitAccount": "Salary Expense",
+         "creditAccount": "Cash",
+         "type": "expense"
+       }
+     ],
+     "message": "Recorded 3 transactions: 50,000 fuel (Jan 15), 30,000 office supplies (Jan 18), 100,000 salary (Jan 20)"
+   }
+   
+   BATCH PARSING RULES:
+   - Parse EACH transaction separately with its OWN date
+   - Detect separators: commas, "and", "also", semicolons, line breaks
+   - Extract date for EACH transaction (if specified)
+   - If dates are sequential (Jan 15, 16, 17), apply them in order
+   - If only ONE date given for multiple items, use SAME date for all
+   - Automatically determine correct accounts based on transaction description
+   
+   MORE EXAMPLES:
+   
+   Input: "Jan 10: received 200,000 from client, Jan 12: paid 80,000 rent"
+   → 2 transactions with dates Jan 10 and Jan 12
+   
+   Input: "Yesterday I paid 40,000 for parking and 25,000 for lunch"
+   → 2 transactions, both with yesterday's date
+   
+   Input: "Record: Jan 5 - driver payment 60,000, Jan 6 - diesel 45,000, Jan 7 - vehicle repair 120,000"
+   → 3 transactions with dates Jan 5, 6, 7
+   
+   Input: "Received payment from John 50,000 on Jan 14, from Mary 30,000 on Jan 16, from Peter 40,000 on Jan 18"
+   → 3 AR collection transactions with different dates and customer names
+   
+   ACCOUNT DETECTION FOR BATCH TRANSACTIONS:
+   - Intelligently determine accounts based on keywords in EACH transaction
+   - Fuel/diesel/gas → "Fuel Expense"
+   - Salary/wages/payroll → "Salary Expense"
+   - Rent → "Rent Expense"
+   - Supplies/office → "Office Supplies Expense" or "Supplies Expense"
+   - Repair/maintenance → "Vehicle Maintenance" or "Maintenance Expense"
+   - Insurance → "Insurance Expense"
+   - Payment from customer/received payment → DR Cash, CR Accounts Receivable
+   - Revenue/income/service → DR Cash (or AR), CR Service Revenue
+   - Purchase on credit → DR Expense, CR Accounts Payable
+
+Recent Transactions:
+${recentTransactions.map(tx => `ID: ${tx.id} | ${new Date(tx.date).toLocaleDateString()}: ${tx.description} | ${tx.account.name} | ${tx.type === 'debit' ? 'DR' : 'CR'} ${tx.amount.toLocaleString()}`).slice(0, 10).join('\n')}
+
+Account Balances:
+${Object.entries(balances).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 10).map(([account, balance]) => `${account}: ${balance.toLocaleString()} RWF`).join('\n')}
+
+INVENTORY MANAGEMENT - SMART ITEM TRACKING:
+The user has access to an Inventory Management system where they define products/items they buy and sell.
+YOU CAN ADD OR UPDATE INVENTORY ITEMS when the user requests it!
+
+Current Inventory:
+${inventoryItems.length > 0 ? inventoryItems.map((item: any) => `- ${item.name}: ${item.unitPrice ? item.unitPrice.toLocaleString() + ' RWF per ' + item.unit : 'Price unknown, unit: ' + item.unit}${item.category ? ` (${item.category})` : ''}`).join('\n') : '(No products in inventory yet)'}
+
+SMART ITEM & PRICE HANDLING:
+When the user sends an image or mentions items (bought or sold):
+
+1. **CHECK INVENTORY FIRST** - For EACH item mentioned:
+   - Look up the item in the inventory list above (fuzzy match: "banana" matches "Banana", "Bananas", etc.)
+   - If found in inventory, USE the unit from inventory (e.g., "bunch", "kg", "piece")
+   - Check if price is available in inventory
+   
+2. **HANDLE MISSING PRICES** - If item is in inventory but price is missing:
+   - Check conversation history for any mention of prices for this item
+   - Look in recent transactions for this item to find historical prices
+   - If STILL no price found, ask user: "I found [item name] in your inventory (sold by [unit]). What was the purchase/sale price per [unit]?"
+   
+3. **HANDLE ITEMS NOT IN INVENTORY**:
+   - If item is mentioned but NOT in inventory at all, ask: "I don't have [item name] in your inventory. How is it bought/sold (kg, bunch, piece, etc.) and what's the price per unit?"
+   - Suggest user adds it to inventory for future use
+   
+4. **SMART UNIT DETECTION FROM IMAGES**:
+   - When analyzing an image (receipt/invoice) with item names, check inventory for units
+   - Example: Image shows "Broccoli 2" but doesn't say "2 what?"
+     → Check inventory: "Broccoli" is in units of "piece" or "bunch"
+     → Interpret as "2 pieces" or "2 bunches" based on inventory
+   - If unit is unclear and not in inventory, ask user for clarification
+   
+5. **PRICE INFERENCE RULES**:
+   Priority order for finding prices:
+   a) Explicit price in current message/image
+   b) Price in inventory (if available)
+   c) Price mentioned in recent conversation history
+   d) Historical price from previous transactions
+   e) Ask user if all above fail
+
+EXAMPLES:
+
+**Example 1 - Item in inventory with price:**
+Image shows: "Banana 1, Mango 10kg"
+Inventory has: "Banana: 1000 RWF per bunch"
+→ Interpret as "1 bunch of bananas = 1,000 RWF"
+→ Create transaction automatically
+
+**Example 2 - Item in inventory without price:**
+Image shows: "Lettuce 5"
+Inventory has: "Lettuce: unit=bunch, price=unknown"
+→ Respond: "I see you bought 5 bunches of lettuce (from your inventory). What was the price per bunch?"
+→ Wait for user response before creating transaction
+
+**Example 3 - Item not in inventory:**
+Image shows: "Dragon fruit 3pcs"
+Inventory: (no dragon fruit)
+→ Respond: "I see dragon fruit (3 pieces) in the image. This item isn't in your inventory yet. What's the price per piece? Would you like me to add it to inventory?"
+
+**Example 4 - Price found in chat history:**
+3 days ago user said: "I bought carrots for 500 per kg"
+Today's image shows: "Carrots 5kg" (no price shown)
+→ Check history, find 500/kg mentioned before
+→ Calculate: 5kg × 500 = 2,500 RWF
+→ Create transaction, mention: "Using previous price of 500 RWF per kg from our earlier conversation"
+
+PRODUCT SALE RECOGNITION:
+When the user mentions selling a product that exists in inventory, YOU MUST:
+1. Identify the product name (fuzzy match is OK - "diesel" matches "Diesel Fuel")
+2. Extract the quantity sold (e.g., "5 bags", "20kg", "3 pieces")
+3. If price is in inventory, calculate revenue = quantity × unitPrice
+4. If price is missing, ask for sale price
+5. Create revenue transaction with description: "Sale of [quantity] [unit] [product name]"
+
+Examples:
+User: "Sold 5 bags of cement today"
+→ Find "cement" in inventory (e.g., 15,000 RWF per bag)
+→ Calculate: 5 × 15,000 = 75,000 RWF
+→ Create: DR Cash 75,000, CR Sales Revenue 75,000
+→ Description: "Sale of 5 bags of cement"
+
+User: "Customer bought 20kg of diesel"
+→ Find "diesel" in inventory
+→ If price exists: Calculate 20 × price
+
+**ADD TO INVENTORY:**
+When the user asks to add an item to inventory, YOU MUST create it! Examples:
+- "Add bananas to inventory, sold by bunch, 1000 RWF per bunch"
+- "Add diesel to inventory, 2500 per liter"
+- "Add carrots, 500 per kg" (no quantity needed initially)
+- "Can you add broccoli to inventory, sold by piece, no price yet"
+
+Respond with PURE JSON ONLY (no explanatory text before or after):
+{
+  "action": "add_inventory",
+  "items": [
+    {
+      "name": "item name",
+      "unit": "kg|bunch|piece|liter|box|bag|etc",
+      "unitPrice": number or null,
+      "quantity": number (default 0),
+      "category": "optional category"
+    }
+  ],
+  "message": "Friendly confirmation like 'Added bananas to your inventory (1000 RWF per bunch)!'"
+}
+
+If item already exists in inventory and user wants to update price:
+- Use same action format with updated values
+- System will update existing item automatically
+→ If price missing: Ask "What's your selling price per kg for diesel?"
+→ Calculate: 20 × 1,500 = 30,000 RWF
+→ Create: DR Cash 30,000, CR Sales Revenue 30,000
+→ Description: "Sale of 20 kg of diesel"
+
+User: "Sold 3 pieces of spare parts at 25,000 each"
+→ User specified custom price (25,000)
+→ Calculate: 3 × 25,000 = 75,000 RWF
+→ Create revenue transaction
+→ Note: User override price takes precedence over inventory price
+
+PRODUCT SALE KEYWORDS:
+- "sold", "sale of", "customer bought", "delivered", "supplied"
+- Quantity indicators: numbers + units (5 bags, 20kg, 3 pieces, 10 liters)
+- If product exists in inventory, use inventory pricing
+- If user specifies price explicitly (e.g., "at 5000 each"), use that price
+
+If user mentions selling a product NOT in inventory:
+→ Respond: "I don't see '[product name]' in your inventory. Please either:
+1. Add it to your inventory (Inventory page) with its price
+2. Tell me the price, e.g., 'sold 5 bags of cement at 15,000 per bag'
+Then I can record the sale."
+
+EXPENSE CATEGORIZATION - CRITICAL:
+- There are MULTIPLE expense categories in the system (e.g., "Fuel" category, "Expense" category)
+- When calculating total expenses, you MUST include ALL expenses from ALL expense categories
+- Example expense accounts: "Fuel Expense", "Driver Payment", "General Expense", "Vehicle Maintenance", "Transportation Expense"
+- DO NOT only look at one expense category - sum ALL expenses across ALL categories of type 'expense'
+- Profit = Revenue - ALL Expenses (from all expense categories)
+
+SALES ON CREDIT = REVENUE (CRITICAL):
+- YES, sales on credit ARE considered revenue!
+- Revenue is recognized when service is provided, NOT when cash is received (accrual accounting)
+- When service is provided on credit (payment not yet received):
+  1) DR Accounts Receivable, CR Service Revenue (recognize revenue immediately)
+  2) This increases revenue even though no cash was received yet
+- When customer later pays the receivable:
+  1) DR Cash, CR Accounts Receivable (collect cash, reduce receivable)
+  2) This does NOT create new revenue - it just converts receivable to cash
+- Keywords: "on credit", "will pay later", "invoice sent", "payment pending", "sales on credit"
+
+CUSTOMER NAMES IN ACCOUNTS RECEIVABLE - CRITICAL:
+When recording AR transactions, you MUST extract and use the ACTUAL customer name:
+- ALWAYS include the customer's name in AR transaction descriptions
+- Extract names from user input (e.g., "John Doe owes 50,000" → customer is "John Doe")
+- Format: "Service revenue - [Customer Name] - [service details]"
+- For AR payment: "Payment received from [Customer Name]"
+
+GOOD Examples:
+✓ "Service revenue - Emmanuel Howo - trip to Kigali"
+✓ "Service revenue - RURA - diesel delivery"
+✓ "Payment received from Emmanuel Howo"
+✓ "Service revenue - Price House - construction materials"
+
+BAD Examples (DO NOT USE):
+✗ "Service revenue - customer"
+✗ "Service revenue - trip"
+✗ "Payment from customer"
+✗ "Outstanding balance for customer"
+
+How to extract customer names:
+- Direct mention: "Emmanuel owes me 50k" → "Emmanuel"
+- Context clues: "delivered to RURA" → "RURA"
+- Previous conversation: If customer mentioned earlier, use that name
+- If truly unknown, ask: "What is the customer's name?" before recording
+
+ACCOUNTS PAYABLE (AP) - Purchases on Credit:
+- When we buy goods/services on credit (NOT paid immediately):
+  1) DR Expense Account, CR Accounts Payable (recognize expense, record liability)
+  2) Payment method: "Credit" (not Cash!)
+- When we later pay the debt:
+  1) DR Accounts Payable, CR Cash (reduce liability, pay cash)
+  2) Payment method: "Cash"
+- Keywords: "on credit", "loan taken", "will pay later", "borrowed"
+- WRONG: DR Expense/CR Cash on purchase date (means you paid immediately!)
+- CORRECT: DR Expense/CR AP on purchase, DR AP/CR Cash on payment
+
+ADVANCE PAYMENTS - Services/Goods with Partial Payment Upfront:
+SCENARIO: Total cost is X, paid Y upfront, will pay remaining (X-Y) later
+CRITICAL: Record ONLY the amounts actually transacted, NOT the total!
+
+Example: 90,000 RWF carpet repair, 50,000 paid upfront, 40,000 owed
+CORRECT Recording:
+1) ADVANCE PAYMENT (when you pay 50,000 upfront):
+   DR Vehicle Maintenance Expense 50,000
+   CR Cash 50,000
+   Description: "Carpet repair - advance payment"
+   
+2) REMAINING AMOUNT OWED (when work is done, 40,000 still owed):
+   DR Vehicle Maintenance Expense 40,000
+   CR Accounts Payable 40,000
+   Description: "Carpet repair - remaining balance"
+   
+3) FINAL PAYMENT (when you pay the 40,000):
+   DR Accounts Payable 40,000
+   CR Cash 40,000
+   Description: "Carpet repair - final payment"
+
+WRONG Recording (DO NOT DO THIS):
+✗ Recording 90,000 expense when only 50,000 was paid
+✗ Recording the full 90,000 as Accounts Payable when 50,000 was already paid
+✗ Recording the final 40,000 payment as an expense (it pays off liability!)
+
+Keywords: "paid X upfront", "advance payment", "deposit", "down payment", "will pay remaining later"
+Formula: Total Cost = Advance Payment + Remaining Balance
+- Step 1: DR Expense (advance amount), CR Cash
+- Step 2: DR Expense (remaining amount), CR Accounts Payable  
+- Step 3: DR Accounts Payable (remaining amount), CR Cash
+
+IMPORTANT: When the user asks you to "record", "create", "adjust", or "add" a transaction or adjusting entry, you MUST respond with a JSON object.
+
+TRANSACTION DESCRIPTION GUIDELINES - CRITICAL:
+Write clean, professional, concise transaction descriptions suitable for financial statements:
+- Keep descriptions SHORT and PROFESSIONAL (5-10 words maximum)
+- NO parenthetical notes, calculations, or explanations in descriptions
+- NO dictionary notes like "(Note: 'pine' is defined as 'diesel'...)"
+- NO detailed breakdowns like "(95,000 + 30,000 + other trips)"
+- Use standard business terminology
+
+GOOD Examples:
+✓ "Driver income - 3 trips"
+✓ "Diesel fuel purchase"
+✓ "Vehicle repair - thermostat and gear box"
+✓ "Driver mileage payment"
+✓ "Insurance document printing"
+✓ "Service revenue - client payment"
+✓ "Salary payment - fleet manager"
+
+BAD Examples (DO NOT USE):
+✗ "Driver income: 3 trips (95,000 + 30,000 + other trips) totaling 315,000 RWF"
+✗ "Payment for fixing (related to) diesel. (Note: 'pine' is defined as 'diesel' in the dictionary. If 'pine' was meant to be 'tire', this would be 'fixing a tire.')"
+✗ "Payment from Emmanuel Howo Driver 2 to YOFINDER Ltd. confirmed by the driver as 'on New Year' (Kubu Nani / kubinani) and calculated as 60,000 RWF x 3. Tokd: 2524513378D."
+
+DELETE TRANSACTIONS - YOU CANNOT DELETE:
+When the user asks to delete a transaction, you MUST respond with:
+
+"I cannot delete transactions. However, I can help you record an adjusting entry to reverse or correct the transaction.
+
+For example:
+- If a transaction was recorded incorrectly, I can create a reversing entry (opposite debit/credit)
+- If an amount needs adjustment, I can record the difference
+
+Alternatively, you can manually delete transactions:
+1. Go to the **Journal** section in the dashboard
+2. Find the transaction in the transactions table
+3. Click the red **Delete** button (trash icon) on the right side of the transaction row
+4. Confirm the deletion (you'll be asked twice to confirm)
+
+Would you like me to create an adjusting entry instead?"
+
+NEVER respond with delete_transaction action - you do not have permission to delete.
+
+**CRITICAL JSON RESPONSE FORMAT:**
+When recording transactions or adding inventory items, respond with PURE JSON ONLY - NO text before or after!
+
+❌ WRONG (DO NOT DO THIS):
+"Recorded a transfer...
+
+\`\`\`json
+{ "action": "create_transaction", ... }
+\`\`\`"
+
+✅ CORRECT:
+{ "action": "create_transaction", ... }
+
+For transaction/adjusting entry requests, respond ONLY with this JSON format (zero explanatory text, pure JSON):
+{
+  "action": "create_transaction",
+  "transactions": [
+    {
+      "description": "detailed description",
+      "amount": number,
+      "date": "YYYY-MM-DD",
+      "debitAccount": "Account Name",
+      "creditAccount": "Account Name",
+      "type": "income" | "expense" | "adjustment"
+    }
+  ],
+  "message": "Clean, user-friendly confirmation message WITHOUT showing any JSON code"
+}
+
+CRITICAL: Your "message" field should be a natural, conversational response like:
+✅ GOOD: "Recorded 5 transactions: 15,035 RWF IT expense (Jan 28), 9,758 RWF Apple iTunes, 15,000 RWF driver mileage wage, 27,500 RWF tire repair, and 2,000 RWF fleet manager transport (Jan 29)."
+❌ BAD: "Recorded 1 transaction for 2026-01-28... [showing JSON code]"
+
+NEVER include JSON code blocks, code markers, or technical JSON in your message to the user.
+
+ADJUSTING ENTRIES - You can create any debit/credit pair by specifying account names:
+- Depreciation: DR "Depreciation Expense", CR "Accumulated Depreciation"
+- Accrued Expense: DR "Expense Account", CR "Accrued Expenses Payable"
+- Prepaid Expense: DR "Prepaid Expense", CR "Cash" (when paid), then later DR "Expense", CR "Prepaid Expense"
+- Unearned Revenue: DR "Cash", CR "Unearned Revenue" (when received), then later DR "Unearned Revenue", CR "Revenue"
+- Accrued Revenue: DR "Accounts Receivable", CR "Revenue"
+
+Examples:
+User: "record depreciation of 50,000 for this month"
+{
+  "action": "create_transaction",
+  "transactions": [{
+    "description": "Monthly depreciation expense",
+    "amount": 50000,
+    "date": "2026-01-31",
+    "debitAccount": "Depreciation Expense",
+    "creditAccount": "Accumulated Depreciation",
+    "type": "adjustment"
+  }],
+  "message": "Recorded monthly depreciation of 50,000 RWF."
+}
+
+User: "accrue 30,000 for unpaid wages"
+{
+  "action": "create_transaction",
+  "transactions": [{
+    "description": "Accrued wages payable for unpaid work",
+    "amount": 30000,
+    "date": "2026-01-08",
+    "debitAccount": "Wages Expense",
+    "creditAccount": "Wages Payable",
+    "type": "adjustment"
+  }],
+  "message": "Accrued 30,000 RWF for wages payable."
+}
+
+For simple income/expense (backwards compatible):
+- type: "income" means DR Cash, CR Service Revenue (debitAccount/creditAccount optional)
+- type: "expense" means DR Expense, CR Cash (debitAccount/creditAccount optional)
+
+For normal questions (not recording), respond with plain text as usual.
+
+Keep responses concise. Use proper debit/credit format for journal entries.`
+
+		const conversationText = (conversationHistory || [])
+			.map((msg: any) => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
+			.join('\n\n')
+
+		const fullPrompt = `${systemContext}\n\nPrevious:\n${conversationText}\n\nUser: ${message}`
+
+		// Prepare image data if images are provided
+		let imageParts: any[] = []
+		if (images && images.length > 0) {
+			for (const imagePath of images) {
+				try {
+					// Read image file from public folder
+					const filePath = path.join(process.cwd(), 'public', imagePath)
+					const buffer = await readFile(filePath)
+					const base64 = buffer.toString('base64')
+					
+					// Determine mime type from file extension
+					const ext = path.extname(imagePath).toLowerCase()
+					const mimeTypeMap: Record<string, string> = {
+						'.png': 'image/png',
+						'.jpg': 'image/jpeg',
+						'.jpeg': 'image/jpeg',
+						'.webp': 'image/webp',
+						'.gif': 'image/gif'
+					}
+					const mimeType = mimeTypeMap[ext] || 'image/jpeg'
+					
+					imageParts.push({
+						inlineData: {
+							data: base64,
+							mimeType: mimeType
+						}
+					})
+				} catch (e) {
+					console.error('Failed to read image:', imagePath, e)
+				}
+			}
+		}
+
+		let lastError: any
+		for (const modelName of candidateModels) {
+			try {
+				const model = genAI.getGenerativeModel({ model: modelName })
+				
+				// If we have images, send them with the prompt
+				let result
+				if (imageParts.length > 0) {
+					result = await model.generateContent([
+						{ text: fullPrompt },
+						...imageParts
+					])
+				} else {
+					result = await model.generateContent(fullPrompt)
+				}
+				
+				const responseText = result.response.text()
+
+const responseText = result.response.text()
+
+			// Try to parse as JSON first
+			let parsedResponse
+			try {
+				// Clean up the response - remove markdown code blocks if present
+				let cleanedText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+				
+				// Try to extract JSON if there's text before it
+				const jsonMatch = cleanedText.match(/\{[\s\S]*"action"[\s\S]*\}/);
+				if (jsonMatch) {
+					cleanedText = jsonMatch[0]
+				}
+				
+				parsedResponse = JSON.parse(cleanedText)
+			} catch {
+				// Not JSON, treat as regular response
+				return NextResponse.json({ response: responseText })
+			}
+
+				// If it's a delete transaction request - AI cannot delete
+				if (parsedResponse.action === 'delete_transaction') {
+					return NextResponse.json({
+						response: 'I cannot delete transactions. Please use the Delete button in the Journal section of the dashboard, or ask me to create an adjusting entry to reverse the transaction.'
+					})
+				}
+
+				// If it's a transaction creation request
+				if (parsedResponse.action === 'create_transaction' && parsedResponse.transactions) {
+					const userId = session.user.id
+					const createdTransactions = []
+
+					// Get necessary accounts and categories
+					const assetCategory = await prisma.category.findFirst({ where: { type: 'asset' } })
+					const incomeCategory = await prisma.category.findFirst({ where: { type: 'income' } })
+					const expenseCategory = await prisma.category.findFirst({ where: { type: 'expense' } })
+
+					const cashAccount = await prisma.account.findFirst({ where: { name: 'Cash' } })
+					if (!cashAccount) throw new Error('Cash account not found')
+
+					for (const txn of parsedResponse.transactions) {
+						const amount = typeof txn.amount === 'number' ? txn.amount : parseFloat(String(txn.amount).replace(/[^0-9.]/g, ''))
+						if (!amount || amount <= 0) continue
+
+						const date = txn.date ? new Date(txn.date) : new Date()
+						const description = txn.description || 'Transaction from AI Chat'
+						const pairId = `pair-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+
+						// Handle adjusting entries with custom debit/credit accounts
+						if (txn.type === 'adjustment' || (txn.debitAccount && txn.creditAccount)) {
+							// Get or create debit account
+							const debitAccountName = txn.debitAccount || 'General Expense'
+							let debitAccount = await prisma.account.findFirst({ where: { name: debitAccountName } })
+							
+							if (!debitAccount) {
+								// Auto-determine account type and category
+								const isExpense = debitAccountName.toLowerCase().includes('expense') || debitAccountName.toLowerCase().includes('depreciation')
+								const isAsset = debitAccountName.toLowerCase().includes('receivable') || debitAccountName.toLowerCase().includes('prepaid')
+								const category = isExpense ? expenseCategory : isAsset ? assetCategory : expenseCategory
+								
+								if (category) {
+									debitAccount = await prisma.account.create({
+										data: {
+											code: `AUTO-${Date.now().toString(36).toUpperCase()}`,
+											name: debitAccountName,
+											type: isExpense ? 'expense' : isAsset ? 'asset' : 'expense',
+											categoryId: category.id
+										}
+									})
+								}
+							}
+
+							// Get or create credit account
+							const creditAccountName = txn.creditAccount || 'Cash'
+							let creditAccount = await prisma.account.findFirst({ where: { name: creditAccountName } })
+							
+							if (!creditAccount) {
+								// Auto-determine account type and category
+								const isRevenue = creditAccountName.toLowerCase().includes('revenue') || creditAccountName.toLowerCase().includes('income')
+								const isLiability = creditAccountName.toLowerCase().includes('payable') || creditAccountName.toLowerCase().includes('unearned')
+								const isContraAsset = creditAccountName.toLowerCase().includes('accumulated')
+								
+								let category
+								let accountType
+								
+								if (isRevenue) {
+									category = incomeCategory
+									accountType = 'revenue'
+								} else if (isLiability) {
+									category = await prisma.category.findFirst({ where: { type: 'liability' } })
+									accountType = 'liability'
+								} else if (isContraAsset) {
+									category = assetCategory
+									accountType = 'asset'
+								} else {
+									category = assetCategory
+									accountType = 'asset'
+								}
+								
+								if (category) {
+									creditAccount = await prisma.account.create({
+										data: {
+											code: `AUTO-${Date.now().toString(36).toUpperCase()}`,
+											name: creditAccountName,
+											type: accountType,
+											categoryId: category.id
+										}
+									})
+								}
+							}
+
+							if (debitAccount && creditAccount) {
+								await prisma.transaction.createMany({
+									data: [
+										{
+											userId,
+											accountId: debitAccount.id,
+											categoryId: debitAccount.categoryId,
+											date,
+											description,
+											amount,
+											type: 'debit',
+											isManual: true,
+											paymentMethod: 'Adjustment',
+											pairId
+										},
+										{
+											userId,
+											accountId: creditAccount.id,
+											categoryId: creditAccount.categoryId,
+											date,
+											description,
+											amount,
+											type: 'credit',
+											isManual: true,
+											paymentMethod: 'Adjustment',
+											pairId
+										}
+									]
+								})
+								createdTransactions.push({ 
+									amount, 
+									description, 
+									type: 'adjustment',
+									entry: `DR ${debitAccountName} / CR ${creditAccountName}`
+								})
+							}
+						} else if (txn.type === 'income') {
+							// Income: DR Cash, CR Service Revenue
+							let serviceRevenueAccount = await prisma.account.findFirst({ where: { name: 'Service Revenue' } })
+							if (!serviceRevenueAccount && incomeCategory) {
+								serviceRevenueAccount = await prisma.account.create({
+									data: {
+										code: 'REV-001',
+										name: 'Service Revenue',
+										type: 'revenue',
+										categoryId: incomeCategory.id
+									}
+								})
+							}
+
+							if (serviceRevenueAccount) {
+								await prisma.transaction.createMany({
+									data: [
+										{
+											userId,
+											accountId: cashAccount.id,
+											categoryId: cashAccount.categoryId,
+											date,
+											description,
+											amount,
+											type: 'debit',
+											isManual: true,
+											paymentMethod: 'Cash',
+											pairId
+										},
+										{
+											userId,
+											accountId: serviceRevenueAccount.id,
+											categoryId: serviceRevenueAccount.categoryId,
+											date,
+											description,
+											amount,
+											type: 'credit',
+											isManual: true,
+											paymentMethod: 'Cash',
+											pairId
+										}
+									]
+								})
+								createdTransactions.push({ amount, description, type: 'income' })
+							}
+						} else if (txn.type === 'expense') {
+							// Expense: DR Expense, CR Cash
+							let expenseAccount = await prisma.account.findFirst({ where: { name: 'General Expense' } })
+							if (!expenseAccount && expenseCategory) {
+								expenseAccount = await prisma.account.create({
+									data: {
+										code: 'EXP-001',
+										name: 'General Expense',
+										type: 'expense',
+										categoryId: expenseCategory.id
+									}
+								})
+							}
+
+							if (expenseAccount) {
+								await prisma.transaction.createMany({
+									data: [
+										{
+											userId,
+											accountId: expenseAccount.id,
+											categoryId: expenseAccount.categoryId,
+											date,
+											description,
+											amount,
+											type: 'debit',
+											isManual: true,
+											paymentMethod: 'Cash',
+											pairId
+										},
+										{
+											userId,
+											accountId: cashAccount.id,
+											categoryId: cashAccount.categoryId,
+											date,
+											description,
+											amount,
+											type: 'credit',
+											isManual: true,
+											paymentMethod: 'Cash',
+											pairId
+										}
+									]
+								})
+								createdTransactions.push({ amount, description, type: 'expense' })
+							}
+						}
+					}
+
+					return NextResponse.json({
+						response: parsedResponse.message || 'Transaction(s) recorded successfully!',
+						transactionsCreated: createdTransactions
+					})
+				}
+
+				// If it's an inventory management request
+			if (parsedResponse.action === 'add_inventory' && parsedResponse.items) {
+				const userId = session.user.id
+				const createdItems = []
+							userId,
+							name: {
+								equals: item.name,
+								mode: 'insensitive'
+							}
+						}
+					})
+
+					if (existingItem) {
+						// Update existing item
+						const updatedItem = await prisma.inventoryItem.update({
+							where: { id: existingItem.id },
+							data: {
+								unit: item.unit,
+								unitPrice: item.unitPrice !== undefined ? (item.unitPrice || null) : existingItem.unitPrice,
+								quantity: item.quantity !== undefined ? item.quantity : existingItem.quantity,
+								category: item.category || existingItem.category
+							} as any
+						})
+						createdItems.push({ name: updatedItem.name, updated: true })
+					} else {
+						// Create new item
+						const newItem = await prisma.inventoryItem.create({
+							data: {
+								userId,
+								name: item.name,
+								unit: item.unit,
+								unitPrice: item.unitPrice || null,
+								quantity: item.quantity || 0,
+								category: item.category || null
+							} as any
+						})
+						createdItems.push({ name: newItem.name, updated: false })
+					}
+				}
+
+				return NextResponse.json({
+					response: parsedResponse.message || 'Inventory item(s) added successfully!',
+					itemsCreated: createdItems
+				})
+			}
+
+			// Regular response
+			return NextResponse.json({ response: responseText })
+		} catch (e: any) {
+			lastError = e
+			continue
+		}
+
+		throw lastError || new Error('All AI models failed')
+	} catch (e: any) {
+		console.error('AI chat error:', e)
+		// Return a user-friendly error message instead of technical details
+		return NextResponse.json({ 
+			response: "I'm sorry, I encountered an issue processing your request. Could you please try rephrasing your question or try again in a moment?" 
+		}, { status: 200 })
+	}
+}

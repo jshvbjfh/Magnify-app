@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-white text-gray-900;
+  }
+
+  * {
+    @apply border-gray-200;
+  }
+}
+
+@layer utilities {
+  .animate-bounce-6 {
+    animation: bounce 1s ease-in-out 6;
+  }
+
+  /* Custom scrollbar for sidebar */
+  .sidebar-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar-track {
+    background: rgba(59, 130, 246, 0.2); /* blue-500 with opacity */
+    border-radius: 10px;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background: rgba(30, 64, 175, 0.9); /* blue-800 with high opacity - darker */
+    border-radius: 10px;
+  }
+
+  .sidebar-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(30, 64, 175, 1); /* blue-800 full opacity */
+  }
+
+  /* Firefox scrollbar */
+  .sidebar-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(30, 64, 175, 0.9) rgba(59, 130, 246, 0.2);
+  }
+}

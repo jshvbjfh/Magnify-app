@@ -1,0 +1,400 @@
+generator client {
+	provider = "prisma-client-js"
+}
+
+datasource db {
+	provider = "sqlite"
+	url      = env("DATABASE_URL")
+}
+
+model User {
+	id           String   @id @default(cuid())
+	email        String   @unique
+	name         String?
+	password     String
+	role             String   @default("admin") // "admin" | "waiter" | "kitchen"
+	businessType     String?  @default("general") // "general" | "restaurant"
+	trackingMode     String   @default("simple") // "simple" | "dish_tracking"
+	fifoEnabled      Boolean  @default(false)     // FIFO costing when true
+	logoUrl          String?  // Business logo for invoices
+	recoveryKeyHash  String?  // hashed one-time recovery key for password reset
+	restaurantId     String?  // For waiters: the restaurant they belong to
+	createdAt        DateTime @default(now())
+	updatedAt    DateTime @updatedAt
+
+	uploads              Upload[]
+	transactions         Transaction[]
+	inventoryItems       InventoryItem[]
+	dishes               Dish[]
+	dishSales            DishSale[]
+	wasteLogs            WasteLog[]
+	employees            Employee[]
+	pendingOrders        PendingOrder[]
+	inventoryPurchases   InventoryPurchase[]
+
+	// Restaurant relations
+	ownedRestaurant  Restaurant?  @relation("RestaurantOwner")
+	restaurant       Restaurant?  @relation("RestaurantWaiters", fields: [restaurantId], references: [id])
+
+	@@map("users")
+}
+
+// ─── Multi-user Restaurant System ─────────────────────────────────────────────
+
+model Restaurant {
+	id             String    @id @default(cuid())
+	name           String
+	ownerId        String    @unique
+	joinCode       String    @unique  // 6-char uppercase code waiters use to be linked
+	billHeader     String?   @default("")  // Custom text printed at top of receipts
+	trialStartAt   DateTime  @default(now())  // when they first signed up
+	licenseExpiry  DateTime? // null = trial only; set by developer when paid
+	licenseActive  Boolean   @default(true)   // developer can suspend
+	createdAt      DateTime  @default(now())
+	updatedAt      DateTime  @updatedAt
+
+	owner          User           @relation("RestaurantOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+	waiters        User[]         @relation("RestaurantWaiters")
+	tables         RestaurantTable[]
+	pendingOrders  PendingOrder[]
+
+	@@map("restaurants")
+}
+
+model RestaurantTable {
+	id           String   @id @default(cuid())
+	restaurantId String
+	name         String
+	seats        Int      @default(4)
+	status       String   @default("available") // available | occupied | reserved | cleaning
+	createdAt    DateTime @default(now())
+	updatedAt    DateTime @updatedAt
+
+	restaurant    Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+	pendingOrders PendingOrder[]
+
+	@@map("restaurant_tables")
+}
+
+model PendingOrder {
+	id           String   @id @default(cuid())
+	restaurantId String
+	tableId      String?
+	tableName    String
+	dishId       String
+	dishName     String
+	dishPrice    Float
+	qty          Int      @default(1)
+	status       String   @default("new") // "new" | "in_kitchen" | "ready"
+	notes        String?
+	waiterId     String
+	addedAt      DateTime @default(now())
+	readyAt      DateTime?
+
+	restaurant Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+	table      RestaurantTable? @relation(fields: [tableId], references: [id], onDelete: SetNull)
+	waiter     User             @relation(fields: [waiterId], references: [id], onDelete: Cascade)
+
+	@@map("pending_orders")
+}
+
+model Upload {
+	id             String   @id @default(cuid())
+	userId         String
+	fileName       String
+	filePath       String
+	status         String   @default("pending") // pending, processing, completed, failed, pending_clarification
+	rawText        String?
+	translatedText String?
+	pendingData    String?  // JSON string of extracted transactions waiting for word clarification
+	errorMessage   String?
+	createdAt      DateTime @default(now())
+	updatedAt      DateTime @updatedAt
+
+	user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+	transactions Transaction[]
+
+	@@map("uploads")
+}
+
+model Category {
+	id          String   @id @default(cuid())
+	name        String   @unique
+	type        String // income, expense, asset, liability, equity
+	description String?
+	createdAt   DateTime @default(now())
+	updatedAt   DateTime @updatedAt
+
+	transactions Transaction[]
+	accounts     Account[]
+
+	@@map("categories")
+}
+
+model Account {
+	id          String   @id @default(cuid())
+	code        String   @unique
+	name        String
+	categoryId  String
+	type        String // asset, liability, equity, revenue, expense
+	description String?
+	createdAt   DateTime @default(now())
+	updatedAt   DateTime @updatedAt
+
+	category     Category      @relation(fields: [categoryId], references: [id])
+	transactions Transaction[]
+
+	@@map("accounts")
+}
+
+model Transaction {
+	id            String   @id @default(cuid())
+	userId        String
+	uploadId      String?
+	accountId     String
+	categoryId    String
+	date          DateTime
+	description   String
+	amount        Float
+	type          String // debit, credit
+	isManual      Boolean  @default(false)
+	paymentMethod String   @default("Cash") // Cash, Bank, Mobile Money, etc.
+	pairId        String?  // Links the two sides of a transaction
+	accountName   String?  // Optional account name for quick reference
+	profitAmount  Float?   // Profit amount for sales transactions
+	costAmount    Float?   // Cost amount for sales transactions
+	createdAt     DateTime @default(now())
+	updatedAt     DateTime @updatedAt
+
+	user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+	upload   Upload? @relation(fields: [uploadId], references: [id], onDelete: SetNull)
+	account  Account @relation(fields: [accountId], references: [id])
+	category Category @relation(fields: [categoryId], references: [id])
+
+	@@map("transactions")
+}
+
+model CustomDictionary {
+	id              String   @id @default(cuid())
+	kinyarwandaWord String
+	englishMeaning  String
+	context         String?
+	createdAt       DateTime @default(now())
+	updatedAt       DateTime @updatedAt
+
+	@@map("custom_dictionary")
+}
+
+model UnknownWord {
+	id              String   @id @default(cuid())
+	uploadId        String?
+	word            String
+	context         String? // The sentence/phrase where it appeared
+	aiQuestion      String? // What the AI is uncertain about
+	userExplanation String? // User's explanation
+	status          String   @default("pending") // pending, resolved
+	createdAt       DateTime @default(now())
+	updatedAt       DateTime @updatedAt
+
+	@@unique([uploadId, word])
+	@@map("unknown_words")
+}
+
+model FinancialStatement {
+	id          String   @id @default(cuid())
+	type        String // balance_sheet, income_statement, cash_flow
+	periodStart DateTime
+	periodEnd   DateTime
+	data        String // JSON data as string for SQLite
+	createdAt   DateTime @default(now())
+	updatedAt   DateTime @updatedAt
+
+	@@map("financial_statements")
+}
+
+model Goal {
+	id          String   @id @default(cuid())
+	userId      String
+	type        String // weekly, monthly
+	period      String // e.g., "2026-W02" for weekly, "2026-01" for monthly
+	targetAmount Float
+	startDate   DateTime
+	endDate     DateTime
+	createdAt   DateTime @default(now())
+	updatedAt   DateTime @updatedAt
+
+	@@unique([userId, type, period])
+	@@map("goals")
+}
+
+model ChatMessage {
+	id        String   @id @default(cuid())
+	userId    String
+	role      String // user, assistant
+	content   String
+	images    String? // JSON array of image paths
+	createdAt DateTime @default(now())
+	updatedAt DateTime @updatedAt
+
+	@@index([userId, createdAt])
+	@@map("chat_messages")
+}
+
+model InventoryItem {
+	id              String    @id @default(cuid())
+	userId          String
+	name            String
+	description     String?
+	unit            String // kg, piece, liter, bag, box, bunch, etc.
+	unitCost        Float? // Cost per unit
+	unitPrice       Float? // Selling price (optional)
+	quantity        Float     @default(0) // Current stock quantity
+	category        String? // Optional category
+	inventoryType   String    @default("resale") // resale | ingredient | supply
+	reorderLevel    Float     @default(0) // Alert when stock falls below this
+	shelfLifeDays   Int?      // Optional: how many days this ingredient lasts
+	lastRestockedAt DateTime? // Optional: when stock was last topped up
+	createdAt       DateTime  @default(now())
+	updatedAt       DateTime  @updatedAt
+
+	user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+	dishIngredients DishIngredient[]
+	wasteLogs       WasteLog[]
+	purchases       InventoryPurchase[]
+	saleIngredients DishSaleIngredient[]
+
+	@@unique([userId, name])
+	@@map("inventory_items")
+}
+
+// ─── Restaurant Models ──────────────────────────────────────────────────────
+
+model Dish {
+	id           String   @id @default(cuid())
+	userId       String
+	name         String
+	sellingPrice Float
+	category     String? // e.g. "Mains", "Drinks", "Sides"
+	isActive     Boolean  @default(true)
+	createdAt    DateTime @default(now())
+	updatedAt    DateTime @updatedAt
+
+	user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+	ingredients DishIngredient[]
+	sales       DishSale[]
+
+	@@unique([userId, name])
+	@@map("dishes")
+}
+
+model DishIngredient {
+	id               String  @id @default(cuid())
+	dishId           String
+	ingredientId     String
+	quantityRequired Float   // How much of the ingredient per 1 dish
+
+	dish       Dish          @relation(fields: [dishId], references: [id], onDelete: Cascade)
+	ingredient InventoryItem @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+	@@unique([dishId, ingredientId])
+	@@map("dish_ingredients")
+}
+
+model DishSale {
+	id                 String   @id @default(cuid())
+	userId             String
+	dishId             String
+	quantitySold       Float
+	saleDate           DateTime @default(now())
+	paymentMethod      String   @default("Cash") // Cash, MoMo, Card
+	totalSaleAmount    Float
+	calculatedFoodCost Float    @default(0)
+	createdAt          DateTime @default(now())
+
+	user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+	dish            Dish                 @relation(fields: [dishId], references: [id], onDelete: Cascade)
+	saleIngredients DishSaleIngredient[]
+
+	@@map("dish_sales")
+}
+
+model WasteLog {
+	id             String   @id @default(cuid())
+	userId         String
+	ingredientId   String
+	quantityWasted Float
+	reason         String   // spoilage | overproduction | theft | other
+	date           DateTime @default(now())
+	calculatedCost Float    @default(0)
+	notes          String?
+	createdAt      DateTime @default(now())
+
+	user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+	ingredient InventoryItem @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+	@@map("waste_logs")
+}
+
+model InventoryPurchase {
+	id                String   @id @default(cuid())
+	userId            String
+	ingredientId      String
+	supplier          String?
+	quantityPurchased Float
+	remainingQuantity Float    // Decremented by FIFO deductions; mirrors purchased qty when FIFO is off
+	unitCost          Float
+	totalCost         Float
+	purchasedAt       DateTime @default(now())
+	createdAt         DateTime @default(now())
+
+	user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+	ingredient InventoryItem @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+	@@map("inventory_purchases")
+}
+
+model DishSaleIngredient {
+	id           String @id @default(cuid())
+	dishSaleId   String
+	ingredientId String
+	quantityUsed Float
+	actualCost   Float  // FIFO-accurate cost; falls back to unitCost × qty when FIFO is off
+
+	dishSale   DishSale      @relation(fields: [dishSaleId], references: [id], onDelete: Cascade)
+	ingredient InventoryItem @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+	@@map("dish_sale_ingredients")
+}
+
+model Employee {
+	id        String   @id @default(cuid())
+	userId    String
+	name      String
+	role      String   // Chef, Waiter, Cashier, Manager, etc.
+	payType   String   // hourly | daily | monthly
+	payRate   Float
+	isActive  Boolean  @default(true)
+	phone     String?
+	createdAt DateTime @default(now())
+	updatedAt DateTime @updatedAt
+
+	user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+	shifts Shift[]
+
+	@@map("employees")
+}
+
+model Shift {
+	id             String   @id @default(cuid())
+	employeeId     String
+	userId         String
+	date           DateTime
+	hoursWorked    Float
+	calculatedWage Float
+	notes          String?
+	createdAt      DateTime @default(now())
+
+	employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+	@@map("shifts")
+}
