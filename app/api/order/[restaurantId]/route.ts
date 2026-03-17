@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 
 // Public — no auth required. Returns restaurant info + active menu for QR ordering.
-export async function GET(_req: Request, { params }: { params: { restaurantId: string } }) {
-  const { restaurantId } = params
+export async function GET(_req: Request, { params }: { params: Promise<{ restaurantId: string }> }) {
+  const { restaurantId } = await params
 
   const restaurant = await prisma.restaurant.findUnique({
     where: { id: restaurantId },

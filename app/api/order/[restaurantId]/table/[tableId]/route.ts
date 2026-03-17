@@ -4,9 +4,9 @@ import { prisma } from '@/lib/prisma'
 // Public — returns table name for display on QR order page
 export async function GET(
   _req: Request,
-  { params }: { params: { restaurantId: string; tableId: string } }
+  { params }: { params: Promise<{ restaurantId: string; tableId: string }> }
 ) {
-  const { restaurantId, tableId } = params
+  const { restaurantId, tableId } = await params
   const table = await prisma.restaurantTable.findFirst({
     where: { id: tableId, restaurantId },
     select: { name: true, seats: true },

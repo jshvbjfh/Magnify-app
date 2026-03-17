@@ -5,7 +5,7 @@ import { prisma } from '@/lib/prisma'
 
 export async function PATCH(
 	request: Request,
-	{ params }: { params: { id: string } }
+	{ params }: { params: Promise<{ id: string }> }
 ) {
 	try {
 		const session = await getServerSession(authOptions)
@@ -14,7 +14,7 @@ export async function PATCH(
 		}
 
 		const body = await request.json()
-		const transactionId = params.id
+		const transactionId = (await params).id
 
 		// Get the transaction to find its pair
 		const transaction = await prisma.transaction.findUnique({
@@ -114,7 +114,7 @@ export async function PATCH(
 
 export async function DELETE(
 	request: Request,
-	{ params }: { params: { id: string } }
+	{ params }: { params: Promise<{ id: string }> }
 ) {
 	try {
 		const session = await getServerSession(authOptions)
@@ -122,7 +122,7 @@ export async function DELETE(
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
-		const transactionId = params.id
+		const transactionId = (await params).id
 
 		// Get the transaction to find its pair
 		const transaction = await prisma.transaction.findUnique({

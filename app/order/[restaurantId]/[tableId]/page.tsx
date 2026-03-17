@@ -1,12 +1,12 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { use, useState, useEffect } from 'react'
 import { ShoppingCart, Plus, Minus, X, ChefHat, CheckCircle2, Loader2 } from 'lucide-react'
 
 type Dish = { id: string; name: string; sellingPrice: number; category: string | null }
 type CartItem = Dish & { qty: number }
 
-export default function CustomerOrderPage({ params }: { params: { restaurantId: string; tableId: string } }) {
-  const { restaurantId, tableId } = params
+export default function CustomerOrderPage({ params }: { params: Promise<{ restaurantId: string; tableId: string }> }) {
+  const { restaurantId, tableId } = use(params)
 
   const [restaurantName, setRestaurantName] = useState('')
   const [tableName, setTableName] = useState('')

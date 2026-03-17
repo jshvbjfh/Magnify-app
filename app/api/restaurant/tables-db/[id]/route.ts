@@ -12,17 +12,18 @@ async function getRestaurantId(userId: string): Promise<string | null> {
   return owned?.id ?? null
 }
 
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const restaurantId = await getRestaurantId(session.user.id)
   if (!restaurantId) return NextResponse.json({ error: 'No restaurant' }, { status: 400 })
 
+  const { id } = await params
   const { status, name, seats } = await req.json()
 
   const table = await prisma.restaurantTable.updateMany({
-    where: { id: params.id, restaurantId },
+    where: { id, restaurantId },
     data: {
       ...(status !== undefined && { status }),
       ...(name !== undefined && { name }),
@@ -32,13 +33,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   return NextResponse.json({ ok: true, count: table.count })
 }
 
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const restaurantId = await getRestaurantId(session.user.id)
   if (!restaurantId) return NextResponse.json({ error: 'No restaurant' }, { status: 400 })
 
-  await prisma.restaurantTable.deleteMany({ where: { id: params.id, restaurantId } })
+  const { id } = await params
+  await prisma.restaurantTable.deleteMany({ where: { id, restaurantId } })
   return NextResponse.json({ ok: true })
 }

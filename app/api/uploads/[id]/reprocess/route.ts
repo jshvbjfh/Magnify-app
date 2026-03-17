@@ -67,10 +67,11 @@ async function ensureAccount(
 	})
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+	let uploadId: string | undefined
 	try {
 		const userId = await requireUserId()
-		const uploadId = params.id
+		uploadId = (await params).id
 
 		// Find the upload
 		const upload = await prisma.upload.findUnique({
@@ -427,10 +428,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 		console.error('Error reprocessing upload:', error)
 		
 		// Update upload status to failed
-		if (params.id) {
+		if (uploadId) {
 			try {
 				await prisma.upload.update({
-					where: { id: params.id },
+					where: { id: uploadId },
 					data: {
 						status: 'failed',
 						errorMessage: error.message || 'Reprocessing failed'

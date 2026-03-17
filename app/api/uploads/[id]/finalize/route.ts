@@ -66,11 +66,11 @@ async function ensureAccount(
 // Finalize upload and create transactions after all words are defined
 export async function POST(
 	request: Request,
-	{ params }: { params: { id: string } }
+	{ params }: { params: Promise<{ id: string }> }
 ) {
 	try {
 		const userId = await requireUserId()
-		const uploadId = params.id
+		const uploadId = (await params).id
 
 		const upload = await prisma.upload.findUnique({
 			where: { id: uploadId }

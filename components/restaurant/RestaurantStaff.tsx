@@ -262,6 +262,8 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
           </div>
         </div>
       )}
+
+      {showEmpForm&&(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
             <div className="flex items-center justify-between"><h3 className="font-bold text-gray-900">Add Employee</h3><button onClick={()=>setShowEmpForm(false)}><X className="h-5 w-5 text-gray-400 hover:text-gray-600"/></button></div>

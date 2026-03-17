@@ -3,13 +3,14 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const { id } = await params
   const data = await req.json()
   await prisma.employee.updateMany({
-    where: { id: params.id, userId: session.user.id },
+    where: { id, userId: session.user.id },
     data: {
       ...(data.name !== undefined && { name: data.name }),
       ...(data.role !== undefined && { role: data.role }),
@@ -22,10 +23,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   return NextResponse.json({ success: true })
 }
 
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  await prisma.employee.deleteMany({ where: { id: params.id, userId: session.user.id } })
+  const { id } = await params
+  await prisma.employee.deleteMany({ where: { id, userId: session.user.id } })
   return NextResponse.json({ success: true })
 }

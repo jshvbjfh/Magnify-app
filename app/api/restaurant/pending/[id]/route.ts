@@ -15,7 +15,7 @@ async function getRestaurantId(userId: string): Promise<string | null> {
 const VALID_STATUSES = ['new', 'in_kitchen', 'ready']
 
 /** PATCH /api/restaurant/pending/[id] — update the status of a pending order */
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -29,13 +29,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` }, { status: 400 })
   }
 
+  const { id } = await params
   const order = await prisma.pendingOrder.findFirst({
-    where: { id: params.id, restaurantId },
+    where: { id, restaurantId },
   })
   if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
 
   const updated = await prisma.pendingOrder.update({
-    where: { id: params.id },
+    where: { id },
     data: {
       status,
       ...(status === 'ready' ? { readyAt: new Date() } : {}),

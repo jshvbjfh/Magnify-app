@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 
 // Public — no auth required. Customer submits order from QR code page.
-export async function POST(req: Request, { params }: { params: { restaurantId: string } }) {
-  const { restaurantId } = params
+export async function POST(req: Request, { params }: { params: Promise<{ restaurantId: string }> }) {
+  const { restaurantId } = await params
 
   const restaurant = await prisma.restaurant.findUnique({
     where: { id: restaurantId },

@@ -6,7 +6,7 @@ import { prisma } from '@/lib/prisma'
 // PATCH: Update inventory item (quantity or other fields)
 export async function PATCH(
 	request: NextRequest,
-	{ params }: { params: { id: string } }
+	{ params }: { params: Promise<{ id: string }> }
 ) {
 	try {
 		const session = await getServerSession(authOptions)
@@ -14,12 +14,13 @@ export async function PATCH(
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
+		const { id } = await params
 		const body = await request.json()
 		const { quantity, itemName, unit, pricePerUnit, category, reorderLevel } = body
 
 		// Get current item
 		const currentItem = await prisma.inventoryItem.findUnique({
-			where: { id: params.id, userId: session.user.id }
+			where: { id, userId: session.user.id }
 		})
 
 		if (!currentItem) {
@@ -44,7 +45,7 @@ export async function PATCH(
 
 		// Update the item
 		const updatedItem = await prisma.inventoryItem.update({
-			where: { id: params.id },
+			where: { id },
 			data: updateData
 		})
 
@@ -64,7 +65,7 @@ export async function PATCH(
 // DELETE: Remove inventory item
 export async function DELETE(
 	request: NextRequest,
-	{ params }: { params: { id: string } }
+	{ params }: { params: Promise<{ id: string }> }
 ) {
 	try {
 		const session = await getServerSession(authOptions)
@@ -72,9 +73,10 @@ export async function DELETE(
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
+		const { id } = await params
 		// Verify ownership
 		const item = await prisma.inventoryItem.findUnique({
-			where: { id: params.id, userId: session.user.id }
+			where: { id, userId: session.user.id }
 		})
 
 		if (!item) {
@@ -83,7 +85,7 @@ export async function DELETE(
 
 		// Delete the item
 		await prisma.inventoryItem.delete({
-			where: { id: params.id }
+			where: { id }
 		})
 
 		return NextResponse.json({ success: true })
