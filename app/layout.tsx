@@ -1,6 +1,13 @@
 import './globals.css'
 import AppSessionProvider from '@/components/SessionProvider'
 import { LanguageProvider } from '@/contexts/LanguageContext'
+import type { Viewport } from 'next'
+
+export const viewport: Viewport = {
+	width: 'device-width',
+	initialScale: 1,
+	maximumScale: 1,
+}
 
 export const metadata = {
 	title: 'Magnify - Personal Accountant',

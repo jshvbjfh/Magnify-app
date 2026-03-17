@@ -15,9 +15,18 @@
     "postinstall": "npm run prisma:generate",
     "electron": "npm run build:electron && electron .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3001 && electron .\"",
-    "electron:build": "npm run build:electron && electron-builder"
+    "electron:build": "npm run build:electron && electron-builder",
+    "cap:sync": "npx cap sync android",
+    "cap:open": "npx cap open android",
+    "cap:run": "npx cap run android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.2.0",
+    "@capacitor/app": "^8.0.1",
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
+    "@capacitor/splash-screen": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.1",
     "@google/generative-ai": "^0.21.0",
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",

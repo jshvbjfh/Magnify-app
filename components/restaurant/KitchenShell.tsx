@@ -169,13 +169,13 @@ export default function KitchenShell() {
     <div className="min-h-screen bg-gray-50 flex flex-col">
 
       {/* ── Header ────────────────────────────────────────────────────────────── */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between flex-shrink-0">
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between flex-wrap gap-2 flex-shrink-0">
         <div className="flex items-center gap-3">
           <div className="bg-gradient-to-br from-orange-500 to-red-600 rounded-xl p-2.5 shadow-sm">
             <ChefHat className="h-5 w-5 text-white" />
           </div>
           <div>
-            <h1 className="font-bold text-gray-900 text-lg leading-tight">Kitchen Display</h1>
+            <h1 className="font-bold text-gray-900 text-base sm:text-lg leading-tight">Kitchen Display</h1>
             <p className="text-xs text-gray-400">
               Auto-refreshes every 5 s &middot; last at{' '}
               {lastRefresh.toLocaleTimeString('en-RW', { hour: '2-digit', minute: '2-digit' })}
@@ -187,13 +187,13 @@ export default function KitchenShell() {
             onClick={refresh}
             className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors"
           >
-            <RefreshCw className="h-4 w-4" /> Refresh
+            <RefreshCw className="h-4 w-4" /> <span className="hidden sm:inline">Refresh</span>
           </button>
           <button
             onClick={() => signOut({ callbackUrl: '/login' })}
             className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-600 bg-gray-100 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors"
           >
-            <LogOut className="h-4 w-4" /> Sign Out
+            <LogOut className="h-4 w-4" /> <span className="hidden sm:inline">Sign Out</span>
           </button>
         </div>
       </div>
@@ -217,7 +217,7 @@ export default function KitchenShell() {
       </div>
 
       {/* ── Board ─────────────────────────────────────────────────────────────── */}
-      <div className="flex-1 p-6 grid grid-cols-3 gap-6 overflow-auto">
+      <div className="flex-1 p-3 sm:p-6 grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 overflow-auto">
 
         {/* NEW ORDERS */}
         <Column

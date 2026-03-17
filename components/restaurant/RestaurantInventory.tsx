@@ -142,7 +142,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
 
       {/* ── INGREDIENTS TAB ──────────────────────────────── */}
       {tab === 'ingredients' && (<>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
           <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
             <p className="text-xs text-gray-500">Total Ingredients</p>
             <p className="text-2xl font-bold text-gray-900 mt-1">{items.length}</p>
@@ -198,7 +198,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             {(ingSearch||ingFilterStatus!=='all')&&<p className="px-4 py-2 text-xs text-gray-400 border-b border-gray-100">Showing {filteredItems.length} of {items.length} ingredients</p>}
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto"><table className="w-full text-sm min-w-[600px]">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>{['Ingredient','Unit','Cost/Unit','Qty in Stock','Stock Value','Reorder At','Status'].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>)}</tr>
               </thead>
@@ -221,14 +221,14 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                   )
                 })}
               </tbody>
-            </table>
+            </table></div>
           </div>
         )}
       </>)}
 
       {/* ── PURCHASES TAB ────────────────────────────────── */}
       {tab === 'purchases' && (<>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
           <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
             <p className="text-xs text-gray-500">Total Batches</p>
             <p className="text-2xl font-bold text-gray-900 mt-1">{purchases.length}</p>
@@ -266,7 +266,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             {purSearch && <p className="px-4 py-2 text-xs text-gray-400 border-b border-gray-100">Showing {filteredPurchases.length} of {purchases.length} purchases</p>}
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto"><table className="w-full text-sm min-w-[580px]">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>{['Date','Ingredient','Supplier','Qty Bought','Unit Cost','Total Cost','Remaining'].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>)}</tr>
               </thead>
@@ -287,7 +287,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           </div>
         )}
       </>)}
@@ -390,4 +390,5 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     </div>
   )
 }
+
 

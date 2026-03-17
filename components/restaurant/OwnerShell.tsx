@@ -67,13 +67,13 @@ export default function OwnerShell() {
     <div className="min-h-screen bg-gray-50 flex flex-col">
 
       {/* ── Header ── */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between flex-shrink-0">
+      <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between flex-wrap gap-2 flex-shrink-0">
         <div className="flex items-center gap-3">
           <div className="bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl p-2.5 shadow-sm">
             <Crown className="h-5 w-5 text-white" />
           </div>
           <div>
-            <h1 className="font-bold text-gray-900 text-lg leading-tight">
+            <h1 className="font-bold text-gray-900 text-base sm:text-lg leading-tight">
               {data?.restaurantName ?? 'Owner Dashboard'}
             </h1>
             <p className="text-xs text-gray-400">
@@ -81,29 +81,29 @@ export default function OwnerShell() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {/* Period selector */}
           <div className="flex bg-gray-100 rounded-lg p-1 text-xs font-medium">
             {(['today', 'week', 'month'] as const).map(p => (
               <button key={p} onClick={() => setPeriod(p)}
-                className={`px-3 py-1.5 rounded-md capitalize transition-colors ${period === p ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
-                {p === 'today' ? 'Today' : p === 'week' ? 'This Week' : 'This Month'}
+                className={`px-2.5 sm:px-3 py-1.5 rounded-md capitalize transition-colors ${period === p ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>
+                {p === 'today' ? 'Today' : p === 'week' ? 'Week' : 'Month'}
               </button>
             ))}
           </div>
           <button onClick={() => load(period)}
             className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors">
-            <RefreshCw className="h-4 w-4" /> Refresh
+            <RefreshCw className="h-4 w-4" /> <span className="hidden sm:inline">Refresh</span>
           </button>
           <button onClick={() => signOut({ callbackUrl: '/login' })}
             className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-600 bg-gray-100 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors">
-            <LogOut className="h-4 w-4" /> Sign Out
+            <LogOut className="h-4 w-4" /> <span className="hidden sm:inline">Sign Out</span>
           </button>
         </div>
       </div>
 
       {/* ── Content ── */}
-      <div className="flex-1 p-6 space-y-6 max-w-5xl mx-auto w-full">
+      <div className="flex-1 p-3 sm:p-6 space-y-4 sm:space-y-6 max-w-5xl mx-auto w-full">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-xl">{error}</div>
         )}
@@ -124,7 +124,7 @@ export default function OwnerShell() {
             )}
 
             {/* KPI row */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
               <KpiCard
                 label="Revenue"
                 value={`${data.revenue.toLocaleString()} RWF`}

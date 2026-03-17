@@ -46,4 +46,8 @@
     scrollbar-width: thin;
     scrollbar-color: rgba(30, 64, 175, 0.9) rgba(59, 130, 246, 0.2);
   }
+
+  /* Hide scrollbar for tab navbars */
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 }

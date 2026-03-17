@@ -263,7 +263,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
         <div className="flex-1 min-w-0 space-y-4">
 
           {/* â”€â”€ Summary cards â”€â”€ */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
             <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs text-gray-500 font-medium">Money In</span>
@@ -509,3 +509,4 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     </div>
   )
 }
+

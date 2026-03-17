@@ -93,20 +93,22 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
           <h2 className="text-lg font-bold text-gray-800">Floor Plan</h2>
           <p className="text-sm text-gray-500">{counts.occupied} occupied / {tables.length} total</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
           <button onClick={load} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" title="Refresh">
             <RefreshCw className={`h-4 w-4 text-gray-500 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
-            <Sparkles className="h-3.5 w-3.5"/> Ask Jesse
+            <Sparkles className="h-3.5 w-3.5"/>
+            <span className="hidden sm:inline">Ask Jesse</span>
           </button>
-          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-            <Plus className="h-4 w-4"/> Add Table
+          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-3 sm:px-4 py-2 rounded-lg transition-colors">
+            <Plus className="h-4 w-4"/>
+            <span>Add Table</span>
           </button>
         </div>
       </div>
@@ -185,7 +187,7 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
 
       {!loading && tables.length > 0 && (
         <>
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {(Object.entries(counts) as [TableStatus, number][]).map(([status, count]) => (
               <div key={status} onClick={() => setFilter(f => f === status ? 'all' : status)}
                 className={`bg-white rounded-xl border p-3 shadow-sm cursor-pointer transition-all ${filter===status?'ring-2 ring-orange-400':''}`}>
@@ -196,7 +198,7 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
             ))}
           </div>
 
-          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {filtered.map(table => {
               const { bg, text, icon: Icon, label } = STATUS_CONFIG[table.status]
               const pendingCount = pendingCounts[table.id] || 0
@@ -205,7 +207,7 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
                 <div key={table.id} className={`relative group rounded-xl border-2 p-3 transition-all ${bg}`}>
                   {/* Delete button */}
                   <button onClick={() => setDeleteId(table.id)}
-                    className="absolute top-1.5 right-1.5 opacity-0 group-hover:opacity-100 p-0.5 rounded bg-white/80 hover:bg-red-50 transition-opacity">
+                    className="absolute top-1.5 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-0.5 rounded bg-white/80 hover:bg-red-50 transition-opacity">
                     <Trash2 className="h-3 w-3 text-red-400"/>
                   </button>
                   {/* Pending orders badge */}
@@ -236,7 +238,7 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
               )
             })}
           </div>
-          <p className="text-xs text-gray-400 text-center">Click a table to cycle its status · Hover to delete</p>
+          <p className="text-xs text-gray-400 text-center">Tap a table to change its status · Use the top-right bin icon to delete</p>
         </>
       )}
 
