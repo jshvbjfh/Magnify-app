@@ -12,3 +12,7 @@ prisma/dev.db-journal
 prisma/schema.generated.prisma
 dist/
 release/
+.vercel
+.env*.local
+*.jks
+*.keystore

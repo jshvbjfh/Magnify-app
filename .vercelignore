@@ -1,0 +1,10 @@
+.git
+.next
+.vercel
+dist
+node_modules
+android
+.env
+.env.local
+*.log
+tsconfig.tsbuildinfo

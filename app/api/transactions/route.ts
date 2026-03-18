@@ -57,11 +57,22 @@ async function ensureAccount(params: { name: string; type: string; categoryId: s
 	})
 }
 
-export async function GET() {
+export async function GET(req: Request) {
 	try {
 		const userId = await requireUserId()
+		const { searchParams } = new URL(req.url)
+		const startDate = searchParams.get('startDate')
+		const endDate = searchParams.get('endDate')
+		const dateFilter = startDate && endDate
+			? {
+				date: {
+					gte: new Date(`${startDate}T00:00:00`),
+					lte: new Date(`${endDate}T23:59:59.999`)
+				}
+			}
+			: {}
 		const transactions = await prisma.transaction.findMany({
-			where: { userId },
+			where: { userId, ...dateFilter },
 			orderBy: { date: 'desc' },
 			include: {
 				account: true,

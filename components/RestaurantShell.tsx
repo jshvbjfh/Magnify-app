@@ -19,6 +19,7 @@ import WaiterShell from '@/components/restaurant/WaiterShell'
 import KitchenShell from '@/components/restaurant/KitchenShell'
 import OwnerShell from '@/components/restaurant/OwnerShell'
 import RestaurantLive from '@/components/restaurant/RestaurantLive'
+import { loadOwnerSyncConfig, syncOwnerCloud } from '@/lib/ownerSyncBrowser'
 
 type TabId = 'dashboard' | 'live' | 'menu' | 'tables' | 'orders' | 'kitchen' | 'inventory' | 'reports' | 'staff' | 'transactions' | 'analytics' | 'settings'
 
@@ -104,6 +105,29 @@ export default function RestaurantShell() {
     window.addEventListener('trackingModeChanged', handler)
     return () => window.removeEventListener('trackingModeChanged', handler)
   }, [])
+
+  useEffect(() => {
+    if (userRole !== 'admin') return
+
+    let syncing = false
+    const runSync = async () => {
+      if (syncing) return
+
+      const config = loadOwnerSyncConfig()
+      if (!config.enabled || !config.targetUrl || !config.email || !config.password) return
+
+      syncing = true
+      try {
+        await syncOwnerCloud(config)
+      } finally {
+        syncing = false
+      }
+    }
+
+    runSync()
+    const timer = window.setInterval(runSync, 120000)
+    return () => window.clearInterval(timer)
+  }, [userRole])
 
   // Block rendering until session is resolved â€” prevents flashing manager UI for kitchen/waiter accounts
   if (status === 'loading') return (

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers } from 'lucide-react'
+import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Cloud, RefreshCw } from 'lucide-react'
+import { loadOwnerSyncConfig, saveOwnerSyncConfig, syncOwnerCloud, type OwnerSyncConfig } from '@/lib/ownerSyncBrowser'
 
 export default function RestaurantSettings() {
   const [billHeader, setBillHeader] = useState('')
@@ -13,6 +14,11 @@ export default function RestaurantSettings() {
   const [savedMode, setSavedMode] = useState(false)
   const [savingFifo, setSavingFifo] = useState(false)
   const [savedFifo, setSavedFifo] = useState(false)
+  const [syncConfig, setSyncConfig] = useState<OwnerSyncConfig>({ enabled: false, targetUrl: '', email: '', password: '' })
+  const [savingSync, setSavingSync] = useState(false)
+  const [savedSync, setSavedSync] = useState(false)
+  const [syncingNow, setSyncingNow] = useState(false)
+  const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -27,6 +33,9 @@ export default function RestaurantSettings() {
       .then(data => {
         if (data.trackingMode) setTrackingMode(data.trackingMode)
         if (typeof data.fifoEnabled === 'boolean') setFifoEnabled(data.fifoEnabled)
+      })
+      .finally(() => {
+        setSyncConfig(loadOwnerSyncConfig())
       })
       .finally(() => setLoading(false))
   }, [])
@@ -81,6 +90,22 @@ export default function RestaurantSettings() {
     } finally {
       setSavingFifo(false)
     }
+  }
+
+  async function saveSyncSettings() {
+    setSavingSync(true)
+    saveOwnerSyncConfig(syncConfig)
+    setSavedSync(true)
+    setSyncMessage('Sync settings saved on this device.')
+    setTimeout(() => setSavedSync(false), 2500)
+    setSavingSync(false)
+  }
+
+  async function runSyncNow() {
+    setSyncingNow(true)
+    const result = await syncOwnerCloud(syncConfig)
+    setSyncMessage(result.message)
+    setSyncingNow(false)
   }
 
   if (loading) return (
@@ -258,6 +283,86 @@ export default function RestaurantSettings() {
           </div>
         </div>
       )}
+
+      <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-4 xl:col-span-2">
+        <div className="flex items-center gap-2">
+          <Cloud className="h-5 w-5 text-orange-500" />
+          <h2 className="text-base font-bold text-gray-900">Owner cloud sync</h2>
+        </div>
+        <p className="text-sm text-gray-500">
+          Use this on the restaurant desktop to push branch updates to your remote owner app. The restaurant can keep running locally, and sync can catch up whenever internet is available.
+        </p>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <label className="space-y-1.5 text-sm text-gray-600">
+            <span className="font-medium">Remote app URL</span>
+            <input
+              value={syncConfig.targetUrl}
+              onChange={e => setSyncConfig(current => ({ ...current, targetUrl: e.target.value }))}
+              placeholder="https://magnify-app-tau.vercel.app"
+              className="w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm outline-none focus:border-orange-400"
+            />
+          </label>
+          <label className="space-y-1.5 text-sm text-gray-600">
+            <span className="font-medium">Remote branch email</span>
+            <input
+              type="email"
+              value={syncConfig.email}
+              onChange={e => setSyncConfig(current => ({ ...current, email: e.target.value }))}
+              placeholder="manager@example.com"
+              className="w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm outline-none focus:border-orange-400"
+            />
+          </label>
+          <label className="space-y-1.5 text-sm text-gray-600 md:col-span-2">
+            <span className="font-medium">Remote branch password</span>
+            <input
+              type="password"
+              value={syncConfig.password}
+              onChange={e => setSyncConfig(current => ({ ...current, password: e.target.value }))}
+              placeholder="Enter the cloud account password for this branch"
+              className="w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm outline-none focus:border-orange-400"
+            />
+          </label>
+        </div>
+
+        <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+          <input
+            type="checkbox"
+            checked={syncConfig.enabled}
+            onChange={e => setSyncConfig(current => ({ ...current, enabled: e.target.checked }))}
+            className="mt-1"
+          />
+          <span>
+            <strong className="text-gray-900">Enable background sync on this device</strong>
+            <span className="block text-xs text-gray-500 mt-1">
+              While the manager app is open, it will try to push a fresh branch snapshot every 2 minutes.
+            </span>
+          </span>
+        </label>
+
+        {syncMessage ? (
+          <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">{syncMessage}</div>
+        ) : null}
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={saveSyncSettings}
+            disabled={savingSync}
+            className="inline-flex items-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-gray-700 disabled:opacity-60"
+          >
+            {savedSync ? <CheckCircle2 className="h-4 w-4 text-green-400" /> : <Save className="h-4 w-4" />}
+            {savedSync ? 'Saved!' : savingSync ? 'Saving…' : 'Save sync settings'}
+          </button>
+          <button
+            onClick={runSyncNow}
+            disabled={syncingNow}
+            className="inline-flex items-center gap-2 rounded-2xl border border-orange-200 bg-orange-50 px-5 py-3 text-sm font-semibold text-orange-700 transition-colors hover:bg-orange-100 disabled:opacity-60"
+          >
+            <RefreshCw className={`h-4 w-4 ${syncingNow ? 'animate-spin' : ''}`} />
+            {syncingNow ? 'Syncing…' : 'Sync now'}
+          </button>
+        </div>
+      </div>
 
     </div>
   )
