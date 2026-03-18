@@ -16,6 +16,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   const [waiters, setWaiters] = useState<Waiter[]>([])
   const [restaurant, setRestaurant] = useState<Restaurant|null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [tab, setTab] = useState<'employees'|'shifts'|'waiters'|'kitchen'|'owner'>('employees')
   const [showEmpForm, setShowEmpForm] = useState(false)
   const [showShiftForm, setShowShiftForm] = useState(false)
@@ -44,30 +45,57 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   const [shiftForm, setShiftForm] = useState({employeeId:'',date:new Date().toISOString().split('T')[0],hoursWorked:'8',notes:''})
   const [waiterForm, setWaiterForm] = useState({name:'',email:'',password:''})
 
+  async function fetchJson<T>(url: string, init?: RequestInit): Promise<T | null> {
+    try {
+      const res = await fetch(url, init)
+      const text = await res.text()
+      if (!text.trim()) return null
+      return JSON.parse(text) as T
+    } catch {
+      return null
+    }
+  }
+
   async function load() {
     setLoading(true)
-    const [e,s] = await Promise.all([fetch('/api/restaurant/employees').then(r=>r.json()),fetch('/api/restaurant/shifts').then(r=>r.json())])
-    setEmployees(Array.isArray(e)?e:[])
-    setShifts(Array.isArray(s)?s:[])
+    setLoadError(null)
+    const [e, s] = await Promise.all([
+      fetchJson<Employee[]>('/api/restaurant/employees', { credentials: 'include' }),
+      fetchJson<Shift[]>('/api/restaurant/shifts', { credentials: 'include' }),
+    ])
+    setEmployees(Array.isArray(e) ? e : [])
+    setShifts(Array.isArray(s) ? s : [])
+    if (!e || !s) {
+      setLoadError('Some staff data could not be loaded. Check the local server connection and refresh again.')
+    }
     setLoading(false)
   }
 
   async function loadWaiters() {
-    const res = await fetch('/api/restaurant/waiters', { credentials:'include' })
-    const data = await res.json()
+    const data = await fetchJson<{ waiters?: Waiter[]; restaurant?: Restaurant }>('/api/restaurant/waiters', { credentials:'include' })
+    if (!data) {
+      setLoadError('Waiter accounts could not be loaded from the local server.')
+      return
+    }
     setWaiters(Array.isArray(data.waiters) ? data.waiters : [])
     if (data.restaurant) setRestaurant(data.restaurant)
   }
 
   async function loadKitchenAccounts() {
-    const res = await fetch('/api/restaurant/kitchen', { credentials:'include' })
-    const data = await res.json()
+    const data = await fetchJson<{ kitchenUsers?: Waiter[] }>('/api/restaurant/kitchen', { credentials:'include' })
+    if (!data) {
+      setLoadError('Kitchen accounts could not be loaded from the local server.')
+      return
+    }
     setKitchenAccounts(Array.isArray(data.kitchenUsers) ? data.kitchenUsers : [])
   }
 
   async function loadOwnerAccounts() {
-    const res = await fetch('/api/restaurant/waiters', { credentials:'include' })
-    const data = await res.json()
+    const data = await fetchJson<{ waiters?: Waiter[]; restaurant?: Restaurant }>('/api/restaurant/waiters', { credentials:'include' })
+    if (!data) {
+      setLoadError('Owner accounts could not be loaded from the local server.')
+      return
+    }
     const all: Waiter[] = Array.isArray(data.waiters) ? data.waiters : []
     setOwnerAccounts(all.filter(w => (w as any).role === 'owner'))
     setWaiters(all.filter(w => (w as any).role === 'waiter'))
@@ -79,7 +107,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
     loadWaiters()
     loadKitchenAccounts()
     loadOwnerAccounts()
-    fetch('/api/restaurant/server-info').then(r=>r.json()).then(d=>{ if(d.waiterUrl) setWaiterUrl(d.waiterUrl) })
+    fetchJson<{ waiterUrl?: string }>('/api/restaurant/server-info').then(d=>{ if(d?.waiterUrl) setWaiterUrl(d.waiterUrl) })
   },[])
 
   async function saveEmployee(e:React.FormEvent) {
@@ -185,9 +213,9 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <h2 className="text-lg font-bold text-gray-800">Staff Management</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 justify-end">
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse
           </button>
@@ -214,20 +242,20 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
         </div>
       </div>
 
-      <div className="flex gap-1 bg-gray-100 p-1 rounded-xl w-fit">
-        <button onClick={()=>setTab('employees')} className={tab==='employees'?'px-4 py-1.5 rounded-lg text-sm font-medium bg-white shadow text-gray-900':'px-4 py-1.5 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700'}>
+      <div className="grid grid-cols-2 gap-1 rounded-xl bg-gray-100 p-1 sm:grid-cols-3 lg:flex lg:w-fit">
+        <button onClick={()=>setTab('employees')} className={tab==='employees'?'px-4 py-2 rounded-lg text-sm font-medium bg-white shadow text-gray-900 text-center':'px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 text-center'}>
           <Users className="h-4 w-4 inline mr-1.5"/>Employees
         </button>
-        <button onClick={()=>setTab('shifts')} className={tab==='shifts'?'px-4 py-1.5 rounded-lg text-sm font-medium bg-white shadow text-gray-900':'px-4 py-1.5 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700'}>
+        <button onClick={()=>setTab('shifts')} className={tab==='shifts'?'px-4 py-2 rounded-lg text-sm font-medium bg-white shadow text-gray-900 text-center':'px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 text-center'}>
           <Clock className="h-4 w-4 inline mr-1.5"/>Shifts
         </button>
-        <button onClick={()=>setTab('waiters')} className={tab==='waiters'?'px-4 py-1.5 rounded-lg text-sm font-medium bg-white shadow text-gray-900':'px-4 py-1.5 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700'}>
+        <button onClick={()=>setTab('waiters')} className={tab==='waiters'?'px-4 py-2 rounded-lg text-sm font-medium bg-white shadow text-gray-900 text-center':'px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 text-center'}>
           <UserCheck className="h-4 w-4 inline mr-1.5"/>Waiter Accounts
         </button>
-        <button onClick={()=>setTab('kitchen')} className={tab==='kitchen'?'px-4 py-1.5 rounded-lg text-sm font-medium bg-white shadow text-gray-900':'px-4 py-1.5 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700'}>
+        <button onClick={()=>setTab('kitchen')} className={tab==='kitchen'?'px-4 py-2 rounded-lg text-sm font-medium bg-white shadow text-gray-900 text-center':'px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 text-center'}>
           <ChefHat className="h-4 w-4 inline mr-1.5"/>Kitchen Accounts
         </button>
-        <button onClick={()=>setTab('owner')} className={tab==='owner'?'px-4 py-1.5 rounded-lg text-sm font-medium bg-white shadow text-gray-900':'px-4 py-1.5 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700'}>
+        <button onClick={()=>setTab('owner')} className={tab==='owner'?'px-4 py-2 rounded-lg text-sm font-medium bg-white shadow text-gray-900 text-center':'px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 text-center'}>
           <Crown className="h-4 w-4 inline mr-1.5"/>Owner Account
         </button>
       </div>
@@ -236,6 +264,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       {waiterSuccess&&<div className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 text-sm font-medium px-4 py-3 rounded-xl"><CheckCircle2 className="h-4 w-4"/>Waiter account created! They can now log in.</div>}
       {kitchenSuccess&&<div className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 text-sm font-medium px-4 py-3 rounded-xl"><CheckCircle2 className="h-4 w-4"/>Kitchen account created! They can now log in.</div>}
       {ownerSuccess&&<div className="flex items-center gap-2 bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium px-4 py-3 rounded-xl"><CheckCircle2 className="h-4 w-4"/>Owner account created! The boss can now log in.</div>}
+      {loadError&&<div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium px-4 py-3 rounded-xl"><Wifi className="h-4 w-4"/>{loadError}</div>}
 
       {showOwnerForm&&(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
