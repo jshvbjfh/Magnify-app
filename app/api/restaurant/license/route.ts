@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { findOwnedRestaurant } from '@/lib/restaurantAccess'
 
 const TRIAL_DAYS = parseInt(process.env.TRIAL_DAYS || '30')
 
@@ -11,7 +11,7 @@ export async function GET() {
 
   const user = session.user as any
   // Find the restaurant owned by this user
-  const restaurant = await prisma.restaurant.findUnique({ where: { ownerId: user.id } })
+  const restaurant = await findOwnedRestaurant(user.id)
 
   // If no restaurant yet (hasn't gone through setup), treat as fresh trial
   if (!restaurant) {

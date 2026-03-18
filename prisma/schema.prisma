@@ -24,6 +24,7 @@ model User {
 
 	uploads              Upload[]
 	transactions         Transaction[]
+	dailySummaries       DailySummary[]
 	inventoryItems       InventoryItem[]
 	dishes               Dish[]
 	dishSales            DishSale[]
@@ -33,7 +34,7 @@ model User {
 	inventoryPurchases   InventoryPurchase[]
 
 	// Restaurant relations
-	ownedRestaurant  Restaurant?  @relation("RestaurantOwner")
+	ownedRestaurants Restaurant[] @relation("RestaurantOwner")
 	restaurant       Restaurant?  @relation("RestaurantWaiters", fields: [restaurantId], references: [id])
 
 	@@map("users")
@@ -44,8 +45,10 @@ model User {
 model Restaurant {
 	id             String    @id @default(cuid())
 	name           String
-	ownerId        String    @unique
+	ownerId        String
 	joinCode       String    @unique  // 6-char uppercase code waiters use to be linked
+	syncRestaurantId String? @unique
+	syncToken      String?
 	billHeader     String?   @default("")  // Custom text printed at top of receipts
 	trialStartAt   DateTime  @default(now())  // when they first signed up
 	licenseExpiry  DateTime? // null = trial only; set by developer when paid
@@ -57,7 +60,12 @@ model Restaurant {
 	waiters        User[]         @relation("RestaurantWaiters")
 	tables         RestaurantTable[]
 	pendingOrders  PendingOrder[]
+	categories     Category[]
+	accounts       Account[]
+	transactions   Transaction[]
+	dailySummaries DailySummary[]
 
+	@@index([ownerId])
 	@@map("restaurants")
 }
 
@@ -119,21 +127,25 @@ model Upload {
 
 model Category {
 	id          String   @id @default(cuid())
-	name        String   @unique
+	restaurantId String?
+	name        String
 	type        String // income, expense, asset, liability, equity
 	description String?
 	createdAt   DateTime @default(now())
 	updatedAt   DateTime @updatedAt
 
+	restaurant   Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 	transactions Transaction[]
 	accounts     Account[]
 
+	@@unique([restaurantId, name])
 	@@map("categories")
 }
 
 model Account {
 	id          String   @id @default(cuid())
-	code        String   @unique
+	restaurantId String?
+	code        String
 	name        String
 	categoryId  String
 	type        String // asset, liability, equity, revenue, expense
@@ -141,15 +153,18 @@ model Account {
 	createdAt   DateTime @default(now())
 	updatedAt   DateTime @updatedAt
 
+	restaurant   Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 	category     Category      @relation(fields: [categoryId], references: [id])
 	transactions Transaction[]
 
+	@@unique([restaurantId, code])
 	@@map("accounts")
 }
 
 model Transaction {
 	id            String   @id @default(cuid())
 	userId        String
+	restaurantId  String?
 	uploadId      String?
 	accountId     String
 	categoryId    String
@@ -163,15 +178,36 @@ model Transaction {
 	accountName   String?  // Optional account name for quick reference
 	profitAmount  Float?   // Profit amount for sales transactions
 	costAmount    Float?   // Cost amount for sales transactions
+	synced        Boolean  @default(false)
 	createdAt     DateTime @default(now())
 	updatedAt     DateTime @updatedAt
 
+	restaurant Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 	user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 	upload   Upload? @relation(fields: [uploadId], references: [id], onDelete: SetNull)
 	account  Account @relation(fields: [accountId], references: [id])
 	category Category @relation(fields: [categoryId], references: [id])
 
 	@@map("transactions")
+}
+
+model DailySummary {
+	id            String   @id @default(cuid())
+	userId        String
+	restaurantId  String?
+	date          DateTime
+	totalRevenue  Float    @default(0)
+	totalExpenses Float    @default(0)
+	profitLoss    Float    @default(0)
+	lastUpdated   DateTime @updatedAt
+	synced        Boolean  @default(false)
+	createdAt     DateTime @default(now())
+
+	restaurant Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+	user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+	@@unique([userId, restaurantId, date])
+	@@map("daily_summaries")
 }
 
 model CustomDictionary {

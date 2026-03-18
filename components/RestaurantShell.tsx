@@ -114,7 +114,7 @@ export default function RestaurantShell() {
       if (syncing) return
 
       const config = loadOwnerSyncConfig()
-      if (!config.enabled || !config.targetUrl || !config.email || !config.password) return
+      if (!config.enabled) return
 
       syncing = true
       try {
@@ -125,7 +125,7 @@ export default function RestaurantShell() {
     }
 
     runSync()
-    const timer = window.setInterval(runSync, 120000)
+    const timer = window.setInterval(runSync, 30000)
     return () => window.clearInterval(timer)
   }, [userRole])
 

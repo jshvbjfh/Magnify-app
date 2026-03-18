@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { prisma } from '@/lib/prisma'
-import { getGeminiCandidates } from '@/lib/openai'
+import { getGeminiCandidates, getGeminiApiKeys, isQuotaError } from '@/lib/openai'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -54,8 +54,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const mode: 'analyze' | 'content' | 'chat' = body.mode ?? 'analyze'
 
-    const apiKey = process.env.GEMINI_API_KEY
-    if (!apiKey) {
+    const apiKeys = getGeminiApiKeys()
+    if (apiKeys.length === 0) {
       return NextResponse.json({ error: 'AI service not configured' }, { status: 500 })
     }
 
@@ -187,20 +187,32 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Call Gemini ──────────────────────────────────────────────────────────
-    const genAI = new GoogleGenerativeAI(apiKey)
-    const candidates = await getGeminiCandidates(apiKey)
-
     let responseText = ''
-    for (const modelName of candidates.slice(0, 3)) {
-      try {
-        const model = genAI.getGenerativeModel({ model: modelName })
-        const result = await model.generateContent(prompt)
-        responseText = result.response.text()
-        if (responseText) break
-      } catch { /* try next model */ }
+    let quotaExhaustedCount = 0
+    for (const currentKey of apiKeys) {
+      const genAI = new GoogleGenerativeAI(currentKey)
+      const candidates = await getGeminiCandidates(currentKey)
+      let keyHadQuota = false
+      for (const modelName of candidates.slice(0, 3)) {
+        try {
+          const model = genAI.getGenerativeModel({ model: modelName })
+          const result = await model.generateContent(prompt)
+          responseText = result.response.text()
+          if (responseText) break
+        } catch (e: any) {
+          if (isQuotaError(e)) { keyHadQuota = true; break }
+          /* try next model */
+        }
+      }
+      if (responseText) break
+      if (keyHadQuota) quotaExhaustedCount++
+      else break
     }
 
     if (!responseText) {
+      if (quotaExhaustedCount === apiKeys.length) {
+        return NextResponse.json({ error: 'Daily AI limit reached. Jesse AI resets automatically — try again tomorrow.' }, { status: 429 })
+      }
       return NextResponse.json({ error: 'AI service unavailable' }, { status: 503 })
     }
 

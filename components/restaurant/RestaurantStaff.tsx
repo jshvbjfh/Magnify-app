@@ -17,6 +17,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   const [restaurant, setRestaurant] = useState<Restaurant|null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [tab, setTab] = useState<'employees'|'shifts'|'waiters'|'kitchen'|'owner'>('employees')
   const [showEmpForm, setShowEmpForm] = useState(false)
   const [showShiftForm, setShowShiftForm] = useState(false)
@@ -112,23 +113,30 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
 
   async function saveEmployee(e:React.FormEvent) {
     e.preventDefault()
-    await fetch('/api/restaurant/employees',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:empForm.name,role:empForm.role,payType:empForm.payType,payRate:Number(empForm.payRate),phone:empForm.phone||null})})
+    setActionError(null)
+    const res = await fetch('/api/restaurant/employees',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({name:empForm.name,role:empForm.role,payType:empForm.payType,payRate:Number(empForm.payRate),phone:empForm.phone||null})})
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null)
+      setActionError(payload?.error || 'Failed to create employee.')
+      return
+    }
     setShowEmpForm(false); setEmpForm({name:'',role:'Waiter',payType:'daily',payRate:'',phone:''}); load()
   }
 
   async function toggleEmployee(emp:Employee) {
-    await fetch('/api/restaurant/employees/'+emp.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({isActive:!emp.isActive})})
+    await fetch('/api/restaurant/employees/'+emp.id,{method:'PATCH',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({isActive:!emp.isActive})})
     load()
   }
 
   async function logShift(e:React.FormEvent) {
     e.preventDefault()
-    const res = await fetch('/api/restaurant/shifts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({employeeId:shiftForm.employeeId,date:shiftForm.date,hoursWorked:Number(shiftForm.hoursWorked),notes:shiftForm.notes||null})})
+    const res = await fetch('/api/restaurant/shifts',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({employeeId:shiftForm.employeeId,date:shiftForm.date,hoursWorked:Number(shiftForm.hoursWorked),notes:shiftForm.notes||null})})
     if(res.ok){setShiftSuccess(true);setTimeout(()=>setShiftSuccess(false),3000);setShowShiftForm(false);setShiftForm({employeeId:'',date:new Date().toISOString().split('T')[0],hoursWorked:'8',notes:''});load()}
   }
 
   async function saveWaiter(e:React.FormEvent) {
     e.preventDefault()
+    setActionError(null)
     const snapshot = { ...waiterForm }
     const res = await fetch('/api/restaurant/waiters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(waiterForm),credentials:'include'})
     if(res.ok){
@@ -136,11 +144,15 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       setWaiterSuccess(true);setTimeout(()=>setWaiterSuccess(false),3000)
       setShowWaiterForm(false);setWaiterForm({name:'',email:'',password:''})
       loadOwnerAccounts()
+      return
     }
+    const payload = await res.json().catch(() => null)
+    setActionError(payload?.error || 'Failed to create waiter account.')
   }
 
   async function saveKitchenAccount(e:React.FormEvent) {
     e.preventDefault()
+    setActionError(null)
     const snapshot = { ...kitchenForm }
     const res = await fetch('/api/restaurant/kitchen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(kitchenForm),credentials:'include'})
     if(res.ok){
@@ -148,7 +160,10 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       setKitchenSuccess(true);setTimeout(()=>setKitchenSuccess(false),3000)
       setShowKitchenForm(false);setKitchenForm({name:'',email:'',password:''})
       loadKitchenAccounts()
+      return
     }
+    const payload = await res.json().catch(() => null)
+    setActionError(payload?.error || 'Failed to create kitchen account.')
   }
 
   async function deleteKitchenAccount(id:string) {
@@ -159,6 +174,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
 
   async function saveOwnerAccount(e:React.FormEvent) {
     e.preventDefault()
+    setActionError(null)
     const snapshot = { ...ownerForm }
     const res = await fetch('/api/restaurant/waiters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...ownerForm,role:'owner'}),credentials:'include'})
     if(res.ok){
@@ -166,7 +182,10 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       setOwnerSuccess(true);setTimeout(()=>setOwnerSuccess(false),3000)
       setShowOwnerForm(false);setOwnerForm({name:'',email:'',password:''})
       loadOwnerAccounts()
+      return
     }
+    const payload = await res.json().catch(() => null)
+    setActionError(payload?.error || 'Failed to create owner account.')
   }
 
   async function deleteOwnerAccount(id:string) {
@@ -265,6 +284,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       {kitchenSuccess&&<div className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 text-sm font-medium px-4 py-3 rounded-xl"><CheckCircle2 className="h-4 w-4"/>Kitchen account created! They can now log in.</div>}
       {ownerSuccess&&<div className="flex items-center gap-2 bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium px-4 py-3 rounded-xl"><CheckCircle2 className="h-4 w-4"/>Owner account created! The boss can now log in.</div>}
       {loadError&&<div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium px-4 py-3 rounded-xl"><Wifi className="h-4 w-4"/>{loadError}</div>}
+      {actionError&&<div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-sm font-medium px-4 py-3 rounded-xl"><X className="h-4 w-4"/>{actionError}</div>}
 
       {showOwnerForm&&(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

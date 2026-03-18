@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { hash } from 'bcryptjs'
+import { ensureRestaurantForOwner } from '@/lib/restaurantAccess'
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions)
@@ -13,19 +14,7 @@ async function requireAdmin() {
 }
 
 async function getOrCreateRestaurant(ownerId: string) {
-  let restaurant = await prisma.restaurant.findUnique({ where: { ownerId } })
-  if (!restaurant) {
-    const user = await prisma.user.findUnique({ where: { id: ownerId } })
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-    let code = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
-    while (await prisma.restaurant.findUnique({ where: { joinCode: code } })) {
-      code = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
-    }
-    restaurant = await prisma.restaurant.create({
-      data: { name: user?.name ? `${user.name}'s Restaurant` : 'My Restaurant', ownerId, joinCode: code },
-    })
-  }
-  return restaurant
+  return ensureRestaurantForOwner(ownerId)
 }
 
 /** GET /api/restaurant/kitchen — list all kitchen accounts for this restaurant */
@@ -76,6 +65,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ kitchenUser }, { status: 201 })
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 })
+    const status = e.message === 'Unauthorized' ? 401 : e.message === 'Admin only' ? 403 : 500
+    return NextResponse.json({ error: e.message }, { status })
   }
 }

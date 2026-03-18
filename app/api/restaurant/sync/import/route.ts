@@ -5,7 +5,7 @@ import type { OwnerSyncSnapshot } from '@/lib/ownerSync'
 
 async function resolveRestaurantForUser(user: { id: string; role: string; restaurantId?: string | null }) {
   if (user.role === 'admin') {
-    return prisma.restaurant.findUnique({ where: { ownerId: user.id }, select: { id: true, name: true } })
+    return prisma.restaurant.findFirst({ where: { ownerId: user.id }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } })
   }
 
   if (user.role === 'owner' && user.restaurantId) {

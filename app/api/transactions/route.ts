@@ -30,9 +30,9 @@ async function ensureCoreCategories() {
 	for (const t of types) {
 		const name = t.charAt(0).toUpperCase() + t.slice(1)
 		const cat = await prisma.category.upsert({
-			where: { name },
+			where: { restaurantId_name: { restaurantId: null, name } },
 			update: { type: t },
-			create: { name, type: t }
+			create: { restaurantId: null, name, type: t }
 		})
 		byType[t] = cat
 	}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { hash } from 'bcryptjs'
 import { randomBytes } from 'crypto'
 import { prisma } from '@/lib/prisma'
+import { ensureRestaurantForOwner } from '@/lib/restaurantAccess'
 
 function generateRecoveryKey(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // no 0/O/1/I
@@ -12,7 +13,7 @@ function generateRecoveryKey(): string {
 export async function POST(request: NextRequest) {
 	try {
 		const body = await request.json()
-		const { name, email, password, trackingMode } = body
+		const { name, email, password, trackingMode, role } = body
 
 		// Validation - be specific about what's missing
 		const missingFields = []
@@ -58,17 +59,23 @@ export async function POST(request: NextRequest) {
 		const recoveryKeyHash = await hash(recoveryKey, 12)
 
 		// Create user
+		const finalRole = role === 'owner' ? 'owner' : 'admin'
+
 		const user = await prisma.user.create({
 			data: {
 				name,
 				email,
 				password: hashedPassword,
 				recoveryKeyHash,
-				role: 'admin', // Default role
+				role: finalRole,
 				businessType: finalBusinessType,
 				trackingMode: trackingMode === 'dish_tracking' ? 'dish_tracking' : 'simple'
 			}
 		})
+
+		if (finalRole === 'admin') {
+			await ensureRestaurantForOwner(user.id)
+		}
 
 		return NextResponse.json(
 			{

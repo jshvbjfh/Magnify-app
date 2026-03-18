@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Cloud, RefreshCw } from 'lucide-react'
-import { loadOwnerSyncConfig, saveOwnerSyncConfig, syncOwnerCloud, type OwnerSyncConfig } from '@/lib/ownerSyncBrowser'
+import { loadOwnerSyncConfig, loadServerOwnerSyncConfig, saveOwnerSyncConfig, syncOwnerCloud, type OwnerSyncConfig, type ServerOwnerSyncConfig } from '@/lib/ownerSyncBrowser'
 
 export default function RestaurantSettings() {
   const [billHeader, setBillHeader] = useState('')
@@ -19,26 +19,42 @@ export default function RestaurantSettings() {
   const [savedSync, setSavedSync] = useState(false)
   const [syncingNow, setSyncingNow] = useState(false)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
+  const [serverSyncConfig, setServerSyncConfig] = useState<ServerOwnerSyncConfig | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch('/api/restaurant/setup', { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => {
-        setRestaurantName(data.restaurant?.name ?? '')
-        setBillHeader(data.restaurant?.billHeader ?? '')
-      })
-    fetch('/api/user/profile', { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => {
-        if (data.trackingMode) setTrackingMode(data.trackingMode)
-        if (typeof data.fifoEnabled === 'boolean') setFifoEnabled(data.fifoEnabled)
-      })
-      .finally(() => {
-        setSyncConfig(loadOwnerSyncConfig())
+    const localSyncConfig = loadOwnerSyncConfig()
+
+    Promise.all([
+      fetch('/api/restaurant/setup', { credentials: 'include' })
+        .then(r => r.ok ? r.json() : null),
+      fetch('/api/user/profile', { credentials: 'include' })
+        .then(r => r.ok ? r.json() : null),
+      loadServerOwnerSyncConfig(),
+    ])
+      .then(([setupData, profileData, serverData]) => {
+        if (setupData) {
+          setRestaurantName(setupData.restaurant?.name ?? '')
+          setBillHeader(setupData.restaurant?.billHeader ?? '')
+        }
+
+        if (profileData) {
+          if (profileData.trackingMode) setTrackingMode(profileData.trackingMode)
+          if (typeof profileData.fifoEnabled === 'boolean') setFifoEnabled(profileData.fifoEnabled)
+        }
+
+        setServerSyncConfig(serverData)
+        setSyncConfig({
+          enabled: localSyncConfig.enabled,
+          targetUrl: localSyncConfig.targetUrl || serverData?.targetUrl || '',
+          email: localSyncConfig.email || serverData?.email || '',
+          password: serverData?.configured ? '' : localSyncConfig.password,
+        })
       })
       .finally(() => setLoading(false))
   }, [])
+
+  const syncConfiguredByServer = Boolean(serverSyncConfig?.configured)
 
   async function save() {
     setSaving(true)
@@ -290,8 +306,14 @@ export default function RestaurantSettings() {
           <h2 className="text-base font-bold text-gray-900">Owner cloud sync</h2>
         </div>
         <p className="text-sm text-gray-500">
-          Use this on the restaurant desktop to push branch updates to your remote owner app. The restaurant can keep running locally, and sync can catch up whenever internet is available.
+          Use this on the restaurant desktop to push local transactions and daily summaries to your remote owner app. The restaurant can keep running locally, and sync catches up automatically whenever internet is available.
         </p>
+
+        {syncConfiguredByServer ? (
+          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+            Sync target is auto-filled from this device's server settings. You only need to enable background sync here.
+          </div>
+        ) : null}
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <label className="space-y-1.5 text-sm text-gray-600">
@@ -300,6 +322,7 @@ export default function RestaurantSettings() {
               value={syncConfig.targetUrl}
               onChange={e => setSyncConfig(current => ({ ...current, targetUrl: e.target.value }))}
               placeholder="https://magnify-app-tau.vercel.app"
+              disabled={syncConfiguredByServer}
               className="w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm outline-none focus:border-orange-400"
             />
           </label>
@@ -310,19 +333,22 @@ export default function RestaurantSettings() {
               value={syncConfig.email}
               onChange={e => setSyncConfig(current => ({ ...current, email: e.target.value }))}
               placeholder="manager@example.com"
+              disabled={syncConfiguredByServer}
               className="w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm outline-none focus:border-orange-400"
             />
           </label>
-          <label className="space-y-1.5 text-sm text-gray-600 md:col-span-2">
-            <span className="font-medium">Remote branch password</span>
-            <input
-              type="password"
-              value={syncConfig.password}
-              onChange={e => setSyncConfig(current => ({ ...current, password: e.target.value }))}
-              placeholder="Enter the cloud account password for this branch"
-              className="w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm outline-none focus:border-orange-400"
-            />
-          </label>
+          {!syncConfiguredByServer ? (
+            <label className="space-y-1.5 text-sm text-gray-600 md:col-span-2">
+              <span className="font-medium">Remote branch password</span>
+              <input
+                type="password"
+                value={syncConfig.password}
+                onChange={e => setSyncConfig(current => ({ ...current, password: e.target.value }))}
+                placeholder="Enter the cloud account password for this branch"
+                className="w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm outline-none focus:border-orange-400"
+              />
+            </label>
+          ) : null}
         </div>
 
         <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
@@ -335,7 +361,7 @@ export default function RestaurantSettings() {
           <span>
             <strong className="text-gray-900">Enable background sync on this device</strong>
             <span className="block text-xs text-gray-500 mt-1">
-              While the manager app is open, it will try to push a fresh branch snapshot every 2 minutes.
+              While the manager app is open, it will try to push transactions and daily summaries every 30 seconds.
             </span>
           </span>
         </label>
@@ -351,7 +377,7 @@ export default function RestaurantSettings() {
             className="inline-flex items-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-gray-700 disabled:opacity-60"
           >
             {savedSync ? <CheckCircle2 className="h-4 w-4 text-green-400" /> : <Save className="h-4 w-4" />}
-            {savedSync ? 'Saved!' : savingSync ? 'Saving…' : 'Save sync settings'}
+            {savedSync ? 'Saved!' : savingSync ? 'Saving…' : 'Save sync preference'}
           </button>
           <button
             onClick={runSyncNow}

@@ -42,6 +42,24 @@ export async function getGeminiCandidates(apiKey: string): Promise<string[]> {
 	return [...new Set(preferred)]
 }
 
+export function getGeminiApiKeys(): string[] {
+	const keys: string[] = []
+	for (let i = 1; i <= 5; i++) {
+		const key = process.env[`GEMINI_API_KEY_${i}`]
+		if (key) keys.push(key)
+	}
+	if (keys.length === 0) {
+		const fallback = process.env.GEMINI_API_KEY
+		if (fallback) keys.push(fallback)
+	}
+	return keys
+}
+
+export function isQuotaError(e: any): boolean {
+	const msg = String(e?.message || e?.status || e || '').toLowerCase()
+	return msg.includes('429') || msg.includes('quota') || msg.includes('resource_exhausted') || msg.includes('rate_limit') || msg.includes('ratelimit')
+}
+
 export type ExtractedTransaction = {
 	date?: string
 	description: string
@@ -102,13 +120,8 @@ function extractJson(text: string) {
 }
 
 export async function generateAnalyticsInsights(dataset: any): Promise<AnalyticsInsights> {
-	const apiKey = process.env.GEMINI_API_KEY
-	if (!apiKey) {
-		throw new Error('Missing GEMINI_API_KEY')
-	}
-
-	const genAI = new GoogleGenerativeAI(apiKey)
-	const candidateModels = await getGeminiCandidates(apiKey)
+	const apiKeys = getGeminiApiKeys()
+	if (apiKeys.length === 0) throw new Error('No GEMINI_API_KEY configured')
 
 	const bp = dataset.businessProfile || {}
 	const summary = dataset.summary || {}
@@ -220,51 +233,60 @@ OUTPUT JSON SCHEMA (strict, no markdown, no code fences):
 }`
 
 	let lastError: any
-	for (const modelName of candidateModels) {
-		try {
-			const model = genAI.getGenerativeModel({ model: modelName })
-			const result = await model.generateContent([{ text: prompt }])
-			const text = result.response.text()
-			const parsed = JSON.parse(extractJson(text))
+	let quotaExhaustedCount = 0
+	for (const apiKey of apiKeys) {
+		const genAI = new GoogleGenerativeAI(apiKey)
+		const candidateModels = await getGeminiCandidates(apiKey)
+		let keyQuotaExhausted = false
+		for (const modelName of candidateModels) {
+			try {
+				const model = genAI.getGenerativeModel({ model: modelName })
+				const result = await model.generateContent([{ text: prompt }])
+				const text = result.response.text()
+				const parsed = JSON.parse(extractJson(text))
 
-			const charts: AnalyticsChart[] = Array.isArray(parsed.charts)
-				? parsed.charts
-					.filter((c: any) => c && (c.type === 'bar' || c.type === 'line') && c.xKey && c.yKey && Array.isArray(c.data))
-					.slice(0, 5)
-					.map((c: any) => ({
-						title: String(c.title || 'Chart'),
-						type: c.type,
-						xKey: String(c.xKey),
-						yKey: String(c.yKey),
-						data: c.data.slice(0, 12).map((row: any) => ({ ...row })),
-						note: c.note ? String(c.note) : undefined
-					}))
-				: []
+				const charts: AnalyticsChart[] = Array.isArray(parsed.charts)
+					? parsed.charts
+						.filter((c: any) => c && (c.type === 'bar' || c.type === 'line') && c.xKey && c.yKey && Array.isArray(c.data))
+						.slice(0, 5)
+						.map((c: any) => ({
+							title: String(c.title || 'Chart'),
+							type: c.type,
+							xKey: String(c.xKey),
+							yKey: String(c.yKey),
+							data: c.data.slice(0, 12).map((row: any) => ({ ...row })),
+							note: c.note ? String(c.note) : undefined
+						}))
+					: []
 
-			const tables: AnalyticsTable[] = Array.isArray(parsed.tables)
-				? parsed.tables
-					.filter((t: any) => t && Array.isArray(t.columns) && Array.isArray(t.rows))
-					.slice(0, 4)
-					.map((t: any) => ({
-						title: String(t.title || 'Table'),
-						columns: t.columns.slice(0, 8).map((c: any) => String(c)),
-						rows: t.rows.slice(0, 12).map((r: any) => Array.isArray(r) ? r.slice(0, 8).map((v: any) => typeof v === 'number' ? v : String(v)) : [])
-					}))
-				: []
+				const tables: AnalyticsTable[] = Array.isArray(parsed.tables)
+					? parsed.tables
+						.filter((t: any) => t && Array.isArray(t.columns) && Array.isArray(t.rows))
+						.slice(0, 4)
+						.map((t: any) => ({
+							title: String(t.title || 'Table'),
+							columns: t.columns.slice(0, 8).map((c: any) => String(c)),
+							rows: t.rows.slice(0, 12).map((r: any) => Array.isArray(r) ? r.slice(0, 8).map((v: any) => typeof v === 'number' ? v : String(v)) : [])
+						}))
+					: []
 
-			return {
-				headline: String(parsed.headline || 'AI analytics generated from your accounting data.'),
-				comments: Array.isArray(parsed.comments) ? parsed.comments.slice(0, 8).map(String) : [],
-				advice: Array.isArray(parsed.advice) ? parsed.advice.slice(0, 6).map(String) : [],
-				charts,
-				tables
+				return {
+					headline: String(parsed.headline || 'AI analytics generated from your accounting data.'),
+					comments: Array.isArray(parsed.comments) ? parsed.comments.slice(0, 8).map(String) : [],
+					advice: Array.isArray(parsed.advice) ? parsed.advice.slice(0, 6).map(String) : [],
+					charts,
+					tables
+				}
+			} catch (e: any) {
+				lastError = e
+				if (isQuotaError(e)) { keyQuotaExhausted = true; break }
+				continue
 			}
-		} catch (e: any) {
-			lastError = e
-			continue
 		}
+		if (keyQuotaExhausted) quotaExhaustedCount++
 	}
 
+	if (quotaExhaustedCount === apiKeys.length) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
 	throw lastError || new Error('Analytics AI generation failed')
 }
 
@@ -273,11 +295,8 @@ export async function extractFromImage(params: {
 	mimeType?: string
 	dictionary?: Array<{ kinyarwandaWord: string; englishMeaning: string; context?: string | null }>
 }): Promise<ExtractResult> {
-	const apiKey = process.env.GEMINI_API_KEY
-	if (!apiKey) throw new Error('Missing GEMINI_API_KEY')
-
-	const genAI = new GoogleGenerativeAI(apiKey)
-	const candidateModels = await getGeminiCandidates(apiKey)
+	const apiKeys = getGeminiApiKeys()
+	if (apiKeys.length === 0) throw new Error('No GEMINI_API_KEY configured')
 
 	const dictLines = (params.dictionary ?? [])
 		.map((d) => `- ${d.kinyarwandaWord} => ${d.englishMeaning}${d.context ? ` (context: ${d.context})` : ''}`)
@@ -416,29 +435,34 @@ Rules:
 	}
 
 	let lastError: any
-	for (const modelName of candidateModels) {
-		try {
-			const model = genAI.getGenerativeModel({ model: modelName })
-			const result = await model.generateContent([
-				{ text: prompt },
-				{ inlineData }
-			])
-			const text = result.response.text()
-			const jsonText = extractJson(text)
-			const parsed = JSON.parse(jsonText)
+	let quotaExhaustedCount = 0
+	for (const apiKey of apiKeys) {
+		const genAI = new GoogleGenerativeAI(apiKey)
+		const candidateModels = await getGeminiCandidates(apiKey)
+		let keyQuotaExhausted = false
+		for (const modelName of candidateModels) {
+			try {
+				const model = genAI.getGenerativeModel({ model: modelName })
+				const result = await model.generateContent([
+					{ text: prompt },
+					{ inlineData }
+				])
+				const text = result.response.text()
+				const jsonText = extractJson(text)
+				const parsed = JSON.parse(jsonText)
 
-			// Validate transactions before returning
-			const validatedTransactions = Array.isArray(parsed.transactions)
-				? parsed.transactions.filter((t: any) => {
-					// Must have valid direction
-					if (!t.direction || (t.direction !== 'in' && t.direction !== 'out')) {
-						console.warn('⚠️ Skipping transaction with invalid direction:', t)
-						return false
-					}
-					// Must have valid amount
-					if (!t.amount || Number(t.amount) <= 0) {
-						console.warn('⚠️ Skipping transaction with invalid amount:', t)
-						return false
+				// Validate transactions before returning
+				const validatedTransactions = Array.isArray(parsed.transactions)
+					? parsed.transactions.filter((t: any) => {
+						// Must have valid direction
+						if (!t.direction || (t.direction !== 'in' && t.direction !== 'out')) {
+							console.warn('⚠️ Skipping transaction with invalid direction:', t)
+							return false
+						}
+						// Must have valid amount
+						if (!t.amount || Number(t.amount) <= 0) {
+							console.warn('⚠️ Skipping transaction with invalid amount:', t)
+							return false
 					}
 					// Must have account name
 					if (!t.accountName || t.accountName.trim() === '') {
@@ -484,19 +508,23 @@ Rules:
 				})
 				: []
 
-			console.log(`✓ Extracted ${validatedTransactions.length} valid transactions from ${parsed.transactions?.length || 0} total`)
+				console.log(`✓ Extracted ${validatedTransactions.length} valid transactions from ${parsed.transactions?.length || 0} total`)
 			
-			return {
-				rawText: String(parsed.rawText ?? ''),
-				translatedText: String(parsed.translatedText ?? ''),
-				unknownWords: Array.isArray(parsed.unknownWords) ? parsed.unknownWords.map(String) : [],
-				transactions: validatedTransactions,
+				return {
+					rawText: String(parsed.rawText ?? ''),
+					translatedText: String(parsed.translatedText ?? ''),
+					unknownWords: Array.isArray(parsed.unknownWords) ? parsed.unknownWords.map(String) : [],
+					transactions: validatedTransactions,
+				}
+			} catch (e: any) {
+				lastError = e
+				if (isQuotaError(e)) { keyQuotaExhausted = true; break }
+				continue
 			}
-		} catch (e: any) {
-			lastError = e
-			continue
 		}
+		if (keyQuotaExhausted) quotaExhaustedCount++
 	}
 
+	if (quotaExhaustedCount === apiKeys.length) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
 	throw lastError || new Error('AI request failed')
 }

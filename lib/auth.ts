@@ -2,6 +2,7 @@ import type { NextAuthOptions } from 'next-auth'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { compare } from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
+import { findOwnedRestaurant } from '@/lib/restaurantAccess'
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -23,7 +24,7 @@ export const authOptions: NextAuthOptions = {
         // For admin users, restaurantId comes from the owned Restaurant record
         let restaurantId = (user as any).restaurantId ?? null
         if (!restaurantId && user.role === 'admin') {
-          const owned = await prisma.restaurant.findUnique({ where: { ownerId: user.id }, select: { id: true } })
+          const owned = await findOwnedRestaurant(user.id)
           restaurantId = owned?.id ?? null
         }
 

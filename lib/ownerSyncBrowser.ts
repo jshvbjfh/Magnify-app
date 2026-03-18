@@ -5,6 +5,13 @@ export type OwnerSyncConfig = {
   password: string
 }
 
+export type ServerOwnerSyncConfig = {
+  configured: boolean
+  targetUrl: string
+  email: string
+  usesSharedSecret: boolean
+}
+
 const STORAGE_KEY = 'magnify.ownerSync.config'
 
 export function loadOwnerSyncConfig(): OwnerSyncConfig {
@@ -32,38 +39,43 @@ export function saveOwnerSyncConfig(config: OwnerSyncConfig) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
 }
 
-function normalizeTargetUrl(value: string) {
-  return value.trim().replace(/\/$/, '')
+export async function loadServerOwnerSyncConfig(): Promise<ServerOwnerSyncConfig | null> {
+  try {
+    const res = await fetch('/api/sync/config', { credentials: 'include' })
+    if (!res.ok) return null
+    const payload = await res.json().catch(() => null)
+    if (!payload) return null
+    return {
+      configured: Boolean(payload.configured),
+      targetUrl: String(payload.targetUrl ?? ''),
+      email: String(payload.email ?? ''),
+      usesSharedSecret: Boolean(payload.usesSharedSecret),
+    }
+  } catch {
+    return null
+  }
 }
 
 export async function syncOwnerCloud(config?: OwnerSyncConfig) {
   const current = config ?? loadOwnerSyncConfig()
   if (!current.enabled) return { ok: false, message: 'Auto sync is disabled.' }
-  if (!current.targetUrl || !current.email || !current.password) {
-    return { ok: false, message: 'Sync target URL, email, and password are required.' }
-  }
 
-  const exportRes = await fetch('/api/restaurant/sync/export', { credentials: 'include' })
-  if (!exportRes.ok) {
-    const text = await exportRes.text()
-    return { ok: false, message: text || 'Failed to export local branch snapshot.' }
-  }
-
-  const { snapshot } = await exportRes.json()
-  const importRes = await fetch(`${normalizeTargetUrl(current.targetUrl)}/api/restaurant/sync/import`, {
+  const syncRes = await fetch('/api/sync/local', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({
+      targetUrl: current.targetUrl,
       email: current.email,
       password: current.password,
-      snapshot,
     }),
   })
 
-  if (!importRes.ok) {
-    const payload = await importRes.json().catch(() => null)
-    return { ok: false, message: payload?.error || 'Remote owner sync failed.' }
+  if (!syncRes.ok) {
+    const payload = await syncRes.json().catch(() => null)
+    return { ok: false, message: payload?.error || 'Owner cloud sync failed.' }
   }
 
-  return { ok: true, message: 'Owner cloud sync completed.' }
+  const payload = await syncRes.json().catch(() => null)
+  return { ok: true, message: payload?.message || 'Owner cloud sync completed.' }
 }

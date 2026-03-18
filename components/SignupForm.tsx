@@ -231,7 +231,7 @@ export default function SignupForm() {
 									Build your menu with dishes and their exact ingredients. Every order automatically deducts stock from inventory. Track what's running low, monitor waste, and see real ingredient costs per dish. Requires initial setup of your menu and recipes.
 								</p>
 								<div className="flex flex-wrap gap-1.5 mt-2">
-									{['✅ Everything in Simple', '✅ Dish menu builder', '✅ Ingredient per dish', '✅ Auto stock deduction', '✅ Waste tracking', '✅ Tables & Kitchen display'].map(tag => (
+									{['âœ… Everything in Simple', 'âœ… Dish menu builder', 'âœ… Ingredient per dish', 'âœ… Auto stock deduction', 'âœ… Waste tracking', 'âœ… Tables & Kitchen display'].map(tag => (
 										<span key={tag} className="text-[10px] bg-white border border-gray-200 rounded-full px-2 py-0.5 text-gray-600">{tag}</span>
 									))}
 								</div>

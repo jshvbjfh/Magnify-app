@@ -13,8 +13,9 @@ export async function GET() {
     return NextResponse.json({ error: 'Only the restaurant manager desktop can export sync data.' }, { status: 403 })
   }
 
-  const restaurant = await prisma.restaurant.findUnique({
+  const restaurant = await prisma.restaurant.findFirst({
     where: { ownerId: session.user.id },
+    orderBy: { createdAt: 'asc' },
     select: { id: true, name: true },
   })
 

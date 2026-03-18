@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { prisma } from '@/lib/prisma'
-import { getGeminiCandidates } from '@/lib/openai'
+import { getGeminiCandidates, getGeminiApiKeys, isQuotaError } from '@/lib/openai'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -61,8 +61,8 @@ export async function POST(req: NextRequest) {
 			return NextResponse.json({ error: 'Message required' }, { status: 400 })
 		}
 
-		const apiKey = process.env.GEMINI_API_KEY
-		if (!apiKey) {
+		const apiKeys = getGeminiApiKeys()
+		if (apiKeys.length === 0) {
 			return NextResponse.json({ error: 'AI service not configured' }, { status: 500 })
 		}
 
@@ -204,13 +204,7 @@ Dish Performance (recent 30d):
 ${dishPerformance.map(d => `  - ${d.name}: ${d.revenue.toLocaleString()} revenue, ${d.orders} orders, ${d.margin} margin, vs prior: ${d.vsPrev}`).join('\n')}`
 		}
 
-		const genAI = new GoogleGenerativeAI(apiKey)
-		const candidateModels = await getGeminiCandidates(apiKey)
-		console.log('[AI Chat] Candidate models:', candidateModels.slice(0, 5).join(', '))
-	
-	console.log('[AI Chat] Final model priority order:', candidateModels.join(', '))
-
-	const systemContext = `You are Jesse, a friendly and calm restaurant business advisor for Yofinder. You help managers with accounting, financial analysis, restaurant strategy, and growing their business. You speak simply and warmly — like a smart, trusted employee helping a friend, never like software interrogating a user.
+const systemContext = `You are Jesse, a friendly and calm restaurant business advisor for Yofinder. You help managers with accounting, financial analysis, restaurant strategy, and growing their business. You speak simply and warmly — like a smart, trusted employee helping a friend, never like software interrogating a user.
 
 🔒 IDENTITY RULE:
 - Never mention underlying AI providers, model vendors, or model names.
@@ -1383,8 +1377,16 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 			console.log(`[AI Chat] Prepared ${imageParts.length} image part(s) for AI`)
 		}
 
+		const _chatPairs: Array<{ki: number; pKey: string; modelName: string}> = []
+		for (let _ki = 0; _ki < apiKeys.length; _ki++) {
+			const _ms = await getGeminiCandidates(apiKeys[_ki])
+			for (const _m of _ms) _chatPairs.push({ ki: _ki, pKey: apiKeys[_ki], modelName: _m })
+		}
+		const _chatExhausted = new Set<number>()
 		let lastError: any
-		for (const modelName of candidateModels) {
+		for (const { ki: _ki, pKey: _pKey, modelName } of _chatPairs) {
+		if (_chatExhausted.has(_ki)) continue
+		const genAI = new GoogleGenerativeAI(_pKey)
 		let parsedResponse: any = null
 		let responseText: string = ''
 		try {
@@ -2080,15 +2082,22 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 				console.error(`[AI Chat] Database error while processing action "${parsedResponse.action}":`, e)
 				throw e // Re-throw to be caught by outer handler
 			}
+			if (isQuotaError(e)) _chatExhausted.add(_ki)
 			continue
 		}
 	}
 
+	if (_chatExhausted.size === apiKeys.length) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
 	throw lastError || new Error('All AI models failed')
 } catch (e: any) {
 	
 	// If the error contains validation or missing field information, pass it through
 	const errorMessage = e?.message || ''
+	if (errorMessage.includes('GEMINI_DAILY_LIMIT_REACHED')) {
+		return NextResponse.json({
+			response: "Jesse AI has reached its daily limit. It resets automatically — try again later today or tomorrow."
+		}, { status: 200 })
+	}
 	if (errorMessage.includes('required') || 
 	    errorMessage.includes('missing') || 
 	    errorMessage.includes('need') ||

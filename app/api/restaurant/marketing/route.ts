@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { GoogleGenerativeAI } from '@google/generative-ai'
-import { getGeminiCandidates } from '@/lib/openai'
+import { getGeminiCandidates, getGeminiApiKeys, isQuotaError } from '@/lib/openai'
 
 export const dynamic = 'force-dynamic'
 
@@ -147,16 +147,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
   }
 
-  const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey) return NextResponse.json({ error: 'AI service not configured' }, { status: 500 })
-
-  const genAI = new GoogleGenerativeAI(apiKey)
-  const candidates = await getGeminiCandidates(apiKey)
-  let model: any = null
-  for (const name of candidates) {
-    try { model = genAI.getGenerativeModel({ model: name }); break } catch { /* try next */ }
-  }
-  if (!model) return NextResponse.json({ error: 'No AI model available' }, { status: 500 })
+  const apiKeys = getGeminiApiKeys()
+  if (apiKeys.length === 0) return NextResponse.json({ error: 'AI service not configured' }, { status: 500 })
 
   let prompt = ''
 
@@ -295,33 +287,45 @@ Write ${desc} for this campaign. Be creative, specific, and compelling.
 Return ONLY the content text — no JSON, no explanation, no extra formatting. Just the copy itself.`
   }
 
-  try {
-    const result = await model.generateContent(prompt)
-    let text = result.response.text().trim()
-    text = sanitize(text)
-
-    if (action === 'diagnose' || action === 'generate_campaign') {
-      // Strip markdown fences if any
-      text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-      try {
-        const parsed = JSON.parse(text)
-        return NextResponse.json({ ok: true, result: parsed })
-      } catch {
-        // Try to extract JSON
-        const match = text.match(/\{[\s\S]+\}/)
-        if (match) {
-          try {
-            const parsed = JSON.parse(match[0])
-            return NextResponse.json({ ok: true, result: parsed })
-          } catch { /* fall through */ }
-        }
-        return NextResponse.json({ ok: true, result: text })
-      }
+  for (const _key of apiKeys) {
+    const _genAI = new GoogleGenerativeAI(_key)
+    const _candidates = await getGeminiCandidates(_key)
+    let _model: any = null
+    for (const _n of _candidates) {
+      try { _model = _genAI.getGenerativeModel({ model: _n }); break } catch { }
     }
+    if (!_model) continue
 
-    return NextResponse.json({ ok: true, result: text })
-  } catch (e: any) {
-    console.error('[Marketing API]', e)
-    return NextResponse.json({ error: e.message ?? 'AI error' }, { status: 500 })
+    try {
+      const result = await _model.generateContent(prompt)
+      let text = result.response.text().trim()
+      text = sanitize(text)
+
+      if (action === 'diagnose' || action === 'generate_campaign') {
+        // Strip markdown fences if any
+        text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+        try {
+          const parsed = JSON.parse(text)
+          return NextResponse.json({ ok: true, result: parsed })
+        } catch {
+          // Try to extract JSON
+          const match = text.match(/\{[\s\S]+\}/)
+          if (match) {
+            try {
+              const parsed = JSON.parse(match[0])
+              return NextResponse.json({ ok: true, result: parsed })
+            } catch { /* fall through */ }
+          }
+          return NextResponse.json({ ok: true, result: text })
+        }
+      }
+
+      return NextResponse.json({ ok: true, result: text })
+    } catch (e: any) {
+      if (isQuotaError(e)) continue
+      console.error('[Marketing API]', e)
+      return NextResponse.json({ error: e.message ?? 'AI error' }, { status: 500 })
+    }
   }
+  return NextResponse.json({ error: 'Daily AI limit reached. Jesse AI resets automatically — try again tomorrow.' }, { status: 429 })
 }

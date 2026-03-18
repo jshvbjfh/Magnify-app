@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { signOut } from 'next-auth/react'
 
-type OwnerView = 'overview' | 'history' | 'reports' | 'inventory'
+type OwnerView = 'home' | 'details' | 'history' | 'reports' | 'inventory'
 type Period = 'today' | 'week' | 'month'
 type FilterState = {
   mode: 'preset' | 'custom'
@@ -29,12 +29,14 @@ type FilterState = {
 
 type DashboardData = {
   restaurantName: string
+  selectedRestaurantId: string
+  restaurants: { id: string; name: string }[]
   period: Period | 'custom'
   rangeLabel: string
   from: string
   to: string
   sync: {
-    source: 'live' | 'snapshot'
+    source: 'live' | 'snapshot' | 'minimal'
     generatedAt: string
   }
   summary: {
@@ -104,7 +106,8 @@ type DashboardData = {
 }
 
 const VIEW_OPTIONS: { id: OwnerView; label: string }[] = [
-  { id: 'overview', label: 'Today' },
+  { id: 'home', label: 'Home' },
+  { id: 'details', label: 'Details' },
   { id: 'history', label: 'History' },
   { id: 'reports', label: 'Reports' },
   { id: 'inventory', label: 'Inventory' },
@@ -128,6 +131,33 @@ function getStatusClasses(level: DashboardData['status']['level']) {
   if (level === 'live') return 'bg-green-50 text-green-700 border-green-200'
   if (level === 'recent') return 'bg-amber-50 text-amber-700 border-amber-200'
   return 'bg-gray-100 text-gray-600 border-gray-200'
+}
+
+function getProfitSignal(profit: number) {
+  if (profit > 0) {
+    return {
+      hero: 'border-green-200 bg-[linear-gradient(135deg,#ecfdf5,white_55%,#dcfce7)]',
+      pill: 'bg-green-100 text-green-700',
+      text: 'text-green-700',
+      label: 'Making money',
+    }
+  }
+
+  if (profit < 0) {
+    return {
+      hero: 'border-red-200 bg-[linear-gradient(135deg,#fef2f2,white_55%,#fee2e2)]',
+      pill: 'bg-red-100 text-red-700',
+      text: 'text-red-700',
+      label: 'Losing money',
+    }
+  }
+
+  return {
+    hero: 'border-amber-200 bg-[linear-gradient(135deg,#fffbeb,white_55%,#fef3c7)]',
+    pill: 'bg-amber-100 text-amber-700',
+    text: 'text-amber-700',
+    label: 'At break-even',
+  }
 }
 
 function KpiCard({
@@ -169,7 +199,7 @@ function SectionCard({ title, sub, children }: { title: string; sub?: string; ch
 
 export default function OwnerShell() {
   const today = new Date().toISOString().slice(0, 10)
-  const [view, setView] = useState<OwnerView>('overview')
+  const [view, setView] = useState<OwnerView>('home')
   const [filters, setFilters] = useState<FilterState>({ mode: 'preset', period: 'today', from: today, to: today })
   const [draftFrom, setDraftFrom] = useState(today)
   const [draftTo, setDraftTo] = useState(today)
@@ -177,18 +207,28 @@ export default function OwnerShell() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<string | null>(null)
+  const [selectedRestaurantId, setSelectedRestaurantId] = useState<string>('')
+  const [selectedHomeDate, setSelectedHomeDate] = useState<string>(today)
 
-  const load = useCallback(async (currentFilters: FilterState) => {
+  const load = useCallback(async (currentFilters: FilterState, currentRestaurantId?: string, currentView?: OwnerView) => {
     setLoading(true)
     setError(null)
 
     try {
       const params = new URLSearchParams()
-      if (currentFilters.mode === 'custom') {
-        params.set('from', currentFilters.from)
-        params.set('to', currentFilters.to)
+      if (currentView === 'home') {
+        params.set('period', 'week')
       } else {
-        params.set('period', currentFilters.period)
+        if (currentFilters.mode === 'custom') {
+          params.set('from', currentFilters.from)
+          params.set('to', currentFilters.to)
+        } else {
+          params.set('period', currentFilters.period)
+        }
+      }
+
+      if (currentRestaurantId) {
+        params.set('restaurantId', currentRestaurantId)
       }
 
       const res = await fetch(`/api/owner/dashboard?${params.toString()}`, { credentials: 'include' })
@@ -199,6 +239,17 @@ export default function OwnerShell() {
 
       const json = await res.json()
       setData(json)
+      if (json.selectedRestaurantId) {
+        setSelectedRestaurantId(json.selectedRestaurantId)
+      }
+      if (currentView === 'home' && Array.isArray(json.dailyHistory)) {
+        const dates = json.dailyHistory.map((day: { date: string }) => day.date)
+        if (dates.includes(today)) {
+          setSelectedHomeDate((current) => dates.includes(current) ? current : today)
+        } else if (dates.length > 0) {
+          setSelectedHomeDate((current) => dates.includes(current) ? current : dates[dates.length - 1])
+        }
+      }
       setLastRefresh(new Date().toISOString())
     } catch {
       setError('Network error. Check your connection and try again.')
@@ -208,18 +259,26 @@ export default function OwnerShell() {
   }, [])
 
   useEffect(() => {
-    load(filters)
-  }, [filters, load])
+    load(filters, selectedRestaurantId, view)
+  }, [filters, load, selectedRestaurantId, view])
 
   useEffect(() => {
     const timer = setInterval(() => {
-      load(filters)
+      load(filters, selectedRestaurantId, view)
     }, 30000)
     return () => clearInterval(timer)
-  }, [filters, load])
+  }, [filters, load, selectedRestaurantId, view])
 
   const applyPreset = (period: Period) => {
     setFilters((current) => ({ ...current, mode: 'preset', period }))
+  }
+
+  const openHome = () => {
+    setView('home')
+    setFilters({ mode: 'preset', period: 'today', from: today, to: today })
+    setDraftFrom(today)
+    setDraftTo(today)
+    setSelectedHomeDate(today)
   }
 
   const applyCustomRange = () => {
@@ -230,6 +289,16 @@ export default function OwnerShell() {
   const summary = data?.summary
   const status = data?.status
   const costBreakdown = data?.costBreakdown
+  const selectedDay = data?.dailyHistory.find((day) => day.date === selectedHomeDate) ?? data?.dailyHistory.find((day) => day.date === today) ?? data?.dailyHistory[data.dailyHistory.length - 1]
+  const homeSummary = selectedDay ? {
+    revenue: selectedDay.revenue,
+    expenses: selectedDay.expenses,
+    profit: selectedDay.profit,
+  } : summary
+  const profitSignal = homeSummary ? getProfitSignal(homeSummary.profit) : null
+  const cashFlowTotal = homeSummary ? Math.max(homeSummary.revenue + homeSummary.expenses, 1) : 1
+  const revenueShare = homeSummary ? Math.max((homeSummary.revenue / cashFlowTotal) * 100, homeSummary.revenue > 0 ? 12 : 0) : 0
+  const expenseShare = homeSummary ? Math.max((homeSummary.expenses / cashFlowTotal) * 100, homeSummary.expenses > 0 ? 12 : 0) : 0
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -243,19 +312,30 @@ export default function OwnerShell() {
               <div>
                 <h1 className="text-lg font-bold text-gray-900 sm:text-xl">{data?.restaurantName ?? 'Owner Dashboard'}</h1>
                 <p className="text-xs text-gray-500 sm:text-sm">
-                  Remote owner view · last refreshed {lastRefresh ? formatCompactDate(lastRefresh) : 'just now'}
+                  {view === 'home' ? 'Today at a glance' : 'Remote owner details'} · last refreshed {lastRefresh ? formatCompactDate(lastRefresh) : 'just now'}
                 </p>
                 {data?.sync ? (
                   <p className="mt-1 text-[11px] text-gray-400">
-                    Source: {data.sync.source === 'snapshot' ? 'restaurant desktop sync' : 'cloud live data'} · branch sync time {formatCompactDate(data.sync.generatedAt)}
+                    Source: {data.sync.source === 'snapshot' ? 'restaurant desktop snapshot' : data.sync.source === 'minimal' ? 'restaurant auto-sync' : 'cloud live data'} · branch sync time {formatCompactDate(data.sync.generatedAt)}
                   </p>
                 ) : null}
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {data?.restaurants && data.restaurants.length > 1 ? (
+                <select
+                  value={selectedRestaurantId}
+                  onChange={(event) => setSelectedRestaurantId(event.target.value)}
+                  className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 outline-none focus:border-orange-400"
+                >
+                  {data.restaurants.map((restaurant) => (
+                    <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
+                  ))}
+                </select>
+              ) : null}
               <button
-                onClick={() => load(filters)}
+                onClick={() => load(filters, selectedRestaurantId)}
                 className="inline-flex items-center gap-2 rounded-xl bg-gray-100 px-3 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-200 hover:text-gray-900"
               >
                 <RefreshCw className="h-4 w-4" />
@@ -276,7 +356,7 @@ export default function OwnerShell() {
               {VIEW_OPTIONS.map((option) => (
                 <button
                   key={option.id}
-                  onClick={() => setView(option.id)}
+                  onClick={() => option.id === 'home' ? openHome() : setView(option.id)}
                   className={`rounded-xl px-3 py-2 text-sm font-semibold transition-colors ${
                     view === option.id ? 'bg-orange-500 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
@@ -288,48 +368,58 @@ export default function OwnerShell() {
 
             <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                <div className="flex flex-wrap gap-2">
-                  {(['today', 'week', 'month'] as Period[]).map((period) => (
-                    <button
-                      key={period}
-                      onClick={() => applyPreset(period)}
-                      className={`rounded-xl px-3 py-2 text-sm font-medium capitalize transition-colors ${
-                        filters.mode === 'preset' && filters.period === period
-                          ? 'bg-white text-gray-900 shadow-sm'
-                          : 'bg-gray-200/70 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      {period === 'today' ? 'Today' : period === 'week' ? 'Last 7 days' : 'This month'}
-                    </button>
-                  ))}
-                </div>
+                {view === 'home' ? (
+                  <div className="rounded-2xl bg-white px-4 py-3 text-sm text-gray-600 shadow-sm">
+                    Home opens on <strong className="text-gray-900">today</strong>. Tap a date below to see that day's ending picture instantly.
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap gap-2">
+                      {(['today', 'week', 'month'] as Period[]).map((period) => (
+                        <button
+                          key={period}
+                          onClick={() => applyPreset(period)}
+                          className={`rounded-xl px-3 py-2 text-sm font-medium capitalize transition-colors ${
+                            filters.mode === 'preset' && filters.period === period
+                              ? 'bg-white text-gray-900 shadow-sm'
+                              : 'bg-gray-200/70 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >
+                          {period === 'today' ? 'Today' : period === 'week' ? 'Last 7 days' : 'This month'}
+                        </button>
+                      ))}
+                    </div>
 
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
-                  <input
-                    type="date"
-                    value={draftFrom}
-                    onChange={(event) => setDraftFrom(event.target.value)}
-                    className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-orange-400"
-                  />
-                  <input
-                    type="date"
-                    value={draftTo}
-                    onChange={(event) => setDraftTo(event.target.value)}
-                    className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-orange-400"
-                  />
-                  <button
-                    onClick={applyCustomRange}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-black"
-                  >
-                    <CalendarRange className="h-4 w-4" />
-                    Apply dates
-                  </button>
-                </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                      <input
+                        type="date"
+                        value={draftFrom}
+                        onChange={(event) => setDraftFrom(event.target.value)}
+                        className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-orange-400"
+                      />
+                      <input
+                        type="date"
+                        value={draftTo}
+                        onChange={(event) => setDraftTo(event.target.value)}
+                        className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-orange-400"
+                      />
+                      <button
+                        onClick={applyCustomRange}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-black"
+                      >
+                        <CalendarRange className="h-4 w-4" />
+                        Apply dates
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                <span className="rounded-full bg-white px-3 py-1 font-medium text-gray-700 shadow-sm">Range: {data?.rangeLabel ?? 'Today'}</span>
-                {data ? <span>Showing {data.from} to {data.to}</span> : null}
+                <span className="rounded-full bg-white px-3 py-1 font-medium text-gray-700 shadow-sm">Range: {view === 'home' ? 'Recent days' : data?.rangeLabel ?? 'Today'}</span>
+                {view === 'home'
+                  ? selectedDay ? <span>Selected day: {selectedDay.label}</span> : null
+                  : data ? <span>Showing {data.from} to {data.to}</span> : null}
               </div>
             </div>
           </div>
@@ -365,42 +455,152 @@ export default function OwnerShell() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <KpiCard
-                  label="Revenue"
-                  value={formatCurrency(summary.revenue)}
-                  sub={`${summary.salesCount} sale${summary.salesCount === 1 ? '' : 's'} in ${data.rangeLabel.toLowerCase()}`}
-                  tone="text-gray-900"
-                  icon={<TrendingUp className="h-4 w-4" />}
-                />
-                <KpiCard
-                  label="Expenses"
-                  value={formatCurrency(summary.expenses)}
-                  sub="Food, labor, waste, and recorded expenses"
-                  tone="text-red-600"
-                  icon={<Wallet className="h-4 w-4" />}
-                />
-                <KpiCard
-                  label="Profit / Loss"
-                  value={formatCurrency(summary.profit)}
-                  sub={summary.profit >= 0 ? 'Business is above break-even' : 'Business is below break-even'}
-                  tone={summary.profit >= 0 ? 'text-green-600' : 'text-red-600'}
-                  icon={summary.profit >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-                />
-                <KpiCard
-                  label="Transactions"
-                  value={summary.transactionCount.toString()}
-                  sub="Recent entries in selected range"
-                  tone="text-gray-900"
-                  icon={<BarChart3 className="h-4 w-4" />}
-                />
-              </div>
+              {view === 'home' ? (
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+                  <div className="lg:col-span-2 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Choose a day</p>
+                    <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+                      {data.dailyHistory.length === 0 ? (
+                        <div className="rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-400">No recent daily totals yet.</div>
+                      ) : data.dailyHistory.map((day) => {
+                        const selected = selectedDay?.date === day.date
+                        return (
+                          <button
+                            key={day.date}
+                            onClick={() => setSelectedHomeDate(day.date)}
+                            className={`min-w-[120px] rounded-2xl border px-4 py-3 text-left transition-colors ${selected ? 'border-orange-300 bg-orange-50' : 'border-gray-200 bg-gray-50 hover:bg-gray-100'}`}
+                          >
+                            <p className={`text-xs font-semibold uppercase tracking-wide ${selected ? 'text-orange-600' : 'text-gray-500'}`}>{day.label}</p>
+                            <p className={`mt-2 text-sm font-bold ${day.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(day.profit)}</p>
+                            <p className="mt-1 text-[11px] text-gray-500">{day.date === today ? 'Today' : day.date}</p>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
 
-              {view === 'overview' ? (
+                  <section className={`rounded-[28px] border p-5 shadow-sm sm:p-6 ${profitSignal?.hero}`}>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-orange-600">{selectedDay?.date === today ? 'Today' : selectedDay?.label ?? 'Selected day'}</p>
+                    <h2 className="mt-2 text-2xl font-bold text-gray-900 sm:text-3xl">How did the business close that day?</h2>
+                    <p className="mt-2 max-w-xl text-sm leading-relaxed text-gray-600">
+                      These are the ending cards for the selected day: what came in, what went out, and what was left.
+                    </p>
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${profitSignal?.pill}`}>
+                        {profitSignal?.label} on this day
+                      </span>
+                      <span className="rounded-full bg-white/80 px-3 py-1 text-xs font-medium text-gray-600">
+                        Default selection is today
+                      </span>
+                    </div>
+
+                    <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div className="rounded-3xl border border-white bg-white/90 p-4 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">Revenue</p>
+                        <p className="mt-3 text-2xl font-bold text-gray-900 sm:text-3xl">{formatCurrency(homeSummary?.revenue ?? 0)}</p>
+                        <p className="mt-2 text-xs text-gray-500">Ending revenue for the selected day</p>
+                      </div>
+                      <div className="rounded-3xl border border-red-100 bg-red-50 p-4 shadow-sm">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-red-600">Expenses</p>
+                        <p className="mt-3 text-2xl font-bold text-red-600 sm:text-3xl">{formatCurrency(homeSummary?.expenses ?? 0)}</p>
+                        <p className="mt-2 text-xs text-red-500">Ending expense total for the selected day</p>
+                      </div>
+                      <div className={`rounded-3xl border p-4 shadow-sm ${(homeSummary?.profit ?? 0) >= 0 ? 'border-green-100 bg-green-50' : 'border-red-100 bg-red-50'}`}>
+                        <p className={`text-[11px] font-semibold uppercase tracking-[0.2em] ${(homeSummary?.profit ?? 0) >= 0 ? 'text-green-700' : 'text-red-600'}`}>Profit / Loss</p>
+                        <p className={`mt-3 text-2xl font-bold sm:text-3xl ${(homeSummary?.profit ?? 0) >= 0 ? 'text-green-700' : 'text-red-600'}`}>{formatCurrency(homeSummary?.profit ?? 0)}</p>
+                        <p className={`mt-2 text-xs ${(homeSummary?.profit ?? 0) >= 0 ? 'text-green-700/80' : 'text-red-500'}`}>
+                          {(homeSummary?.profit ?? 0) >= 0 ? 'The business closed above break-even on this day.' : 'The business closed below break-even on this day.'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-6 rounded-3xl border border-white/80 bg-white/85 p-4 shadow-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">Cash in vs cash out</p>
+                          <p className="mt-1 text-sm text-gray-600">A simple visual split of the selected day's money movement.</p>
+                        </div>
+                        <p className={`text-sm font-bold ${profitSignal?.text}`}>{profitSignal?.label}</p>
+                      </div>
+                      <div className="mt-4 h-4 overflow-hidden rounded-full bg-gray-200">
+                        <div className="flex h-full w-full">
+                          <div className="bg-green-500" style={{ width: `${revenueShare}%` }} />
+                          <div className="bg-red-500" style={{ width: `${expenseShare}%` }} />
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                        <div className="rounded-2xl bg-green-50 px-3 py-3">
+                          <p className="font-semibold uppercase tracking-wide text-green-700">Cash in</p>
+                          <p className="mt-1 text-sm font-bold text-gray-900">{formatCurrency(homeSummary?.revenue ?? 0)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-red-50 px-3 py-3">
+                          <p className="font-semibold uppercase tracking-wide text-red-700">Cash out</p>
+                          <p className="mt-1 text-sm font-bold text-gray-900">{formatCurrency(homeSummary?.expenses ?? 0)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <div className="space-y-4">
+                    <SectionCard title="Quick read" sub="For the owner who only has a few seconds.">
+                      <div className="space-y-3">
+                        <div className={`rounded-2xl p-4 ${summary.profit > 0 ? 'bg-green-50' : summary.profit < 0 ? 'bg-red-50' : 'bg-amber-50'}`}>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Business result</p>
+                          <p className={`mt-2 text-lg font-bold ${(homeSummary?.profit ?? 0) > 0 ? 'text-green-600' : (homeSummary?.profit ?? 0) < 0 ? 'text-red-600' : 'text-amber-700'}`}>
+                            {(homeSummary?.profit ?? 0) > 0 ? 'Made money that day' : (homeSummary?.profit ?? 0) < 0 ? 'Lost money that day' : 'Broke even that day'}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl bg-gray-50 p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Selected date</p>
+                          <p className="mt-2 text-lg font-bold text-gray-900">{selectedDay?.label ?? 'Today'}</p>
+                          <p className="mt-1 text-xs text-gray-500">{selectedDay?.date ?? today}</p>
+                        </div>
+                        <div className="rounded-2xl bg-gray-50 p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Next step</p>
+                          <p className="mt-2 text-sm font-semibold text-gray-900">Open Details if you want the transaction feed, alerts, and deeper breakdown.</p>
+                        </div>
+                      </div>
+                    </SectionCard>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <KpiCard
+                    label="Revenue"
+                    value={formatCurrency(summary.revenue)}
+                    sub={`${summary.salesCount} sale${summary.salesCount === 1 ? '' : 's'} in ${data.rangeLabel.toLowerCase()}`}
+                    tone="text-gray-900"
+                    icon={<TrendingUp className="h-4 w-4" />}
+                  />
+                  <KpiCard
+                    label="Expenses"
+                    value={formatCurrency(summary.expenses)}
+                    sub="Food, labor, waste, and recorded expenses"
+                    tone="text-red-600"
+                    icon={<Wallet className="h-4 w-4" />}
+                  />
+                  <KpiCard
+                    label="Profit / Loss"
+                    value={formatCurrency(summary.profit)}
+                    sub={summary.profit >= 0 ? 'Business is above break-even' : 'Business is below break-even'}
+                    tone={summary.profit >= 0 ? 'text-green-600' : 'text-red-600'}
+                    icon={summary.profit >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+                  />
+                  <KpiCard
+                    label="Transactions"
+                    value={summary.transactionCount.toString()}
+                    sub="Recent entries in selected range"
+                    tone="text-gray-900"
+                    icon={<BarChart3 className="h-4 w-4" />}
+                  />
+                </div>
+              )}
+
+              {view === 'details' ? (
                 <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.2fr_0.8fr]">
                   <SectionCard
-                    title="Today's transaction feed"
-                    sub="This is the default owner view: money in, money out, and what happened most recently."
+                    title="Transaction feed"
+                    sub="Detailed owner view: money in, money out, and what happened most recently."
                   >
                     {data.transactions.length === 0 ? (
                       <p className="text-sm text-gray-400">No transactions recorded in this range yet.</p>

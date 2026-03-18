@@ -2,11 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-
-function makeJoinCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
-}
+import { ensureRestaurantForOwner, findOwnedRestaurant } from '@/lib/restaurantAccess'
 
 /** GET — fetch the admin's restaurant (creates one if missing) */
 export async function GET() {
@@ -21,20 +17,7 @@ export async function GET() {
     if (restaurant) return NextResponse.json({ restaurant, waiters: [] })
   }
 
-  let restaurant = await prisma.restaurant.findUnique({ where: { ownerId: userId } })
-
-  if (!restaurant) {
-    // Auto-create with their name as restaurant name
-    const user = await prisma.user.findUnique({ where: { id: userId } })
-    let code = makeJoinCode()
-    // ensure uniqueness
-    while (await prisma.restaurant.findUnique({ where: { joinCode: code } })) {
-      code = makeJoinCode()
-    }
-    restaurant = await prisma.restaurant.create({
-      data: { name: user?.name ? `${user.name}'s Restaurant` : 'My Restaurant', ownerId: userId, joinCode: code }
-    })
-  }
+  const restaurant = await ensureRestaurantForOwner(userId)
 
   const waiters = await prisma.user.findMany({
     where: { restaurantId: restaurant.id },
@@ -55,16 +38,16 @@ export async function POST(req: Request) {
   if (name      !== undefined) updateData.name       = name      || 'My Restaurant'
   if (billHeader !== undefined) updateData.billHeader = billHeader ?? ''
 
-  const restaurant = await prisma.restaurant.upsert({
-    where: { ownerId: userId },
-    update: updateData,
-    create: {
-      name: name || 'My Restaurant',
-      billHeader: billHeader ?? '',
-      ownerId: userId,
-      joinCode: makeJoinCode()
-    }
-  })
+  const existingRestaurant = await findOwnedRestaurant(userId)
+  const restaurant = existingRestaurant
+    ? await prisma.restaurant.update({
+        where: { id: existingRestaurant.id },
+        data: updateData,
+      })
+    : await prisma.restaurant.update({
+        where: { id: (await ensureRestaurantForOwner(userId)).id },
+        data: updateData,
+      })
 
   return NextResponse.json({ restaurant })
 }

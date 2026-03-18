@@ -148,15 +148,15 @@ export async function POST(req: Request) {
 
 		// Ensure core categories exist
 		const assetCategory = await prisma.category.upsert({
-			where: { name: 'Asset' },
+			where: { restaurantId_name: { restaurantId: null, name: 'Asset' } },
 			update: { type: 'asset' },
-			create: { name: 'Asset', type: 'asset' }
+			create: { restaurantId: null, name: 'Asset', type: 'asset' }
 		})
 
 		const incomeCategory = await prisma.category.upsert({
-			where: { name: 'Income' },
+			where: { restaurantId_name: { restaurantId: null, name: 'Income' } },
 			update: { type: 'income' },
-			create: { name: 'Income', type: 'income' }
+			create: { restaurantId: null, name: 'Income', type: 'income' }
 		})
 
 		// Ensure Accounts Receivable account exists
