@@ -1,6 +1,6 @@
 'use client'
-import { useState, useEffect } from 'react'
-import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Cloud, RefreshCw } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Cloud, RefreshCw, Download, Upload, ShieldCheck } from 'lucide-react'
 import { loadOwnerSyncConfig, loadServerOwnerSyncConfig, saveOwnerSyncConfig, syncOwnerCloud, type OwnerSyncConfig, type ServerOwnerSyncConfig } from '@/lib/ownerSyncBrowser'
 
 export default function RestaurantSettings() {
@@ -21,6 +21,12 @@ export default function RestaurantSettings() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [serverSyncConfig, setServerSyncConfig] = useState<ServerOwnerSyncConfig | null>(null)
   const [loading, setLoading] = useState(true)
+
+  // Backup / restore state
+  const [backingUp, setBackingUp] = useState(false)
+  const [restoring, setRestoring] = useState(false)
+  const [restoreMessage, setRestoreMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const localSyncConfig = loadOwnerSyncConfig()
@@ -122,6 +128,67 @@ export default function RestaurantSettings() {
     const result = await syncOwnerCloud(syncConfig)
     setSyncMessage(result.message)
     setSyncingNow(false)
+  }
+
+  async function downloadBackup() {
+    setBackingUp(true)
+    try {
+      const res = await fetch('/api/restaurant/backup', { credentials: 'include' })
+      if (!res.ok) throw new Error('Backup failed')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `magnify-backup-${new Date().toISOString().slice(0, 10)}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      setRestoreMessage({ type: 'error', text: 'Backup download failed. Please try again.' })
+      setTimeout(() => setRestoreMessage(null), 4000)
+    } finally {
+      setBackingUp(false)
+    }
+  }
+
+  async function handleRestoreFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+
+    if (!file.name.endsWith('.json')) {
+      setRestoreMessage({ type: 'error', text: 'Please choose a .json backup file.' })
+      setTimeout(() => setRestoreMessage(null), 4000)
+      return
+    }
+
+    const confirmed = window.confirm(
+      'Restore from this backup?\n\nExisting data with the same IDs will be overwritten. New data in the backup will be added alongside your current data.\n\nThis cannot be undone.'
+    )
+    if (!confirmed) return
+
+    setRestoring(true)
+    setRestoreMessage(null)
+    try {
+      const text = await file.text()
+      const json = JSON.parse(text)
+      const res = await fetch('/api/restaurant/backup', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(json),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setRestoreMessage({ type: 'error', text: data.error ?? 'Restore failed.' })
+      } else {
+        setRestoreMessage({ type: 'success', text: 'Backup restored successfully! Refresh the page to see your data.' })
+      }
+    } catch {
+      setRestoreMessage({ type: 'error', text: 'Invalid backup file or restore failed.' })
+    } finally {
+      setRestoring(false)
+      setTimeout(() => setRestoreMessage(null), 6000)
+    }
   }
 
   if (loading) return (
@@ -388,6 +455,60 @@ export default function RestaurantSettings() {
             {syncingNow ? 'Syncing…' : 'Sync now'}
           </button>
         </div>
+      </div>
+
+      {/* ── Backup & Restore ── */}
+      <div className="xl:col-span-2 bg-white rounded-2xl border border-gray-200 p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-5 w-5 text-orange-500" />
+          <h2 className="text-base font-bold text-gray-900">Backup &amp; Restore</h2>
+        </div>
+        <p className="text-sm text-gray-500">
+          Download a full copy of your data (transactions, dishes, inventory, employees, sales, etc.) as a JSON file.
+          You can restore it anytime to the same or a different account.
+        </p>
+
+        {restoreMessage && (
+          <div className={`rounded-xl px-4 py-3 text-sm font-medium ${
+            restoreMessage.type === 'success'
+              ? 'bg-green-50 border border-green-200 text-green-700'
+              : 'bg-red-50 border border-red-200 text-red-700'
+          }`}>
+            {restoreMessage.text}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={downloadBackup}
+            disabled={backingUp}
+            className="inline-flex items-center gap-2 rounded-2xl bg-gray-900 hover:bg-gray-700 disabled:opacity-60 text-white font-semibold px-5 py-3 text-sm transition-colors shadow-sm"
+          >
+            <Download className="h-4 w-4" />
+            {backingUp ? 'Preparing…' : 'Download backup'}
+          </button>
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={restoring}
+            className="inline-flex items-center gap-2 rounded-2xl border border-orange-200 bg-orange-50 hover:bg-orange-100 disabled:opacity-60 text-orange-700 font-semibold px-5 py-3 text-sm transition-colors"
+          >
+            <Upload className="h-4 w-4" />
+            {restoring ? 'Restoring…' : 'Restore from backup'}
+          </button>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={handleRestoreFile}
+          />
+        </div>
+
+        <p className="text-xs text-gray-400">
+          Tip: Download a backup before making big changes. The file includes all transactions, dishes, inventory, employees, and sales — but not uploaded images or chat history.
+        </p>
       </div>
 
     </div>
