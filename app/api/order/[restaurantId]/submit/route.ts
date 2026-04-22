@@ -58,7 +58,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
         id: { in: requestedDishIds },
         userId: restaurant.ownerId,
         restaurantId: resolvedRestaurantId,
-        ...(resolvedBranchId ? { branchId: resolvedBranchId } : {}),
+        ...(resolvedBranchId
+          ? { OR: [{ branchId: resolvedBranchId }, { branchId: null }] }
+          : {}),
         isActive: true,
       },
       select: { id: true, name: true, sellingPrice: true },
