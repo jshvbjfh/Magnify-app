@@ -5,7 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser, isMainRestaurantBranch } from '@/lib/restaurantAccess'
 import { resolveCancellationApprover } from '@/lib/cancelApproval'
 import { InsufficientFifoStockError, InsufficientInventoryStockError, recordDishSalesForPaidOrder, recordDishWasteForOrderItems } from '@/lib/dishSaleRecording'
-import { syncRestaurantOrderTotals, enqueueOrderSync } from '@/lib/restaurantOrders'
+import { calculateRestaurantOrderTotals, syncRestaurantOrderTotals, enqueueOrderSync } from '@/lib/restaurantOrders'
 import { recordJournalEntry } from '@/lib/accounting'
 import { findRestaurantAction, isRestaurantActionConflict, normalizeRestaurantActionKey, recordRestaurantAction } from '@/lib/restaurantAction'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
@@ -199,13 +199,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
           })),
         })
 
+        const journalAmount = calculateRestaurantOrderTotals(
+          currentOrder.items.map((item) => ({ dishPrice: Number(item.dishPrice), qty: Number(item.qty) }))
+        ).totalAmount
+
         await recordJournalEntry(tx, {
           userId: context.billingUserId,
           restaurantId: context.restaurantId,
           branchId: context.branchId,
           date: paidOrder.paidAt ?? paidAt,
           description: transactionDescription,
-          amount: syncedOrder.totalAmount,
+          amount: journalAmount,
           direction: 'in',
           accountName: 'DishSale',
           categoryType: 'income',
