@@ -2,164 +2,131 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+
+function normalizePaymentMethod(paymentMethod?: string): string {
+  const raw = String(paymentMethod || 'Cash').trim().toLowerCase()
+  if (raw.includes('mobile') || raw.includes('momo')) return 'Mobile Money'
+  if (raw.includes('bank') || raw.includes('transfer') || raw.includes('card')) return 'Bank'
+  if (raw.includes('credit')) return 'Credit'
+  return 'Cash'
+}
+
+async function ensureCategoryByType(type: string, fallbackName: string) {
+  let category = await prisma.category.findFirst({ where: { type } })
+  if (!category) {
+    category = await prisma.category.create({
+      data: {
+        name: fallbackName,
+        type,
+      } as any,
+    })
+  }
+  return category
+}
+
+async function ensureAccount(params: { name: string; type: string; categoryId: string; code: string; description?: string }) {
+  let account = await prisma.account.findFirst({ where: { name: params.name } })
+  if (!account) {
+    account = await prisma.account.create({
+      data: {
+        code: params.code,
+        name: params.name,
+        categoryId: params.categoryId,
+        type: params.type,
+        description: params.description,
+      }
+    })
+  }
+  return account
+}
+
+async function resolveSaleSettlementAccount(paymentMethod?: string) {
+  const normalizedPaymentMethod = normalizePaymentMethod(paymentMethod)
+  if (normalizedPaymentMethod === 'Credit') {
+    const assetCategory = await ensureCategoryByType('asset', 'Asset')
+    const account = await ensureAccount({ name: 'Accounts Receivable', type: 'asset', categoryId: assetCategory.id, code: '1200', description: 'Customer balances for sales on credit' })
+    return { paymentMethod: normalizedPaymentMethod, account }
+  }
+  if (normalizedPaymentMethod === 'Bank') {
+    const assetCategory = await ensureCategoryByType('asset', 'Asset')
+    const account = await ensureAccount({ name: 'Current Account', type: 'asset', categoryId: assetCategory.id, code: '1010', description: 'Bank account balance' })
+    return { paymentMethod: normalizedPaymentMethod, account }
+  }
+  if (normalizedPaymentMethod === 'Mobile Money') {
+    const assetCategory = await ensureCategoryByType('asset', 'Asset')
+    const account = await ensureAccount({ name: 'Mobile Money', type: 'asset', categoryId: assetCategory.id, code: '1020', description: 'Mobile money balance' })
+    return { paymentMethod: normalizedPaymentMethod, account }
+  }
+  const assetCategory = await ensureCategoryByType('asset', 'Asset')
+  const account = await ensureAccount({ name: 'Cash', type: 'asset', categoryId: assetCategory.id, code: '1000', description: 'Cash on hand' })
+  return { paymentMethod: 'Cash', account }
+}
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const context = await getRestaurantContextForUser(session.user.id)
+  const billingUserId = context?.billingUserId ?? session.user.id
+  const restaurantId = context?.restaurantId ?? null
+  const branchId = context?.branchId ?? null
+
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
   const to = searchParams.get('to')
 
-  // For waiters, show the restaurant's sales (recorded under admin)
-  const currentUser = await prisma.user.findUnique({
-    where: { id: session.user.id },
-    select: { role: true, restaurantId: true }
-  })
-  let queryUserId = session.user.id
-  if ((currentUser?.role === 'waiter' || currentUser?.role === 'kitchen') && currentUser.restaurantId) {
-    const restaurant = await prisma.restaurant.findUnique({ where: { id: currentUser.restaurantId } })
-    if (restaurant) queryUserId = restaurant.ownerId
-  }
-
   const sales = await prisma.dishSale.findMany({
     where: {
-      userId: queryUserId,
+      userId: billingUserId,
+      ...(restaurantId ? { restaurantId } : {}),
+      ...(branchId ? { branchId } : {}),
       ...(from && to && { saleDate: { gte: new Date(from), lte: new Date(to) } }),
     },
     include: { dish: true },
     orderBy: { saleDate: 'desc' }
   })
-  return NextResponse.json(sales)
+
+  const orderIds = Array.from(new Set(
+    sales
+      .map((sale) => sale.orderId)
+      .filter((orderId): orderId is string => Boolean(orderId))
+  ))
+
+  const orders = orderIds.length > 0
+    ? await prisma.restaurantOrder.findMany({
+        where: {
+          id: { in: orderIds },
+          ...(restaurantId ? { restaurantId } : {}),
+          ...(branchId ? { branchId } : {}),
+        },
+        select: {
+          id: true,
+          orderNumber: true,
+          tableName: true,
+          createdByName: true,
+        },
+      })
+    : []
+
+  const orderMeta = new Map(orders.map((order) => [order.id, order]))
+
+  return NextResponse.json(sales.map((sale) => {
+    const order = sale.orderId ? orderMeta.get(sale.orderId) : null
+    return {
+      ...sale,
+      waiterName: order?.createdByName ?? null,
+      orderNumber: order?.orderNumber ?? null,
+      tableName: order?.tableName ?? null,
+    }
+  }))
 }
 
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const { dishId, quantitySold, paymentMethod, saleDate } = await req.json()
-  if (!dishId || !quantitySold) {
-    return NextResponse.json({ error: 'dishId and quantitySold required' }, { status: 400 })
-  }
-
-  const qty = Number(quantitySold)
-
-  // Resolve billing owner (waiters bill under restaurant admin)
-  const currentUser = await prisma.user.findUnique({
-    where: { id: session.user.id },
-    select: { role: true, restaurantId: true }
-  })
-  let billingUserId = session.user.id
-  if ((currentUser?.role === 'waiter' || currentUser?.role === 'kitchen') && currentUser.restaurantId) {
-    const restaurant = await prisma.restaurant.findUnique({ where: { id: currentUser.restaurantId } })
-    if (restaurant) billingUserId = restaurant.ownerId
-  }
-
-  // Check if the billing owner has FIFO enabled
-  const owner = await prisma.user.findUnique({
-    where: { id: billingUserId },
-    select: { fifoEnabled: true }
-  })
-  const fifoEnabled = (owner as any)?.fifoEnabled ?? false
-
-  // Fetch dish + recipe
-  const dish = await prisma.dish.findFirst({
-    where: { id: dishId, userId: billingUserId },
-    include: { ingredients: { include: { ingredient: true } } }
-  })
-  if (!dish) return NextResponse.json({ error: 'Dish not found' }, { status: 404 })
-
-  const totalSaleAmount = dish.sellingPrice * qty
-  let calculatedFoodCost = 0
-
-  // ── Ingredient deduction ──────────────────────────────────────────────────
-  // Records per ingredient used (for DishSaleIngredient)
-  const ingredientLines: { ingredientId: string; quantityUsed: number; actualCost: number }[] = []
-
-  for (const row of dish.ingredients) {
-    const totalNeeded = row.quantityRequired * qty
-
-    if (fifoEnabled) {
-      // FIFO: consume from oldest batches first
-      let remaining = totalNeeded
-      let lineCost = 0
-
-      const batches = await prisma.inventoryPurchase.findMany({
-        where: { ingredientId: row.ingredientId, userId: billingUserId, remainingQuantity: { gt: 0 } },
-        orderBy: { purchasedAt: 'asc' }
-      })
-
-      for (const batch of batches) {
-        if (remaining <= 0) break
-        const take = Math.min(batch.remainingQuantity, remaining)
-        lineCost += take * batch.unitCost
-        remaining -= take
-
-        await prisma.inventoryPurchase.update({
-          where: { id: batch.id },
-          data: { remainingQuantity: { decrement: take } }
-        })
-      }
-
-      // If batches didn't cover everything (e.g. no purchases recorded), fall back to unitCost
-      if (remaining > 0) {
-        lineCost += remaining * (row.ingredient.unitCost ?? 0)
-      }
-
-      calculatedFoodCost += lineCost
-      ingredientLines.push({ ingredientId: row.ingredientId, quantityUsed: totalNeeded, actualCost: lineCost })
-    } else {
-      // Simple mode: use current unitCost
-      const cost = totalNeeded * (row.ingredient.unitCost ?? 0)
-      calculatedFoodCost += cost
-      ingredientLines.push({ ingredientId: row.ingredientId, quantityUsed: totalNeeded, actualCost: cost })
-    }
-
-    // Always deduct from inventory quantity
-    await prisma.inventoryItem.update({
-      where: { id: row.ingredientId },
-      data: { quantity: { decrement: totalNeeded } }
-    })
-  }
-
-  // ── Accounting entries ────────────────────────────────────────────────────
-  let salesCategory = await prisma.category.findFirst({ where: { name: 'Sales Revenue' } })
-  if (!salesCategory) salesCategory = await prisma.category.create({ data: { name: 'Sales Revenue', type: 'income', description: 'Revenue from dish sales' } })
-  let salesAccount = await prisma.account.findFirst({ where: { name: 'Restaurant Sales' } })
-  if (!salesAccount) salesAccount = await prisma.account.create({ data: { code: 'REST-SAL-001', name: 'Restaurant Sales', categoryId: salesCategory.id, type: 'revenue', description: 'Restaurant dish sales account' } })
-  let cashCategory = await prisma.category.findFirst({ where: { name: 'Asset' } })
-  if (!cashCategory) cashCategory = await prisma.category.create({ data: { name: 'Asset', type: 'asset', description: 'Asset accounts' } })
-  let cashAccount = await prisma.account.findFirst({ where: { name: 'Cash' } })
-  if (!cashAccount) cashAccount = await prisma.account.create({ data: { code: '1000', name: 'Cash', categoryId: cashCategory.id, type: 'asset', description: 'Cash on hand' } })
-
-  const pairId = `pair-sale-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-  const txDate = saleDate ? new Date(saleDate) : new Date()
-  const txDesc = `${dish.name} × ${qty}`
-  const profit = totalSaleAmount - calculatedFoodCost
-
-  await prisma.transaction.createMany({
-    data: [
-      { userId: billingUserId, accountId: cashAccount.id, categoryId: cashCategory.id, date: txDate, description: txDesc, amount: totalSaleAmount, type: 'debit', isManual: true, paymentMethod: paymentMethod || 'Cash', pairId, profitAmount: profit, costAmount: calculatedFoodCost },
-      { userId: billingUserId, accountId: salesAccount.id, categoryId: salesCategory.id, date: txDate, description: txDesc, amount: totalSaleAmount, type: 'credit', isManual: true, paymentMethod: paymentMethod || 'Cash', pairId, profitAmount: profit, costAmount: calculatedFoodCost },
-    ]
-  })
-
-  // ── Record sale + ingredient breakdown ───────────────────────────────────
-  const sale = await prisma.dishSale.create({
-    data: {
-      userId: billingUserId,
-      dishId,
-      quantitySold: qty,
-      saleDate: txDate,
-      paymentMethod: paymentMethod || 'Cash',
-      totalSaleAmount,
-      calculatedFoodCost,
-      saleIngredients: {
-        create: ingredientLines
-      }
-    }
-  })
-
-  return NextResponse.json({ sale, totalSaleAmount, calculatedFoodCost, fifoEnabled }, { status: 201 })
+  void req
+  return NextResponse.json(
+    { error: 'Dish sales can only be created from the paid-order flow' },
+    { status: 405 }
+  )
 }
 

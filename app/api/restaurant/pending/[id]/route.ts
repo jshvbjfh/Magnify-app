@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantIdForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 const VALID_STATUSES = ['new', 'in_kitchen', 'ready']
 
@@ -11,8 +11,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const restaurantId = await getRestaurantIdForUser(session.user.id)
-  if (!restaurantId) return NextResponse.json({ error: 'No restaurant found' }, { status: 400 })
+  const context = await getRestaurantContextForUser(session.user.id)
+  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const body = await req.json()
   const { status } = body
@@ -22,15 +22,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   const { id } = await params
-  const order = await prisma.pendingOrder.findFirst({
-    where: { id, restaurantId },
+  const orderItem = await prisma.restaurantOrderItem.findFirst({
+    where: { id, order: { restaurantId: context.restaurantId, branchId: context.branchId, status: 'PENDING' }, status: 'ACTIVE' },
   })
-  if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
+  if (!orderItem) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
 
-  const updated = await prisma.pendingOrder.update({
+  const updated = await prisma.restaurantOrderItem.update({
     where: { id },
     data: {
-      status,
+      kitchenStatus: status,
       ...(status === 'ready' ? { readyAt: new Date() } : {}),
     },
   })

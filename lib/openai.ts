@@ -1,63 +1,312 @@
+import { createHash } from 'crypto'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
+const DEFAULT_GEMINI_503_RETRY_DELAY_MS = 500
+const DEFAULT_GEMINI_503_MAX_RETRIES = 1
+const DEFAULT_GEMINI_MINUTE_COOLDOWN_MS = 60 * 1000
+const DEFAULT_GEMINI_DAILY_COOLDOWN_MS = 6 * 60 * 60 * 1000
+const DEFAULT_GEMINI_GENERIC_COOLDOWN_MS = 5 * 60 * 1000
+
+type GeminiQuotaCooldownKind = 'minute' | 'daily' | 'generic'
+
+type GeminiQuotaCooldownEntry = {
+	until: number
+	kind: GeminiQuotaCooldownKind
+}
+
+const geminiQuotaCooldowns = new Map<string, GeminiQuotaCooldownEntry>()
+
+function parseNonNegativeIntegerEnv(name: string, fallback: number) {
+	const raw = process.env[name]?.trim()
+	if (!raw) return fallback
+	const parsed = Number(raw)
+	if (!Number.isFinite(parsed) || parsed < 0) return fallback
+	return Math.floor(parsed)
+}
+
+function getConfiguredGeminiModels() {
+	const primaryModel = process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL
+	const fallbackModel = process.env.GEMINI_FALLBACK_MODEL?.trim()
+
+	return [...new Set([primaryModel, fallbackModel].filter(Boolean) as string[])]
+}
+
+function getGeminiCooldownConfig() {
+	return {
+		minuteCooldownMs: parseNonNegativeIntegerEnv('GEMINI_MINUTE_QUOTA_COOLDOWN_MS', DEFAULT_GEMINI_MINUTE_COOLDOWN_MS),
+		dailyCooldownMs: parseNonNegativeIntegerEnv('GEMINI_DAILY_QUOTA_COOLDOWN_MS', DEFAULT_GEMINI_DAILY_COOLDOWN_MS),
+		genericCooldownMs: parseNonNegativeIntegerEnv('GEMINI_GENERIC_QUOTA_COOLDOWN_MS', DEFAULT_GEMINI_GENERIC_COOLDOWN_MS),
+	}
+}
+
+function getGeminiKeyFingerprint(apiKey: string) {
+	return createHash('sha256').update(apiKey).digest('hex').slice(0, 16)
+}
+
+function cleanupGeminiQuotaCooldowns() {
+	const now = Date.now()
+	for (const [fingerprint, entry] of geminiQuotaCooldowns.entries()) {
+		if (entry.until <= now) {
+			geminiQuotaCooldowns.delete(fingerprint)
+		}
+	}
+}
+
+function parseGeminiRetryDelayMs(rawValue: unknown): number | null {
+	if (typeof rawValue !== 'string') return null
+	const trimmed = rawValue.trim()
+	if (!trimmed) return null
+	const match = trimmed.match(/^(\d+(?:\.\d+)?)(ms|s|m)?$/i)
+	if (!match) return null
+	const amount = Number(match[1])
+	if (!Number.isFinite(amount) || amount < 0) return null
+	const unit = (match[2] || 's').toLowerCase()
+	if (unit === 'ms') return Math.round(amount)
+	if (unit === 'm') return Math.round(amount * 60 * 1000)
+	return Math.round(amount * 1000)
+}
+
+function getGeminiQuotaCooldownDetails(e: any): { kind: GeminiQuotaCooldownKind; cooldownMs: number } {
+	const retryConfig = getGeminiCooldownConfig()
+	const details = Array.isArray(e?.errorDetails) ? e.errorDetails : []
+	const detailText = details
+		.map((detail) => {
+			try {
+				return JSON.stringify(detail)
+			} catch {
+				return String(detail ?? '')
+			}
+		})
+		.join(' ')
+	const messageText = `${String(e?.message || '')} ${detailText}`.toLowerCase()
+
+	const retryDelayMs = (() => {
+		for (const detail of details) {
+			const parsed = parseGeminiRetryDelayMs(detail?.retryDelay)
+			if (parsed !== null) return parsed
+		}
+		const inlineMatch = String(e?.message || '').match(/retry in\s+([\d.]+)s/i)
+		if (inlineMatch) return Math.round(Number(inlineMatch[1]) * 1000)
+		return null
+	})()
+
+	if (
+		messageText.includes('requestsperday') ||
+		messageText.includes('perday') ||
+		messageText.includes('daily limit') ||
+		messageText.includes('limit reached for the day')
+	) {
+		return {
+			kind: 'daily',
+			cooldownMs: Math.max(retryConfig.dailyCooldownMs, retryDelayMs ?? 0),
+		}
+	}
+
+	if (
+		messageText.includes('perminute') ||
+		messageText.includes('requestsperminute') ||
+		messageText.includes('tokensperminute') ||
+		messageText.includes('input_token_count') ||
+		messageText.includes('retryinfo')
+	) {
+		return {
+			kind: 'minute',
+			cooldownMs: Math.max(retryConfig.minuteCooldownMs, retryDelayMs ?? 0),
+		}
+	}
+
+	return {
+		kind: 'generic',
+		cooldownMs: Math.max(retryConfig.genericCooldownMs, retryDelayMs ?? 0),
+	}
+}
+
+export type GeminiKeyAvailability = {
+	configuredKeyCount: number
+	availableKeyCount: number
+	blockedKeyCount: number
+	blockedKeyIndexes: number[]
+	nextRetryAt: string | null
+}
+
+export function getGeminiKeyAvailability(apiKeys: string[] = getGeminiApiKeys()): GeminiKeyAvailability {
+	cleanupGeminiQuotaCooldowns()
+	const blockedKeyIndexes: number[] = []
+	let nextRetryAtMs: number | null = null
+
+	apiKeys.forEach((apiKey, keyIndex) => {
+		const entry = geminiQuotaCooldowns.get(getGeminiKeyFingerprint(apiKey))
+		if (!entry) return
+		blockedKeyIndexes.push(keyIndex)
+		nextRetryAtMs = nextRetryAtMs === null ? entry.until : Math.min(nextRetryAtMs, entry.until)
+	})
+
+	return {
+		configuredKeyCount: apiKeys.length,
+		availableKeyCount: apiKeys.length - blockedKeyIndexes.length,
+		blockedKeyCount: blockedKeyIndexes.length,
+		blockedKeyIndexes,
+		nextRetryAt: nextRetryAtMs ? new Date(nextRetryAtMs).toISOString() : null,
+	}
+}
+
+export function markGeminiQuotaFailure(apiKey: string, e: any) {
+	cleanupGeminiQuotaCooldowns()
+	const fingerprint = getGeminiKeyFingerprint(apiKey)
+	const details = getGeminiQuotaCooldownDetails(e)
+	geminiQuotaCooldowns.set(fingerprint, {
+		until: Date.now() + details.cooldownMs,
+		kind: details.kind,
+	})
+	return details
+}
+
+export function clearGeminiQuotaFailure(apiKey: string) {
+	geminiQuotaCooldowns.delete(getGeminiKeyFingerprint(apiKey))
+}
+
+export function getGeminiUnavailableMessage(subject = 'Jesse AI') {
+	return `${subject} is temporarily unavailable because the shared Jesse AI service is currently hitting quota or rate limits. This is not based only on your personal usage. Try again later.`
+}
+
+export type GeminiAttemptPlanEntry = {
+	apiKey: string
+	keyIndex: number
+	keyCount: number
+	modelName: string
+	modelIndex: number
+	modelCount: number
+	usedFallbackKey: boolean
+	usedFallbackModel: boolean
+}
+
+export function getGeminiAttemptPlan(apiKeys: string[] = getGeminiApiKeys()): GeminiAttemptPlanEntry[] {
+	const models = getConfiguredGeminiModels()
+	const attempts: GeminiAttemptPlanEntry[] = []
+	const blockedKeyIndexes = new Set(getGeminiKeyAvailability(apiKeys).blockedKeyIndexes)
+	const availableKeyIndexes = apiKeys
+		.map((_, keyIndex) => keyIndex)
+		.filter((keyIndex) => !blockedKeyIndexes.has(keyIndex))
+
+	for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
+		const modelName = models[modelIndex]
+		for (let availableOrderIndex = 0; availableOrderIndex < availableKeyIndexes.length; availableOrderIndex++) {
+			const keyIndex = availableKeyIndexes[availableOrderIndex]
+			attempts.push({
+				apiKey: apiKeys[keyIndex],
+				keyIndex,
+				keyCount: apiKeys.length,
+				modelName,
+				modelIndex,
+				modelCount: models.length,
+				usedFallbackKey: availableOrderIndex > 0,
+				usedFallbackModel: modelIndex > 0,
+			})
+		}
+	}
+
+	return attempts
+}
+
+async function delay(ms: number) {
+	if (ms <= 0) return
+	await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 /**
- * Fetches the live list of models available for the given API key,
- * then returns a priority-ordered candidate list.
- * Falls back to a hardcoded list if the API call fails.
+	* Returns the intentionally short, explicitly configured Gemini model list.
+	* Keeping this bounded prevents per-request model fan-out across every API key.
  */
-export async function getGeminiCandidates(apiKey: string): Promise<string[]> {
-	const preferred = [
-		process.env.GEMINI_MODEL,
-		'gemini-1.5-flash',
-		'gemini-1.5-pro',
-		'gemini-2.0-flash-exp',
-		'gemini-2.0-flash',
-		'gemini-pro',
-		'gemini-1.0-pro'
-	].filter(Boolean) as string[]
+export async function getGeminiCandidates(_apiKey: string): Promise<string[]> {
+	return getConfiguredGeminiModels()
+}
 
-	try {
-		const res = await fetch(
-			`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
-		)
-		if (!res.ok) throw new Error(`HTTP ${res.status}`)
-		const data = await res.json()
-		const available: string[] = (data.models || [])
-			.filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
-			.map((m: any) => (m.name as string).replace('models/', ''))
+function addGeminiKey(target: string[], value: string | undefined) {
+	const trimmed = value?.trim()
+	if (!trimmed || target.includes(trimmed)) return
+	target.push(trimmed)
+}
 
-		const candidates: string[] = []
-		// Priority-ordered first
-		for (const p of preferred) {
-			if (available.includes(p) && !candidates.includes(p)) candidates.push(p)
-		}
-		// Remaining available models as fallback
-		for (const a of available) {
-			if (!candidates.includes(a)) candidates.push(a)
-		}
-		if (candidates.length > 0) return candidates
-	} catch { /* fall through to hardcoded list */ }
-
-	// Hardcoded fallback
-	return [...new Set(preferred)]
+function getGeminiKeyEnvEntries() {
+	return Object.entries(process.env)
+		.filter(([name, value]) => /^GEMINI_API_KEY(?:_\d+)?$/.test(name) && typeof value === 'string' && value.trim())
+		.sort(([a], [b]) => {
+			const aMatch = a.match(/^GEMINI_API_KEY_(\d+)$/)
+			const bMatch = b.match(/^GEMINI_API_KEY_(\d+)$/)
+			if (!aMatch && !bMatch) return a.localeCompare(b)
+			if (!aMatch) return 1
+			if (!bMatch) return -1
+			return Number(aMatch[1]) - Number(bMatch[1])
+		})
 }
 
 export function getGeminiApiKeys(): string[] {
 	const keys: string[] = []
-	for (let i = 1; i <= 5; i++) {
-		const key = process.env[`GEMINI_API_KEY_${i}`]
-		if (key) keys.push(key)
+	for (const raw of (process.env.GEMINI_API_KEYS || '').split(/[\r\n,]+/)) {
+		addGeminiKey(keys, raw)
 	}
-	if (keys.length === 0) {
-		const fallback = process.env.GEMINI_API_KEY
-		if (fallback) keys.push(fallback)
+	for (const [, value] of getGeminiKeyEnvEntries()) {
+		addGeminiKey(keys, value)
 	}
 	return keys
 }
 
+export function getGeminiDiagnostics() {
+	const envEntries = getGeminiKeyEnvEntries()
+	const hasGroupedKeys = Boolean(process.env.GEMINI_API_KEYS?.trim())
+	const configuredModels = getConfiguredGeminiModels()
+	const availability = getGeminiKeyAvailability()
+	return {
+		configuredKeyCount: getGeminiApiKeys().length,
+		configuredEnvVars: envEntries.map(([name]) => name),
+		usesGroupedKeyList: hasGroupedKeys,
+		usesSharedQuota: true,
+		geminiModel: configuredModels[0] || null,
+		geminiFallbackModel: configuredModels[1] || null,
+		geminiCandidateCount: configuredModels.length,
+		coolingDownKeyCount: availability.blockedKeyCount,
+		nextRetryAt: availability.nextRetryAt,
+	}
+}
+
+export function getGeminiRetryConfig() {
+	return {
+		serviceUnavailableRetries: parseNonNegativeIntegerEnv('GEMINI_503_MAX_RETRIES', DEFAULT_GEMINI_503_MAX_RETRIES),
+		serviceUnavailableDelayMs: parseNonNegativeIntegerEnv('GEMINI_503_RETRY_DELAY_MS', DEFAULT_GEMINI_503_RETRY_DELAY_MS),
+	}
+}
+
 export function isQuotaError(e: any): boolean {
 	const msg = String(e?.message || e?.status || e || '').toLowerCase()
-	return msg.includes('429') || msg.includes('quota') || msg.includes('resource_exhausted') || msg.includes('rate_limit') || msg.includes('ratelimit')
+	return (
+		msg.includes('resource_exhausted') ||
+		msg.includes('quota exceeded') ||
+		msg.includes('quota exhausted') ||
+		msg.includes('exceeded your current quota') ||
+		msg.includes('daily limit exceeded') ||
+		msg.includes('limit reached for the day') ||
+		msg.includes('too many requests') && msg.includes('quota')
+	)
+}
+
+export function isRetryableGeminiServiceError(e: any): boolean {
+	const msg = String(
+		e?.message ||
+		e?.status ||
+		e?.cause?.message ||
+		e?.cause?.status ||
+		e ||
+		''
+	).toLowerCase()
+
+	return (
+		msg.includes('503') ||
+		msg.includes('service unavailable') ||
+		msg.includes('high demand') ||
+		msg.includes('model is overloaded') ||
+		msg.includes('overloaded')
+	)
 }
 
 export type ExtractedTransaction = {
@@ -122,6 +371,8 @@ function extractJson(text: string) {
 export async function generateAnalyticsInsights(dataset: any): Promise<AnalyticsInsights> {
 	const apiKeys = getGeminiApiKeys()
 	if (apiKeys.length === 0) throw new Error('No GEMINI_API_KEY configured')
+	const keyAvailability = getGeminiKeyAvailability(apiKeys)
+	if (keyAvailability.availableKeyCount === 0) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
 
 	const bp = dataset.businessProfile || {}
 	const summary = dataset.summary || {}
@@ -233,60 +484,77 @@ OUTPUT JSON SCHEMA (strict, no markdown, no code fences):
 }`
 
 	let lastError: any
-	let quotaExhaustedCount = 0
-	for (const apiKey of apiKeys) {
-		const genAI = new GoogleGenerativeAI(apiKey)
-		const candidateModels = await getGeminiCandidates(apiKey)
-		let keyQuotaExhausted = false
-		for (const modelName of candidateModels) {
+	const exhaustedKeyIndexes = new Set<number>()
+	const keyOnlyQuotaFailures = new Map<number, boolean>(apiKeys.map((_, index) => [index, true]))
+	const retryConfig = getGeminiRetryConfig()
+	for (const attempt of getGeminiAttemptPlan(apiKeys)) {
+		if (exhaustedKeyIndexes.has(attempt.keyIndex)) continue
+
+		const genAI = new GoogleGenerativeAI(attempt.apiKey)
+		let serviceUnavailableRetryCount = 0
+		while (true) {
 			try {
-				const model = genAI.getGenerativeModel({ model: modelName })
-				const result = await model.generateContent([{ text: prompt }])
-				const text = result.response.text()
-				const parsed = JSON.parse(extractJson(text))
+				const model = genAI.getGenerativeModel({ model: attempt.modelName })
+					const result = await model.generateContent([{ text: prompt }])
+					const text = result.response.text()
+					clearGeminiQuotaFailure(attempt.apiKey)
+					const parsed = JSON.parse(extractJson(text))
 
-				const charts: AnalyticsChart[] = Array.isArray(parsed.charts)
-					? parsed.charts
-						.filter((c: any) => c && (c.type === 'bar' || c.type === 'line') && c.xKey && c.yKey && Array.isArray(c.data))
-						.slice(0, 5)
-						.map((c: any) => ({
-							title: String(c.title || 'Chart'),
-							type: c.type,
-							xKey: String(c.xKey),
-							yKey: String(c.yKey),
-							data: c.data.slice(0, 12).map((row: any) => ({ ...row })),
-							note: c.note ? String(c.note) : undefined
-						}))
-					: []
+					const charts: AnalyticsChart[] = Array.isArray(parsed.charts)
+						? parsed.charts
+							.filter((c: any) => c && (c.type === 'bar' || c.type === 'line') && c.xKey && c.yKey && Array.isArray(c.data))
+							.slice(0, 5)
+							.map((c: any) => ({
+								title: String(c.title || 'Chart'),
+								type: c.type,
+								xKey: String(c.xKey),
+								yKey: String(c.yKey),
+								data: c.data.slice(0, 12).map((row: any) => ({ ...row })),
+								note: c.note ? String(c.note) : undefined
+							}))
+						: []
 
-				const tables: AnalyticsTable[] = Array.isArray(parsed.tables)
-					? parsed.tables
-						.filter((t: any) => t && Array.isArray(t.columns) && Array.isArray(t.rows))
-						.slice(0, 4)
-						.map((t: any) => ({
-							title: String(t.title || 'Table'),
-							columns: t.columns.slice(0, 8).map((c: any) => String(c)),
-							rows: t.rows.slice(0, 12).map((r: any) => Array.isArray(r) ? r.slice(0, 8).map((v: any) => typeof v === 'number' ? v : String(v)) : [])
-						}))
-					: []
+					const tables: AnalyticsTable[] = Array.isArray(parsed.tables)
+						? parsed.tables
+							.filter((t: any) => t && Array.isArray(t.columns) && Array.isArray(t.rows))
+							.slice(0, 4)
+							.map((t: any) => ({
+								title: String(t.title || 'Table'),
+								columns: t.columns.slice(0, 8).map((c: any) => String(c)),
+								rows: t.rows.slice(0, 12).map((r: any) => Array.isArray(r) ? r.slice(0, 8).map((v: any) => typeof v === 'number' ? v : String(v)) : [])
+							}))
+						: []
 
-				return {
-					headline: String(parsed.headline || 'AI analytics generated from your accounting data.'),
-					comments: Array.isArray(parsed.comments) ? parsed.comments.slice(0, 8).map(String) : [],
-					advice: Array.isArray(parsed.advice) ? parsed.advice.slice(0, 6).map(String) : [],
-					charts,
-					tables
-				}
+					return {
+						headline: String(parsed.headline || 'AI analytics generated from your accounting data.'),
+						comments: Array.isArray(parsed.comments) ? parsed.comments.slice(0, 8).map(String) : [],
+						advice: Array.isArray(parsed.advice) ? parsed.advice.slice(0, 6).map(String) : [],
+						charts,
+						tables
+					}
 			} catch (e: any) {
 				lastError = e
-				if (isQuotaError(e)) { keyQuotaExhausted = true; break }
-				continue
+				if (isQuotaError(e)) {
+					markGeminiQuotaFailure(attempt.apiKey, e)
+					exhaustedKeyIndexes.add(attempt.keyIndex)
+					break
+				}
+				keyOnlyQuotaFailures.set(attempt.keyIndex, false)
+				if (isRetryableGeminiServiceError(e) && serviceUnavailableRetryCount < retryConfig.serviceUnavailableRetries) {
+					serviceUnavailableRetryCount++
+					await delay(retryConfig.serviceUnavailableDelayMs)
+					continue
+				}
+				break
 			}
 		}
-		if (keyQuotaExhausted) quotaExhaustedCount++
 	}
 
-	if (quotaExhaustedCount === apiKeys.length) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
+	const allKeysQuotaExhausted =
+		keyAvailability.blockedKeyCount + exhaustedKeyIndexes.size === apiKeys.length &&
+		apiKeys.every((_, index) => keyOnlyQuotaFailures.get(index) === true)
+
+	if (allKeysQuotaExhausted) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
 	throw lastError || new Error('Analytics AI generation failed')
 }
 
@@ -297,6 +565,8 @@ export async function extractFromImage(params: {
 }): Promise<ExtractResult> {
 	const apiKeys = getGeminiApiKeys()
 	if (apiKeys.length === 0) throw new Error('No GEMINI_API_KEY configured')
+	const keyAvailability = getGeminiKeyAvailability(apiKeys)
+	if (keyAvailability.availableKeyCount === 0) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
 
 	const dictLines = (params.dictionary ?? [])
 		.map((d) => `- ${d.kinyarwandaWord} => ${d.englishMeaning}${d.context ? ` (context: ${d.context})` : ''}`)
@@ -435,96 +705,113 @@ Rules:
 	}
 
 	let lastError: any
-	let quotaExhaustedCount = 0
-	for (const apiKey of apiKeys) {
-		const genAI = new GoogleGenerativeAI(apiKey)
-		const candidateModels = await getGeminiCandidates(apiKey)
-		let keyQuotaExhausted = false
-		for (const modelName of candidateModels) {
+	const exhaustedKeyIndexes = new Set<number>()
+	const keyOnlyQuotaFailures = new Map<number, boolean>(apiKeys.map((_, index) => [index, true]))
+	const retryConfig = getGeminiRetryConfig()
+	for (const attempt of getGeminiAttemptPlan(apiKeys)) {
+		if (exhaustedKeyIndexes.has(attempt.keyIndex)) continue
+
+		const genAI = new GoogleGenerativeAI(attempt.apiKey)
+		let serviceUnavailableRetryCount = 0
+		while (true) {
 			try {
-				const model = genAI.getGenerativeModel({ model: modelName })
-				const result = await model.generateContent([
-					{ text: prompt },
-					{ inlineData }
-				])
-				const text = result.response.text()
-				const jsonText = extractJson(text)
-				const parsed = JSON.parse(jsonText)
+				const model = genAI.getGenerativeModel({ model: attempt.modelName })
+					const result = await model.generateContent([
+						{ text: prompt },
+						{ inlineData }
+					])
+					const text = result.response.text()
+					clearGeminiQuotaFailure(attempt.apiKey)
+					const jsonText = extractJson(text)
+					const parsed = JSON.parse(jsonText)
 
-				// Validate transactions before returning
-				const validatedTransactions = Array.isArray(parsed.transactions)
-					? parsed.transactions.filter((t: any) => {
-						// Must have valid direction
-						if (!t.direction || (t.direction !== 'in' && t.direction !== 'out')) {
-							console.warn('⚠️ Skipping transaction with invalid direction:', t)
-							return false
-						}
-						// Must have valid amount
-						if (!t.amount || Number(t.amount) <= 0) {
-							console.warn('⚠️ Skipping transaction with invalid amount:', t)
-							return false
-					}
-					// Must have account name
-					if (!t.accountName || t.accountName.trim() === '') {
-						console.warn('⚠️ Skipping transaction without account name:', t)
-						return false
-					}
-					// Must have description
-					if (!t.description || t.description.trim() === '') {
-						console.warn('⚠️ Skipping transaction without description:', t)
-						return false
-					}
-					return true
-				}).map((t: any) => {
-					// Normalize account names to standard forms
-					let accountName = String(t.accountName).trim()
-					const lowerName = accountName.toLowerCase()
-					
-					// Map variations to standard account names
-					if (lowerName === 'cogs' || lowerName === 'cost of goods' || lowerName.includes('cost of goods sold')) {
-						accountName = 'Cost of Goods Sold'
-					} else if (lowerName === 'ar' || lowerName === 'receivable' || lowerName.includes('accounts receivable')) {
-						accountName = 'Accounts Receivable'
-					} else if (lowerName === 'ap' || lowerName === 'payable' || lowerName.includes('accounts payable')) {
-						accountName = 'Accounts Payable'
-					} else if (lowerName.includes('sales revenue') || lowerName === 'sales') {
-						accountName = 'Sales Revenue'
-					} else if (lowerName.includes('service revenue') || lowerName === 'service') {
-						accountName = 'Service Revenue'
-					} else if (lowerName === 'inventory' || lowerName === 'stock') {
-						accountName = 'Inventory'
-					}
-					// Keep Cash, Revenue, and other names as-is
-					
+					// Validate transactions before returning
+					const validatedTransactions = Array.isArray(parsed.transactions)
+						? parsed.transactions.filter((t: any) => {
+							// Must have valid direction
+							if (!t.direction || (t.direction !== 'in' && t.direction !== 'out')) {
+								console.warn('⚠️ Skipping transaction with invalid direction:', t)
+								return false
+							}
+							// Must have valid amount
+							if (!t.amount || Number(t.amount) <= 0) {
+								console.warn('⚠️ Skipping transaction with invalid amount:', t)
+								return false
+							}
+							// Must have account name
+							if (!t.accountName || t.accountName.trim() === '') {
+								console.warn('⚠️ Skipping transaction without account name:', t)
+								return false
+							}
+							// Must have description
+							if (!t.description || t.description.trim() === '') {
+								console.warn('⚠️ Skipping transaction without description:', t)
+								return false
+							}
+							return true
+						}).map((t: any) => {
+							// Normalize account names to standard forms
+							let accountName = String(t.accountName).trim()
+							const lowerName = accountName.toLowerCase()
+							
+							// Map variations to standard account names
+							if (lowerName === 'cogs' || lowerName === 'cost of goods' || lowerName.includes('cost of goods sold')) {
+								accountName = 'Cost of Goods Sold'
+							} else if (lowerName === 'ar' || lowerName === 'receivable' || lowerName.includes('accounts receivable')) {
+								accountName = 'Accounts Receivable'
+							} else if (lowerName === 'ap' || lowerName === 'payable' || lowerName.includes('accounts payable')) {
+								accountName = 'Accounts Payable'
+							} else if (lowerName.includes('sales revenue') || lowerName === 'sales') {
+								accountName = 'Sales Revenue'
+							} else if (lowerName.includes('service revenue') || lowerName === 'service') {
+								accountName = 'Service Revenue'
+							} else if (lowerName === 'inventory' || lowerName === 'stock') {
+								accountName = 'Inventory'
+							}
+							// Keep Cash, Revenue, and other names as-is
+							
+							return {
+								date: t.date ? String(t.date) : undefined,
+								description: String(t.description ?? ''),
+								summary: t.summary ? String(t.summary) : undefined,
+								amount: Number(t.amount ?? 0),
+								direction: t.direction === 'in' ? 'in' : 'out',
+								categoryType: t.categoryType,
+								accountName: accountName
+							}
+						})
+						: []
+
+					console.log(`✓ Extracted ${validatedTransactions.length} valid transactions from ${parsed.transactions?.length || 0} total`)
+				
 					return {
-						date: t.date ? String(t.date) : undefined,
-						description: String(t.description ?? ''),
-						summary: t.summary ? String(t.summary) : undefined,
-						amount: Number(t.amount ?? 0),
-						direction: t.direction === 'in' ? 'in' : 'out',
-						categoryType: t.categoryType,
-						accountName: accountName
+						rawText: String(parsed.rawText ?? ''),
+						translatedText: String(parsed.translatedText ?? ''),
+						unknownWords: Array.isArray(parsed.unknownWords) ? parsed.unknownWords.map(String) : [],
+						transactions: validatedTransactions,
 					}
-				})
-				: []
-
-				console.log(`✓ Extracted ${validatedTransactions.length} valid transactions from ${parsed.transactions?.length || 0} total`)
-			
-				return {
-					rawText: String(parsed.rawText ?? ''),
-					translatedText: String(parsed.translatedText ?? ''),
-					unknownWords: Array.isArray(parsed.unknownWords) ? parsed.unknownWords.map(String) : [],
-					transactions: validatedTransactions,
-				}
 			} catch (e: any) {
 				lastError = e
-				if (isQuotaError(e)) { keyQuotaExhausted = true; break }
-				continue
+				if (isQuotaError(e)) {
+					markGeminiQuotaFailure(attempt.apiKey, e)
+					exhaustedKeyIndexes.add(attempt.keyIndex)
+					break
+				}
+				keyOnlyQuotaFailures.set(attempt.keyIndex, false)
+				if (isRetryableGeminiServiceError(e) && serviceUnavailableRetryCount < retryConfig.serviceUnavailableRetries) {
+					serviceUnavailableRetryCount++
+					await delay(retryConfig.serviceUnavailableDelayMs)
+					continue
+				}
+				break
 			}
 		}
-		if (keyQuotaExhausted) quotaExhaustedCount++
 	}
 
-	if (quotaExhaustedCount === apiKeys.length) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
+	const allKeysQuotaExhausted =
+		keyAvailability.blockedKeyCount + exhaustedKeyIndexes.size === apiKeys.length &&
+		apiKeys.every((_, index) => keyOnlyQuotaFailures.get(index) === true)
+
+	if (allKeysQuotaExhausted) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
 	throw lastError || new Error('AI request failed')
 }

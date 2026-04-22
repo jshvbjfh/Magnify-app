@@ -7,10 +7,20 @@ export async function GET(
   { params }: { params: Promise<{ restaurantId: string; tableId: string }> }
 ) {
   const { restaurantId, tableId } = await params
-  const table = await prisma.restaurantTable.findFirst({
+  // Try direct match, then fall back to syncRestaurantId-based restaurant
+  let table = await prisma.restaurantTable.findFirst({
     where: { id: tableId, restaurantId },
     select: { name: true, seats: true },
   })
+  if (!table) {
+    const restaurant = await prisma.restaurant.findUnique({ where: { syncRestaurantId: restaurantId }, select: { id: true } })
+    if (restaurant) {
+      table = await prisma.restaurantTable.findFirst({
+        where: { id: tableId, restaurantId: restaurant.id },
+        select: { name: true, seats: true },
+      })
+    }
+  }
   if (!table) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   return NextResponse.json(table)
 }

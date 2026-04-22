@@ -1,16 +1,32 @@
 ﻿'use client'
 import { useState, useEffect, useRef } from 'react'
+import { useSession } from 'next-auth/react'
 import { Plus, Trash2, ChefHat, X, Edit2, ToggleLeft, ToggleRight, Sparkles, Search, ChevronDown } from 'lucide-react'
+import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { estimateFifoCostForQuantity } from '@/lib/fifoCosting'
+import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
+import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type Ingredient = { id: string; name: string; unit: string; unitCost: number | null; quantity: number }
 type DishIngredient = { id: string; ingredientId: string; quantityRequired: number; ingredient: Ingredient }
 type Dish = { id: string; name: string; sellingPrice: number; category: string | null; isActive: boolean; ingredients: DishIngredient[] }
+type PurchaseLayer = { id: string; ingredientId: string; remainingQuantity: number; unitCost: number; purchasedAt: string; createdAt: string }
+
+type RestaurantMenuSnapshot = {
+  updatedAt: string
+  dishes: Dish[]
+  ingredients: Ingredient[]
+  purchases: PurchaseLayer[]
+}
 
 const CATEGORIES = ['Mains','Sides','Drinks','Desserts','Breakfast','Specials']
 
 export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void }) {
+  const { data: session } = useSession()
+  const restaurantBranch = useRestaurantBranch()
   const [dishes, setDishes] = useState<Dish[]>([])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
+  const [purchases, setPurchases] = useState<PurchaseLayer[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterCat, setFilterCat] = useState('')
@@ -21,7 +37,30 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   const [recipeForm, setRecipeForm] = useState({ ingredientId:'', quantityRequired:'' })
   const [ingSearch, setIngSearch] = useState('')
   const [ingDropOpen, setIngDropOpen] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
   const ingSearchRef = useRef<HTMLDivElement>(null)
+  const sellingPriceNumber = Number(form.sellingPrice || 0)
+  const previewVatAmount = calculateVatFromNet(sellingPriceNumber)
+  const previewMenuPrice = calculateGrossFromNet(sellingPriceNumber)
+  const snapshotScopeId = buildRestaurantSnapshotScope({
+    restaurantId: restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null,
+    branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
+    fallbackUserId: session?.user?.id ?? null,
+  })
+  const snapshotStorageScope = snapshotScopeId ? `restaurant-menu:${snapshotScopeId}` : null
+
+  function persistSnapshot(nextDishes: Dish[], nextIngredients: Ingredient[], nextPurchases: PurchaseLayer[]) {
+    if (!snapshotStorageScope) return
+    const snapshot = mergeRestaurantDeviceSnapshot<RestaurantMenuSnapshot>(snapshotStorageScope, {
+      dishes: nextDishes,
+      ingredients: nextIngredients,
+      purchases: nextPurchases,
+    })
+    if (!snapshot) return
+    setSnapshotUpdatedAt(snapshot.updatedAt)
+    setShowingCachedSnapshot(false)
+  }
 
   // close ingredient dropdown on outside click
   useEffect(() => {
@@ -38,12 +77,42 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   })
 
   async function load() {
-    setLoading(true)
-    const [d,i] = await Promise.all([fetch('/api/restaurant/dishes').then(r=>r.json()), fetch('/api/restaurant/ingredients').then(r=>r.json())])
-    setDishes(Array.isArray(d)?d:[])
-    setIngredients(Array.isArray(i)?i:[])
-    setLoading(false)
+    setLoading(dishes.length === 0 && ingredients.length === 0 && purchases.length === 0)
+    try {
+      const [d, i, p] = await Promise.all([
+        fetch('/api/restaurant/dishes').then(r => r.json()),
+        fetch('/api/restaurant/ingredients').then(r => r.json()),
+        fetch('/api/restaurant/inventory-purchases').then(r => r.json()),
+      ])
+      const nextDishes = Array.isArray(d) ? d : []
+      const nextIngredients = Array.isArray(i) ? i : []
+      const nextPurchases = Array.isArray(p) ? p : []
+      setDishes(nextDishes)
+      setIngredients(nextIngredients)
+      setPurchases(nextPurchases)
+      setSelectedDish((current) => current ? nextDishes.find((dish) => dish.id === current.id) ?? null : null)
+      persistSnapshot(nextDishes, nextIngredients, nextPurchases)
+    } finally {
+      setLoading(false)
+    }
   }
+  useEffect(() => {
+    if (!snapshotStorageScope) return
+
+    const snapshot = loadRestaurantDeviceSnapshot<RestaurantMenuSnapshot>(snapshotStorageScope)
+    if (!snapshot) return
+
+    const nextDishes = Array.isArray(snapshot.dishes) ? snapshot.dishes : []
+    const nextIngredients = Array.isArray(snapshot.ingredients) ? snapshot.ingredients : []
+    const nextPurchases = Array.isArray(snapshot.purchases) ? snapshot.purchases : []
+    setDishes(nextDishes)
+    setIngredients(nextIngredients)
+    setPurchases(nextPurchases)
+    setSelectedDish((current) => current ? nextDishes.find((dish) => dish.id === current.id) ?? null : null)
+    setSnapshotUpdatedAt(snapshot.updatedAt ?? null)
+    setShowingCachedSnapshot(true)
+    setLoading(false)
+  }, [snapshotStorageScope])
   useEffect(()=>{load()},[])
 
   async function saveDish(e: React.FormEvent) {
@@ -88,7 +157,15 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
 
   function openEdit(dish: Dish) { setEditDish(dish); setForm({name:dish.name,sellingPrice:String(dish.sellingPrice),category:dish.category||''}); setShowForm(true) }
 
-  const foodCost = (dish: Dish) => dish.ingredients.reduce((s,r)=>s+(r.quantityRequired*(r.ingredient.unitCost??0)),0)
+  function estimateIngredientCost(ingredient: Ingredient, quantityRequired: number) {
+    return estimateFifoCostForQuantity(
+      purchases.filter((purchase) => purchase.ingredientId === ingredient.id),
+      quantityRequired,
+      ingredient.unitCost,
+    )
+  }
+
+  const foodCost = (dish: Dish) => dish.ingredients.reduce((sum, row) => sum + estimateIngredientCost(row.ingredient, row.quantityRequired).totalCost, 0)
   const margin = (dish: Dish) => { const fc=foodCost(dish); return dish.sellingPrice>0?((dish.sellingPrice-fc)/dish.sellingPrice*100):0 }
 
   const filteredDishes = dishes.filter(d => {
@@ -97,18 +174,27 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
     const matchesCat = !filterCat || d.category === filterCat
     return matchesSearch && matchesCat
   })
+  const snapshotUpdatedLabel = snapshotUpdatedAt
+    ? new Date(snapshotUpdatedAt).toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
+    : null
 
   return (
     <div className="space-y-5">
+      {showingCachedSnapshot && snapshotUpdatedLabel ? (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          <p className="font-semibold">Showing last synced menu snapshot from this device</p>
+          <p className="mt-1 text-xs opacity-90">Last synced snapshot: {snapshotUpdatedLabel}</p>
+        </div>
+      ) : null}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-gray-800">Menu & Recipe Builder</h2>
+        <h2 className="text-lg font-bold text-gray-800">Restaurant Menu</h2>
         <div className="flex items-center gap-2">
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
-            <Sparkles className="h-3.5 w-3.5"/> Ask Jesse
+            <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI
           </button>
           <button onClick={()=>{setShowForm(true);setEditDish(null);setForm({name:'',sellingPrice:'',category:''})}}
           className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-            <Plus className="h-4 w-4" /> Add Dish
+            <Plus className="h-4 w-4" /> Add Menu Item
           </button>
         </div>
       </div>
@@ -117,14 +203,20 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="font-bold text-gray-900">{editDish?'Edit Dish':'New Dish'}</h3>
+              <h3 className="font-bold text-gray-900">{editDish?'Edit Menu Item':'New Menu Item'}</h3>
               <button onClick={()=>{setShowForm(false);setEditDish(null)}}><X className="h-5 w-5 text-gray-400 hover:text-gray-600"/></button>
             </div>
             <form onSubmit={saveDish} className="space-y-3">
-              <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Dish Name</label>
+              <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Menu Item Name</label>
                 <input required className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Grilled Tilapia"/></div>
-              <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Selling Price (RWF)</label>
-                <input required type="number" min="0" step="any" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.sellingPrice} onChange={e=>setForm(f=>({...f,sellingPrice:e.target.value}))} placeholder="2500"/></div>
+              <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Selling Price Before VAT (RWF)</label>
+                <input required type="number" min="0" step="any" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.sellingPrice} onChange={e=>setForm(f=>({...f,sellingPrice:e.target.value}))} placeholder="5000"/></div>
+              <div className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-3 text-sm text-orange-900">
+                <p className="font-semibold">Price shown on the menu</p>
+                <p className="mt-1 text-lg font-bold">{previewMenuPrice.toLocaleString()} RWF</p>
+                <p className="mt-1 text-xs text-orange-700">{sellingPriceNumber.toLocaleString()} + ({sellingPriceNumber.toLocaleString()} × 18%) = {previewMenuPrice.toLocaleString()} RWF</p>
+                <p className="text-xs text-orange-700">VAT included: {previewVatAmount.toLocaleString()} RWF</p>
+              </div>
               <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Category</label>
                 <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
                   <option value="">Select category</option>
@@ -132,7 +224,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                 </select></div>
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={()=>{setShowForm(false);setEditDish(null)}} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
-                <button type="submit" className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium py-2 rounded-lg transition-colors">{editDish?'Save Changes':'Create Dish'}</button>
+                <button type="submit" className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium py-2 rounded-lg transition-colors">{editDish?'Save Changes':'Create Menu Item'}</button>
               </div>
             </form>
           </div>
@@ -149,7 +241,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
             <div className="p-4 border-b border-gray-100 space-y-2">
               <div className="flex items-center gap-2">
                 <ChefHat className="h-4 w-4 text-orange-500 flex-shrink-0"/>
-                <h3 className="font-semibold text-gray-800">Dishes ({filteredDishes.length}{filteredDishes.length !== dishes.length ? ` of ${dishes.length}` : ''})</h3>
+                <h3 className="font-semibold text-gray-800">Menu Items ({filteredDishes.length}{filteredDishes.length !== dishes.length ? ` of ${dishes.length}` : ''})</h3>
               </div>
               {/* Search + filter row */}
               <div className="flex gap-2">
@@ -158,7 +250,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                   <input
                     value={search}
                     onChange={e => setSearch(e.target.value)}
-                    placeholder="Search dishes…"
+                    placeholder="Search menu items…"
                     className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-orange-400 bg-gray-50"
                   />
                 </div>
@@ -172,7 +264,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
               </div>
             </div>
             {dishes.length===0 ? (
-              <p className="p-8 text-center text-gray-400 text-sm">No dishes yet. Add your first dish.</p>
+              <p className="p-8 text-center text-gray-400 text-sm">No menu items yet. Add your first one.</p>
             ) : filteredDishes.length===0 ? (
               <p className="p-8 text-center text-gray-400 text-sm">No dishes match your search.</p>
             ) : (
@@ -199,7 +291,8 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                       <p className="text-sm font-bold text-blue-700 truncate">{dish.name}</p>
                       {dish.category && <p className="text-xs text-sky-500 font-medium">{dish.category}</p>}
                       <div className="mt-1 text-xs">
-                        <span className="text-gray-700 font-semibold">{dish.sellingPrice.toLocaleString()} RWF</span>
+                        <span className="text-gray-700 font-semibold">{calculateGrossFromNet(dish.sellingPrice).toLocaleString()} RWF</span>
+                        <span className="ml-2 text-[11px] font-medium text-orange-500">incl. VAT</span>
                         {dish.ingredients.length>0&&<div className="flex items-center gap-2 mt-0.5">
                           <span className="text-gray-400">Cost: {fc.toFixed(0)}</span>
                           <span className={`font-semibold ${mgn>=60?'text-green-600':mgn>=40?'text-amber-600':'text-red-600'}`}>{mgn.toFixed(0)}%</span>
@@ -217,15 +310,18 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
             <div className="p-4 border-b border-gray-100">
               <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="font-semibold text-gray-800">
-                  {selectedDish ? `Recipe: ${selectedDish.name}` : 'Select a dish to edit its recipe'}
+                  {selectedDish ? `Recipe: ${selectedDish.name}` : 'Select a menu item to edit its recipe'}
                 </h3>
                 {selectedDish && (
-                  <span className="text-sm font-bold text-orange-500">{selectedDish.sellingPrice.toLocaleString()} RWF</span>
+                  <div className="text-right">
+                    <span className="text-sm font-bold text-orange-500">{calculateGrossFromNet(selectedDish.sellingPrice).toLocaleString()} RWF</span>
+                    <p className="text-[11px] text-gray-400">Base price {selectedDish.sellingPrice.toLocaleString()} RWF</p>
+                  </div>
                 )}
               </div>
             </div>
             {!selectedDish ? (
-              <p className="p-8 text-center text-gray-400 text-sm">Click on a dish to view and edit its recipe (ingredients).</p>
+              <p className="p-8 text-center text-gray-400 text-sm">Click on a menu item to view and edit its recipe ingredients.</p>
             ) : (
               <div className="p-4 space-y-4">
                 <form onSubmit={addIngredient} className="flex gap-2 bg-gray-50 p-3 rounded-xl">
@@ -299,17 +395,23 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                   <p className="text-sm text-gray-400 text-center py-4">No ingredients in recipe yet.</p>
                 ) : (
                   <div className="space-y-2">
-                    {selectedDish.ingredients.map(r=>(
+                    {selectedDish.ingredients.map(r=>{
+                      const lineEstimate = estimateIngredientCost(r.ingredient, r.quantityRequired)
+                      const effectiveUnitCost = lineEstimate.effectiveUnitCost ?? r.ingredient.unitCost ?? 0
+                      return (
                       <div key={r.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2.5">
                         <div>
                           <p className="text-sm font-medium text-gray-800">{r.ingredient.name}</p>
-                          <p className="text-xs text-gray-500">{r.quantityRequired} {r.ingredient.unit}  {r.ingredient.unitCost??0} RWF = <span className="font-semibold text-gray-700">{(r.quantityRequired*(r.ingredient.unitCost??0)).toFixed(0)} RWF</span></p>
+                          <p className="text-xs text-gray-500">
+                            {r.quantityRequired} {r.ingredient.unit} x {effectiveUnitCost.toLocaleString()} RWF = <span className="font-semibold text-gray-700">{lineEstimate.totalCost.toFixed(0)} RWF</span>
+                            {lineEstimate.allocations.length > 1 && <span className="ml-1 font-medium text-amber-600">FIFO blend</span>}
+                          </p>
                         </div>
                         <button onClick={()=>removeIngredient(selectedDish.id,r.ingredientId)} className="p-1 rounded hover:bg-red-50">
                           <Trash2 className="h-4 w-4 text-red-400"/>
                         </button>
                       </div>
-                    ))}
+                    )})}
                     <div className="pt-2 border-t border-gray-100 flex justify-between text-sm">
                       <span className="text-gray-500 font-medium">Total Food Cost:</span>
                       <span className="font-bold text-gray-900">{foodCost(selectedDish).toFixed(0)} RWF</span>

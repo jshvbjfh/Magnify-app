@@ -3,9 +3,15 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { prisma } from '@/lib/prisma'
-import { getGeminiCandidates, getGeminiApiKeys, isQuotaError } from '@/lib/openai'
+import { clearGeminiQuotaFailure, getGeminiAttemptPlan, getGeminiApiKeys, getGeminiKeyAvailability, getGeminiRetryConfig, getGeminiUnavailableMessage, isQuotaError, isRetryableGeminiServiceError, markGeminiQuotaFailure } from '@/lib/openai'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function delay(ms: number) {
+  if (ms <= 0) return Promise.resolve()
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 function startOfWeek(offsetWeeks: number): Date {
   const d = new Date()
@@ -58,6 +64,15 @@ export async function POST(req: NextRequest) {
     if (apiKeys.length === 0) {
       return NextResponse.json({ error: 'AI service not configured' }, { status: 500 })
     }
+    const keyAvailability = getGeminiKeyAvailability(apiKeys)
+    if (keyAvailability.availableKeyCount === 0) {
+      return NextResponse.json({ error: getGeminiUnavailableMessage('Jesse AI') }, { status: 429 })
+    }
+
+    const restaurantCtx = await getRestaurantContextForUser(session.user.id)
+    const billingUserId = restaurantCtx?.billingUserId ?? session.user.id
+    const restaurantId = restaurantCtx?.restaurantId ?? null
+    const branchId = restaurantCtx?.branchId ?? null
 
     // ── Gather restaurant data ───────────────────────────────────────────────
 
@@ -65,18 +80,18 @@ export async function POST(req: NextRequest) {
 
     const [allSales, allShifts, allWaste, allDishes] = await Promise.all([
       prisma.dishSale.findMany({
-        where: { userId: session.user.id, saleDate: { gte: eightWeeksAgo } },
+        where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}), saleDate: { gte: eightWeeksAgo } },
         include: { dish: true },
         orderBy: { saleDate: 'asc' },
       }),
       prisma.shift.findMany({
-        where: { userId: session.user.id, date: { gte: eightWeeksAgo } },
+        where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}), date: { gte: eightWeeksAgo } },
       }),
       prisma.wasteLog.findMany({
-        where: { userId: session.user.id, date: { gte: eightWeeksAgo } },
+        where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}), date: { gte: eightWeeksAgo } },
       }),
       prisma.dish.findMany({
-        where: { userId: session.user.id, isActive: true },
+        where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}), isActive: true },
         select: { id: true, name: true, sellingPrice: true, category: true },
       }),
     ])
@@ -188,30 +203,50 @@ export async function POST(req: NextRequest) {
 
     // ── Call Gemini ──────────────────────────────────────────────────────────
     let responseText = ''
-    let quotaExhaustedCount = 0
-    for (const currentKey of apiKeys) {
-      const genAI = new GoogleGenerativeAI(currentKey)
-      const candidates = await getGeminiCandidates(currentKey)
-      let keyHadQuota = false
-      for (const modelName of candidates.slice(0, 3)) {
+    let lastError: any = null
+    const retryConfig = getGeminiRetryConfig()
+    const exhaustedKeyIndexes = new Set<number>()
+    const keyOnlyQuotaFailures = new Map<number, boolean>(apiKeys.map((_, index) => [index, true]))
+    for (const attempt of getGeminiAttemptPlan(apiKeys)) {
+      if (responseText || exhaustedKeyIndexes.has(attempt.keyIndex)) continue
+
+      const genAI = new GoogleGenerativeAI(attempt.apiKey)
+      let serviceUnavailableRetryCount = 0
+      while (true) {
         try {
-          const model = genAI.getGenerativeModel({ model: modelName })
+          const model = genAI.getGenerativeModel({ model: attempt.modelName })
           const result = await model.generateContent(prompt)
           responseText = result.response.text()
-          if (responseText) break
+          clearGeminiQuotaFailure(attempt.apiKey)
+          break
         } catch (e: any) {
-          if (isQuotaError(e)) { keyHadQuota = true; break }
-          /* try next model */
+          lastError = e
+          if (isQuotaError(e)) {
+            markGeminiQuotaFailure(attempt.apiKey, e)
+            exhaustedKeyIndexes.add(attempt.keyIndex)
+            break
+          }
+          keyOnlyQuotaFailures.set(attempt.keyIndex, false)
+          if (isRetryableGeminiServiceError(e) && serviceUnavailableRetryCount < retryConfig.serviceUnavailableRetries) {
+            serviceUnavailableRetryCount++
+            await delay(retryConfig.serviceUnavailableDelayMs)
+            continue
+          }
+          break
         }
       }
-      if (responseText) break
-      if (keyHadQuota) quotaExhaustedCount++
-      else break
     }
 
+    const allKeysQuotaExhausted =
+      keyAvailability.blockedKeyCount + exhaustedKeyIndexes.size === apiKeys.length &&
+      apiKeys.every((_, index) => keyOnlyQuotaFailures.get(index) === true)
+
     if (!responseText) {
-      if (quotaExhaustedCount === apiKeys.length) {
-        return NextResponse.json({ error: 'Daily AI limit reached. Jesse AI resets automatically — try again tomorrow.' }, { status: 429 })
+      if (allKeysQuotaExhausted) {
+        return NextResponse.json({ error: getGeminiUnavailableMessage('Jesse AI') }, { status: 429 })
+      }
+      if (lastError && !isRetryableGeminiServiceError(lastError)) {
+        throw lastError
       }
       return NextResponse.json({ error: 'AI service unavailable' }, { status: 503 })
     }

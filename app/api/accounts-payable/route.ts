@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { recordJournalEntry } from '@/lib/accounting'
 import { prisma } from '@/lib/prisma'
+import { ensureRestaurantForOwner } from '@/lib/restaurantAccess'
 
 export async function GET(req: NextRequest) {
 	try {
@@ -10,9 +12,12 @@ export async function GET(req: NextRequest) {
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
+		const restaurant = await ensureRestaurantForOwner(session.user.id)
+
 		// Get Accounts Payable account - specifically the main one
 		const apAccount = await prisma.account.findFirst({
 			where: {
+				restaurantId: restaurant.id,
 				name: 'Accounts Payable'
 			}
 		})
@@ -29,6 +34,7 @@ export async function GET(req: NextRequest) {
 		const creditTransactions = await prisma.transaction.findMany({
 			where: {
 				userId: session.user.id,
+				restaurantId: restaurant.id,
 				accountId: apAccount.id,
 				type: 'credit'
 			},
@@ -40,6 +46,7 @@ export async function GET(req: NextRequest) {
 		const debitTransactions = await prisma.transaction.findMany({
 			where: {
 				userId: session.user.id,
+				restaurantId: restaurant.id,
 				accountId: apAccount.id,
 				type: 'debit'
 			}
@@ -129,88 +136,22 @@ export async function POST(req: NextRequest) {
 			return NextResponse.json({ error: `Missing required fields: ${missingFields.join(', ')}` }, { status: 400 })
 		}
 
-		// Get or create Accounts Payable account
-		let apAccount = await prisma.account.findFirst({
-			where: { name: 'Accounts Payable' }
-		})
-
-		if (!apAccount) {
-			const liabilityCategory = await prisma.category.findFirst({
-				where: { type: 'liability' }
-			})
-
-			if (!liabilityCategory) {
-				return NextResponse.json({ error: 'Liability category not found' }, { status: 400 })
-			}
-
-			apAccount = await prisma.account.create({
-				data: {
-					code: 'AP-001',
-					name: 'Accounts Payable',
-					type: 'liability',
-					categoryId: liabilityCategory.id
-				}
-			})
-		}
-
-		// Get expense account (we'll need to create or find appropriate expense account)
-		const expenseCategory = await prisma.category.findFirst({
-			where: { type: 'expense' }
-		})
-
-		let expenseAccount = await prisma.account.findFirst({
-			where: { name: 'General Expense' }
-		})
-
-		if (!expenseAccount && expenseCategory) {
-			expenseAccount = await prisma.account.create({
-				data: {
-					code: 'EXP-001',
-					name: 'General Expense',
-					type: 'expense',
-					categoryId: expenseCategory.id
-				}
-			})
-		}
-
-		if (!expenseAccount) {
-			return NextResponse.json({ error: 'Expense account not found' }, { status: 400 })
-		}
-
-		const pairId = `pair-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+		const restaurant = await ensureRestaurantForOwner(session.user.id)
 		const txDate = date ? new Date(date) : new Date()
 		const fullDescription = `${description || 'Goods/services received'} - ${vendorName}`
 
-		// Create the double entry:
-		// DR Expense (increase expense)
-		// CR Accounts Payable (increase liability - we owe money)
-		await prisma.transaction.createMany({
-			data: [
-				{
-					userId: session.user.id,
-					accountId: expenseAccount.id,
-					categoryId: expenseAccount.categoryId,
-					date: txDate,
-					description: fullDescription,
-					amount: parseFloat(amount),
-					type: 'debit',
-					isManual: true,
-					paymentMethod: 'Credit',
-					pairId
-				},
-				{
-					userId: session.user.id,
-					accountId: apAccount.id,
-					categoryId: apAccount.categoryId,
-					date: txDate,
-					description: fullDescription,
-					amount: parseFloat(amount),
-					type: 'credit',
-					isManual: true,
-					paymentMethod: 'Credit',
-					pairId
-				}
-			]
+		await recordJournalEntry(prisma, {
+			userId: session.user.id,
+			restaurantId: restaurant.id,
+			date: txDate,
+			description: fullDescription,
+			amount: parseFloat(amount),
+			direction: 'out',
+			accountName: 'General Expense',
+			paymentMethod: 'Credit',
+			isManual: true,
+			sourceKind: 'accounts_payable',
+			authoritativeForRevenue: false,
 		})
 
 		return NextResponse.json({ success: true })

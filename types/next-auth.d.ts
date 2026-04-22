@@ -5,7 +5,11 @@ declare module 'next-auth' {
     user: {
       id: string
       role?: string
+      restaurantId?: string | null
+      branchId?: string | null
       trackingMode?: string
+      isActive?: boolean
+      isSuperAdmin?: boolean
     } & DefaultSession['user']
   }
 }
@@ -14,7 +18,11 @@ declare module 'next-auth/jwt' {
   interface JWT {
     id?: string
     role?: string
+    restaurantId?: string | null
+    branchId?: string | null
     trackingMode?: string
+    isActive?: boolean
+    isSuperAdmin?: boolean
   }
 }
 

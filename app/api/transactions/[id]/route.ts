@@ -2,6 +2,44 @@ import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+
+const VALID_PAYMENT_METHODS = ['Cash', 'Bank', 'Mobile Money', 'Owner Momo', 'Credit', 'Notes Payable', 'Other']
+
+function buildTransactionScopeFilter(restaurantId: string | null, branchId: string | null) {
+	if (!restaurantId) return {}
+	return { restaurantId, branchId }
+}
+
+async function resolveAuthorizedTransaction(userId: string, transactionId: string) {
+	const context = await getRestaurantContextForUser(userId)
+	const billingUserId = context?.billingUserId ?? userId
+	const restaurantId = context?.restaurantId ?? null
+	const branchId = context?.branchId ?? null
+
+	const transaction = await prisma.transaction.findFirst({
+		where: {
+			id: transactionId,
+			userId: billingUserId,
+			...buildTransactionScopeFilter(restaurantId, branchId),
+		},
+	})
+
+	return { context, billingUserId, restaurantId, branchId, transaction }
+}
+
+async function resolveAuthorizedPairIds(billingUserId: string, restaurantId: string | null, branchId: string | null, pairId: string) {
+	const pairTransactions = await prisma.transaction.findMany({
+		where: {
+			pairId,
+			userId: billingUserId,
+			...buildTransactionScopeFilter(restaurantId, branchId),
+		},
+		select: { id: true, description: true, paymentMethod: true },
+	})
+
+	return pairTransactions
+}
 
 export async function PATCH(
 	request: Request,
@@ -15,20 +53,20 @@ export async function PATCH(
 
 		const body = await request.json()
 		const transactionId = (await params).id
-
-		// Get the transaction to find its pair
-		const transaction = await prisma.transaction.findUnique({
-			where: { id: transactionId }
-		})
+		const { billingUserId, restaurantId, branchId, transaction } = await resolveAuthorizedTransaction(session.user.id, transactionId)
 
 		if (!transaction) {
 			return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
 		}
 
+		if (!transaction.isManual) {
+			return NextResponse.json({ error: 'System-generated transactions cannot be edited here' }, { status: 403 })
+		}
+
 		// Check if this is a full update or just payment method
 		if (body.fullUpdate) {
 			// Full transaction update
-			const { direction, amount, description, date, categoryType, accountName, paymentMethod } = body
+			const { amount, description, date, paymentMethod } = body
 			
 			if (!amount || amount <= 0) {
 				return NextResponse.json({ error: 'Invalid amount' }, { status: 400 })
@@ -37,14 +75,16 @@ export async function PATCH(
 			// Parse amount and date
 			const parsedAmount = parseFloat(amount)
 			const parsedDate = date ? new Date(date) : new Date()
+			if (Number.isNaN(parsedDate.getTime())) {
+				return NextResponse.json({ error: 'Invalid date' }, { status: 400 })
+			}
 
 			// If transaction has a pair, update both
 			if (transaction.pairId) {
-				// Get both transactions in the pair
-				const pairTransactions = await prisma.transaction.findMany({
-					where: { pairId: transaction.pairId },
-					include: { account: true }
-				})
+				const pairTransactions = await resolveAuthorizedPairIds(billingUserId, restaurantId, branchId, transaction.pairId)
+				if (pairTransactions.length === 0) {
+					return NextResponse.json({ error: 'Transaction pair not found' }, { status: 404 })
+				}
 
 				// Update both transactions with new values
 				for (const tx of pairTransactions) {
@@ -76,22 +116,23 @@ export async function PATCH(
 			// Just payment method update (original functionality)
 			const { paymentMethod } = body
 
-			if (!paymentMethod || !['Cash', 'Bank', 'Mobile Money', 'Owner Momo', 'Credit', 'Other'].includes(paymentMethod)) {
+			if (!paymentMethod || !VALID_PAYMENT_METHODS.includes(paymentMethod)) {
 				return NextResponse.json(
-					{ error: 'Invalid payment method. Must be Cash, Bank, Mobile Money, Owner Momo, Credit, or Other' },
+					{ error: 'Invalid payment method. Must be Cash, Bank, Mobile Money, Owner Momo, Credit, Notes Payable, or Other' },
 					{ status: 400 }
 				)
 			}
 
 			// Update both this transaction and its pair (if it has one)
 			if (transaction.pairId) {
+				const pairTransactions = await resolveAuthorizedPairIds(billingUserId, restaurantId, branchId, transaction.pairId)
+				if (pairTransactions.length === 0) {
+					return NextResponse.json({ error: 'Transaction pair not found' }, { status: 404 })
+				}
+
 				await prisma.transaction.updateMany({
-					where: {
-						pairId: transaction.pairId
-					},
-					data: {
-						paymentMethod
-					}
+					where: { id: { in: pairTransactions.map((tx) => tx.id) } },
+					data: { paymentMethod }
 				})
 			} else {
 				// Just update this single transaction
@@ -123,22 +164,27 @@ export async function DELETE(
 		}
 
 		const transactionId = (await params).id
-
-		// Get the transaction to find its pair
-		const transaction = await prisma.transaction.findUnique({
-			where: { id: transactionId }
-		})
+		const { billingUserId, restaurantId, branchId, transaction } = await resolveAuthorizedTransaction(session.user.id, transactionId)
 
 		if (!transaction) {
 			return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
 		}
 
+		if (!transaction.isManual) {
+			return NextResponse.json({ error: 'System-generated transactions cannot be deleted here' }, { status: 403 })
+		}
+
 		// Delete both this transaction and its pair (if it has one)
 		// This ensures double-entry bookkeeping integrity
 		if (transaction.pairId) {
+			const pairTransactions = await resolveAuthorizedPairIds(billingUserId, restaurantId, branchId, transaction.pairId)
+			if (pairTransactions.length === 0) {
+				return NextResponse.json({ error: 'Transaction pair not found' }, { status: 404 })
+			}
+
 			await prisma.transaction.deleteMany({
 				where: {
-					pairId: transaction.pairId
+					id: { in: pairTransactions.map((tx) => tx.id) }
 				}
 			})
 		} else {

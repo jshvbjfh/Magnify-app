@@ -3,9 +3,38 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { GoogleGenerativeAI } from '@google/generative-ai'
-import { getGeminiCandidates, getGeminiApiKeys, isQuotaError } from '@/lib/openai'
+import { clearGeminiQuotaFailure, getGeminiAttemptPlan, getGeminiApiKeys, getGeminiKeyAvailability, getGeminiRetryConfig, getGeminiUnavailableMessage, isQuotaError, isRetryableGeminiServiceError, markGeminiQuotaFailure } from '@/lib/openai'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 export const dynamic = 'force-dynamic'
+
+function delay(ms: number) {
+  if (ms <= 0) return Promise.resolve()
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function buildCampaignScopeMarker(billingUserId: string, restaurantId: string | null, branchId: string | null) {
+  return branchId
+    ? `"branchId":"${branchId}"`
+    : restaurantId
+    ? `"restaurantId":"${restaurantId}"`
+    : `"billingUserId":"${billingUserId}"`
+}
+
+function parseCampaignRecord(data: string, billingUserId: string, restaurantId: string | null, branchId: string | null) {
+  try {
+    const parsed = JSON.parse(data)
+    if (branchId) {
+      return parsed?.branchId === branchId ? parsed : null
+    }
+    if (restaurantId) {
+      return parsed?.restaurantId === restaurantId ? parsed : null
+    }
+    return parsed?.billingUserId === billingUserId ? parsed : null
+  } catch {
+    return null
+  }
+}
 
 function sanitize(text: string): string {
   return text
@@ -23,6 +52,11 @@ export async function GET(req: NextRequest) {
   const action = searchParams.get('action') // 'diagnose' | 'campaigns'
 
   const userId = session.user.id
+  const restaurantCtx = await getRestaurantContextForUser(userId)
+  const billingUserId = restaurantCtx?.billingUserId ?? userId
+  const restaurantId = restaurantCtx?.restaurantId ?? null
+  const branchId = restaurantCtx?.branchId ?? null
+  const campaignScopeMarker = buildCampaignScopeMarker(billingUserId, restaurantId, branchId)
   const now = new Date()
 
   // ── Revenue trend: last 8 weeks ─────────────────────────────────────────
@@ -30,7 +64,7 @@ export async function GET(req: NextRequest) {
   weeksAgo8.setDate(weeksAgo8.getDate() - 56)
 
   const sales = await prisma.dishSale.findMany({
-    where: { userId, saleDate: { gte: weeksAgo8 } },
+    where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}), saleDate: { gte: weeksAgo8 } },
     include: { dish: true },
     orderBy: { saleDate: 'asc' },
   })
@@ -85,19 +119,19 @@ export async function GET(req: NextRequest) {
 
   // ── Campaign history (stored in FinancialStatement table as type 'marketing_campaign') ──
   const campaignHistory = await prisma.financialStatement.findMany({
-    where: { type: 'marketing_campaign', data: { contains: userId } },
+    where: { type: 'marketing_campaign', data: { contains: campaignScopeMarker } },
     orderBy: { createdAt: 'desc' },
     take: 20,
   })
-  const campaigns = campaignHistory.map(c => {
-    try { return JSON.parse(c.data) } catch { return null }
-  }).filter(Boolean)
+  const campaigns = campaignHistory
+    .map((c) => parseCampaignRecord(c.data, billingUserId, restaurantId, branchId))
+    .filter(Boolean)
 
   // ── Total revenue last 30d vs prev 30d ───────────────────────────────
   const prev30start = new Date(thirtyAgo)
   prev30start.setDate(prev30start.getDate() - 30)
   const prev30sales = await prisma.dishSale.findMany({
-    where: { userId, saleDate: { gte: prev30start, lt: thirtyAgo } },
+    where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}), saleDate: { gte: prev30start, lt: thirtyAgo } },
     select: { totalSaleAmount: true },
   })
   const rev30 = recentSales.reduce((s, x) => s + x.totalSaleAmount, 0)
@@ -123,6 +157,10 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const restaurantCtx = await getRestaurantContextForUser(session.user.id)
+  const billingUserId = restaurantCtx?.billingUserId ?? session.user.id
+  const restaurantId = restaurantCtx?.restaurantId ?? null
+  const branchId = restaurantCtx?.branchId ?? null
   const body = await req.json()
   const { action, context, campaignData } = body
 
@@ -136,7 +174,14 @@ export async function POST(req: NextRequest) {
         type: 'marketing_campaign',
         periodStart: new Date(),
         periodEnd: new Date(),
-        data: JSON.stringify({ ...campaignData, userId: session.user.id, savedAt: new Date().toISOString() }),
+        data: JSON.stringify({
+          ...campaignData,
+          currentUserId: session.user.id,
+          billingUserId,
+          restaurantId,
+          branchId,
+          savedAt: new Date().toISOString(),
+        }),
       },
     })
     return NextResponse.json({ ok: true, id: record.id })
@@ -149,6 +194,10 @@ export async function POST(req: NextRequest) {
 
   const apiKeys = getGeminiApiKeys()
   if (apiKeys.length === 0) return NextResponse.json({ error: 'AI service not configured' }, { status: 500 })
+  const keyAvailability = getGeminiKeyAvailability(apiKeys)
+  if (keyAvailability.availableKeyCount === 0) {
+    return NextResponse.json({ error: getGeminiUnavailableMessage('Jesse AI') }, { status: 429 })
+  }
 
   let prompt = ''
 
@@ -287,45 +336,77 @@ Write ${desc} for this campaign. Be creative, specific, and compelling.
 Return ONLY the content text — no JSON, no explanation, no extra formatting. Just the copy itself.`
   }
 
-  for (const _key of apiKeys) {
-    const _genAI = new GoogleGenerativeAI(_key)
-    const _candidates = await getGeminiCandidates(_key)
-    let _model: any = null
-    for (const _n of _candidates) {
-      try { _model = _genAI.getGenerativeModel({ model: _n }); break } catch { }
-    }
-    if (!_model) continue
+  const retryConfig = getGeminiRetryConfig()
+  const exhaustedKeyIndexes = new Set<number>()
+  const keyOnlyQuotaFailures = new Map<number, boolean>(apiKeys.map((_, index) => [index, true]))
+  let lastError: any = null
 
-    try {
-      const result = await _model.generateContent(prompt)
-      let text = result.response.text().trim()
-      text = sanitize(text)
+  for (const attempt of getGeminiAttemptPlan(apiKeys)) {
+    if (exhaustedKeyIndexes.has(attempt.keyIndex)) continue
 
-      if (action === 'diagnose' || action === 'generate_campaign') {
-        // Strip markdown fences if any
-        text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-        try {
-          const parsed = JSON.parse(text)
-          return NextResponse.json({ ok: true, result: parsed })
-        } catch {
-          // Try to extract JSON
-          const match = text.match(/\{[\s\S]+\}/)
-          if (match) {
-            try {
-              const parsed = JSON.parse(match[0])
-              return NextResponse.json({ ok: true, result: parsed })
-            } catch { /* fall through */ }
+    const genAI = new GoogleGenerativeAI(attempt.apiKey)
+    let serviceUnavailableRetryCount = 0
+
+    while (true) {
+      try {
+        const model = genAI.getGenerativeModel({ model: attempt.modelName })
+        const result = await model.generateContent(prompt)
+        let text = result.response.text().trim()
+        clearGeminiQuotaFailure(attempt.apiKey)
+        text = sanitize(text)
+
+        if (action === 'diagnose' || action === 'generate_campaign') {
+          // Strip markdown fences if any
+          text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+          try {
+            const parsed = JSON.parse(text)
+            return NextResponse.json({ ok: true, result: parsed })
+          } catch {
+            // Try to extract JSON
+            const match = text.match(/\{[\s\S]+\}/)
+            if (match) {
+              try {
+                const parsed = JSON.parse(match[0])
+                return NextResponse.json({ ok: true, result: parsed })
+              } catch { /* fall through */ }
+            }
+            return NextResponse.json({ ok: true, result: text })
           }
-          return NextResponse.json({ ok: true, result: text })
         }
-      }
 
-      return NextResponse.json({ ok: true, result: text })
-    } catch (e: any) {
-      if (isQuotaError(e)) continue
-      console.error('[Marketing API]', e)
-      return NextResponse.json({ error: e.message ?? 'AI error' }, { status: 500 })
+        return NextResponse.json({ ok: true, result: text })
+      } catch (e: any) {
+        lastError = e
+        if (isQuotaError(e)) {
+          markGeminiQuotaFailure(attempt.apiKey, e)
+          exhaustedKeyIndexes.add(attempt.keyIndex)
+          break
+        }
+        keyOnlyQuotaFailures.set(attempt.keyIndex, false)
+        if (isRetryableGeminiServiceError(e) && serviceUnavailableRetryCount < retryConfig.serviceUnavailableRetries) {
+          serviceUnavailableRetryCount++
+          await delay(retryConfig.serviceUnavailableDelayMs)
+          continue
+        }
+        break
+      }
     }
   }
-  return NextResponse.json({ error: 'Daily AI limit reached. Jesse AI resets automatically — try again tomorrow.' }, { status: 429 })
+
+  const allKeysQuotaExhausted =
+    keyAvailability.blockedKeyCount + exhaustedKeyIndexes.size === apiKeys.length &&
+    apiKeys.every((_, index) => keyOnlyQuotaFailures.get(index) === true)
+
+  if (allKeysQuotaExhausted) {
+    return NextResponse.json({ error: getGeminiUnavailableMessage('Jesse AI') }, { status: 429 })
+  }
+
+  if (lastError) {
+    console.error('[Marketing API]', lastError)
+    if (!isRetryableGeminiServiceError(lastError)) {
+      return NextResponse.json({ error: lastError.message ?? 'AI error' }, { status: 500 })
+    }
+  }
+
+  return NextResponse.json({ error: 'AI service unavailable' }, { status: 503 })
 }

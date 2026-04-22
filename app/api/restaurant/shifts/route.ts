@@ -2,10 +2,20 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { recordJournalEntry } from '@/lib/accounting'
+import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const context = await getRestaurantContextForUser(session.user.id)
+  const billingUserId = context?.billingUserId ?? session.user.id
+  const restaurantId = context?.restaurantId ?? null
+  const branchId = context?.branchId ?? null
+
+  if (!restaurantId || !branchId) return NextResponse.json([])
 
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
@@ -13,7 +23,9 @@ export async function GET(req: Request) {
 
   const shifts = await prisma.shift.findMany({
     where: {
-      userId: session.user.id,
+      userId: billingUserId,
+      restaurantId,
+      branchId,
       ...(from && to && { date: { gte: new Date(from), lte: new Date(to) } })
     },
     include: { employee: true },
@@ -26,12 +38,19 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const context = await getRestaurantContextForUser(session.user.id)
+  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+
+  const billingUserId = context.billingUserId
+  const restaurantId = context.restaurantId
+  const branchId = context.branchId
+
   const { employeeId, date, hoursWorked, notes } = await req.json()
   if (!employeeId || !date || hoursWorked == null) {
     return NextResponse.json({ error: 'employeeId, date, hoursWorked required' }, { status: 400 })
   }
 
-  const employee = await prisma.employee.findUnique({ where: { id: employeeId } })
+  const employee = await prisma.employee.findFirst({ where: { id: employeeId, userId: billingUserId, restaurantId, branchId } })
   if (!employee) return NextResponse.json({ error: 'Employee not found' }, { status: 404 })
 
   const hours = Number(hoursWorked)
@@ -47,50 +66,50 @@ export async function POST(req: Request) {
     calculatedWage = (employee.payRate / (26 * 8)) * hours
   }
 
-  // Find or create Labor category + account
-  let laborCategory = await prisma.category.findFirst({ where: { name: 'Labor Cost' } })
-  if (!laborCategory) {
-    laborCategory = await prisma.category.create({
-      data: { name: 'Labor Cost', type: 'expense', description: 'Staff wages and salaries' }
-    })
-  }
-  let laborAccount = await prisma.account.findFirst({ where: { name: 'Staff Wages' } })
-  if (!laborAccount) {
-    laborAccount = await prisma.account.create({
-      data: {
-        code: 'REST-LAB-001',
-        name: 'Staff Wages',
-        categoryId: laborCategory.id,
-        type: 'expense',
-        description: 'Restaurant labor expense'
-      }
-    })
+  const shiftDate = new Date(date)
+  if (Number.isNaN(shiftDate.getTime())) {
+    return NextResponse.json({ error: 'Invalid date' }, { status: 400 })
   }
 
-  // Auto-create expense transaction
-  await prisma.transaction.create({
-    data: {
-      userId: session.user.id,
-      accountId: laborAccount.id,
-      categoryId: laborCategory.id,
-      date: new Date(date),
+  const shift = await prisma.$transaction(async (tx) => {
+    await recordJournalEntry(tx, {
+      userId: billingUserId,
+      restaurantId,
+      branchId,
+      date: shiftDate,
       description: `Wages: ${employee.name} (${hours}h)`,
       amount: calculatedWage,
-      type: 'debit',
-      isManual: true,
-      paymentMethod: 'Cash'
-    }
-  })
+      direction: 'out',
+      accountName: 'Staff Wages',
+      categoryType: 'expense',
+      paymentMethod: 'Cash',
+      isManual: false,
+      sourceKind: 'shift_wage',
+    })
 
-  const shift = await prisma.shift.create({
-    data: {
-      userId: session.user.id,
-      employeeId,
-      date: new Date(date),
-      hoursWorked: hours,
-      calculatedWage,
-      notes: notes || null
-    }
+    const createdShift = await tx.shift.create({
+      data: {
+        userId: billingUserId,
+        restaurantId,
+        branchId,
+        employeeId,
+        date: shiftDate,
+        hoursWorked: hours,
+        calculatedWage,
+        notes: notes || null
+      }
+    })
+
+    await enqueueSyncChange(tx, {
+      restaurantId,
+      branchId,
+      entityType: 'shift',
+      entityId: createdShift.id,
+      operation: 'upsert',
+      payload: createdShift,
+    })
+
+    return createdShift
   })
 
   return NextResponse.json({ shift, calculatedWage }, { status: 201 })

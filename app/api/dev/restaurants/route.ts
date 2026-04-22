@@ -1,7 +1,23 @@
 import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
 import { prisma } from '@/lib/prisma'
+import { authOptions } from '@/lib/auth'
 
 const TRIAL_DAYS = parseInt(process.env.TRIAL_DAYS || '30')
+
+async function requireAdminSession() {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const user = session.user as any
+  if (user.role !== 'admin') {
+    return NextResponse.json({ error: 'Admin only' }, { status: 403 })
+  }
+
+  return null
+}
 
 function getLicenseStatus(r: {
   trialStartAt: Date
@@ -24,6 +40,9 @@ function checkKey(req: Request) {
 
 export async function GET(req: Request) {
   try {
+    const authError = await requireAdminSession()
+    if (authError) return authError
+
     checkKey(req)
     const restaurants = await prisma.restaurant.findMany({
       include: { owner: { select: { name: true, email: true, createdAt: true } } },

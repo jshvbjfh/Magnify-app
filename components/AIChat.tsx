@@ -82,6 +82,23 @@ type PendingFinancialRecord = {
 	totalAmount: number
 }
 
+function isSharedQuotaMessage(content: string) {
+	const normalized = content.toLowerCase()
+	return normalized.includes('shared gemini quota')
+		|| normalized.includes('all configured ai keys are currently unavailable')
+		|| normalized.includes('jesse ai is temporarily unavailable')
+		|| normalized.includes('shared jesse ai service')
+}
+
+function createWelcomeMessage(): Message[] {
+	return [{
+		id: 'welcome-message',
+		role: 'assistant',
+		content: "Hi! I'm Jesse, your accounting AI assistant. I can help you with:\n\n• **Upload images** 📷 - Send receipts, invoices, or bills and I'll automatically extract and record transactions!\n  - Just click the image icon and upload\n  - I'll read the document and create proper journal entries\n  - Works with photos, scans, or screenshots\n\n• **Record transactions** - Single or multiple transactions with different dates and accounts:\n  - Single: \"Record 50,000 fuel expense on Jan 15\"\n  - Batch: \"Jan 10: received 200,000 from client, Jan 12: paid 80,000 rent, Jan 15: 45,000 diesel\"\n  - Natural: \"Yesterday I paid 40,000 for parking and 25,000 for lunch\"\n  - Sequential: \"Record driver payment 60,000 on Jan 5, diesel 45,000 on Jan 6, repair 120,000 on Jan 7\"\n\n• **Product sales** - If you add products to Inventory, I can automatically calculate revenue:\n  - \"Sold 5 bags of cement today\"\n  - \"Customer bought 20kg of diesel\"\n  - I'll look up the price from your inventory and record the sale!\n\n• **Create adjusting entries** - Depreciation, accruals, deferrals, and corrections\n\n• **Understand your finances** - Ask about your cash balance, revenue, expenses, profit, or account balances\n\n• **Explain accounting concepts** - Questions about debits, credits, accounts payable, receivables, financial statements, etc.\n\n**Important:**\n- I can handle multiple transactions at once with different dates and accounts!\n- Just separate them with commas, \"and\", or list them\n- I automatically detect the right accounts based on the transaction type\n- Upload images of receipts and invoices for automatic processing!\n- Add products in the Inventory tab to enable automatic sales tracking\n- I only answer accounting-related questions\n- I cannot delete transactions (use the Delete button in the Journal section)\n\nWhat can I help you with today?",
+		timestamp: new Date()
+	}]
+}
+
 export default function AIChat() {
 	const { t } = useLanguage()
 	const [messages, setMessages] = useState<Message[]>([])
@@ -92,10 +109,16 @@ export default function AIChat() {
 	const [loadingHistory, setLoadingHistory] = useState(true)
 	const [error, setError] = useState<string | null>(null)
 	const [selectedDate, setSelectedDate] = useState<string>('all')
+	const [conversationMode, setConversationMode] = useState<'history' | 'new'>('history')
 	const [showDatePicker, setShowDatePicker] = useState(false)
 	const [pendingFinancialRecord, setPendingFinancialRecord] = useState<PendingFinancialRecord | null>(null)
 	const messagesEndRef = useRef<HTMLDivElement>(null)
 	const fileInputRef = useRef<HTMLInputElement>(null)
+	const conversationModeRef = useRef<'history' | 'new'>('history')
+
+	useEffect(() => {
+		conversationModeRef.current = conversationMode
+	}, [conversationMode])
 
 	// Listen for analytics context from the Analytics page
 	useEffect(() => {
@@ -159,6 +182,10 @@ export default function AIChat() {
 
 	// Filter messages by selected date
 	useEffect(() => {
+		if (conversationMode === 'new') {
+			setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+			return
+		}
 		if (selectedDate === 'all') {
 			setMessages(allMessages)
 		} else {
@@ -170,7 +197,7 @@ export default function AIChat() {
 		}
 		// Auto-scroll after filtering
 		setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
-	}, [selectedDate, allMessages])
+	}, [selectedDate, allMessages, conversationMode])
 
 	async function loadChatHistory() {
 		setLoadingHistory(true)
@@ -189,17 +216,15 @@ export default function AIChat() {
 					}))
 					console.log('Setting messages:', loadedMessages) // Debug log
 					setAllMessages(loadedMessages)
-					setMessages(loadedMessages)
+					if (conversationModeRef.current === 'history') {
+						setMessages(loadedMessages)
+					}
 				} else {
-					// Show welcome message if no history
-					const welcomeMsg = [{
-						id: '1',
-						role: 'assistant' as const,
-						content: "Hi! I'm Jesse, your accounting AI assistant. I can help you with:\n\n• **Upload images** 📷 - Send receipts, invoices, or bills and I'll automatically extract and record transactions!\n  - Just click the image icon and upload\n  - I'll read the document and create proper journal entries\n  - Works with photos, scans, or screenshots\n\n• **Record transactions** - Single or multiple transactions with different dates and accounts:\n  - Single: \"Record 50,000 fuel expense on Jan 15\"\n  - Batch: \"Jan 10: received 200,000 from client, Jan 12: paid 80,000 rent, Jan 15: 45,000 diesel\"\n  - Natural: \"Yesterday I paid 40,000 for parking and 25,000 for lunch\"\n  - Sequential: \"Record driver payment 60,000 on Jan 5, diesel 45,000 on Jan 6, repair 120,000 on Jan 7\"\n\n• **Product sales** - If you add products to Inventory, I can automatically calculate revenue:\n  - \"Sold 5 bags of cement today\"\n  - \"Customer bought 20kg of diesel\"\n  - I'll look up the price from your inventory and record the sale!\n\n• **Create adjusting entries** - Depreciation, accruals, deferrals, and corrections\n\n• **Understand your finances** - Ask about your cash balance, revenue, expenses, profit, or account balances\n\n• **Explain accounting concepts** - Questions about debits, credits, accounts payable, receivables, financial statements, etc.\n\n**Important:**\n- I can handle multiple transactions at once with different dates and accounts!\n- Just separate them with commas, \"and\", or list them\n- I automatically detect the right accounts based on the transaction type\n- Upload images of receipts and invoices for automatic processing!\n- Add products in the Inventory tab to enable automatic sales tracking\n- I only answer accounting-related questions\n- I cannot delete transactions (use the Delete button in the Journal section)\n\nWhat can I help you with today?",
-						timestamp: new Date()
-					}]
+					const welcomeMsg = createWelcomeMessage()
 					setAllMessages(welcomeMsg)
-					setMessages(welcomeMsg)
+					if (conversationModeRef.current === 'history') {
+						setMessages(welcomeMsg)
+					}
 				}
 			} else {
 				console.error('Failed to load chat history:', await res.text())
@@ -332,7 +357,7 @@ export default function AIChat() {
 				const errBody = await res.json().catch(() => ({}))
 				const errMsg = errBody?.error || errBody?.message || ''
 				if (errMsg.toLowerCase().includes('gemini') || errMsg.toLowerCase().includes('api key')) {
-					throw new Error('⚙️ Gemini API key is not configured. Go to **AI Analytics** tab and enter your key to enable AI features.')
+					throw new Error('⚙️ Jesse AI is not fully configured right now. Please try again later.')
 				}
 				throw new Error("I'm sorry, I encountered an issue. Please try again.")
 			}
@@ -363,6 +388,7 @@ export default function AIChat() {
 
 			setAllMessages((prev) => [...prev, aiMessage])
 			setMessages((prev) => [...prev, aiMessage])
+			setError(null)
 
 			// If transactions were created, add a success message
 			if (data.transactionsCreated && data.transactionsCreated.length > 0) {
@@ -480,6 +506,41 @@ export default function AIChat() {
 					}
 				}
 			}
+
+			// If new inventory items were added and purchased in one action, show details and refresh reports
+			if (data.addAndPurchaseResults && data.addAndPurchaseResults.length > 0) {
+				const successItems = data.addAndPurchaseResults.filter((p: any) => !p.error)
+				const errorItems = data.addAndPurchaseResults.filter((p: any) => p.error)
+
+				let successContent = ''
+				if (successItems.length > 0) {
+					successContent = `✅ Successfully added and recorded ${successItems.length} inventory purchase(s):\n${successItems.map((p: any) =>
+						`• ${p.quantity} ${p.unit} ${p.name}${p.totalCost ? ` - ${p.totalCost.toLocaleString()} RWF` : ''}\n  Stock is now ${p.newQuantity} ${p.unit}`
+					).join('\n')}`
+				}
+
+				if (errorItems.length > 0) {
+					successContent += `\n\n❌ Errors:\n${errorItems.map((e: any) => `• ${e.name}: ${e.error}`).join('\n')}`
+				}
+
+				if (successContent) {
+					const successId = await saveMessage('assistant', successContent)
+					const successMsg: Message = {
+						id: successId,
+						role: 'assistant',
+						content: successContent,
+						timestamp: new Date()
+					}
+					setAllMessages((prev) => [...prev, successMsg])
+					setMessages((prev) => [...prev, successMsg])
+
+					if (successItems.length > 0) {
+						window.dispatchEvent(new CustomEvent('refreshTransactions', {
+							detail: { count: successItems.length, source: 'inventory_add_and_purchase' }
+						}))
+					}
+				}
+			}
 		} catch (e: any) {
 			// Show user-friendly error message
 			const errorMessage = e?.message?.includes('fetch') || e?.message?.includes('network')
@@ -500,6 +561,20 @@ export default function AIChat() {
 			setLoading(false)
 		}
 	}
+
+	function startNewConversation() {
+		setConversationMode('new')
+		setSelectedDate('all')
+		setError(null)
+		setInput('')
+		setSelectedImages([])
+		setPendingFinancialRecord(null)
+		localStorage.removeItem('aiChatDraft')
+		setMessages(createWelcomeMessage())
+	}
+
+	const latestAssistantMessage = [...messages].reverse().find((msg) => msg.role === 'assistant')
+	const showSharedQuotaBanner = Boolean(latestAssistantMessage && isSharedQuotaMessage(latestAssistantMessage.content))
 
 	function handleKeyPress(e: React.KeyboardEvent) {
 		if (e.key === 'Enter' && !e.shiftKey) {
@@ -554,7 +629,7 @@ export default function AIChat() {
 				{/* New Conversation */}
 				<div className="p-3 border-b border-gray-200">
 					<button
-						onClick={() => setSelectedDate('all')}
+						onClick={startNewConversation}
 						className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 transition-colors shadow-sm"
 					>
 						<span className="text-base leading-none">+</span>
@@ -595,7 +670,11 @@ export default function AIChat() {
 							return (
 								<button
 									key={date}
-									onClick={() => setSelectedDate(date)}
+									onClick={() => {
+										setConversationMode('history')
+										setSelectedDate(date)
+										setError(null)
+									}}
 									className={`w-full text-left px-3 py-2 rounded-lg mb-0.5 transition-colors ${
 										selectedDate === date
 											? 'bg-orange-100 border border-orange-200'
@@ -662,7 +741,7 @@ export default function AIChat() {
 											className={`flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full ${
 												msg.role === 'user'
 													? 'bg-orange-100 text-orange-600'
-													: 'bg-white p-0.5'
+													: 'text-orange-500'
 											}`}
 										>
 											{msg.role === 'user' ? (
@@ -675,7 +754,9 @@ export default function AIChat() {
 											className={`max-w-[70%] rounded-lg px-4 py-3 ${
 												msg.role === 'user'
 											? 'bg-orange-600 text-white'
-													: 'bg-gray-100 text-gray-900'
+													: isSharedQuotaMessage(msg.content)
+														? 'border border-amber-200 bg-amber-50 text-amber-900'
+														: 'bg-gray-100 text-gray-900'
 											}`}
 										>
 											{/* Images if present */}
@@ -695,6 +776,11 @@ export default function AIChat() {
 											)}
 											
 										{renderMessageContent(msg.content)}
+										{msg.role === 'assistant' && isSharedQuotaMessage(msg.content) && (
+											<div className="mt-3 rounded-lg border border-amber-200 bg-white/80 px-3 py-2 text-xs text-amber-700">
+												Shared service issue: Jesse AI is using the app's shared service capacity, not a per-user daily limit.
+											</div>
+										)}
 											<p
 												className={`mt-1 text-xs ${
 													msg.role === 'user' ? 'text-orange-200' : 'text-gray-500'
@@ -706,10 +792,21 @@ export default function AIChat() {
 									</div>
 								</div>
 							)})}
+						{showSharedQuotaBanner && (
+							<div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+								<div className="flex items-start gap-3">
+									<AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+									<div>
+										<p className="font-semibold">AI Keys Temporarily Unavailable</p>
+										<p className="mt-1 text-xs text-amber-700">Jesse AI is temporarily unavailable because the shared service is currently hitting quota or rate limits. This is not based only on your personal usage. Try again later.</p>
+									</div>
+								</div>
+							</div>
+						)}
 						{loading && (
 							<div className="flex gap-3">
-								<div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-orange-500 to-red-600">
-									<Sparkles className="h-4 w-4 text-white" />
+								<div className="flex h-8 w-8 shrink-0 items-center justify-center text-orange-500">
+									<Sparkles className="h-4 w-4" />
 								</div>
 								<div className="rounded-lg bg-gray-100 px-4 py-2">
 									<div className="flex gap-1">

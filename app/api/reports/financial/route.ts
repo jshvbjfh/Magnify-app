@@ -4,34 +4,43 @@ import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { generateFinancialReportPDF } from '@/lib/pdfGenerator'
+import {
+	buildBranchScopeCondition,
+	buildDateRangeCondition,
+	buildOperationalIncomeStatement,
+	buildRestaurantScopeCondition,
+	getOperationalReportMetrics,
+	isCashEquivalentAccountName,
+	requireReportingContext,
+} from '@/lib/restaurantReporting'
 
 export async function GET(req: NextRequest) {
 	try {
 		const session = await getServerSession(authOptions)
-		if (!session?.user) {
+		if (!session?.user?.id) {
 			return new NextResponse('Unauthorized', { status: 401 })
 		}
+
+		const reportingContext = await requireReportingContext(session.user.id)
 
 		// Get query parameters
 		const searchParams = req.nextUrl.searchParams
 		const startDate = searchParams.get('startDate')
 		const endDate = searchParams.get('endDate')
+		const startDateValue = startDate ? new Date(startDate + 'T00:00:00') : undefined
+		const endDateValue = endDate ? new Date(endDate + 'T23:59:59') : undefined
+		const restaurantScope = buildRestaurantScopeCondition(reportingContext.restaurantId) as any
+		const branchScope = buildBranchScopeCondition(reportingContext.branchId) as any
 
 		// Build where clause for date filtering
-		let dateFilter = {}
-		if (startDate && endDate) {
-			dateFilter = {
-				date: {
-					gte: new Date(startDate + 'T00:00:00'),
-					lte: new Date(endDate + 'T23:59:59')
-				}
-			}
-		}
+		const dateFilter = buildDateRangeCondition('date', { start: startDateValue, end: endDateValue }) as any
 
 		// Fetch transactions with filtering
 		const transactions = await prisma.transaction.findMany({
 			where: {
-				userId: session.user.id,
+				userId: reportingContext.billingUserId,
+				...restaurantScope,
+				...branchScope,
 				...dateFilter
 			},
 			select: {
@@ -93,15 +102,27 @@ export async function GET(req: NextRequest) {
 			}
 		})
 
+		const operationalMetrics = await getOperationalReportMetrics(reportingContext, {
+			start: startDateValue,
+			end: endDateValue,
+		})
+
 		// Calculate financial statement data
 		const financialData = calculateFinancialStatements(txData)
+		financialData.incomeStatement = buildOperationalIncomeStatement(operationalMetrics)
+		financialData.balanceSheet.equity.retainedEarnings = financialData.incomeStatement.netProfit
 
 		// Fetch Accounts Receivable data
 		const arAccount = await prisma.account.findFirst({
 			where: { 
-				OR: [
-					{ code: '1200' },
-					{ name: { contains: 'Accounts Receivable' } }
+				AND: [
+					restaurantScope,
+					{
+						OR: [
+							{ code: '1200' },
+							{ name: { contains: 'Accounts Receivable' } }
+						]
+					}
 				]
 			}
 		})
@@ -110,7 +131,9 @@ export async function GET(req: NextRequest) {
 		if (arAccount) {
 			const arTransactions = await prisma.transaction.findMany({
 				where: {
-					userId: session.user.id,
+					userId: reportingContext.billingUserId,
+					...restaurantScope,
+					...branchScope,
 					accountId: arAccount.id,
 					...dateFilter
 				},
@@ -161,132 +184,44 @@ export async function GET(req: NextRequest) {
 			})
 		}
 
-		// Fetch Sales Profit Data
-		const salesAccount = await prisma.account.findFirst({
-			where: { name: 'Sales Revenue' }
-		})
-
-		const salesWithProfit: any[] = []
-		if (salesAccount) {
-			const salesTransactions = await prisma.transaction.findMany({
-				where: {
-					userId: session.user.id,
-					accountId: salesAccount.id,
-					type: 'credit',
-					...dateFilter
-				},
-				select: {
-					id: true,
-					date: true,
-					description: true,
-					amount: true,
-					type: true,
-					profitAmount: true,
-					costAmount: true
-				},
-				orderBy: { date: 'desc' }
-			})
-
-			// Get all inventory items
-			const inventoryItems = await prisma.inventoryItem.findMany({
-				where: { userId: session.user.id }
-			})
-
-			const itemMap = new Map(inventoryItems.map(item => [item.name.toLowerCase(), item]))
-
-			// Process sales and calculate profits
-			salesTransactions.forEach(tx => {
-				// Try to use stored profit/cost data first
-				if (tx.profitAmount !== null && tx.costAmount !== null) {
-					const match = tx.description.match(/Sale:\s*(.+?)\s*\(([0-9.]+)\s*(.+?)\)/)
-					if (match) {
-						const itemName = match[1].trim()
-						const quantity = parseFloat(match[2])
-						const unit = match[3].trim()
-						const revenue = tx.amount
-						const cost = Number(tx.costAmount)
-						const profit = Number(tx.profitAmount)
-						const unitCost = cost / quantity
-						const unitPrice = revenue / quantity
-						const profitMargin = revenue > 0 ? (profit / revenue * 100) : 0
-
-						salesWithProfit.push({
-							date: tx.date.toLocaleDateString(),
-							itemName,
-							quantity,
-							unit,
-							unitCost,
-							unitPrice,
-							revenue,
-							cost,
-							profit,
-							profitMargin: profitMargin.toFixed(1)
-						})
-					}
-					return
-				}
-
-				// Fall back to parsing and calculating from inventory
-				const match = tx.description.match(/Sale:\s*(.+?)\s*\(([0-9.]+)\s*(.+?)\)/)
-				if (!match) return
-
-				const itemName = match[1].trim()
-				const quantity = parseFloat(match[2])
-				const unit = match[3].trim()
-
-				const inventoryItem = itemMap.get(itemName.toLowerCase())
-				const revenue = tx.amount
-			
-				// If item not in inventory or no cost data, still show the sale
-				if (!inventoryItem || !(inventoryItem as any).unitCost) {
-					const unitPrice = revenue / quantity
-					salesWithProfit.push({
-						date: tx.date.toLocaleDateString(),
-						itemName,
-						quantity,
-						unit,
-						unitCost: 0,
-						unitPrice,
-						revenue,
-						cost: 0,
-						profit: 0,
-						profitMargin: 'N/A' // No cost data available
-					})
-					return
-				}
-
-				const unitPrice = (inventoryItem as any).unitPrice || (revenue / quantity)
-				const unitCost = (inventoryItem as any).unitCost
-				const cost = unitCost * quantity
-				const profit = revenue - cost
-				const profitMargin = revenue > 0 ? (profit / revenue * 100) : 0
-
-				salesWithProfit.push({
-					date: tx.date.toLocaleDateString(),
-					itemName,
-					quantity,
-					unit,
-					unitCost,
-					unitPrice,
-					revenue,
-					cost,
-					profit,
-					profitMargin: profitMargin.toFixed(1)
-				})
-			})
-		}
+		const salesWithProfit = operationalMetrics.salesWithProfit.map((sale) => ({
+			date: new Date(sale.date).toLocaleDateString(),
+			itemName: sale.itemName,
+			quantity: sale.quantity,
+			unit: sale.unit,
+			unitCost: sale.unitCost,
+			unitPrice: sale.unitPrice,
+			revenue: sale.revenue,
+			cost: sale.cost,
+			profit: sale.profit,
+			profitMargin: sale.profitMargin,
+		}))
 
 		// Fetch Accounts Payable data
-		const apAccount = await prisma.account.findFirst({
-			where: { name: 'Accounts Payable' }
+		const apAccounts = await prisma.account.findMany({
+			where: {
+				AND: [
+					restaurantScope,
+					{
+						OR: [
+							{ name: 'Accounts Payable' },
+							{ name: 'Notes Payable' },
+							{ name: { contains: 'Payable' } }
+						]
+					}
+				]
+			}
 		})
 
 		const payables: any[] = []
-		if (apAccount) {
+		if (apAccounts.length > 0) {
+			const payableAccountIds = apAccounts.map((account) => account.id)
 			const creditTransactions = await prisma.transaction.findMany({
 				where: {
-					userId: session.user.id,
-					accountId: apAccount.id,
+					userId: reportingContext.billingUserId,
+					...restaurantScope,
+					...branchScope,
+					accountId: { in: payableAccountIds },
 					type: 'credit',
 					...dateFilter
 				},
@@ -295,8 +230,10 @@ export async function GET(req: NextRequest) {
 
 			const debitTransactions = await prisma.transaction.findMany({
 				where: {
-					userId: session.user.id,
-					accountId: apAccount.id,
+					userId: reportingContext.billingUserId,
+					...restaurantScope,
+					...branchScope,
+					accountId: { in: payableAccountIds },
 					type: 'debit'
 				}
 			})
@@ -360,7 +297,7 @@ export async function GET(req: NextRequest) {
 
 		for (const tx of txData) {
 			const accountName = (tx.accountName || '').trim().toLowerCase()
-			if (!(accountName === 'cash' || accountName.includes('cash'))) continue
+			if (!isCashEquivalentAccountName(accountName)) continue
 			
 			if (tx.type === 'debit') {
 				cashInflow += tx.amount

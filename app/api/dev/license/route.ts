@@ -1,5 +1,21 @@
 import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
 import { prisma } from '@/lib/prisma'
+import { authOptions } from '@/lib/auth'
+
+async function requireAdminSession() {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const user = session.user as any
+  if (user.role !== 'admin') {
+    return NextResponse.json({ error: 'Admin only' }, { status: 403 })
+  }
+
+  return null
+}
 
 function checkKey(req: Request) {
   const url = new URL(req.url)
@@ -10,6 +26,9 @@ function checkKey(req: Request) {
 /** POST body: { restaurantId, action: 'grant'|'revoke'|'suspend'|'unsuspend', months?: number } */
 export async function POST(req: Request) {
   try {
+    const authError = await requireAdminSession()
+    if (authError) return authError
+
     checkKey(req)
     const { restaurantId, action, months = 1 } = await req.json()
     if (!restaurantId || !action) {

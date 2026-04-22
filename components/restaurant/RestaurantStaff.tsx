@@ -1,8 +1,9 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { Plus, Users, Clock, X, CheckCircle2, Sparkles, UserCheck, Copy, Trash2, Eye, EyeOff, Wifi, ChefHat, Crown } from 'lucide-react'
+import { loadOwnerSyncConfig, loadServerOwnerSyncConfig } from '@/lib/ownerSyncBrowser'
 
-type Employee = { id:string; name:string; role:string; payType:string; payRate:number; isActive:boolean; phone:string|null }
+type Employee = { id:string; name:string; role:string; payType:string; payRate:number; isActive:boolean; canApproveOrderCancellation:boolean; phone:string|null }
 type Shift = { id:string; employee:{name:string}; date:string; hoursWorked:number; calculatedWage:number; notes:string|null }
 type Waiter = { id:string; name:string; email:string; createdAt:string }
 type Restaurant = { id:string; name:string; joinCode:string }
@@ -30,6 +31,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   const [showOwnerForm, setShowOwnerForm] = useState(false)
   const [ownerForm, setOwnerForm] = useState({name:'',email:'',password:''})
   const [ownerSuccess, setOwnerSuccess] = useState(false)
+  const [ownerSubmitting, setOwnerSubmitting] = useState(false)
   const [lastCreatedOwner, setLastCreatedOwner] = useState<{name:string;email:string;password:string}|null>(null)
   const [ownerCredCopied, setOwnerCredCopied] = useState<'email'|'password'|null>(null)
   const [codeCopied, setCodeCopied] = useState(false)
@@ -42,13 +44,23 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   const [urlCopied, setUrlCopied] = useState(false)
   const [waiterUrl, setWaiterUrl] = useState<string>('')
   const [showPasswords, setShowPasswords] = useState<Record<string,boolean>>({})
-  const [empForm, setEmpForm] = useState({name:'',role:'Waiter',payType:'daily',payRate:'',phone:''})
+  const [empForm, setEmpForm] = useState({name:'',role:'Waiter',payType:'daily',payRate:'',phone:'',canApproveOrderCancellation:false,cancellationPin:''})
   const [shiftForm, setShiftForm] = useState({employeeId:'',date:new Date().toISOString().split('T')[0],hoursWorked:'8',notes:''})
   const [waiterForm, setWaiterForm] = useState({name:'',email:'',password:''})
 
   async function fetchJson<T>(url: string, init?: RequestInit): Promise<T | null> {
     try {
-      const res = await fetch(url, init)
+      const method = String(init?.method ?? 'GET').toUpperCase()
+      const requestInit: RequestInit = {
+        credentials: init?.credentials ?? 'include',
+        ...init,
+      }
+
+      if (method === 'GET') {
+        requestInit.cache = 'no-store'
+      }
+
+      const res = await fetch(url, requestInit)
       const text = await res.text()
       if (!text.trim()) return null
       return JSON.parse(text) as T
@@ -114,17 +126,64 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   async function saveEmployee(e:React.FormEvent) {
     e.preventDefault()
     setActionError(null)
-    const res = await fetch('/api/restaurant/employees',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({name:empForm.name,role:empForm.role,payType:empForm.payType,payRate:Number(empForm.payRate),phone:empForm.phone||null})})
+    const res = await fetch('/api/restaurant/employees',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({name:empForm.name,role:empForm.role,payType:empForm.payType,payRate:Number(empForm.payRate),phone:empForm.phone||null,canApproveOrderCancellation:empForm.canApproveOrderCancellation,cancellationPin:empForm.cancellationPin})})
     if (!res.ok) {
       const payload = await res.json().catch(() => null)
       setActionError(payload?.error || 'Failed to create employee.')
       return
     }
-    setShowEmpForm(false); setEmpForm({name:'',role:'Waiter',payType:'daily',payRate:'',phone:''}); load()
+    setShowEmpForm(false); setEmpForm({name:'',role:'Waiter',payType:'daily',payRate:'',phone:'',canApproveOrderCancellation:false,cancellationPin:''}); load()
   }
 
   async function toggleEmployee(emp:Employee) {
     await fetch('/api/restaurant/employees/'+emp.id,{method:'PATCH',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({isActive:!emp.isActive})})
+    load()
+  }
+
+  async function configureCancellationApprover(emp: Employee) {
+    setActionError(null)
+    const pin = window.prompt(`Set a 5-digit cancellation PIN for ${emp.name}`, '')
+    if (pin == null) return
+
+    const normalizedPin = pin.trim()
+    if (!/^\d{5}$/.test(normalizedPin)) {
+      setActionError('Cancellation PIN must be exactly 5 digits.')
+      return
+    }
+
+    const res = await fetch('/api/restaurant/employees/'+emp.id, {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      credentials:'include',
+      body:JSON.stringify({ canApproveOrderCancellation: true, cancellationPin: normalizedPin })
+    })
+
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null)
+      setActionError(payload?.error || 'Failed to save cancellation approval PIN.')
+      return
+    }
+
+    load()
+  }
+
+  async function revokeCancellationApprover(emp: Employee) {
+    setActionError(null)
+    if (!window.confirm(`Remove ${emp.name}'s cancellation approval PIN?`)) return
+
+    const res = await fetch('/api/restaurant/employees/'+emp.id, {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      credentials:'include',
+      body:JSON.stringify({ canApproveOrderCancellation: false, cancellationPin: '' })
+    })
+
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null)
+      setActionError(payload?.error || 'Failed to remove cancellation approval PIN.')
+      return
+    }
+
     load()
   }
 
@@ -174,18 +233,38 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
 
   async function saveOwnerAccount(e:React.FormEvent) {
     e.preventDefault()
+    if (ownerSubmitting) return
     setActionError(null)
+    setOwnerSubmitting(true)
     const snapshot = { ...ownerForm }
-    const res = await fetch('/api/restaurant/waiters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...ownerForm,role:'owner'}),credentials:'include'})
-    if(res.ok){
-      setLastCreatedOwner({ name: snapshot.name, email: snapshot.email, password: snapshot.password })
-      setOwnerSuccess(true);setTimeout(()=>setOwnerSuccess(false),3000)
-      setShowOwnerForm(false);setOwnerForm({name:'',email:'',password:''})
-      loadOwnerAccounts()
-      return
+    let syncPayload: Record<string, string> = {}
+
+    try {
+      const serverSyncConfig = await loadServerOwnerSyncConfig()
+      const deviceSyncConfig = loadOwnerSyncConfig(serverSyncConfig)
+      if (deviceSyncConfig.targetUrl.trim() && deviceSyncConfig.email.trim() && deviceSyncConfig.password) {
+        syncPayload = {
+          syncTargetUrl: deviceSyncConfig.targetUrl,
+          syncEmail: deviceSyncConfig.email,
+          syncPassword: deviceSyncConfig.password,
+        }
+      }
+    } catch {}
+
+    try {
+      const res = await fetch('/api/restaurant/waiters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...ownerForm,role:'owner',...syncPayload}),credentials:'include'})
+      if(res.ok){
+        setLastCreatedOwner({ name: snapshot.name, email: snapshot.email, password: snapshot.password })
+        setOwnerSuccess(true);setTimeout(()=>setOwnerSuccess(false),3000)
+        setShowOwnerForm(false);setOwnerForm({name:'',email:'',password:''})
+        loadOwnerAccounts()
+        return
+      }
+      const payload = await res.json().catch(() => null)
+      setActionError(payload?.error || 'Failed to create owner account.')
+    } finally {
+      setOwnerSubmitting(false)
     }
-    const payload = await res.json().catch(() => null)
-    setActionError(payload?.error || 'Failed to create owner account.')
   }
 
   async function deleteOwnerAccount(id:string) {
@@ -236,7 +315,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
         <h2 className="text-lg font-bold text-gray-800">Staff Management</h2>
         <div className="flex flex-wrap items-center gap-2 justify-end">
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
-            <Sparkles className="h-3.5 w-3.5"/> Ask Jesse
+            <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI
           </button>
           {tab==='employees'&&<button onClick={()=>setShowEmpForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"><Plus className="h-4 w-4"/> Add Employee</button>}
           {tab==='shifts'&&<button onClick={()=>setShowShiftForm(true)} disabled={employees.length===0} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"><Clock className="h-4 w-4"/> Log Shift</button>}
@@ -305,7 +384,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
               <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Password</label><input required type="text" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-400" value={ownerForm.password} onChange={e=>setOwnerForm(f=>({...f,password:e.target.value}))} placeholder="min 8 characters"/></div>
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={()=>setShowOwnerForm(false)} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
-                <button type="submit" className="flex-1 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold py-2 rounded-lg transition-colors">Create Owner Account</button>
+                <button type="submit" disabled={ownerSubmitting} className="flex-1 bg-purple-600 hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60 text-white text-sm font-semibold py-2 rounded-lg transition-colors">{ownerSubmitting?'Creating...':'Create Owner Account'}</button>
               </div>
             </form>
           </div>
@@ -324,6 +403,19 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
               </div>
               <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Pay Rate (RWF)</label><input required type="number" min="0" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={empForm.payRate} onChange={e=>setEmpForm(f=>({...f,payRate:e.target.value}))} placeholder={empForm.payType==='hourly'?'Per hour':empForm.payType==='daily'?'Per day':'Per month'}/></div>
               <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Phone (optional)</label><input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={empForm.phone} onChange={e=>setEmpForm(f=>({...f,phone:e.target.value}))} placeholder="+250 ..."/></div>
+              <label className="flex items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 px-3 py-3 cursor-pointer">
+                <input type="checkbox" checked={empForm.canApproveOrderCancellation} onChange={e=>setEmpForm(f=>({...f,canApproveOrderCancellation:e.target.checked,cancellationPin:e.target.checked?f.cancellationPin:''}))} className="mt-1"/>
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">Can approve order cancellations</p>
+                  <p className="text-xs text-gray-500 mt-0.5">This employee will have a 5-digit supervisor PIN used when staff cancel an order.</p>
+                </div>
+              </label>
+              {empForm.canApproveOrderCancellation && (
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">Supervisor PIN</label>
+                  <input required maxLength={5} inputMode="numeric" pattern="\d{5}" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={empForm.cancellationPin} onChange={e=>setEmpForm(f=>({...f,cancellationPin:e.target.value.replace(/\D/g,'').slice(0,5)}))} placeholder="5 digits"/>
+                </div>
+              )}
               <div className="flex gap-2 pt-1">
                 <button type="button" onClick={()=>setShowEmpForm(false)} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 rounded-lg hover:bg-gray-50">Cancel</button>
                 <button type="submit" className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium py-2 rounded-lg transition-colors">Add Employee</button>
@@ -409,7 +501,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200"><tr>{['Name','Role','Pay Type','Rate (RWF)','Phone','Status'].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>)}</tr></thead>
+              <thead className="bg-gray-50 border-b border-gray-200"><tr>{['Name','Role','Pay Type','Rate (RWF)','Phone','Cancel Approval','Status'].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-gray-50">
                 {employees.map(emp=>(
                   <tr key={emp.id} className="hover:bg-gray-50 transition-colors">
@@ -418,6 +510,21 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
                     <td className="px-4 py-3 text-gray-600 capitalize">{emp.payType}</td>
                     <td className="px-4 py-3 text-gray-700">{emp.payRate.toLocaleString()}</td>
                     <td className="px-4 py-3 text-gray-500">{emp.phone||'—'}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={emp.canApproveOrderCancellation?'text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium':'text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium'}>
+                          {emp.canApproveOrderCancellation?'Supervisor PIN active':'No PIN'}
+                        </span>
+                        <button onClick={()=>configureCancellationApprover(emp)} className="text-xs text-orange-600 hover:text-orange-700 font-semibold">
+                          {emp.canApproveOrderCancellation?'Change PIN':'Set PIN'}
+                        </button>
+                        {emp.canApproveOrderCancellation && (
+                          <button onClick={()=>revokeCancellationApprover(emp)} className="text-xs text-red-500 hover:text-red-600 font-semibold">
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-3">
                       <button onClick={()=>toggleEmployee(emp)} className={emp.isActive?'text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium':'text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium'}>{emp.isActive?'Active':'Inactive'}</button>
                     </td>

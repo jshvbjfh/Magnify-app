@@ -2,8 +2,10 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
+import { AI_ANALYTICS_DISABLED_MESSAGE, AI_ANALYTICS_ENABLED } from '@/lib/aiAnalyticsFeature'
 import { prisma } from '@/lib/prisma'
-import { generateAnalyticsInsights } from '@/lib/openai'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { generateAnalyticsInsights, type AnalyticsInsights } from '@/lib/openai'
 
 type MonthMetric = {
 	month: string
@@ -54,7 +56,11 @@ function buildBusinessProfile(params: {
 
 	// Signal keyword banks (ordered by industry specificity)
 	const produceKeywords   = ['bell pepper', 'butternut', 'onion', 'grape', 'tomato', 'carrot', 'cabbage', 'spinach', 'avocado', 'mango', 'fruit', 'vegetable', 'produce', 'harvest', 'fresh', 'kg', 'pcs', 'box', 'crate']
-	const retailSalePatterns = [/^sale:/i, /sold/i, /^cash sale/i]
+	const retailSalePatterns = [
+		/^sale:\s+(.+?)\s+\(/i,
+		/^cash sale:\s+(.+?)\s+\(/i,
+		/^dish sale\s*-\s*(.+?)\s*x\s*([0-9.]+)/i,
+	]
 	const wholesalePatterns  = [/wholesale/i, /bulk/i, /carton/i, /bags/i, /lounge/i, /restaurant/i, /green lounge/i, /allgreens/i, /hotel/i, /supermarket/i]
 	const fleetKeywords      = ['vehicle', 'truck', 'fleet', 'driver', 'mileage', 'tire', 'wheel', 'fuel', 'oil', 'transmission', 'hydraulic', 'accelerator', 'rods', 'pivot', 'basiriri', 'differential', 'stabilizer', 'charoi', 'fleet manager']
 	const serviceKeywords    = ['service rendered', 'service revenue', 'service charge', 'consult', 'repair service', 'maintenance service']
@@ -84,8 +90,10 @@ function buildBusinessProfile(params: {
 		// Produce detection
 		if (produceKeywords.some((k) => text.includes(k))) produceSignals++
 
-		// Retail sale detection — "Sale: ProductName (qty)"
-		const retailMatch = (tx.description || '').match(/^Sale:\s+(.+?)\s+\(/i)
+		// Retail / dish sale detection.
+		const retailMatch = retailSalePatterns
+			.map((pattern) => (tx.description || '').match(pattern))
+			.find(Boolean)
 		if (retailMatch) {
 			retailSignals++
 			const productName = retailMatch[1].trim()
@@ -330,16 +338,99 @@ function buildMetrics(transactions: any[], inventoryItems: any[]) {
 	}
 }
 
+function buildFallbackAnalyticsInsights(dataset: any): AnalyticsInsights {
+	const summary = dataset.summary || {}
+	const businessProfile = dataset.businessProfile || {}
+	const topExpenseAccounts = Array.isArray(dataset.topExpenseAccounts) ? dataset.topExpenseAccounts : []
+	const topIncomeAccounts = Array.isArray(dataset.topIncomeAccounts) ? dataset.topIncomeAccounts : []
+	const monthlyTrend = Array.isArray(dataset.monthlyTrend) ? dataset.monthlyTrend : []
+	const paymentMethodMix = Array.isArray(dataset.paymentMethodMix) ? dataset.paymentMethodMix : []
+	const spendingAlerts = Array.isArray(dataset.spendingAlerts) ? dataset.spendingAlerts : []
+
+	const netProfit = Number(summary.netProfit || 0)
+	const topIncome = topIncomeAccounts[0]
+	const topExpense = topExpenseAccounts[0]
+	const latestMonth = monthlyTrend[monthlyTrend.length - 1]
+
+	const comments = [
+		`Gemini quota is exhausted right now, so these insights are generated from your saved accounting metrics only.`,
+		`Total income is ${Number(summary.totalIncome || 0).toLocaleString()} RWF, while total expenses are ${Number(summary.totalExpense || 0).toLocaleString()} RWF.`,
+		`The business is currently reporting a ${netProfit >= 0 ? 'net profit' : 'net loss'} of ${Math.abs(netProfit).toLocaleString()} RWF with a net margin of ${Number(summary.netMargin || 0).toLocaleString()}%.`,
+	]
+
+	if (topIncome) {
+		comments.push(`${topIncome.name} is the strongest income account at ${Number(topIncome.amount || 0).toLocaleString()} RWF.`)
+	}
+	if (topExpense) {
+		comments.push(`${topExpense.name} is the largest expense account at ${Number(topExpense.amount || 0).toLocaleString()} RWF.`)
+	}
+	if (latestMonth) {
+		comments.push(`For ${latestMonth.month}, net performance was ${Number(latestMonth.net || 0).toLocaleString()} RWF.`)
+	}
+	if (spendingAlerts[0]) {
+		comments.push(String(spendingAlerts[0]))
+	}
+
+	const advice = [
+		`Watch ${topExpense?.name || 'your largest expense accounts'} closely and compare it against sales each week.`,
+		`Protect cash flow by reviewing payment method mix and reconciling the most-used channel daily.`,
+		`Retry AI analytics later when Gemini quota resets if you want narrative analysis beyond these verified metrics.`,
+	]
+
+	return {
+		headline: `Analytics ready from your ledger: ${netProfit >= 0 ? 'profit' : 'loss'} stands at ${Math.abs(netProfit).toLocaleString()} RWF${businessProfile.detectedIndustry ? ` for your ${String(businessProfile.detectedIndustry).replaceAll('-', ' ')}` : ''}.`,
+		comments: comments.slice(0, 8),
+		advice: advice.slice(0, 6),
+		charts: [
+			{
+				title: 'Monthly Net Trend',
+				type: 'line',
+				xKey: 'month',
+				yKey: 'net',
+				data: monthlyTrend.slice(-12).map((row: any) => ({ month: row.month, net: Number(row.net || 0) })),
+				note: 'Tracks whether the business is improving or weakening month by month.',
+			},
+			{
+				title: 'Top Expense Accounts',
+				type: 'bar',
+				xKey: 'name',
+				yKey: 'amount',
+				data: topExpenseAccounts.slice(0, 8).map((row: any) => ({ name: String(row.name || 'Unknown'), amount: Number(row.amount || 0) })),
+				note: 'Highlights where the biggest cost pressure is coming from.',
+			},
+		],
+		tables: [
+			{
+				title: 'Revenue Leaders',
+				columns: ['Account', 'Amount (RWF)'],
+				rows: topIncomeAccounts.slice(0, 8).map((row: any) => [String(row.name || 'Unknown'), Number(row.amount || 0)]),
+			},
+			{
+				title: 'Payment Method Mix',
+				columns: ['Method', 'Count'],
+				rows: paymentMethodMix.slice(0, 8).map((row: any) => [String(row.name || 'Unknown'), Number(row.count || 0)]),
+			},
+		],
+	}
+}
+
 // ─── ROUTE HANDLER ──────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
 	try {
+		if (!AI_ANALYTICS_ENABLED) {
+			return NextResponse.json({ error: AI_ANALYTICS_DISABLED_MESSAGE, archived: true }, { status: 503 })
+		}
+
 		const session = await getServerSession(authOptions)
 		if (!session?.user?.id) {
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
+		const context = await getRestaurantContextForUser(session.user.id)
+		const billingUserId = context?.billingUserId ?? session.user.id
+
 		const user = await prisma.user.findUnique({
-			where: { id: session.user.id },
+			where: { id: billingUserId },
 			select: { businessType: true }
 		})
 
@@ -348,11 +439,11 @@ export async function GET(req: NextRequest) {
 
 		const [transactions, inventoryItems] = await Promise.all([
 			prisma.transaction.findMany({
-				where: { userId: session.user.id },
+				where: { userId: billingUserId },
 				include: { account: true, category: true },
 				orderBy: { date: 'desc' }
 			}),
-			prisma.inventoryItem.findMany({ where: { userId: session.user.id } })
+			prisma.inventoryItem.findMany({ where: { userId: billingUserId } })
 		])
 
 		// Layer 1: Deep business understanding from transaction signals
@@ -413,7 +504,20 @@ export async function GET(req: NextRequest) {
 			fullInventory
 		}
 
-		const ai = await generateAnalyticsInsights(dataset)
+		let ai: AnalyticsInsights
+		let quotaLimited = false
+		let quotaMessage: string | null = null
+		try {
+			ai = await generateAnalyticsInsights(dataset)
+		} catch (error: any) {
+			if (String(error?.message || '').includes('GEMINI_DAILY_LIMIT_REACHED')) {
+				quotaLimited = true
+				quotaMessage = 'Jesse AI analytics is temporarily using fallback insights because Jesse AI is currently unavailable due to service limits.'
+				ai = buildFallbackAnalyticsInsights(dataset)
+			} else {
+				throw error
+			}
+		}
 
 		// Layer 4: Persist daily snapshot
 		let snapshotSaved = false
@@ -445,9 +549,9 @@ export async function GET(req: NextRequest) {
 			snapshotSaved = true
 		}
 
-		return NextResponse.json({ generatedAt: new Date().toISOString(), dataset, ai, snapshotSaved })
+		return NextResponse.json({ generatedAt: new Date().toISOString(), dataset, ai, snapshotSaved, quotaLimited, quotaMessage })
 	} catch (error: any) {
 		console.error('AI analytics error:', error)
-		return NextResponse.json({ error: error.message || 'Failed to generate AI analytics' }, { status: 500 })
+		return NextResponse.json({ error: error.message || 'Failed to generate Jesse AI analytics' }, { status: 500 })
 	}
 }

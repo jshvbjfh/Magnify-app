@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { findOwnedRestaurant } from '@/lib/restaurantAccess'
+import { getDaysRemaining, isSubscriptionExpired } from '@/lib/subscriptions'
 
 const TRIAL_DAYS = parseInt(process.env.TRIAL_DAYS || '30')
 
@@ -22,16 +23,16 @@ export async function GET() {
     return NextResponse.json({ status: 'suspended', daysLeft: 0, trialDays: TRIAL_DAYS })
   }
 
-  const now = Date.now()
+  const now = new Date()
 
-  if (restaurant.licenseExpiry && restaurant.licenseExpiry.getTime() > now) {
-    const daysLeft = Math.ceil((restaurant.licenseExpiry.getTime() - now) / 86400000)
+  if (restaurant.licenseExpiry && !isSubscriptionExpired(restaurant.licenseExpiry, now)) {
+    const daysLeft = getDaysRemaining(restaurant.licenseExpiry, now)
     return NextResponse.json({ status: 'active', daysLeft, licenseExpiry: restaurant.licenseExpiry, trialDays: TRIAL_DAYS })
   }
 
   const trialEnd = restaurant.trialStartAt.getTime() + TRIAL_DAYS * 86400000
-  if (now <= trialEnd) {
-    const daysLeft = Math.ceil((trialEnd - now) / 86400000)
+  if (now.getTime() <= trialEnd) {
+    const daysLeft = Math.ceil((trialEnd - now.getTime()) / 86400000)
     return NextResponse.json({ status: 'trial', daysLeft, trialDays: TRIAL_DAYS })
   }
 

@@ -5,16 +5,19 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  Bell,
   CalendarDays,
-  CalendarRange,
   ChefHat,
   Clock3,
   Crown,
+  DollarSign,
   FileText,
   Home,
   LogOut,
+  Menu,
   Package,
   RefreshCw,
+  ReceiptText,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -34,6 +37,8 @@ type DashboardData = {
   restaurantName: string
   selectedRestaurantId: string
   restaurants: { id: string; name: string }[]
+  selectedBranchId?: string
+  branches?: { id: string; name: string; code: string; isMain: boolean }[]
   period: Period | 'custom'
   rangeLabel: string
   from: string
@@ -49,6 +54,8 @@ type DashboardData = {
     salesCount: number
     transactionCount: number
     activeOrders: number
+    orderCount?: number
+    clientCount?: number
   }
   costBreakdown: {
     cogs: number
@@ -76,6 +83,7 @@ type DashboardData = {
     type: string
     paymentMethod: string
     accountName: string
+    sourceKind?: string | null
     categoryName: string
     categoryType: string
     isManual: boolean
@@ -86,6 +94,8 @@ type DashboardData = {
     revenue: number
     expenses: number
     profit: number
+    orderCount?: number
+    clientCount?: number
   }[]
   topDishes: { name: string; revenue: number; qty: number }[]
   lowStock: { name: string; quantity: number; reorderLevel: number; unit: string }[]
@@ -105,6 +115,130 @@ type DashboardData = {
       stockValue: number
       isLow: boolean
     }[]
+  }
+}
+
+const EMPTY_SUMMARY: DashboardData['summary'] = {
+  revenue: 0,
+  expenses: 0,
+  profit: 0,
+  salesCount: 0,
+  transactionCount: 0,
+  activeOrders: 0,
+  orderCount: 0,
+  clientCount: 0,
+}
+
+const EMPTY_COST_BREAKDOWN: DashboardData['costBreakdown'] = {
+  cogs: 0,
+  foodCostPct: 0,
+  laborCost: 0,
+  laborPct: 0,
+  wasteCost: 0,
+  wastePct: 0,
+  recordedExpenses: 0,
+  primeCost: 0,
+  primeCostPct: 0,
+}
+
+const EMPTY_STATUS: DashboardData['status'] = {
+  level: 'stale',
+  label: 'Quiet',
+  detail: 'No synced branch activity yet.',
+  lastActivityAt: null,
+  activeOrders: 0,
+}
+
+const EMPTY_INVENTORY: DashboardData['inventory'] = {
+  purchaseCost: 0,
+  usedCost: 0,
+  stockValue: 0,
+  lowStockCount: 0,
+  items: [],
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function asNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function asString(value: unknown, fallback = '') {
+  return typeof value === 'string' ? value : fallback
+}
+
+function normalizeStatusLevel(value: unknown): DashboardData['status']['level'] {
+  return value === 'live' || value === 'recent' || value === 'stale' ? value : 'stale'
+}
+
+function normalizeDashboardData(payload: unknown, fallbackDate: string): DashboardData | null {
+  if (!isRecord(payload)) return null
+
+  const rawSummary = isRecord(payload.summary) ? payload.summary : null
+  const rawCostBreakdown = isRecord(payload.costBreakdown) ? payload.costBreakdown : null
+  const rawStatus = isRecord(payload.status) ? payload.status : null
+  const rawInventory = isRecord(payload.inventory) ? payload.inventory : null
+  const rawSync = isRecord(payload.sync) ? payload.sync : null
+
+  return {
+    restaurantName: asString(payload.restaurantName, 'Owner workspace'),
+    selectedRestaurantId: asString(payload.selectedRestaurantId),
+    restaurants: Array.isArray(payload.restaurants) ? payload.restaurants as DashboardData['restaurants'] : [],
+    selectedBranchId: typeof payload.selectedBranchId === 'string' && payload.selectedBranchId ? payload.selectedBranchId : undefined,
+    branches: Array.isArray(payload.branches) ? payload.branches as NonNullable<DashboardData['branches']> : [],
+    period: payload.period === 'today' || payload.period === 'week' || payload.period === 'month' || payload.period === 'custom'
+      ? payload.period
+      : 'today',
+    rangeLabel: asString(payload.rangeLabel, 'Today'),
+    from: asString(payload.from, fallbackDate),
+    to: asString(payload.to, fallbackDate),
+    sync: {
+      source: rawSync?.source === 'live' || rawSync?.source === 'snapshot' || rawSync?.source === 'minimal'
+        ? rawSync.source
+        : 'minimal',
+      generatedAt: asString(rawSync?.generatedAt, new Date().toISOString()),
+    },
+    summary: {
+      revenue: asNumber(rawSummary?.revenue),
+      expenses: asNumber(rawSummary?.expenses),
+      profit: asNumber(rawSummary?.profit),
+      salesCount: asNumber(rawSummary?.salesCount),
+      transactionCount: asNumber(rawSummary?.transactionCount),
+      activeOrders: asNumber(rawSummary?.activeOrders),
+      orderCount: asNumber(rawSummary?.orderCount),
+      clientCount: asNumber(rawSummary?.clientCount),
+    },
+    costBreakdown: {
+      cogs: asNumber(rawCostBreakdown?.cogs),
+      foodCostPct: asNumber(rawCostBreakdown?.foodCostPct),
+      laborCost: asNumber(rawCostBreakdown?.laborCost),
+      laborPct: asNumber(rawCostBreakdown?.laborPct),
+      wasteCost: asNumber(rawCostBreakdown?.wasteCost),
+      wastePct: asNumber(rawCostBreakdown?.wastePct),
+      recordedExpenses: asNumber(rawCostBreakdown?.recordedExpenses),
+      primeCost: asNumber(rawCostBreakdown?.primeCost),
+      primeCostPct: asNumber(rawCostBreakdown?.primeCostPct),
+    },
+    status: {
+      level: normalizeStatusLevel(rawStatus?.level),
+      label: asString(rawStatus?.label, EMPTY_STATUS.label),
+      detail: asString(rawStatus?.detail, EMPTY_STATUS.detail),
+      lastActivityAt: typeof rawStatus?.lastActivityAt === 'string' ? rawStatus.lastActivityAt : null,
+      activeOrders: asNumber(rawStatus?.activeOrders),
+    },
+    transactions: Array.isArray(payload.transactions) ? payload.transactions as DashboardData['transactions'] : [],
+    dailyHistory: Array.isArray(payload.dailyHistory) ? payload.dailyHistory as DashboardData['dailyHistory'] : [],
+    topDishes: Array.isArray(payload.topDishes) ? payload.topDishes as DashboardData['topDishes'] : [],
+    lowStock: Array.isArray(payload.lowStock) ? payload.lowStock as DashboardData['lowStock'] : [],
+    inventory: {
+      purchaseCost: asNumber(rawInventory?.purchaseCost),
+      usedCost: asNumber(rawInventory?.usedCost),
+      stockValue: asNumber(rawInventory?.stockValue),
+      lowStockCount: asNumber(rawInventory?.lowStockCount),
+      items: Array.isArray(rawInventory?.items) ? rawInventory.items as DashboardData['inventory']['items'] : [],
+    },
   }
 }
 
@@ -128,6 +262,51 @@ function formatCompactDate(value: string | null) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value))
+}
+
+function isWasteLikeTransaction(entry: { sourceKind?: string | null; description: string }) {
+  const normalizedSourceKind = String(entry.sourceKind || '').trim().toLowerCase()
+  if (normalizedSourceKind === 'inventory_waste') return true
+  return entry.description.trim().toLowerCase().startsWith('waste:')
+}
+
+function toDateKey(value: Date) {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function buildRecentDateKeys(days: number, endDateKey: string) {
+  const end = new Date(`${endDateKey}T12:00:00`)
+  const keys: string[] = []
+
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const current = new Date(end)
+    current.setDate(end.getDate() - offset)
+    keys.push(toDateKey(current))
+  }
+
+  return keys
+}
+
+function getLatestActiveHomeDate(days: DashboardData['dailyHistory'], fallbackDate: string) {
+  const activeDay = [...days].reverse().find((day) => {
+    const orderCount = day.orderCount ?? 0
+    const clientCount = day.clientCount ?? 0
+    return day.revenue !== 0 || day.expenses !== 0 || day.profit !== 0 || orderCount > 0 || clientCount > 0
+  })
+
+  return activeDay?.date ?? fallbackDate
+}
+
+function formatDateCardParts(dateKey: string) {
+  const value = new Date(`${dateKey}T12:00:00`)
+  return {
+    weekday: value.toLocaleDateString('en-RW', { weekday: 'short' }),
+    month: value.toLocaleDateString('en-RW', { month: 'short' }),
+    day: value.getDate(),
+  }
 }
 
 function getStatusClasses(level: DashboardData['status']['level']) {
@@ -188,6 +367,58 @@ function KpiCard({
   )
 }
 
+function getChange(current: number, previous?: number) {
+  if (previous === undefined) return null
+  if (previous === 0) return current === 0 ? 0 : 100
+  return ((current - previous) / Math.abs(previous)) * 100
+}
+
+function formatChange(delta: number | null) {
+  if (delta === null || !Number.isFinite(delta)) return null
+  const abs = Math.abs(delta)
+  const digits = abs >= 10 ? 0 : 1
+  return `${delta > 0 ? '+' : delta < 0 ? '-' : ''}${abs.toFixed(digits)}%`
+}
+
+function getChangeTone(delta: number | null, inverse = false) {
+  if (delta === null) return 'bg-gray-100 text-gray-500'
+  const good = inverse ? delta <= 0 : delta >= 0
+  return good ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'
+}
+
+function HomeOverviewCard({
+  label,
+  value,
+  icon,
+  chip,
+  chipTone,
+  valueTone = 'text-slate-900',
+}: {
+  label: string
+  value: string
+  icon: React.ReactNode
+  chip?: string | null
+  chipTone?: string
+  valueTone?: string
+}) {
+  return (
+    <article className="rounded-[26px] border border-slate-200/80 bg-white px-4 py-4 shadow-[0_10px_28px_rgba(15,23,42,0.08)] sm:px-5 sm:py-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="rounded-2xl bg-orange-50 p-3 text-orange-500">
+          {icon}
+        </div>
+        {chip ? (
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${chipTone ?? 'bg-green-100 text-green-700'}`}>
+            {chip}
+          </span>
+        ) : null}
+      </div>
+      <p className="mt-4 text-[15px] font-semibold text-slate-500">{label}</p>
+      <p className={`mt-2 text-[2rem] font-semibold leading-none tracking-[-0.03em] ${valueTone}`}>{value}</p>
+    </article>
+  )
+}
+
 function SectionCard({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
   return (
     <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -202,25 +433,32 @@ function SectionCard({ title, sub, children }: { title: string; sub?: string; ch
 
 export default function OwnerShell() {
   const today = new Date().toISOString().slice(0, 10)
+  const homeHistoryStart = new Date(new Date(`${today}T12:00:00`).getTime() - (27 * 86400000)).toISOString().slice(0, 10)
+  const detailHistoryStart = '2000-01-01'
   const [view, setView] = useState<OwnerView>('home')
   const [filters, setFilters] = useState<FilterState>({ mode: 'preset', period: 'today', from: today, to: today })
-  const [draftFrom, setDraftFrom] = useState(today)
-  const [draftTo, setDraftTo] = useState(today)
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<string | null>(null)
-  const [selectedRestaurantId, setSelectedRestaurantId] = useState<string>('')
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('')
+  const [branchSwitchingId, setBranchSwitchingId] = useState<string | null>(null)
   const [selectedHomeDate, setSelectedHomeDate] = useState<string>(today)
+  const [selectedDetailsDate, setSelectedDetailsDate] = useState<string>(today)
 
-  const load = useCallback(async (currentFilters: FilterState, currentRestaurantId?: string, currentView?: OwnerView) => {
+  const load = useCallback(async (currentFilters: FilterState, currentBranchId?: string, currentView?: OwnerView) => {
     setLoading(true)
     setError(null)
 
     try {
       const params = new URLSearchParams()
       if (currentView === 'home') {
-        params.set('period', 'week')
+        params.set('from', homeHistoryStart)
+        params.set('to', today)
+      } else if (currentView === 'details') {
+        params.set('from', detailHistoryStart)
+        params.set('to', today)
+        params.set('transactionHistory', 'full')
       } else {
         if (currentFilters.mode === 'custom') {
           params.set('from', currentFilters.from)
@@ -230,8 +468,8 @@ export default function OwnerShell() {
         }
       }
 
-      if (currentRestaurantId) {
-        params.set('restaurantId', currentRestaurantId)
+      if (currentBranchId) {
+        params.set('branchId', currentBranchId)
       }
 
       const res = await fetch(`/api/owner/dashboard?${params.toString()}`, { credentials: 'include' })
@@ -241,17 +479,23 @@ export default function OwnerShell() {
       }
 
       const json = await res.json()
-      setData(json)
-      if (json.selectedRestaurantId) {
-        setSelectedRestaurantId(json.selectedRestaurantId)
+      const normalized = normalizeDashboardData(json, today)
+      if (!normalized) {
+        setError('Failed to load owner dashboard data.')
+        return
       }
-      if (currentView === 'home' && Array.isArray(json.dailyHistory)) {
-        const dates = json.dailyHistory.map((day: { date: string }) => day.date)
-        if (dates.includes(today)) {
-          setSelectedHomeDate((current) => dates.includes(current) ? current : today)
-        } else if (dates.length > 0) {
-          setSelectedHomeDate((current) => dates.includes(current) ? current : dates[dates.length - 1])
-        }
+
+      setData(normalized)
+      if (normalized.selectedBranchId) {
+        setSelectedBranchId(normalized.selectedBranchId)
+      }
+      if (currentView === 'home') {
+        const allowedDates = new Set(buildRecentDateKeys(28, today))
+        const latestActiveDate = getLatestActiveHomeDate(normalized.dailyHistory, today)
+        setSelectedHomeDate((current) => {
+          if (allowedDates.has(current) && current !== today) return current
+          return latestActiveDate
+        })
       }
       setLastRefresh(new Date().toISOString())
     } catch {
@@ -259,141 +503,213 @@ export default function OwnerShell() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [detailHistoryStart, homeHistoryStart, today])
 
   useEffect(() => {
-    load(filters, selectedRestaurantId, view)
-  }, [filters, load, selectedRestaurantId, view])
+    void load(filters, selectedBranchId, view)
+  }, [filters, load, view])
 
   useEffect(() => {
     const timer = setInterval(() => {
-      load(filters, selectedRestaurantId, view)
+      void load(filters, selectedBranchId, view)
     }, 30000)
     return () => clearInterval(timer)
-  }, [filters, load, selectedRestaurantId, view])
+  }, [filters, load, selectedBranchId, view])
+
+  useEffect(() => {
+    if (view !== 'details') return
+
+    setSelectedDetailsDate((current) => current || today)
+  }, [data, today, view])
 
   const applyPreset = (period: Period) => {
     setFilters((current) => ({ ...current, mode: 'preset', period }))
   }
 
+  const handleBranchSelect = async (branchId: string) => {
+    if (!branchId || branchId === selectedBranchId || branchSwitchingId) return
+
+    setBranchSwitchingId(branchId)
+    setError(null)
+
+    try {
+      const response = await fetch('/api/restaurant/branches', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ branchId }),
+      })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Failed to switch branch')
+      }
+
+      const nextBranchId = typeof payload?.activeBranchId === 'string' ? payload.activeBranchId : branchId
+      await load(filters, nextBranchId, view)
+    } catch (switchError) {
+      setError(switchError instanceof Error ? switchError.message : 'Failed to switch branch')
+    } finally {
+      setBranchSwitchingId(null)
+    }
+  }
+
   const openHome = () => {
     setView('home')
     setFilters({ mode: 'preset', period: 'today', from: today, to: today })
-    setDraftFrom(today)
-    setDraftTo(today)
     setSelectedHomeDate(today)
   }
 
-  const applyCustomRange = () => {
-    if (!draftFrom || !draftTo) return
-    setFilters({ mode: 'custom', period: 'today', from: draftFrom, to: draftTo })
-  }
-
-  const summary = data?.summary
-  const status = data?.status
-  const costBreakdown = data?.costBreakdown
-  const selectedDay = data?.dailyHistory.find((day) => day.date === selectedHomeDate) ?? data?.dailyHistory.find((day) => day.date === today) ?? data?.dailyHistory[data.dailyHistory.length - 1]
+  const summary = data?.summary ?? EMPTY_SUMMARY
+  const status = data?.status ?? EMPTY_STATUS
+  const costBreakdown = data?.costBreakdown ?? EMPTY_COST_BREAKDOWN
+  const isHomeView = view === 'home'
+  const fullDailyHistory = data?.dailyHistory ?? []
+  const homeHistoryDates = Array.from(new Set([...buildRecentDateKeys(28, today), selectedHomeDate])).sort((a, b) => a.localeCompare(b))
+  const homeHistory = homeHistoryDates.map((date) => {
+    const existing = fullDailyHistory.find((day) => day.date === date)
+    return existing ?? {
+      date,
+      label: new Intl.DateTimeFormat('en-RW', { month: 'short', day: 'numeric' }).format(new Date(`${date}T12:00:00`)),
+      revenue: 0,
+      expenses: 0,
+      profit: 0,
+      orderCount: 0,
+      clientCount: 0,
+    }
+  })
+  const homeHistoryCards = [...homeHistory].reverse()
+  const selectedDay = homeHistory.find((day) => day.date === selectedHomeDate) ?? homeHistory[homeHistory.length - 1]
+  const selectedDayIndex = selectedDay ? homeHistory.findIndex((day) => day.date === selectedDay.date) : -1
+  const previousDay = selectedDayIndex > 0 ? homeHistory[selectedDayIndex - 1] : null
   const homeSummary = selectedDay ? {
     revenue: selectedDay.revenue,
     expenses: selectedDay.expenses,
     profit: selectedDay.profit,
   } : summary
+  const homeOrderCount = selectedDay?.orderCount ?? summary?.orderCount ?? 0
   const profitSignal = homeSummary ? getProfitSignal(homeSummary.profit) : null
   const cashFlowTotal = homeSummary ? Math.max(homeSummary.revenue + homeSummary.expenses, 1) : 1
   const revenueShare = homeSummary ? Math.max((homeSummary.revenue / cashFlowTotal) * 100, homeSummary.revenue > 0 ? 12 : 0) : 0
   const expenseShare = homeSummary ? Math.max((homeSummary.expenses / cashFlowTotal) * 100, homeSummary.expenses > 0 ? 12 : 0) : 0
+  const revenueChange = homeSummary ? getChange(homeSummary.revenue, previousDay?.revenue) : null
+  const profitChange = homeSummary ? getChange(homeSummary.profit, previousDay?.profit) : null
+  const expenseChange = homeSummary ? getChange(homeSummary.expenses, previousDay?.expenses) : null
+  const orderChange = getChange(homeOrderCount, previousDay?.orderCount)
+  const homeSectionTitle = selectedDay?.date === today ? "TODAY'S OVERVIEW" : `${(selectedDay?.label ?? 'Selected Day').toUpperCase()} OVERVIEW`
+  const detailEntriesPerDate = (data?.transactions ?? []).reduce<Record<string, number>>((acc, txn) => {
+    const date = txn.date.slice(0, 10)
+    acc[date] = (acc[date] ?? 0) + 1
+    return acc
+  }, {})
+  const detailDates = Array.from(new Set([selectedDetailsDate, ...Object.keys(detailEntriesPerDate)])).sort((a, b) => a.localeCompare(b))
+  const detailTransactions = (data?.transactions ?? []).filter((txn) => txn.date.slice(0, 10) === selectedDetailsDate)
+  const detailDateLabel = selectedDetailsDate === today
+    ? 'Today'
+    : new Intl.DateTimeFormat('en-RW', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${selectedDetailsDate}T12:00:00`))
+  const ownerBranches = data?.branches ?? []
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col">
 
         {/* â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-        <header className="sticky top-0 z-20 border-b border-gray-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="rounded-2xl bg-gradient-to-br from-orange-500 to-red-600 p-2.5 shadow-sm shrink-0">
-                <Crown className="h-4 w-4 text-white" />
+        <>
+          <header className="sticky top-0 z-20 bg-[#ff6a36] px-4 py-4 text-white shadow-[0_8px_18px_rgba(255,106,54,0.28)] sm:px-6">
+            <div className="grid grid-cols-[40px_1fr_40px] items-center gap-2">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10">
+                <Menu className="h-5 w-5" />
+              </span>
+              <div className="text-center">
+                <p className="text-xl font-bold tracking-[-0.03em]">Magnify</p>
               </div>
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10">
+                <Bell className="h-5 w-5" />
+              </span>
+            </div>
+          </header>
+
+          <div className="border-b border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-6">
+            <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <h1 className="truncate text-base font-bold text-gray-900 sm:text-lg">{data?.restaurantName ?? 'Owner Dashboard'}</h1>
-                <p className="text-[11px] text-gray-400">
-                  {lastRefresh ? `Updated ${formatCompactDate(lastRefresh)}` : 'Loadingâ€¦'}
-                  {data?.sync ? ` Â· ${data.sync.source === 'snapshot' ? 'snapshot' : data.sync.source === 'minimal' ? 'auto-sync' : 'live'}` : ''}
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="truncate text-xl font-semibold tracking-[-0.03em] text-slate-900">{data?.restaurantName ?? 'Owner workspace'}</h1>
+                  {data && status.level !== 'stale' ? (
+                    <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${getStatusClasses(status.level)}`}>
+                      {status.label}
+                    </span>
+                  ) : null}
+                  {status?.activeOrders ? (
+                    <span className="rounded-full bg-orange-50 px-2.5 py-1 text-[11px] font-semibold text-orange-600">
+                      {status.activeOrders} active
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-1 text-xs text-slate-400">
+                  {lastRefresh ? `Updated ${formatCompactDate(lastRefresh)}` : 'Loading...'}
                 </p>
               </div>
-            </div>
-
-            <div className="flex shrink-0 items-center gap-2">
-              {data?.restaurants && data.restaurants.length > 1 ? (
-                <select
-                  value={selectedRestaurantId}
-                  onChange={(e) => setSelectedRestaurantId(e.target.value)}
-                  className="rounded-xl border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 outline-none focus:border-orange-400"
-                >
-                  {data.restaurants.map((r) => (
-                    <option key={r.id} value={r.id}>{r.name}</option>
-                  ))}
-                </select>
-              ) : null}
-              <button
-                onClick={() => load(filters, selectedRestaurantId, view)}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-200"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Refresh</span>
-              </button>
-              <button
-                onClick={() => signOut({ callbackUrl: '/login' })}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-red-50 hover:text-red-600"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Sign out</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Date controls â€” only for non-home views */}
-          {view !== 'home' ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {(['today', 'week', 'month'] as Period[]).map((p) => (
+              <div className="flex items-center gap-2">
                 <button
-                  key={p}
-                  onClick={() => applyPreset(p)}
-                  className={`rounded-xl px-3 py-1.5 text-xs font-semibold capitalize transition-colors ${
-                    filters.mode === 'preset' && filters.period === p
-                      ? 'bg-orange-500 text-white shadow-sm'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
+                  onClick={() => void load(filters, selectedBranchId, view)}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition-colors hover:bg-slate-200"
+                  aria-label="Refresh owner view"
                 >
-                  {p === 'today' ? 'Today' : p === 'week' ? '7 days' : 'Month'}
+                  <RefreshCw className="h-4 w-4" />
                 </button>
-              ))}
-              <input
-                type="date"
-                value={draftFrom}
-                onChange={(e) => setDraftFrom(e.target.value)}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs outline-none focus:border-orange-400"
-              />
-              <span className="text-xs text-gray-400">to</span>
-              <input
-                type="date"
-                value={draftTo}
-                onChange={(e) => setDraftTo(e.target.value)}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs outline-none focus:border-orange-400"
-              />
-              <button
-                onClick={applyCustomRange}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-black"
-              >
-                <CalendarRange className="h-3 w-3" />
-                Apply
-              </button>
+                <button
+                  onClick={() => signOut({ callbackUrl: '/login' })}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600"
+                  aria-label="Sign out"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </div>
             </div>
-          ) : null}
-        </header>
+            {ownerBranches.length > 0 ? (
+              <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-1">
+                <span className="whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">Branches</span>
+                {ownerBranches.map((branch) => {
+                  const isActive = selectedBranchId === branch.id
+                  const isSwitching = branchSwitchingId === branch.id
+                  return (
+                    <button
+                      key={branch.id}
+                      type="button"
+                      onClick={() => void handleBranchSelect(branch.id)}
+                      disabled={isActive || isSwitching}
+                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${isActive ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+                    >
+                      <span>{branch.name}</span>
+                      {branch.isMain ? <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px]">Main</span> : <span className="text-[10px] uppercase text-slate-400">{branch.code}</span>}
+                      {isSwitching ? <RefreshCw className="h-3 w-3 animate-spin" /> : null}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+
+            {!isHomeView && view !== 'details' ? (
+              <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-1">
+                {(['today', 'week', 'month'] as Period[]).map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => applyPreset(p)}
+                    className={`rounded-xl px-3 py-1.5 text-xs font-semibold capitalize transition-colors ${
+                      filters.mode === 'preset' && filters.period === p
+                        ? 'bg-orange-500 text-white shadow-sm'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {p === 'today' ? 'Today' : p === 'week' ? '7 days' : 'Month'}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </>
 
         {/* â”€â”€ Main content â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-        <main className="flex-1 px-4 py-4 pb-24 sm:px-6 sm:py-6">
+        <main className={`flex-1 ${isHomeView ? 'px-4 py-5 pb-28 sm:px-6' : 'px-4 py-4 pb-24 sm:px-6 sm:py-6'}`}>
           {error ? (
             <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
           ) : null}
@@ -405,206 +721,238 @@ export default function OwnerShell() {
             </div>
           ) : null}
 
-          {data && summary && status && costBreakdown ? (
+          {data ? (
             <div className="space-y-5 sm:space-y-6">
 
-              {/* Status bar */}
-              <div className={`rounded-2xl border px-4 py-3 ${getStatusClasses(status.level)}`}>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-start gap-3">
-                    <Activity className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                    <div>
-                      <p className="text-sm font-bold">{status.label}</p>
-                      <p className="text-xs opacity-90">{status.detail}</p>
+              {isHomeView ? (
+                <div className="mx-auto w-full max-w-2xl space-y-5">
+                  <section className="rounded-[28px] border border-slate-200/80 bg-white px-4 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-slate-400">Last 4 weeks</p>
+                      </div>
+                      <label className="relative inline-flex h-10 items-center gap-2 rounded-full bg-slate-100 px-3 text-xs font-semibold text-slate-500">
+                        <CalendarDays className="h-4 w-4" />
+                        Pick date
+                        <input
+                          type="date"
+                          value={selectedHomeDate}
+                          max={today}
+                          onChange={(e) => setSelectedHomeDate(e.target.value)}
+                          className="absolute inset-0 opacity-0"
+                        />
+                      </label>
                     </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-                    <span className="rounded-full bg-white/70 px-3 py-1">Last activity: {formatCompactDate(status.lastActivityAt)}</span>
-                    <span className="rounded-full bg-white/70 px-3 py-1">Active orders: {status.activeOrders}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* â”€â”€ HOME view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-              {view === 'home' ? (
-                <div className="space-y-4">
-                  {/* Day selector */}
-                  <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Select a day</p>
-                    <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-                      {data.dailyHistory.length === 0 ? (
-                        <p className="text-sm text-gray-400">No daily data yet.</p>
-                      ) : data.dailyHistory.map((day) => {
+                    <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+                      {homeHistoryCards.length === 0 ? (
+                        <p className="text-sm text-slate-400">No daily activity yet.</p>
+                      ) : homeHistoryCards.map((day) => {
                         const selected = selectedDay?.date === day.date
+                        const parts = formatDateCardParts(day.date)
                         return (
                           <button
                             key={day.date}
                             onClick={() => setSelectedHomeDate(day.date)}
-                            className={`min-w-[110px] rounded-2xl border px-4 py-3 text-left transition-colors ${selected ? 'border-orange-300 bg-orange-50' : 'border-gray-200 bg-gray-50 hover:bg-gray-100'}`}
+                            className={`min-w-[66px] rounded-[18px] px-3 py-2 text-center transition-all ${selected ? 'bg-[#ff6a36] text-white shadow-[0_10px_24px_rgba(255,106,54,0.28)]' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
                           >
-                            <p className={`text-[11px] font-semibold uppercase tracking-wide ${selected ? 'text-orange-600' : 'text-gray-400'}`}>{day.label}</p>
-                            <p className={`mt-2 text-base font-bold ${day.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(day.profit)}</p>
-                            <p className="mt-1 text-[11px] text-gray-400">{day.date === today ? 'Today' : day.date}</p>
+                            <p className={`text-[11px] font-semibold uppercase ${selected ? 'text-white/80' : 'text-slate-400'}`}>{parts.month}</p>
+                            <p className="mt-1 text-xl font-semibold leading-none tracking-[-0.05em]">{parts.day}</p>
+                            <p className={`mt-1 text-[11px] font-medium ${selected ? 'text-white/80' : 'text-slate-400'}`}>{parts.weekday}</p>
                           </button>
                         )
                       })}
                     </div>
-                  </div>
+                  </section>
 
-                  {/* Profit hero */}
-                  {profitSignal && homeSummary ? (
-                    <section className={`rounded-[24px] border p-5 shadow-sm ${profitSignal.hero}`}>
-                      <p className={`text-[11px] font-bold uppercase tracking-[0.2em] ${profitSignal.text}`}>
-                        {selectedDay?.date === today ? 'Today' : selectedDay?.label ?? 'Selected day'}
-                      </p>
-                      <div className="mt-4 grid grid-cols-3 gap-3">
-                        <div className="rounded-2xl border border-white bg-white/90 p-4 shadow-sm">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Revenue</p>
-                          <p className="mt-2 text-xl font-bold text-gray-900">{formatCurrency(homeSummary.revenue)}</p>
-                        </div>
-                        <div className="rounded-2xl border border-red-100 bg-red-50 p-4 shadow-sm">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide text-red-500">Expenses</p>
-                          <p className="mt-2 text-xl font-bold text-red-600">{formatCurrency(homeSummary.expenses)}</p>
-                        </div>
-                        <div className={`rounded-2xl border p-4 shadow-sm ${homeSummary.profit >= 0 ? 'border-green-100 bg-green-50' : 'border-red-100 bg-red-50'}`}>
-                          <p className={`text-[11px] font-semibold uppercase tracking-wide ${homeSummary.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                            {homeSummary.profit >= 0 ? 'Profit' : 'Loss'}
-                          </p>
-                          <p className={`mt-2 text-xl font-bold ${homeSummary.profit >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-                            {formatCurrency(homeSummary.profit)}
-                          </p>
-                        </div>
-                      </div>
+                  <section className="space-y-4">
+                    <div className="px-1">
+                      <p className="text-sm font-bold tracking-wide text-slate-500">{homeSectionTitle}</p>
+                    </div>
 
-                      {/* cash flow bar */}
-                      <div className="mt-4 rounded-2xl bg-white/80 p-4">
-                        <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
-                          <span>Cash in vs cash out</span>
-                          <span className={`font-bold ${profitSignal.text}`}>{profitSignal.label}</span>
+                    <HomeOverviewCard
+                      label="Revenue"
+                      value={formatCurrency(homeSummary?.revenue ?? 0)}
+                      icon={<DollarSign className="h-5 w-5" />}
+                      chip={formatChange(revenueChange)}
+                      chipTone={getChangeTone(revenueChange)}
+                    />
+
+                    <HomeOverviewCard
+                      label="Profit / Loss"
+                      value={formatCurrency(homeSummary?.profit ?? 0)}
+                      icon={<TrendingUp className="h-5 w-5" />}
+                      chip={formatChange(profitChange)}
+                      chipTone={getChangeTone(profitChange)}
+                      valueTone={homeSummary && homeSummary.profit < 0 ? 'text-red-600' : 'text-slate-900'}
+                    />
+
+                    <HomeOverviewCard
+                      label="Expenses"
+                      value={formatCurrency(homeSummary?.expenses ?? 0)}
+                      icon={<Wallet className="h-5 w-5" />}
+                      chip={formatChange(expenseChange)}
+                      chipTone={getChangeTone(expenseChange, true)}
+                    />
+
+                    <HomeOverviewCard
+                      label="Orders"
+                      value={homeOrderCount.toLocaleString('en-RW')}
+                      icon={<ReceiptText className="h-5 w-5" />}
+                      chip={formatChange(orderChange)}
+                      chipTone={getChangeTone(orderChange)}
+                    />
+
+                    {profitSignal && homeSummary ? (
+                      <section className={`rounded-[26px] border p-5 shadow-[0_10px_28px_rgba(15,23,42,0.06)] ${profitSignal.hero}`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <p className={`text-[11px] font-bold uppercase tracking-[0.22em] ${profitSignal.text}`}>
+                            {selectedDay?.date === today ? 'Today' : selectedDay?.label ?? 'Selected day'}
+                          </p>
+                          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${profitSignal.pill}`}>
+                            {profitSignal.label}
+                          </span>
                         </div>
-                        <div className="h-3 overflow-hidden rounded-full bg-gray-200">
+                        <div className="mt-4 h-3 overflow-hidden rounded-full bg-white/80">
                           <div className="flex h-full">
-                            <div className="bg-green-500 transition-all" style={{ width: `${revenueShare}%` }} />
-                            <div className="bg-red-500 transition-all" style={{ width: `${expenseShare}%` }} />
+                            <div className="bg-emerald-500 transition-all" style={{ width: `${revenueShare}%` }} />
+                            <div className="bg-rose-400 transition-all" style={{ width: `${expenseShare}%` }} />
                           </div>
                         </div>
-                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                          <div className="rounded-xl bg-green-50 px-3 py-2">
-                            <p className="font-semibold text-green-700">Cash in</p>
-                            <p className="mt-1 font-bold text-gray-900">{formatCurrency(homeSummary.revenue)}</p>
+                        <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                          <div className="rounded-2xl bg-white/80 px-4 py-3">
+                            <p className="font-medium text-slate-500">Cash in</p>
+                            <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(homeSummary.revenue)}</p>
                           </div>
-                          <div className="rounded-xl bg-red-50 px-3 py-2">
-                            <p className="font-semibold text-red-700">Cash out</p>
-                            <p className="mt-1 font-bold text-gray-900">{formatCurrency(homeSummary.expenses)}</p>
+                          <div className="rounded-2xl bg-white/80 px-4 py-3">
+                            <p className="font-medium text-slate-500">Cash out</p>
+                            <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(homeSummary.expenses)}</p>
                           </div>
                         </div>
-                      </div>
-                    </section>
-                  ) : null}
-
-                  {/* Top dishes quick peek */}
-                  {data.topDishes.length > 0 ? (
-                    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Top dishes today</p>
-                      <div className="mt-3 space-y-2">
-                        {data.topDishes.slice(0, 3).map((dish, i) => (
-                          <div key={dish.name} className="flex items-center justify-between gap-3 rounded-xl bg-gray-50 px-3 py-2">
-                            <p className="text-sm font-semibold text-gray-800">#{i + 1} {dish.name}</p>
-                            <p className="text-sm font-bold text-gray-900">{formatCurrency(dish.revenue)}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {/* Low stock quick peek */}
-                  {data.lowStock.length > 0 ? (
-                    <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-red-600">Low stock alerts</p>
-                      <div className="mt-3 space-y-2">
-                        {data.lowStock.slice(0, 3).map((item) => (
-                          <div key={item.name} className="flex items-center gap-2 text-sm">
-                            <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />
-                            <span className="font-semibold text-gray-900">{item.name}</span>
-                            <span className="text-red-600">{item.quantity} {item.unit} left</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
+                      </section>
+                    ) : null}
+                  </section>
                 </div>
+              ) : view !== 'details' ? (
+                <>
+                  <div className={`rounded-2xl border px-4 py-3 ${getStatusClasses(status.level)}`}>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-start gap-3">
+                        <Activity className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                        <div>
+                          <p className="text-sm font-bold">{status.label}</p>
+                          <p className="text-xs opacity-90">{status.detail}</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+                        <span className="rounded-full bg-white/70 px-3 py-1">Last activity: {formatCompactDate(status.lastActivityAt)}</span>
+                        <span className="rounded-full bg-white/70 px-3 py-1">Active orders: {status.activeOrders}</span>
+                      </div>
+                    </div>
+                  </div>
+                </>
               ) : null}
 
               {/* â”€â”€ DETAILS view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
               {view === 'details' ? (
                 <>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    <KpiCard label="Revenue" value={formatCurrency(summary.revenue)} sub={`${summary.salesCount} sales`} tone="text-gray-900" icon={<TrendingUp className="h-4 w-4" />} />
-                    <KpiCard label="Expenses" value={formatCurrency(summary.expenses)} sub="Food, labor, waste" tone="text-red-600" icon={<Wallet className="h-4 w-4" />} />
-                    <KpiCard label="Profit / Loss" value={formatCurrency(summary.profit)} sub={summary.profit >= 0 ? 'Above break-even' : 'Below break-even'} tone={summary.profit >= 0 ? 'text-green-600' : 'text-red-600'} icon={summary.profit >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />} />
-                    <KpiCard label="Transactions" value={summary.transactionCount.toString()} sub="In selected range" tone="text-gray-900" icon={<BarChart3 className="h-4 w-4" />} />
-                  </div>
+                  <div className="space-y-5">
+                    <section className="rounded-[28px] border border-slate-200/80 bg-white px-4 py-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-slate-400">Transactions</p>
+                        </div>
+                        <label className="relative inline-flex h-10 items-center gap-2 rounded-full bg-slate-100 px-3 text-xs font-semibold text-slate-500">
+                          <CalendarDays className="h-4 w-4" />
+                          Pick date
+                          <input
+                            type="date"
+                            value={selectedDetailsDate}
+                            max={today}
+                            onChange={(e) => setSelectedDetailsDate(e.target.value)}
+                            className="absolute inset-0 opacity-0"
+                          />
+                        </label>
+                      </div>
+                      <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+                        {detailDates.length === 0 ? (
+                          <p className="text-sm text-slate-400">No transaction history yet.</p>
+                        ) : detailDates.map((date) => {
+                          const selected = selectedDetailsDate === date
+                          const parts = formatDateCardParts(date)
+                          return (
+                            <button
+                              key={date}
+                              onClick={() => setSelectedDetailsDate(date)}
+                              className={`min-w-[66px] rounded-[18px] px-3 py-2 text-center transition-all ${selected ? 'bg-[#ff6a36] text-white shadow-[0_10px_24px_rgba(255,106,54,0.28)]' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+                            >
+                              <p className={`text-[11px] font-semibold uppercase ${selected ? 'text-white/80' : 'text-slate-400'}`}>{parts.month}</p>
+                              <p className="mt-1 text-xl font-semibold leading-none tracking-[-0.05em]">{parts.day}</p>
+                              <p className={`mt-1 text-[11px] font-medium ${selected ? 'text-white/80' : 'text-slate-400'}`}>{parts.weekday}</p>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </section>
 
-                  <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-                    <SectionCard title="Transaction feed" sub="Money in and money out.">
-                      {data.transactions.length === 0 ? (
-                        <p className="text-sm text-gray-400">No transactions in this range yet.</p>
+                    <SectionCard title="Transaction journal" sub={`${detailDateLabel} transactions only.`}>
+                      {detailTransactions.length === 0 ? (
+                        <div className="rounded-[24px] border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center">
+                          <p className="text-sm font-semibold text-slate-500">No transactions found</p>
+                          <p className="mt-1 text-xs text-slate-400">No entries were recorded for the selected day.</p>
+                        </div>
                       ) : (
                         <div className="space-y-3">
-                          {data.transactions.map((txn) => (
-                            <div key={txn.id} className="flex items-start justify-between gap-3 rounded-2xl border border-gray-100 bg-gray-50 px-3 py-3">
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-semibold text-gray-900">{txn.description}</p>
-                                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                                  <span>{new Date(txn.date).toLocaleString('en-RW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                                  <span className="rounded-full bg-white px-2 py-0.5">{txn.accountName}</span>
+                          {detailTransactions.map((txn) => {
+                            const isInventoryLoss = isWasteLikeTransaction(txn)
+                            const isRevenue = txn.categoryType === 'income'
+                            const isExpense = txn.categoryType === 'expense' && !isInventoryLoss
+                            const amountClass = isInventoryLoss
+                              ? 'text-amber-600'
+                              : isExpense
+                                ? 'text-red-600'
+                                : isRevenue
+                                  ? 'text-emerald-600'
+                                  : 'text-slate-600'
+                            const amountPrefix = isRevenue ? '+' : isExpense ? '-' : ''
+                            const originLabel = isInventoryLoss ? 'Excluded from profit' : txn.isManual ? 'Manual' : 'Recorded'
+                            return (
+                              <article key={txn.id} className="rounded-[24px] border border-slate-200 bg-slate-50/80 px-4 py-4 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                                        isInventoryLoss
+                                          ? 'bg-amber-100 text-amber-700'
+                                          : isExpense
+                                            ? 'bg-red-100 text-red-700'
+                                            : isRevenue
+                                              ? 'bg-emerald-100 text-emerald-700'
+                                              : 'bg-slate-200 text-slate-700'
+                                      }`}>
+                                        {isInventoryLoss ? 'Inventory Loss' : isExpense ? 'Expense' : isRevenue ? 'Revenue' : 'Entry'}
+                                      </span>
+                                      <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">{txn.paymentMethod}</span>
+                                    </div>
+                                    <p className="mt-3 text-base font-semibold text-slate-900">{txn.description}</p>
+                                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                      <span>{new Date(txn.date).toLocaleString('en-RW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                                      <span className="rounded-full bg-white px-2 py-0.5">{txn.accountName}</span>
+                                      <span className="rounded-full bg-white px-2 py-0.5 capitalize">{txn.categoryName}</span>
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className={`text-lg font-semibold ${amountClass}`}>
+                                      {amountPrefix}{formatCurrency(txn.amount)}
+                                    </p>
+                                    <p className="mt-1 text-[11px] font-medium text-slate-400">{originLabel}</p>
+                                  </div>
                                 </div>
-                              </div>
-                              <p className={`shrink-0 text-sm font-bold ${txn.categoryType === 'expense' ? 'text-red-600' : 'text-green-600'}`}>
-                                {txn.categoryType === 'expense' ? '-' : '+'}{formatCurrency(txn.amount)}
-                              </p>
-                            </div>
-                          ))}
+                              </article>
+                            )
+                          })}
                         </div>
                       )}
                     </SectionCard>
-
-                    <div className="space-y-5">
-                      <SectionCard title="Summary" sub="Closing numbers.">
-                        <div className="space-y-3">
-                          <div className="rounded-2xl bg-orange-50 p-3">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-orange-600">Revenue</p>
-                            <p className="mt-1 text-xl font-bold text-gray-900">{formatCurrency(summary.revenue)}</p>
-                          </div>
-                          <div className="rounded-2xl bg-red-50 p-3">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-red-600">Expenses</p>
-                            <p className="mt-1 text-xl font-bold text-gray-900">{formatCurrency(summary.expenses)}</p>
-                          </div>
-                          <div className={`rounded-2xl p-3 ${summary.profit >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
-                            <p className={`text-xs font-semibold uppercase tracking-wide ${summary.profit >= 0 ? 'text-green-700' : 'text-red-700'}`}>Profit / Loss</p>
-                            <p className="mt-1 text-xl font-bold text-gray-900">{formatCurrency(summary.profit)}</p>
-                          </div>
-                        </div>
-                      </SectionCard>
-
-                      <SectionCard title="Low stock" sub="Items to restock.">
-                        {data.lowStock.length === 0 ? (
-                          <p className="text-sm font-medium text-green-600">All stock above reorder level.</p>
-                        ) : (
-                          <div className="space-y-2">
-                            {data.lowStock.slice(0, 5).map((item) => (
-                              <div key={item.name} className="flex items-center gap-3 rounded-2xl border border-red-100 bg-red-50 px-3 py-2">
-                                <AlertTriangle className="h-4 w-4 shrink-0 text-red-500" />
-                                <div>
-                                  <p className="text-sm font-semibold text-gray-900">{item.name}</p>
-                                  <p className="text-xs text-red-600">{item.quantity} {item.unit} left</p>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </SectionCard>
-                    </div>
                   </div>
                 </>
               ) : null}

@@ -4,6 +4,7 @@ import { signIn, getSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { Loader2, Lock, Mail, Eye, EyeOff } from 'lucide-react'
+import { loadServerOwnerSyncConfig, seedOwnerSyncConfigFromLogin } from '@/lib/ownerSyncBrowser'
 
 export default function LoginForm() {
 	const router = useRouter()
@@ -19,19 +20,46 @@ export default function LoginForm() {
 		setError(null)
 
 		const result = await signIn('credentials', {
-			email,
+			email: email.trim().toLowerCase(),
 			password,
 			redirect: false
 		})
-
-		setLoading(false)
 		if (result?.error) {
-			setError('Invalid email or password')
+			setLoading(false)
+			if (result.error === 'AccountInactive') {
+				setError('Your account has been deactivated. Contact Magnify admin to restore access.')
+			} else {
+				setError('Invalid email or password')
+			}
 			return
 		}
 		// Redirect based on business type
 		const session = await getSession()
-		const bType = (session?.user as any)?.businessType ?? 'general'
+		const role = (session?.user as any)?.role
+		if (role === 'admin' || role === 'waiter' || role === 'kitchen') {
+			try {
+				await fetch('/api/sync/local', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					credentials: 'include',
+					body: JSON.stringify({}),
+				})
+			} catch {}
+		}
+		if (role === 'admin') {
+			try {
+				const serverSyncConfig = await loadServerOwnerSyncConfig()
+				if (!serverSyncConfig?.configured) {
+					seedOwnerSyncConfigFromLogin({
+						email: email.trim().toLowerCase(),
+						password,
+						targetUrl: serverSyncConfig?.targetUrl,
+						serverConfig: serverSyncConfig,
+					})
+				}
+			} catch {}
+		}
+		setLoading(false)
 		router.push('/restaurant')
 	}
 

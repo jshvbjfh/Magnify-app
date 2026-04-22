@@ -3,25 +3,159 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { buildOwnerDashboardPayload, buildOwnerSyncSnapshot, parseOwnerDashboardRange, type OwnerSyncSnapshot } from '@/lib/ownerSync'
+import { ensureMainBranchForRestaurant } from '@/lib/restaurantAccess'
+
+const ownerBranchSelect = {
+  id: true,
+  name: true,
+  code: true,
+  isMain: true,
+  isActive: true,
+  sortOrder: true,
+} as const
+
+type HomeActivityOrder = {
+  id: string
+  createdAt: Date
+  tableId: string | null
+  tableName: string
+  createdByName: string
+}
 
 function formatDayLabel(dateKey: string) {
   return new Intl.DateTimeFormat('en-RW', { month: 'short', day: 'numeric' }).format(new Date(`${dateKey}T12:00:00`))
 }
 
 function toDateKey(date: Date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function listDateKeys(from: Date, to: Date) {
+  const keys: string[] = []
+  const cursor = new Date(from)
+  cursor.setUTCHours(0, 0, 0, 0)
+
+  const end = new Date(to)
+  end.setUTCHours(0, 0, 0, 0)
+
+  while (cursor <= end) {
+    keys.push(toDateKey(cursor))
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+
+  return keys
+}
+
+function getClientKey(order: HomeActivityOrder) {
+  const guestMatch = order.createdByName.match(/^Guest\s*-\s*(.+)$/i)
+  const guestName = guestMatch?.[1]?.trim()
+
+  if (guestName) return `guest:${guestName.toLowerCase()}`
+  if (order.tableId) return `table:${order.tableId}`
+
+  const tableName = order.tableName.trim()
+  if (tableName && tableName.toLowerCase() !== 'takeaway') {
+    return `table-name:${tableName.toLowerCase()}`
+  }
+
+  const creator = order.createdByName.trim()
+  if (creator && creator.toLowerCase() !== 'staff') {
+    return `staff:${creator.toLowerCase()}`
+  }
+
+  return `order:${order.id}`
+}
+
+function isWasteLikeTransaction(entry: { sourceKind?: string | null; description: string }) {
+  const normalizedSourceKind = String(entry.sourceKind || '').trim().toLowerCase()
+  if (normalizedSourceKind === 'inventory_waste') return true
+  return entry.description.trim().toLowerCase().startsWith('waste:')
+}
+
+function buildBranchScopeWhere(branch: { id: string; isMain: boolean }) {
+  return branch.isMain
+    ? { OR: [{ branchId: branch.id }, { branchId: null }] }
+    : { branchId: branch.id }
+}
+
+async function listActiveBranches(restaurantId: string) {
+  return prisma.restaurantBranch.findMany({
+    where: { restaurantId, isActive: true },
+    orderBy: [
+      { isMain: 'desc' },
+      { sortOrder: 'asc' },
+      { name: 'asc' },
+    ],
+    select: ownerBranchSelect,
+  })
+}
+
+function withHomeMetrics<T extends {
+  summary: Record<string, unknown>
+  dailyHistory: Array<{
+    date: string
+    label: string
+    revenue: number
+    expenses: number
+    profit: number
+  }>
+}>(payload: T, orders: HomeActivityOrder[], range: ReturnType<typeof parseOwnerDashboardRange>) {
+  const dailyCounts = new Map<string, { orderCount: number; clientKeys: Set<string> }>()
+  const totalClientKeys = new Set<string>()
+
+  for (const order of orders) {
+    const dateKey = toDateKey(order.createdAt)
+    const current = dailyCounts.get(dateKey) ?? { orderCount: 0, clientKeys: new Set<string>() }
+    const clientKey = getClientKey(order)
+
+    current.orderCount += 1
+    current.clientKeys.add(clientKey)
+    totalClientKeys.add(clientKey)
+    dailyCounts.set(dateKey, current)
+  }
+
+  const historyByDate = new Map(payload.dailyHistory.map((day) => [day.date, day]))
+  const dailyHistory = listDateKeys(range.from, range.to).map((dateKey) => {
+    const baseDay = historyByDate.get(dateKey) ?? {
+      date: dateKey,
+      label: formatDayLabel(dateKey),
+      revenue: 0,
+      expenses: 0,
+      profit: 0,
+    }
+    const counts = dailyCounts.get(dateKey)
+
+    return {
+      ...baseDay,
+      orderCount: counts?.orderCount ?? 0,
+      clientCount: counts?.clientKeys.size ?? 0,
+    }
+  })
+
+  return {
+    ...payload,
+    summary: {
+      ...payload.summary,
+      orderCount: orders.length,
+      clientCount: totalClientKeys.size,
+    },
+    dailyHistory,
+  }
 }
 
 function buildMinimalDashboardPayload(params: {
   restaurantName: string
   selectedRestaurantId: string
   restaurants: Array<{ id: string; name: string }>
+  selectedBranchId: string
+  branches: Array<{ id: string; name: string; code: string; isMain: boolean }>
   range: ReturnType<typeof parseOwnerDashboardRange>
   saleCount: number
   transactionCount: number
+  wasteCost: number
   summaries: Array<{
     date: Date
     totalRevenue: number
@@ -37,6 +171,7 @@ function buildMinimalDashboardPayload(params: {
     type: string
     paymentMethod: string
     accountName: string | null
+    sourceKind: string | null
     category: { name: string; type: string } | null
     isManual: boolean
   }>
@@ -95,6 +230,8 @@ function buildMinimalDashboardPayload(params: {
     restaurantName: params.restaurantName,
     selectedRestaurantId: params.selectedRestaurantId,
     restaurants: params.restaurants,
+    selectedBranchId: params.selectedBranchId,
+    branches: params.branches,
     period: params.range.period,
     rangeLabel: params.range.label,
     from: params.range.fromKey,
@@ -116,8 +253,8 @@ function buildMinimalDashboardPayload(params: {
       foodCostPct: 0,
       laborCost: 0,
       laborPct: 0,
-      wasteCost: 0,
-      wastePct: 0,
+      wasteCost: params.wasteCost,
+      wastePct: revenue > 0 ? Number(((params.wasteCost / revenue) * 100).toFixed(1)) : 0,
       recordedExpenses: expenses,
       primeCost: 0,
       primeCostPct: 0,
@@ -137,6 +274,7 @@ function buildMinimalDashboardPayload(params: {
       type: txn.type,
       paymentMethod: txn.paymentMethod,
       accountName: txn.accountName ?? '',
+      sourceKind: txn.sourceKind,
       categoryName: txn.category?.name ?? '',
       categoryType: txn.category?.type ?? '',
       isManual: txn.isManual,
@@ -154,22 +292,29 @@ function buildMinimalDashboardPayload(params: {
   }
 }
 
-async function resolveRestaurantAccess(requestedRestaurantId: string | null) {
+async function resolveRestaurantAccess(requestedRestaurantId: string | null, requestedBranchId: string | null) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
 
   const userRole = (session.user as any).role
   const userId = session.user.id
+  const currentUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, restaurantId: true, branchId: true },
+  })
+
+  let restaurant: { id: string; name: string; ownerId: string } | null = null
+  let restaurants: Array<{ id: string; name: string; ownerId: string }> = []
 
   if (userRole === 'owner') {
-    const restaurants = await prisma.restaurant.findMany({
+    restaurants = await prisma.restaurant.findMany({
       where: { ownerId: userId },
       select: { id: true, name: true, ownerId: true },
       orderBy: { createdAt: 'asc' },
     })
 
     if (restaurants.length === 0) {
-      const restaurantId = (session.user as any).restaurantId
+      const restaurantId = currentUser?.restaurantId ?? (session.user as any).restaurantId
       if (!restaurantId) {
         return { error: NextResponse.json({ error: 'No restaurants linked to this owner account' }, { status: 403 }) }
       }
@@ -180,50 +325,93 @@ async function resolveRestaurantAccess(requestedRestaurantId: string | null) {
       })
 
       if (!linkedRestaurant) return { error: NextResponse.json({ error: 'Restaurant not found' }, { status: 404 }) }
-      return { restaurant: linkedRestaurant, restaurants: [linkedRestaurant] }
+      restaurant = linkedRestaurant
+      restaurants = [linkedRestaurant]
+    } else {
+      restaurant = requestedRestaurantId
+        ? restaurants.find((row) => row.id === requestedRestaurantId) ?? null
+        : restaurants[0]
     }
-
-    const restaurant = requestedRestaurantId
-      ? restaurants.find((row) => row.id === requestedRestaurantId) ?? null
-      : restaurants[0]
-
-    if (!restaurant) return { error: NextResponse.json({ error: 'Restaurant not found' }, { status: 404 }) }
-    return { restaurant, restaurants }
   }
 
-  if (userRole === 'admin') {
-    const restaurant = await prisma.restaurant.findFirst({
+  if (!restaurant && userRole === 'admin') {
+    restaurant = await prisma.restaurant.findFirst({
       where: { ownerId: userId },
       orderBy: { createdAt: 'asc' },
       select: { id: true, name: true, ownerId: true },
     })
 
     if (!restaurant) return { error: NextResponse.json({ error: 'Restaurant not set up yet' }, { status: 404 }) }
-    return { restaurant, restaurants: [{ id: restaurant.id, name: restaurant.name, ownerId: restaurant.ownerId }] }
+    restaurants = [{ id: restaurant.id, name: restaurant.name, ownerId: restaurant.ownerId }]
   }
 
-  return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) }
+  if (!restaurant) {
+    return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) }
+  }
+
+  await ensureMainBranchForRestaurant(restaurant.id)
+  const branches = await listActiveBranches(restaurant.id)
+  const normalizedRequestedBranchId = String(requestedBranchId ?? '').trim()
+  let branch = normalizedRequestedBranchId
+    ? branches.find((row) => row.id === normalizedRequestedBranchId) ?? null
+    : branches.find((row) => row.id === currentUser?.branchId) ?? branches[0] ?? null
+
+  if (normalizedRequestedBranchId && !branch) {
+    return { error: NextResponse.json({ error: 'Branch not found' }, { status: 404 }) }
+  }
+
+  if (!branch) {
+    return { error: NextResponse.json({ error: 'No active branch found for this restaurant' }, { status: 400 }) }
+  }
+
+  if (currentUser?.branchId !== branch.id) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { branchId: branch.id },
+    })
+  }
+
+  return { restaurant, restaurants, branch, branches }
 }
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
-  const access = await resolveRestaurantAccess(searchParams.get('restaurantId'))
+  const includeFullTransactionHistory = searchParams.get('transactionHistory') === 'full'
+  const access = await resolveRestaurantAccess(searchParams.get('restaurantId'), searchParams.get('branchId'))
   if ('error' in access) return access.error
 
-  const { restaurant, restaurants } = access
-  const managerUserId = restaurant.ownerId
+  const { restaurant, restaurants, branch, branches } = access
   const range = parseOwnerDashboardRange(searchParams)
+  const branchScopeWhere = buildBranchScopeWhere(branch)
 
   const syncedWhere = {
     restaurantId: restaurant.id,
+    ...branchScopeWhere,
     synced: true,
     date: { gte: range.from, lte: range.to },
   }
 
-  const [syncedSummaries, syncedTransactions, syncedTransactionCount, syncedSaleCount] = await Promise.all([
+  const [homeActivityOrders, syncedSummaries, syncedTransactions, syncedTransactionCount, syncedSaleCount, syncedWasteAggregate] = await Promise.all([
+    prisma.restaurantOrder.findMany({
+      where: {
+        restaurantId: restaurant.id,
+        ...branchScopeWhere,
+        status: { not: 'CANCELED' },
+        createdAt: { gte: range.from, lte: range.to },
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        tableId: true,
+        tableName: true,
+        createdByName: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    }),
     prisma.dailySummary.findMany({
       where: {
         restaurantId: restaurant.id,
+        ...branchScopeWhere,
         synced: true,
         date: { gte: range.from, lte: range.to },
       },
@@ -235,7 +423,7 @@ export async function GET(req: Request) {
         category: { select: { name: true, type: true } },
       },
       orderBy: { date: 'desc' },
-      take: 20,
+      ...(includeFullTransactionHistory ? {} : { take: 20 }),
     }),
     prisma.transaction.count({
       where: syncedWhere,
@@ -246,25 +434,39 @@ export async function GET(req: Request) {
         category: { is: { type: 'income' } },
       },
     }),
+    prisma.transaction.aggregate({
+      where: {
+        ...syncedWhere,
+        type: 'debit',
+        OR: [
+          { sourceKind: 'inventory_waste' },
+          { description: { startsWith: 'Waste:' } },
+        ],
+      },
+      _sum: { amount: true },
+    }),
   ])
 
   if (syncedSummaries.length > 0 || syncedTransactions.length > 0) {
     return NextResponse.json(
-      buildMinimalDashboardPayload({
+      withHomeMetrics(buildMinimalDashboardPayload({
         restaurantName: restaurant.name,
         selectedRestaurantId: restaurant.id,
         restaurants: restaurants.map((row) => ({ id: row.id, name: row.name })),
+        selectedBranchId: branch.id,
+        branches: branches.map((row) => ({ id: row.id, name: row.name, code: row.code, isMain: row.isMain })),
         range,
         saleCount: syncedSaleCount,
         transactionCount: syncedTransactionCount,
+        wasteCost: syncedWasteAggregate._sum.amount ?? 0,
         summaries: syncedSummaries,
         transactions: syncedTransactions,
-      })
+      }), homeActivityOrders, range)
     )
   }
 
   const syncedSnapshot = await prisma.financialStatement.findFirst({
-    where: { type: `owner_sync_snapshot:${restaurant.id}` },
+    where: { type: `owner_sync_snapshot:${restaurant.id}:${branch.id}` },
     orderBy: { updatedAt: 'desc' },
   })
 
@@ -273,9 +475,11 @@ export async function GET(req: Request) {
       const snapshot = JSON.parse(syncedSnapshot.data) as OwnerSyncSnapshot
       if (snapshot?.version === 1 && snapshot.restaurantId === restaurant.id) {
         return NextResponse.json({
-          ...buildOwnerDashboardPayload(snapshot, range, 'snapshot'),
+          ...withHomeMetrics(buildOwnerDashboardPayload(snapshot, range, 'snapshot', { includeFullTransactionHistory }), homeActivityOrders, range),
           selectedRestaurantId: restaurant.id,
           restaurants: restaurants.map((row) => ({ id: row.id, name: row.name })),
+          selectedBranchId: branch.id,
+          branches: branches.map((row) => ({ id: row.id, name: row.name, code: row.code, isMain: row.isMain })),
         })
       }
     } catch {
@@ -300,25 +504,45 @@ export async function GET(req: Request) {
     latestWaste,
   ] = await Promise.all([
     prisma.dishSale.findMany({
-      where: { userId: managerUserId },
+      where: {
+        restaurantId: restaurant.id,
+        ...branchScopeWhere,
+      },
       include: { dish: { select: { name: true } } },
       orderBy: { saleDate: 'desc' },
       take: 5000,
     }),
     prisma.shift.findMany({
-      where: { userId: managerUserId },
+      where: {
+        restaurantId: restaurant.id,
+        ...branchScopeWhere,
+      },
       orderBy: { date: 'desc' },
       take: 2000,
     }),
     prisma.wasteLog.findMany({
-      where: { userId: managerUserId },
+      where: {
+        restaurantId: restaurant.id,
+        ...branchScopeWhere,
+      },
       orderBy: { date: 'desc' },
       take: 2000,
     }),
     prisma.transaction.findMany({
       where: {
-        userId: managerUserId,
+        restaurantId: restaurant.id,
+        ...branchScopeWhere,
         category: { is: { type: 'expense' } },
+        NOT: [
+          {
+            description: {
+              startsWith: 'COGS - ',
+            },
+          },
+          {
+            sourceKind: 'inventory_waste',
+          },
+        ],
       },
       include: {
         account: { select: { name: true } },
@@ -328,7 +552,10 @@ export async function GET(req: Request) {
       take: 4000,
     }),
     prisma.transaction.findMany({
-      where: { userId: managerUserId },
+      where: {
+        restaurantId: restaurant.id,
+        ...branchScopeWhere,
+      },
       include: {
         account: { select: { name: true } },
         category: { select: { name: true, type: true } },
@@ -337,27 +564,39 @@ export async function GET(req: Request) {
       take: 1000,
     }),
     prisma.inventoryItem.findMany({
-      where: { userId: managerUserId, inventoryType: 'ingredient' },
+      where: {
+        restaurantId: restaurant.id,
+        ...branchScopeWhere,
+        inventoryType: 'ingredient',
+      },
       orderBy: { name: 'asc' },
     }),
     prisma.inventoryPurchase.findMany({
-      where: { userId: managerUserId },
+      where: {
+        restaurantId: restaurant.id,
+        ...branchScopeWhere,
+      },
       orderBy: { purchasedAt: 'desc' },
       take: 3000,
     }),
     prisma.dishSaleIngredient.findMany({
-      where: { dishSale: { userId: managerUserId } },
+      where: {
+        dishSale: {
+          restaurantId: restaurant.id,
+          ...branchScopeWhere,
+        },
+      },
       include: { dishSale: { select: { saleDate: true } } },
       take: 5000,
     }),
     prisma.pendingOrder.count({
-      where: { restaurantId: restaurant.id, status: { in: ['new', 'in_kitchen'] } },
+      where: { restaurantId: restaurant.id, ...branchScopeWhere, status: { in: ['new', 'in_kitchen'] } },
     }),
-    prisma.dishSale.findFirst({ where: { userId: managerUserId }, orderBy: { saleDate: 'desc' }, select: { saleDate: true } }),
-    prisma.transaction.findFirst({ where: { userId: managerUserId }, orderBy: { date: 'desc' }, select: { date: true } }),
-    prisma.pendingOrder.findFirst({ where: { restaurantId: restaurant.id }, orderBy: { addedAt: 'desc' }, select: { addedAt: true } }),
-    prisma.inventoryPurchase.findFirst({ where: { userId: managerUserId }, orderBy: { purchasedAt: 'desc' }, select: { purchasedAt: true } }),
-    prisma.wasteLog.findFirst({ where: { userId: managerUserId }, orderBy: { date: 'desc' }, select: { date: true } }),
+    prisma.dishSale.findFirst({ where: { restaurantId: restaurant.id, ...branchScopeWhere }, orderBy: { saleDate: 'desc' }, select: { saleDate: true } }),
+    prisma.transaction.findFirst({ where: { restaurantId: restaurant.id, ...branchScopeWhere }, orderBy: { date: 'desc' }, select: { date: true } }),
+    prisma.pendingOrder.findFirst({ where: { restaurantId: restaurant.id, ...branchScopeWhere }, orderBy: { addedAt: 'desc' }, select: { addedAt: true } }),
+    prisma.inventoryPurchase.findFirst({ where: { restaurantId: restaurant.id, ...branchScopeWhere }, orderBy: { purchasedAt: 'desc' }, select: { purchasedAt: true } }),
+    prisma.wasteLog.findFirst({ where: { restaurantId: restaurant.id, ...branchScopeWhere }, orderBy: { date: 'desc' }, select: { date: true } }),
   ])
 
   const snapshot = buildOwnerSyncSnapshot({
@@ -382,8 +621,10 @@ export async function GET(req: Request) {
   })
 
   return NextResponse.json({
-    ...buildOwnerDashboardPayload(snapshot, range, 'live'),
+    ...withHomeMetrics(buildOwnerDashboardPayload(snapshot, range, 'live', { includeFullTransactionHistory }), homeActivityOrders, range),
     selectedRestaurantId: restaurant.id,
     restaurants: restaurants.map((row) => ({ id: row.id, name: row.name })),
+    selectedBranchId: branch.id,
+    branches: branches.map((row) => ({ id: row.id, name: row.name, code: row.code, isMain: row.isMain })),
   })
 }

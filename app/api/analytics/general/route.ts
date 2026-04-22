@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 export async function GET() {
 	try {
@@ -11,12 +12,15 @@ export async function GET() {
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
+		const context = await getRestaurantContextForUser(session.user.id)
+		const billingUserId = context?.billingUserId ?? session.user.id
+
 		// Fetch all sales transactions
 		const salesTxns = await prisma.transaction.findMany({
 			where: {
-				userId: session.user.id,
+				userId: billingUserId,
 				type: 'credit',
-				account: { name: 'Sales Revenue' }
+				account: { name: { in: ['Sales Revenue', 'Restaurant Sales'] } }
 			},
 			include: { account: true },
 			orderBy: { date: 'desc' }
@@ -24,7 +28,7 @@ export async function GET() {
 
 		// Fetch all inventory items
 		const inventoryItems = await prisma.inventoryItem.findMany({
-			where: { userId: session.user.id }
+			where: { userId: billingUserId }
 		})
 
 		// ── 1. TOP SELLING PRODUCTS ──────────────────────────────────────────

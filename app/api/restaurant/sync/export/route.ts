@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { buildOwnerSyncSnapshot } from '@/lib/ownerSync'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 export async function GET() {
   const session = await getServerSession(authOptions)
@@ -13,8 +14,17 @@ export async function GET() {
     return NextResponse.json({ error: 'Only the restaurant manager desktop can export sync data.' }, { status: 403 })
   }
 
+  const context = await getRestaurantContextForUser(session.user.id)
+  if (!context?.restaurantId) {
+    return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
+  }
+
+  const billingUserId = context.billingUserId
+  const restaurantId = context.restaurantId
+  const branchId = context.branchId ?? null
+
   const restaurant = await prisma.restaurant.findFirst({
-    where: { ownerId: session.user.id },
+    where: { id: restaurantId },
     orderBy: { createdAt: 'asc' },
     select: { id: true, name: true },
   })
@@ -43,23 +53,50 @@ export async function GET() {
     latestWaste,
   ] = await Promise.all([
     prisma.dishSale.findMany({
-      where: { userId: session.user.id, saleDate: { gte: lookbackStart } },
+      where: {
+        userId: billingUserId,
+        restaurantId,
+        ...(branchId ? { branchId } : {}),
+        saleDate: { gte: lookbackStart },
+      },
       include: { dish: { select: { name: true } } },
       orderBy: { saleDate: 'desc' },
     }),
     prisma.shift.findMany({
-      where: { userId: session.user.id, date: { gte: lookbackStart } },
+      where: {
+        userId: billingUserId,
+        restaurantId,
+        ...(branchId ? { branchId } : {}),
+        date: { gte: lookbackStart },
+      },
       orderBy: { date: 'desc' },
     }),
     prisma.wasteLog.findMany({
-      where: { userId: session.user.id, date: { gte: lookbackStart } },
+      where: {
+        userId: billingUserId,
+        restaurantId,
+        ...(branchId ? { branchId } : {}),
+        date: { gte: lookbackStart },
+      },
       orderBy: { date: 'desc' },
     }),
     prisma.transaction.findMany({
       where: {
-        userId: session.user.id,
+        userId: billingUserId,
+        restaurantId,
+        ...(branchId ? { branchId } : {}),
         date: { gte: lookbackStart },
         category: { is: { type: 'expense' } },
+        NOT: [
+          {
+            description: {
+              startsWith: 'COGS - ',
+            },
+          },
+          {
+            sourceKind: 'inventory_waste',
+          },
+        ],
       },
       include: {
         account: { select: { name: true } },
@@ -68,7 +105,12 @@ export async function GET() {
       orderBy: { date: 'desc' },
     }),
     prisma.transaction.findMany({
-      where: { userId: session.user.id, date: { gte: lookbackStart } },
+      where: {
+        userId: billingUserId,
+        restaurantId,
+        ...(branchId ? { branchId } : {}),
+        date: { gte: lookbackStart },
+      },
       include: {
         account: { select: { name: true } },
         category: { select: { name: true, type: true } },
@@ -77,30 +119,42 @@ export async function GET() {
       take: 300,
     }),
     prisma.inventoryItem.findMany({
-      where: { userId: session.user.id, inventoryType: 'ingredient' },
+      where: {
+        userId: billingUserId,
+        inventoryType: 'ingredient',
+        restaurantId,
+        ...(branchId ? { branchId } : {}),
+      },
       orderBy: { name: 'asc' },
     }),
     prisma.inventoryPurchase.findMany({
-      where: { userId: session.user.id, purchasedAt: { gte: lookbackStart } },
+      where: {
+        userId: billingUserId,
+        restaurantId,
+        ...(branchId ? { branchId } : {}),
+        purchasedAt: { gte: lookbackStart },
+      },
       orderBy: { purchasedAt: 'desc' },
     }),
     prisma.dishSaleIngredient.findMany({
       where: {
         dishSale: {
-          userId: session.user.id,
+          userId: billingUserId,
+          restaurantId,
+          ...(branchId ? { branchId } : {}),
           saleDate: { gte: lookbackStart },
         },
       },
       include: { dishSale: { select: { saleDate: true } } },
     }),
     prisma.pendingOrder.count({
-      where: { restaurantId: restaurant.id, status: { in: ['new', 'in_kitchen'] } },
+      where: { restaurantId: restaurant.id, ...(branchId ? { branchId } : {}), status: { in: ['new', 'in_kitchen'] } },
     }),
-    prisma.dishSale.findFirst({ where: { userId: session.user.id }, orderBy: { saleDate: 'desc' }, select: { saleDate: true } }),
-    prisma.transaction.findFirst({ where: { userId: session.user.id }, orderBy: { date: 'desc' }, select: { date: true } }),
-    prisma.pendingOrder.findFirst({ where: { restaurantId: restaurant.id }, orderBy: { addedAt: 'desc' }, select: { addedAt: true } }),
-    prisma.inventoryPurchase.findFirst({ where: { userId: session.user.id }, orderBy: { purchasedAt: 'desc' }, select: { purchasedAt: true } }),
-    prisma.wasteLog.findFirst({ where: { userId: session.user.id }, orderBy: { date: 'desc' }, select: { date: true } }),
+    prisma.dishSale.findFirst({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { saleDate: 'desc' }, select: { saleDate: true } }),
+    prisma.transaction.findFirst({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { date: 'desc' }, select: { date: true } }),
+    prisma.pendingOrder.findFirst({ where: { restaurantId: restaurant.id, ...(branchId ? { branchId } : {}) }, orderBy: { addedAt: 'desc' }, select: { addedAt: true } }),
+    prisma.inventoryPurchase.findFirst({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { purchasedAt: 'desc' }, select: { purchasedAt: true } }),
+    prisma.wasteLog.findFirst({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { date: 'desc' }, select: { date: true } }),
   ])
 
   const snapshot = buildOwnerSyncSnapshot({

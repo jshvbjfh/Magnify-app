@@ -1,11 +1,21 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
+import { useSession } from 'next-auth/react'
 import { Users, CheckCircle2, Clock, XCircle, Sparkles, Plus, X, Trash2, RefreshCw, QrCode, Download, ExternalLink } from 'lucide-react'
+import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
 import { QRCodeSVG } from 'qrcode.react'
+import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type TableStatus = 'available' | 'occupied' | 'reserved' | 'cleaning'
 type Table = { id: string; name: string; seats: number; status: TableStatus }
 type PendingCount = Record<string, number> // tableId -> pending item count
+
+type RestaurantTablesSnapshot = {
+  updatedAt: string
+  tables: Table[]
+  pendingCounts: PendingCount
+  qrOrderingMode: 'order' | 'view_only' | 'disabled'
+}
 
 const STATUS_CONFIG = {
   available: { label:'Available', color:'bg-green-500', text:'text-green-700', bg:'bg-green-50 border-green-200', icon: CheckCircle2 },
@@ -15,6 +25,8 @@ const STATUS_CONFIG = {
 }
 
 export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJesse?: () => void; restaurantId?: string }) {
+  const { data: session } = useSession()
+  const restaurantBranch = useRestaurantBranch()
   const [tables, setTables] = useState<Table[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -24,30 +36,73 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [pendingCounts, setPendingCounts] = useState<PendingCount>({})
   const [qrTable, setQrTable] = useState<Table | null>(null)
-  const appUrl = typeof window !== 'undefined' ? window.location.origin : ''
+  const [qrOrderingMode, setQrOrderingMode] = useState<'order' | 'view_only' | 'disabled'>('order')
+  const [syncRestaurantId, setSyncRestaurantId] = useState<string | null>(null)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://magnify-app-tau.vercel.app').replace(/\/$/, '')
+  const snapshotScopeId = buildRestaurantSnapshotScope({
+    restaurantId: restaurantBranch?.restaurantId ?? restaurantId ?? ((session?.user as any)?.restaurantId ?? null),
+    branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
+    fallbackUserId: session?.user?.id ?? null,
+  })
+  const snapshotStorageScope = snapshotScopeId ? `restaurant-tables:${snapshotScopeId}` : null
+
+  const persistSnapshot = useCallback((nextSnapshot: Omit<RestaurantTablesSnapshot, 'updatedAt'>) => {
+    if (!snapshotStorageScope) return
+    const snapshot = mergeRestaurantDeviceSnapshot<RestaurantTablesSnapshot>(snapshotStorageScope, nextSnapshot)
+    if (!snapshot) return
+    setSnapshotUpdatedAt(snapshot.updatedAt)
+    setShowingCachedSnapshot(false)
+  }, [snapshotStorageScope])
 
   const load = useCallback(async () => {
-    setLoading(true)
+    setLoading(tables.length === 0)
     try {
-      const [tablesRes, ordersRes] = await Promise.all([
+      const [tablesRes, ordersRes, setupRes] = await Promise.all([
         fetch('/api/restaurant/tables-db', { credentials: 'include' }),
         fetch('/api/restaurant/pending', { credentials: 'include' }),
+        fetch('/api/restaurant/setup', { credentials: 'include' }),
       ])
       const tablesData = await tablesRes.json()
-      setTables(Array.isArray(tablesData) ? tablesData : [])
+      const nextTables = Array.isArray(tablesData) ? tablesData : []
+      setTables(nextTables)
+      let nextPendingCounts: PendingCount = {}
       if (ordersRes.ok) {
         const orders = await ordersRes.json()
-        const counts: PendingCount = {}
         if (Array.isArray(orders)) {
           orders.forEach((o: any) => {
-            if (o.tableId && o.status !== 'ready') counts[o.tableId] = (counts[o.tableId] || 0) + 1
+            if (o.tableId && o.status !== 'ready') nextPendingCounts[o.tableId] = (nextPendingCounts[o.tableId] || 0) + 1
           })
         }
-        setPendingCounts(counts)
+        setPendingCounts(nextPendingCounts)
       }
+      let nextQrOrderingMode: 'order' | 'view_only' | 'disabled' = qrOrderingMode
+      if (setupRes.ok) {
+        const setupData = await setupRes.json()
+        const nextMode = setupData?.restaurant?.qrOrderingMode
+        nextQrOrderingMode = nextMode === 'view_only' ? 'view_only' : nextMode === 'disabled' ? 'disabled' : 'order'
+        setQrOrderingMode(nextQrOrderingMode)
+        if (setupData?.restaurant?.syncRestaurantId) setSyncRestaurantId(setupData.restaurant.syncRestaurantId)
+      }
+      persistSnapshot({ tables: nextTables, pendingCounts: nextPendingCounts, qrOrderingMode: nextQrOrderingMode })
     } catch { setTables([]) }
     finally { setLoading(false) }
-  }, [])
+  }, [persistSnapshot, qrOrderingMode, tables.length])
+
+  useEffect(() => {
+    if (!snapshotStorageScope) return
+
+    const snapshot = loadRestaurantDeviceSnapshot<RestaurantTablesSnapshot>(snapshotStorageScope)
+    if (!snapshot) return
+
+    setTables(Array.isArray(snapshot.tables) ? snapshot.tables : [])
+    setPendingCounts(snapshot.pendingCounts ?? {})
+    setQrOrderingMode(snapshot.qrOrderingMode ?? 'order')
+    setSnapshotUpdatedAt(snapshot.updatedAt ?? null)
+    setShowingCachedSnapshot(true)
+    setLoading(false)
+  }, [snapshotStorageScope])
 
   useEffect(() => { load() }, [load])
 
@@ -90,9 +145,23 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
     cleaning:  tables.filter(t => t.status==='cleaning').length,
   }
   const filtered = filter === 'all' ? tables : tables.filter(t => t.status === filter)
+  const qrEnabled = qrOrderingMode !== 'disabled' && Boolean(restaurantId)
+  const snapshotUpdatedLabel = snapshotUpdatedAt
+    ? new Date(snapshotUpdatedAt).toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
+    : null
+
+  useEffect(() => {
+    if (!qrEnabled && qrTable) setQrTable(null)
+  }, [qrEnabled, qrTable])
 
   return (
     <div className="space-y-5">
+      {showingCachedSnapshot && snapshotUpdatedLabel ? (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          <p className="font-semibold">Showing last synced floor plan snapshot from this device</p>
+          <p className="mt-1 text-xs opacity-90">Last synced snapshot: {snapshotUpdatedLabel}</p>
+        </div>
+      ) : null}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0">
           <h2 className="text-lg font-bold text-gray-800">Floor Plan</h2>
@@ -104,7 +173,7 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
           </button>
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
             <Sparkles className="h-3.5 w-3.5"/>
-            <span className="hidden sm:inline">Ask Jesse</span>
+            <span className="hidden sm:inline">Ask Jesse AI</span>
           </button>
           <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-3 sm:px-4 py-2 rounded-lg transition-colors">
             <Plus className="h-4 w-4"/>
@@ -202,7 +271,8 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
             {filtered.map(table => {
               const { bg, text, icon: Icon, label } = STATUS_CONFIG[table.status]
               const pendingCount = pendingCounts[table.id] || 0
-              const qrUrl = restaurantId ? `${appUrl}/order/${restaurantId}/${table.id}` : ''
+              const qrRestId = syncRestaurantId || restaurantId
+              const qrUrl = qrEnabled && qrRestId ? `${appUrl}/order/${qrRestId}/${table.id}` : ''
               return (
                 <div key={table.id} className={`relative group rounded-xl border-2 p-3 transition-all ${bg}`}>
                   {/* Delete button */}
@@ -243,7 +313,7 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
       )}
 
       {/* QR Code Modal */}
-      {qrTable && restaurantId && (
+      {qrEnabled && qrTable && (syncRestaurantId || restaurantId) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-6 space-y-4 text-center">
             <div className="flex items-center justify-between">
@@ -253,14 +323,14 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
             <p className="text-xs text-gray-500">Customers scan this to see the menu and place an order.</p>
             <div className="flex justify-center p-4 bg-gray-50 rounded-xl">
               <QRCodeSVG
-                value={`${appUrl}/order/${restaurantId}/${qrTable.id}`}
+                value={`${appUrl}/order/${syncRestaurantId || restaurantId}/${qrTable.id}`}
                 size={180}
                 includeMargin={true}
               />
             </div>
-            <p className="text-[10px] text-gray-400 break-all">{appUrl}/order/{restaurantId}/{qrTable.id}</p>
+            <p className="text-[10px] text-gray-400 break-all">{appUrl}/order/{syncRestaurantId || restaurantId}/{qrTable.id}</p>
             <div className="flex gap-2">
-              <a href={`${appUrl}/order/${restaurantId}/${qrTable.id}`} target="_blank" rel="noopener noreferrer"
+              <a href={`${appUrl}/order/${syncRestaurantId || restaurantId}/${qrTable.id}`} target="_blank" rel="noopener noreferrer"
                 className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold border border-gray-200 rounded-lg py-2 hover:bg-gray-50">
                 <ExternalLink className="h-3.5 w-3.5"/>Preview
               </a>

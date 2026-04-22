@@ -1,12 +1,13 @@
 'use client'
-import { use, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { ShoppingCart, Plus, Minus, X, ChefHat, CheckCircle2, Loader2 } from 'lucide-react'
+import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
 
 type Dish = { id: string; name: string; sellingPrice: number; category: string | null }
 type CartItem = Dish & { qty: number }
 
-export default function CustomerOrderPage({ params }: { params: Promise<{ restaurantId: string; tableId: string }> }) {
-  const { restaurantId, tableId } = use(params)
+export default function CustomerOrderPage({ params }: { params: { restaurantId: string; tableId: string } }) {
+  const { restaurantId, tableId } = params
 
   const [restaurantName, setRestaurantName] = useState('')
   const [tableName, setTableName] = useState('')
@@ -18,14 +19,16 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState('')
   const [showCart, setShowCart] = useState(false)
+  const [qrOrderingMode, setQrOrderingMode] = useState<'order' | 'view_only'>('order')
 
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch(`/api/order/${restaurantId}`)
+        const res = await fetch(`/api/order/${restaurantId}?tableId=${encodeURIComponent(tableId)}`)
         const data = await res.json()
         if (!res.ok) { setError('Menu not found'); return }
         setRestaurantName(data.restaurant.name)
+        setQrOrderingMode(data.restaurant.qrOrderingMode === 'view_only' ? 'view_only' : 'order')
         setDishes(data.dishes)
 
         // Get table name
@@ -44,6 +47,7 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
   }, [restaurantId, tableId])
 
   function addToCart(dish: Dish) {
+    if (qrOrderingMode !== 'order') return
     setCart(prev => {
       const existing = prev.find(i => i.id === dish.id)
       if (existing) return prev.map(i => i.id === dish.id ? { ...i, qty: i.qty + 1 } : i)
@@ -52,6 +56,7 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
   }
 
   function removeFromCart(dishId: string) {
+    if (qrOrderingMode !== 'order') return
     setCart(prev => {
       const existing = prev.find(i => i.id === dishId)
       if (!existing) return prev
@@ -65,7 +70,9 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
   }
 
   const totalItems = cart.reduce((s, i) => s + i.qty, 0)
-  const totalPrice = cart.reduce((s, i) => s + i.qty * i.sellingPrice, 0)
+  const subtotalPrice = cart.reduce((s, i) => s + i.qty * i.sellingPrice, 0)
+  const vatAmount = calculateVatFromNet(subtotalPrice)
+  const totalPrice = calculateGrossFromNet(subtotalPrice)
 
   async function placeOrder() {
     if (cart.length === 0) return
@@ -82,7 +89,11 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
           items: cart.map(i => ({ dishId: i.id, dishName: i.name, dishPrice: i.sellingPrice, qty: i.qty })),
         }),
       })
-      if (!res.ok) { setError('Failed to place order. Please try again.'); return }
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null)
+        setError(payload?.error || 'Failed to place order. Please try again.')
+        return
+      }
       setSubmitted(true)
     } catch {
       setError('Network error. Please try again.')
@@ -121,12 +132,22 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
           {cart.map(i => (
             <div key={i.id} className="flex justify-between text-sm">
               <span className="text-gray-700">{i.qty}× {i.name}</span>
-              <span className="text-gray-500">{(i.qty * i.sellingPrice).toLocaleString()} RWF</span>
+              <span className="text-gray-500">{calculateGrossFromNet(i.qty * i.sellingPrice).toLocaleString()} RWF</span>
             </div>
           ))}
-          <div className="border-t border-gray-200 pt-2 mt-2 flex justify-between font-bold text-sm">
-            <span>Total</span>
-            <span className="text-orange-600">{totalPrice.toLocaleString()} RWF</span>
+          <div className="border-t border-gray-200 pt-2 mt-2 space-y-1 text-sm">
+            <div className="flex justify-between">
+              <span className="text-gray-500">Price before VAT</span>
+              <span>{subtotalPrice.toLocaleString()} RWF</span>
+            </div>
+            <div className="flex justify-between text-orange-600">
+              <span>VAT (18%)</span>
+              <span>{vatAmount.toLocaleString()} RWF</span>
+            </div>
+            <div className="flex justify-between font-bold">
+              <span>Total</span>
+              <span className="text-orange-600">{totalPrice.toLocaleString()} RWF</span>
+            </div>
           </div>
         </div>
         <button onClick={() => { setCart([]); setSubmitted(false); setCustomerName('') }}
@@ -146,6 +167,10 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
           <h1 className="font-bold text-lg">{restaurantName}</h1>
         </div>
         <p className="text-orange-100 text-sm">Table: <span className="font-semibold text-white">{tableName || tableId}</span></p>
+        <p className="mt-2 text-xs font-semibold text-orange-100">All menu prices already include VAT.</p>
+        {qrOrderingMode === 'view_only' && (
+          <p className="mt-2 text-xs font-semibold text-orange-100">Guests can browse the menu, but orders must be taken by staff.</p>
+        )}
       </div>
 
       {/* Menu */}
@@ -166,10 +191,11 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
                   <div key={dish.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex items-center justify-between">
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-gray-900 text-sm">{dish.name}</p>
-                      <p className="text-orange-600 font-bold text-sm">{dish.sellingPrice.toLocaleString()} RWF</p>
+                      <p className="text-orange-600 font-bold text-sm">{calculateGrossFromNet(dish.sellingPrice).toLocaleString()} RWF</p>
+                      <p className="text-[11px] text-gray-400">VAT included</p>
                     </div>
                     <div className="flex items-center gap-2 ml-3">
-                      {qty > 0 ? (
+                      {qrOrderingMode === 'order' && qty > 0 ? (
                         <>
                           <button onClick={() => removeFromCart(dish.id)}
                             className="w-7 h-7 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center">
@@ -178,10 +204,14 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
                           <span className="w-5 text-center font-bold text-sm text-gray-800">{qty}</span>
                         </>
                       ) : null}
-                      <button onClick={() => addToCart(dish)}
-                        className="w-7 h-7 rounded-full bg-orange-500 text-white flex items-center justify-center">
-                        <Plus className="h-3.5 w-3.5"/>
-                      </button>
+                      {qrOrderingMode === 'order' ? (
+                        <button onClick={() => addToCart(dish)}
+                          className="w-7 h-7 rounded-full bg-orange-500 text-white flex items-center justify-center">
+                          <Plus className="h-3.5 w-3.5"/>
+                        </button>
+                      ) : (
+                        <span className="rounded-full border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-500">View only</span>
+                      )}
                     </div>
                   </div>
                 )
@@ -192,7 +222,7 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
       </div>
 
       {/* Floating cart button */}
-      {totalItems > 0 && !showCart && (
+      {qrOrderingMode === 'order' && totalItems > 0 && !showCart && (
         <button onClick={() => setShowCart(true)}
           className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-orange-500 hover:bg-orange-600 text-white font-semibold px-6 py-3 rounded-2xl shadow-xl flex items-center gap-3 transition-all">
           <div className="relative">
@@ -205,7 +235,7 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
       )}
 
       {/* Cart sheet */}
-      {showCart && (
+      {qrOrderingMode === 'order' && showCart && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/50">
           <div className="bg-white rounded-t-2xl max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between p-4 border-b border-gray-100">
@@ -227,12 +257,16 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ restau
                     </button>
                   </div>
                   <span className="flex-1 text-sm text-gray-800 mx-3">{item.name}</span>
-                  <span className="text-sm font-semibold text-gray-700">{(item.qty * item.sellingPrice).toLocaleString()} RWF</span>
+                  <span className="text-sm font-semibold text-gray-700">{calculateGrossFromNet(item.qty * item.sellingPrice).toLocaleString()} RWF</span>
                 </div>
               ))}
-              <div className="border-t border-gray-100 pt-3 flex justify-between font-bold">
-                <span>Total</span>
-                <span className="text-orange-600">{totalPrice.toLocaleString()} RWF</span>
+              <div className="border-t border-gray-100 pt-3 space-y-1">
+                <div className="flex justify-between text-sm text-gray-500"><span>Price before VAT</span><span>{subtotalPrice.toLocaleString()} RWF</span></div>
+                <div className="flex justify-between text-sm text-orange-600"><span>VAT (18%)</span><span>{vatAmount.toLocaleString()} RWF</span></div>
+                <div className="flex justify-between font-bold">
+                  <span>Total</span>
+                  <span className="text-orange-600">{totalPrice.toLocaleString()} RWF</span>
+                </div>
               </div>
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Your name (optional)</label>

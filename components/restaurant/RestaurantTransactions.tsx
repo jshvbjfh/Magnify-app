@@ -1,7 +1,10 @@
 ﻿'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, ArrowDownLeft, ArrowUpRight, RefreshCw, Search, Sparkles, X, Calendar, TrendingUp, TrendingDown, Layers } from 'lucide-react'
+import { useSession } from 'next-auth/react'
+import { Plus, ArrowDownLeft, ArrowUpRight, RefreshCw, Search, X, Calendar, TrendingUp, TrendingDown, Layers, Check } from 'lucide-react'
+import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 // â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 interface Transaction {
@@ -14,6 +17,8 @@ interface Transaction {
   categoryType: string
   paymentMethod: string
   pairId: string | null
+  isManual?: boolean
+  sourceKind?: string | null
   uploadId: string | null
   screenshotUrl: string | null
 }
@@ -26,6 +31,11 @@ interface ManualFormState {
   accountName: string
   categoryType: string
   paymentMethod: string
+}
+
+type RestaurantTransactionsSnapshot = {
+  updatedAt: string
+  transactions: Transaction[]
 }
 
 function fmtRWF(n: number) {
@@ -55,19 +65,56 @@ function formatDateLabel(isoDate: string): string {
   return `${dayName}, ${ordinal(d.getDate())} ${month} ${d.getFullYear()}`
 }
 
+function isCashEquivalentAccountName(name?: string) {
+  const normalized = (name ?? '').trim().toLowerCase()
+  return normalized === 'cash'
+    || normalized.includes('cash')
+    || normalized === 'current account'
+    || normalized.includes('bank')
+    || normalized === 'mobile money'
+    || normalized.includes('momo')
+}
+
+function isWasteLikeTransaction(transaction: Pick<Transaction, 'description' | 'sourceKind'>) {
+  const normalizedSourceKind = String(transaction.sourceKind || '').trim().toLowerCase()
+  if (normalizedSourceKind === 'inventory_waste') return true
+  return transaction.description.trim().toLowerCase().startsWith('waste:')
+}
+
 const CATEGORIES = ['income', 'expense', 'asset', 'liability', 'equity']
 const PAYMENT_METHODS = ['Cash', 'Bank', 'Mobile Money', 'Card', 'Other']
 
 // â”€â”€â”€ Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: () => void }) {
+  const { data: session } = useSession()
+  const restaurantBranch = useRestaurantBranch()
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string>(todayStr())
   const [search, setSearch] = useState('')
-  const [showModal, setShowModal] = useState(false)
+  const [isAddingRow, setIsAddingRow] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
+  const snapshotScopeId = buildRestaurantSnapshotScope({
+    restaurantId: restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null,
+    branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
+    fallbackUserId: session?.user?.id ?? null,
+  })
+  const snapshotStorageScope = snapshotScopeId ? `restaurant-transactions:${snapshotScopeId}` : null
+
+  const persistSnapshot = useCallback((nextTransactions: Transaction[]) => {
+    if (!snapshotStorageScope) return
+    const snapshot = mergeRestaurantDeviceSnapshot<RestaurantTransactionsSnapshot>(snapshotStorageScope, {
+      transactions: nextTransactions,
+    })
+    if (!snapshot) return
+    setSnapshotUpdatedAt(snapshot.updatedAt)
+    setShowingCachedSnapshot(false)
+  }, [snapshotStorageScope])
 
   const [form, setForm] = useState<ManualFormState>({
     date: todayStr(),
@@ -81,25 +128,60 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
 
   // â”€â”€ Fetch â”€â”€
   const fetchTransactions = useCallback(async () => {
-    setLoading(true)
+    setLoading(transactions.length === 0)
+    setLoadError(null)
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      if (transactions.length === 0) {
+        setLoadError('You are offline. Reconnect to load transactions from the server.')
+      }
+      setLoading(false)
+      return
+    }
+
     try {
       const res = await fetch('/api/transactions', { credentials: 'include' })
-      if (!res.ok) throw new Error('Failed to load')
+      if (!res.ok) throw new Error('Failed to load transactions')
       const data = await res.json()
-      setTransactions(data.transactions || [])
+      const nextTransactions = data.transactions || []
+      setTransactions(nextTransactions)
+      persistSnapshot(nextTransactions)
     } catch {
-      setTransactions([])
+      setLoadError('Could not load transactions. Check connection or database status.')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [persistSnapshot, transactions.length])
+
+  useEffect(() => {
+    if (!snapshotStorageScope) return
+
+    const snapshot = loadRestaurantDeviceSnapshot<RestaurantTransactionsSnapshot>(snapshotStorageScope)
+    if (!snapshot) return
+
+    setTransactions(Array.isArray(snapshot.transactions) ? snapshot.transactions : [])
+    setSnapshotUpdatedAt(snapshot.updatedAt ?? null)
+    setShowingCachedSnapshot(true)
+    setLoading(false)
+  }, [snapshotStorageScope])
 
   useEffect(() => { fetchTransactions() }, [fetchTransactions])
 
   useEffect(() => {
     const handler = () => fetchTransactions()
+    const onlineHandler = () => fetchTransactions()
     window.addEventListener('refreshTransactions', handler)
-    return () => window.removeEventListener('refreshTransactions', handler)
+    window.addEventListener('online', onlineHandler)
+    return () => {
+      window.removeEventListener('refreshTransactions', handler)
+      window.removeEventListener('online', onlineHandler)
+    }
+  }, [fetchTransactions])
+
+  // Auto-refresh every 30 s so the tab never shows stale data after Jesse records
+  useEffect(() => {
+    const id = setInterval(() => fetchTransactions(), 30_000)
+    return () => clearInterval(id)
   }, [fetchTransactions])
 
   // â”€â”€ Build date sidebar â”€â”€
@@ -138,8 +220,33 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     rows.push(t)
   }
 
-  const totalIn  = dateTransactions.filter(t => t.type === 'debit'  && t.accountName === 'Cash').reduce((s, t) => s + t.amount, 0)
-  const totalOut = dateTransactions.filter(t => t.type === 'credit' && t.accountName === 'Cash').reduce((s, t) => s + t.amount, 0)
+  const totalIn  = dateTransactions.filter(t => !isWasteLikeTransaction(t) && t.type === 'debit'  && isCashEquivalentAccountName(t.accountName)).reduce((s, t) => s + t.amount, 0)
+  const totalOut = dateTransactions.filter(t => !isWasteLikeTransaction(t) && t.type === 'credit' && isCashEquivalentAccountName(t.accountName)).reduce((s, t) => s + t.amount, 0)
+
+  const openAddRow = () => {
+    setSaveError(null)
+    setSaveSuccess(false)
+    setIsAddingRow(true)
+    setForm({ date: todayStr(), description: '', amount: '', direction: 'out', accountName: '', categoryType: 'expense', paymentMethod: 'Cash' })
+  }
+
+  const cancelAddRow = () => {
+    setIsAddingRow(false)
+    setSaveError(null)
+    setSaveSuccess(false)
+    setForm({ date: todayStr(), description: '', amount: '', direction: 'out', accountName: '', categoryType: 'expense', paymentMethod: 'Cash' })
+  }
+
+  const handleRowKeyDown = (event: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      void handleSave()
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      cancelAddRow()
+    }
+  }
 
   // â”€â”€ Save manual transaction â”€â”€
   const handleSave = async () => {
@@ -168,11 +275,12 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
         const msg = await res.text()
         throw new Error(msg || 'Failed to save')
       }
-      setSaveSuccess(true)
       window.dispatchEvent(new Event('refreshTransactions'))
       setForm({ date: todayStr(), description: '', amount: '', direction: 'out', accountName: '', categoryType: 'expense', paymentMethod: 'Cash' })
       await fetchTransactions()
-      setTimeout(() => { setSaveSuccess(false); setShowModal(false) }, 1200)
+      setSaveSuccess(true)
+      setIsAddingRow(false)
+      setTimeout(() => { setSaveSuccess(false) }, 1200)
     } catch (e: any) {
       setSaveError(e?.message || 'Error saving transaction')
     } finally {
@@ -181,32 +289,19 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   }
 
   const dateLabel = selectedDate === today ? 'Today' : formatDateLabel(selectedDate)
+  const snapshotUpdatedLabel = snapshotUpdatedAt
+    ? new Date(snapshotUpdatedAt).toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
+    : null
 
   // â”€â”€ Render â”€â”€
   return (
     <div className="space-y-4">
-
-      {/* â”€â”€ Jesse AI banner â”€â”€ */}
-      <div className="bg-gradient-to-r from-orange-500 to-red-600 rounded-xl p-4 flex items-center justify-between gap-4 shadow-md">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-white/20 rounded-lg">
-            <Sparkles className="h-5 w-5 text-white" />
-          </div>
-          <div>
-            <p className="text-white font-semibold text-sm">Ask Jesse to record transactions</p>
-            <p className="text-orange-100 text-xs mt-0.5">
-              Upload a receipt or photo and say "Record this expense" â€” Jesse will do the rest.
-            </p>
-          </div>
+      {showingCachedSnapshot && snapshotUpdatedLabel ? (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          <p className="font-semibold">Showing last synced transactions snapshot from this device</p>
+          <p className="mt-1 text-xs opacity-90">Last synced snapshot: {snapshotUpdatedLabel}</p>
         </div>
-        <button
-          onClick={onAskJesse}
-          className="flex-shrink-0 flex items-center gap-2 px-4 py-2 bg-white text-orange-600 rounded-lg text-sm font-semibold hover:bg-orange-50 transition-colors shadow"
-        >
-          <Sparkles className="h-4 w-4" />
-          Ask Jesse
-        </button>
-      </div>
+      ) : null}
 
       {/* â”€â”€ Two-column layout â”€â”€ */}
       <div className="flex gap-4 items-start">
@@ -262,11 +357,17 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
         {/* â”€â”€ Main content â”€â”€ */}
         <div className="flex-1 min-w-0 space-y-4">
 
+          {loadError && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {loadError}
+            </div>
+          )}
+
           {/* â”€â”€ Summary cards â”€â”€ */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
             <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-gray-500 font-medium">Money In</span>
+                <span className="text-xs text-gray-500 font-medium">Revenue</span>
                 <div className="p-1.5 bg-green-100 rounded-lg"><TrendingUp className="h-4 w-4 text-green-600" /></div>
               </div>
               <p className="text-xl font-bold text-green-600">{fmtRWF(totalIn)}</p>
@@ -274,7 +375,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
             </div>
             <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-gray-500 font-medium">Money Out</span>
+                <span className="text-xs text-gray-500 font-medium">Expenses</span>
                 <div className="p-1.5 bg-red-100 rounded-lg"><TrendingDown className="h-4 w-4 text-red-600" /></div>
               </div>
               <p className="text-xl font-bold text-red-600">{fmtRWF(totalOut)}</p>
@@ -282,13 +383,13 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
             </div>
             <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-gray-500 font-medium">Net</span>
+                <span className="text-xs text-gray-500 font-medium">Profit / Loss</span>
                 <div className="p-1.5 bg-orange-100 rounded-lg"><Layers className="h-4 w-4 text-orange-600" /></div>
               </div>
               <p className={`text-xl font-bold ${totalIn - totalOut >= 0 ? 'text-orange-600' : 'text-red-600'}`}>
                 {fmtRWF(Math.abs(totalIn - totalOut))}
               </p>
-              <p className="text-xs text-gray-400 mt-1">{totalIn - totalOut >= 0 ? 'Positive' : 'Negative'}</p>
+              <p className="text-xs text-gray-400 mt-1">{totalIn - totalOut >= 0 ? 'Profitable' : 'Loss recorded'}</p>
             </div>
           </div>
 
@@ -310,7 +411,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 />
               </div>
               <button
-                onClick={() => { setSaveError(null); setSaveSuccess(false); setShowModal(true) }}
+                onClick={openAddRow}
                 className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-semibold hover:bg-orange-600 transition-colors shadow-sm"
               >
                 <Plus className="h-4 w-4" />
@@ -326,7 +427,13 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <RefreshCw className="h-6 w-6 text-gray-400 animate-spin mr-2" />
                 <span className="text-gray-400 text-sm">Loading transactionsâ€¦</span>
               </div>
-            ) : rows.length === 0 ? (
+            ) : loadError ? (
+              <div className="text-center py-16">
+                <Calendar className="h-10 w-10 text-red-200 mx-auto mb-3" />
+                <p className="text-red-600 font-medium">Transactions unavailable</p>
+                <p className="text-red-400 text-sm mt-1">The list could not be loaded from the server.</p>
+              </div>
+            ) : rows.length === 0 && !isAddingRow ? (
               <div className="text-center py-16">
                 <Calendar className="h-10 w-10 text-gray-300 mx-auto mb-3" />
                 <p className="text-gray-500 font-medium">No transactions found</p>
@@ -349,9 +456,110 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
+                    {isAddingRow && (
+                      <tr className="bg-orange-50">
+                        <td className="px-3 py-2">
+                          <input
+                            type="text"
+                            value={form.description}
+                            onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                            onKeyDown={handleRowKeyDown}
+                            placeholder="Description"
+                            className="w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="text"
+                            value={form.accountName}
+                            onChange={e => setForm(f => ({ ...f, accountName: e.target.value }))}
+                            onKeyDown={handleRowKeyDown}
+                            placeholder={form.direction === 'in' ? 'Sales, Revenue' : 'Rent, Utilities'}
+                            className="w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <select
+                            value={form.categoryType}
+                            onChange={e => setForm(f => ({ ...f, categoryType: e.target.value }))}
+                            onKeyDown={handleRowKeyDown}
+                            className="w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                          >
+                            {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <select
+                            value={form.paymentMethod}
+                            onChange={e => setForm(f => ({ ...f, paymentMethod: e.target.value }))}
+                            onKeyDown={handleRowKeyDown}
+                            className="w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                          >
+                            {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex rounded-lg overflow-hidden border border-orange-200 bg-white">
+                            <button
+                              type="button"
+                              onClick={() => setForm(f => ({ ...f, direction: 'in', categoryType: 'income' }))}
+                              className={`flex-1 px-2 py-2 text-xs font-semibold transition-colors ${form.direction === 'in' ? 'bg-green-500 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                            >
+                              In
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setForm(f => ({ ...f, direction: 'out', categoryType: 'expense' }))}
+                              className={`flex-1 px-2 py-2 text-xs font-semibold transition-colors ${form.direction === 'out' ? 'bg-red-500 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                            >
+                              Out
+                            </button>
+                          </div>
+                          <input
+                            type="date"
+                            value={form.date}
+                            onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+                            onKeyDown={handleRowKeyDown}
+                            className="mt-2 w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={form.amount}
+                            onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
+                            onKeyDown={handleRowKeyDown}
+                            placeholder="0"
+                            className="w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-right text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                          />
+                          {saveError && <p className="mt-1 text-[11px] font-medium text-red-600">{saveError}</p>}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <button type="button" onClick={() => void handleSave()} disabled={saving} className="text-orange-600 transition-colors hover:text-orange-700 disabled:opacity-50">
+                              <Check className="h-4 w-4" />
+                            </button>
+                            <button type="button" onClick={cancelAddRow} className="text-gray-500 transition-colors hover:text-gray-700">
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
                     {rows.map(t => {
-                      const isIn = t.type === 'debit' && t.accountName === 'Cash'
-                      const isCashOut = t.type === 'credit' && t.accountName === 'Cash'
+                      const isWasteEntry = isWasteLikeTransaction(t)
+                      const isIn = !isWasteEntry && t.type === 'debit' && isCashEquivalentAccountName(t.accountName)
+                      const isCashOut = !isWasteEntry && t.type === 'credit' && isCashEquivalentAccountName(t.accountName)
+                      const originLabel = isWasteEntry ? 'Inventory Loss' : t.uploadId ? 'Upload' : t.isManual ? 'Manual' : 'Recorded'
+                      const originClass = isWasteEntry
+                        ? 'bg-amber-100 text-amber-700'
+                        : t.uploadId
+                          ? 'bg-orange-100 text-orange-600'
+                          : t.isManual
+                            ? 'bg-gray-100 text-gray-500'
+                            : 'bg-emerald-100 text-emerald-700'
                       return (
                         <tr key={t.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 text-gray-800 font-medium max-w-xs truncate" title={t.description}>
@@ -360,13 +568,14 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                           <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{t.accountName}</td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
-                              t.categoryType === 'income'    ? 'bg-green-100 text-green-700'   :
-                              t.categoryType === 'expense'   ? 'bg-red-100 text-red-700'        :
-                              t.categoryType === 'asset'     ? 'bg-orange-100 text-orange-700'  :
-                              t.categoryType === 'liability' ? 'bg-yellow-100 text-yellow-700'  :
+                              isWasteEntry                   ? 'bg-amber-100 text-amber-700'    :
+                              t.categoryType === 'income'    ? 'bg-green-100 text-green-700'    :
+                              t.categoryType === 'expense'   ? 'bg-red-100 text-red-700'       :
+                              t.categoryType === 'asset'     ? 'bg-orange-100 text-orange-700' :
+                              t.categoryType === 'liability' ? 'bg-yellow-100 text-yellow-700' :
                               'bg-gray-100 text-gray-600'
                             }`}>
-                              {t.categoryType}
+                              {isWasteEntry ? 'inventory loss' : t.categoryType}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{t.paymentMethod}</td>
@@ -384,10 +593,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                             {isIn ? '+' : isCashOut ? '-' : ''}{fmtRWF(t.amount)}
                           </td>
                           <td className="px-4 py-3">
-                            {t.uploadId
-                              ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-600">Upload</span>
-                              : <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">Manual</span>
-                            }
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${originClass}`}>{originLabel}</span>
                           </td>
                         </tr>
                       )
@@ -404,108 +610,6 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
 
         </div>{/* end main content */}
       </div>{/* end two-column */}
-
-      {/* â”€â”€ New Transaction Modal â”€â”€ */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setShowModal(false)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 z-10">
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="text-lg font-bold text-gray-900">New Transaction</h2>
-              <button onClick={() => setShowModal(false)} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
-                <X className="h-5 w-5 text-gray-500" />
-              </button>
-            </div>
-
-            <div className="flex rounded-xl overflow-hidden border border-gray-200 mb-4">
-              <button
-                onClick={() => setForm(f => ({ ...f, direction: 'in', categoryType: 'income' }))}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold transition-all ${
-                  form.direction === 'in' ? 'bg-green-500 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
-                }`}
-              >
-                <ArrowDownLeft className="h-4 w-4" /> Money In
-              </button>
-              <button
-                onClick={() => setForm(f => ({ ...f, direction: 'out', categoryType: 'expense' }))}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold transition-all ${
-                  form.direction === 'out' ? 'bg-red-500 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
-                }`}
-              >
-                <ArrowUpRight className="h-4 w-4" /> Money Out
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Date</label>
-                <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Description *</label>
-                <input type="text" placeholder="e.g. Food supplies purchase" value={form.description}
-                  onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Amount (RWF) *</label>
-                <input type="number" placeholder="0" min="0" step="1" value={form.amount}
-                  onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Account Name</label>
-                <input type="text" placeholder={form.direction === 'in' ? 'e.g. Sales, Revenue' : 'e.g. Rent, Utilities'}
-                  value={form.accountName} onChange={e => setForm(f => ({ ...f, accountName: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-gray-600 mb-1 block">Category</label>
-                  <select value={form.categoryType} onChange={e => setForm(f => ({ ...f, categoryType: e.target.value }))}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300 bg-white capitalize">
-                    {CATEGORIES.map(c => <option key={c} value={c} className="capitalize">{c}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-600 mb-1 block">Payment Method</label>
-                  <select value={form.paymentMethod} onChange={e => setForm(f => ({ ...f, paymentMethod: e.target.value }))}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300 bg-white">
-                    {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {saveError && (
-              <div className="mt-4 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">{saveError}</div>
-            )}
-            {saveSuccess && (
-              <div className="mt-4 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-sm text-green-600 font-medium">
-                âœ… Transaction saved!
-              </div>
-            )}
-
-            <div className="flex gap-3 mt-5">
-              <button onClick={() => setShowModal(false)}
-                className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors">
-                Cancel
-              </button>
-              <button onClick={handleSave} disabled={saving || saveSuccess}
-                className={`flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all shadow-sm ${
-                  saving || saveSuccess
-                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : form.direction === 'in'
-                      ? 'bg-green-500 hover:bg-green-600 text-white'
-                      : 'bg-red-500 hover:bg-red-600 text-white'
-                }`}>
-                {saving ? 'Savingâ€¦' : saveSuccess ? 'Saved!' : `Record ${form.direction === 'in' ? 'Income' : 'Expense'}`}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

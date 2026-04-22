@@ -1,392 +1,1000 @@
 ﻿'use client'
-import { useState, useEffect } from 'react'
-import { Plus, AlertTriangle, X, Package, Sparkles, ShoppingCart, Search } from 'lucide-react'
+import { Fragment, useEffect, useState } from 'react'
+import { AlertTriangle, X, Sparkles, ShoppingCart, Search, Trash2 } from 'lucide-react'
+import { createInventoryBatchSuffix, formatInventoryBatchId } from '@/lib/inventoryBatch'
+import {
+  derivePurchaseQuantity,
+  derivePurchaseUnitCost,
+  DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT,
+  getPurchaseUnit,
+  getUnitsPerPurchaseUnit,
+  INVENTORY_UNITS,
+  isDualUnitPurchaseUnit,
+  splitUsageQuantity,
+} from '@/lib/inventoryUnits'
 
-type Ingredient = { id: string; name: string; unit: string; unitCost: number | null; quantity: number; reorderLevel: number; category: string | null }
-type Purchase = { id: string; ingredientId: string; supplier: string | null; quantityPurchased: number; remainingQuantity: number; unitCost: number; totalCost: number; purchasedAt: string; ingredient: { name: string; unit: string } }
+type Ingredient = {
+  id: string
+  name: string
+  unit: string
+  purchaseUnit: string | null
+  unitsPerPurchaseUnit: number | null
+  unitCost: number | null
+  quantity: number
+  reorderLevel: number
+  category: string | null
+}
+type Purchase = {
+  id: string
+  batchId: string | null
+  ingredientId: string
+  supplier: string | null
+  purchaseQuantity: number | null
+  purchaseUnit: string | null
+  unitsPerPurchaseUnit: number | null
+  purchaseUnitCost: number | null
+  quantityPurchased: number
+  remainingQuantity: number
+  unitCost: number
+  totalCost: number
+  purchasedAt: string
+  createdAt: string
+  ingredient: { name: string; unit: string; purchaseUnit: string | null; unitsPerPurchaseUnit: number | null }
+}
+type PurchaseBatchGroup = { key: string; batchId: string | null; purchasedAt: string; earliestCreatedAt: string; totalCost: number; purchases: Purchase[] }
+const INVENTORY_COLUMN_LABELS = ['Item', 'Supplier', 'Unit', 'Opening stock', 'Cost/unit', 'Stock on hand', 'Tot. stock value', 'Actions'] as const
+const FRESH_FETCH_OPTIONS = { credentials: 'include' as const, cache: 'no-store' as const }
 
-const UNITS = ['kg','g','liter','ml','piece','bottle','bag','box','bunch','can','sachet']
 const fmt = (n: number) => n.toLocaleString('en-RW', { maximumFractionDigits: 0 })
+const fmtQty = (n: number) => n.toLocaleString('en-RW', { maximumFractionDigits: 2 })
+const PURCHASE_USAGE_EPSILON = 0.000001
+const normalizeInventoryItemName = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase()
+const todayInputValue = () => {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+const createEmptyPurchaseForm = (purchasedAt = todayInputValue()) => ({
+  itemName: '',
+  usageUnit: '',
+  purchaseUnit: '',
+  unitsPerPurchaseUnit: '',
+  supplier: '',
+  purchaseQuantity: '',
+  purchaseUnitCost: '',
+  purchasedAt,
+})
+
+function parseDateInput(value: string) {
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day) return new Date()
+  return new Date(year, month - 1, day)
+}
+
+function formatDateInput(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return todayInputValue()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+function formatBatchDateLabel(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Invalid date'
+  return date.toLocaleDateString('en-RW', { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+function formatBatchCreatedTimeLabel(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Unknown time'
+  return date.toLocaleTimeString('en-RW', { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatUnitSummary(purchaseUnit: string, usageUnit: string, unitsPerPurchaseUnit: number) {
+  if (purchaseUnit.toLowerCase() === usageUnit.toLowerCase() || unitsPerPurchaseUnit <= 1) return usageUnit
+  return `${purchaseUnit} -> ${usageUnit}`
+}
+
+function formatStockOnHand(quantity: number, usageUnit: string, purchaseUnit: string, unitsPerPurchaseUnit: number) {
+  if (purchaseUnit.toLowerCase() === usageUnit.toLowerCase() || unitsPerPurchaseUnit <= 1) {
+    return `${fmtQty(quantity)} ${usageUnit}`
+  }
+
+  const breakdown = splitUsageQuantity(quantity, unitsPerPurchaseUnit)
+  if (breakdown.wholePurchaseUnits > 0 && breakdown.remainderUsageQuantity > PURCHASE_USAGE_EPSILON) {
+    return `${fmtQty(breakdown.wholePurchaseUnits)} ${purchaseUnit} + ${fmtQty(breakdown.remainderUsageQuantity)} ${usageUnit}`
+  }
+  if (breakdown.wholePurchaseUnits > 0) {
+    return `${fmtQty(breakdown.wholePurchaseUnits)} ${purchaseUnit}`
+  }
+  return `${fmtQty(quantity)} ${usageUnit} (~${fmtQty(breakdown.approxPurchaseUnits)} ${purchaseUnit})`
+}
+
+function getPurchaseDisplayMeta(purchase: Purchase) {
+  const purchaseUnit = getPurchaseUnit({
+    unit: purchase.ingredient.unit,
+    purchaseUnit: purchase.purchaseUnit ?? purchase.ingredient.purchaseUnit,
+    unitsPerPurchaseUnit: purchase.unitsPerPurchaseUnit ?? purchase.ingredient.unitsPerPurchaseUnit,
+  })
+  const unitsPerPurchaseUnit = getUnitsPerPurchaseUnit({
+    unit: purchase.ingredient.unit,
+    purchaseUnit,
+    unitsPerPurchaseUnit: purchase.unitsPerPurchaseUnit ?? purchase.ingredient.unitsPerPurchaseUnit,
+  })
+  const purchaseQuantity = derivePurchaseQuantity({
+    unit: purchase.ingredient.unit,
+    purchaseUnit,
+    unitsPerPurchaseUnit,
+    purchaseQuantity: purchase.purchaseQuantity,
+    quantityPurchased: purchase.quantityPurchased,
+  })
+  const purchaseUnitCost = derivePurchaseUnitCost({
+    unit: purchase.ingredient.unit,
+    purchaseUnit,
+    unitsPerPurchaseUnit,
+    purchaseUnitCost: purchase.purchaseUnitCost,
+    unitCost: purchase.unitCost,
+  })
+
+  return {
+    purchaseUnit,
+    usageUnit: purchase.ingredient.unit,
+    unitsPerPurchaseUnit,
+    purchaseQuantity,
+    purchaseUnitCost,
+  }
+}
+
+function extractBatchSuffix(batchId: string) {
+  const match = /^B-\d{8}-(.+)$/.exec(batchId.trim())
+  return match?.[1] ?? ''
+}
+
+function renderBatchColumnLabels() {
+  return (
+    <tr className="bg-white border-b border-gray-200">
+      {INVENTORY_COLUMN_LABELS.map((label) => (
+        <th key={label} className="px-4 py-2 text-left text-xs font-semibold text-gray-600">
+          {label}
+        </th>
+      ))}
+    </tr>
+  )
+}
+
+function comparePurchaseRows(
+  left: Pick<Purchase, 'purchasedAt' | 'createdAt' | 'id'>,
+  right: Pick<Purchase, 'purchasedAt' | 'createdAt' | 'id'>,
+) {
+  return new Date(right.purchasedAt).getTime() - new Date(left.purchasedAt).getTime()
+    || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    || right.id.localeCompare(left.id)
+}
+
+function compareBatchGroups(left: PurchaseBatchGroup, right: PurchaseBatchGroup) {
+  return new Date(right.purchasedAt).getTime() - new Date(left.purchasedAt).getTime()
+    || new Date(right.earliestCreatedAt).getTime() - new Date(left.earliestCreatedAt).getTime()
+    || right.key.localeCompare(left.key)
+}
+
+function groupPurchasesByBatch(purchases: Purchase[]) {
+  const groups = new Map<string, PurchaseBatchGroup>()
+
+  for (const purchase of purchases) {
+    const key = purchase.batchId || `purchase-${purchase.id}`
+    const existingGroup = groups.get(key)
+
+    if (existingGroup) {
+      existingGroup.purchases.push(purchase)
+      existingGroup.totalCost += purchase.totalCost
+
+      if (new Date(purchase.createdAt).getTime() < new Date(existingGroup.earliestCreatedAt).getTime()) {
+        existingGroup.earliestCreatedAt = purchase.createdAt
+      }
+      continue
+    }
+
+    groups.set(key, {
+      key,
+      batchId: purchase.batchId,
+      purchasedAt: purchase.purchasedAt,
+      earliestCreatedAt: purchase.createdAt,
+      totalCost: purchase.totalCost,
+      purchases: [purchase],
+    })
+  }
+
+  return Array.from(groups.values())
+    .map(group => ({
+      ...group,
+      purchases: group.purchases.slice().sort(comparePurchaseRows),
+    }))
+    .sort(compareBatchGroups)
+}
 
 export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () => void }) {
-  const [tab, setTab] = useState<'ingredients' | 'purchases'>('ingredients')
   const [items, setItems] = useState<Ingredient[]>([])
   const [purchases, setPurchases] = useState<Purchase[]>([])
-  const [loading, setLoading] = useState(true)
-  const [showForm, setShowForm] = useState(false)
-  const [recordFinancial, setRecordFinancial] = useState(false)
-  const [form, setForm] = useState({ name:'',unit:'kg',unitCost:'',quantity:'',reorderLevel:'',category:'' })
-  // Purchase form
+  const [itemsLoading, setItemsLoading] = useState(true)
+  const [purchasesLoading, setPurchasesLoading] = useState(true)
   const [showPurchaseForm, setShowPurchaseForm] = useState(false)
-  const [pForm, setPForm] = useState({ ingredientId: '', supplier: '', quantityPurchased: '', unitCost: '', purchasedAt: new Date().toISOString().slice(0, 10) })
+  const [showPurchaseRecorder, setShowPurchaseRecorder] = useState(false)
+  const [activeBatchSuffix, setActiveBatchSuffix] = useState('')
+  const [activeBatchDate, setActiveBatchDate] = useState(todayInputValue())
+  const [editingPurchaseId, setEditingPurchaseId] = useState<string | null>(null)
+  const [purchaseError, setPurchaseError] = useState<string | null>(null)
+  const [purchaseAutofillNotice, setPurchaseAutofillNotice] = useState<string | null>(null)
+  const [purchaseAutofillMatchKey, setPurchaseAutofillMatchKey] = useState('')
+  const [pForm, setPForm] = useState(createEmptyPurchaseForm())
   const [pSaving, setPSaving] = useState(false)
 
   async function load() {
-    setLoading(true)
-    const data = await fetch('/api/restaurant/ingredients').then(r=>r.json())
+    setItemsLoading(true)
+    const data = await fetch('/api/restaurant/ingredients', FRESH_FETCH_OPTIONS).then(r=>r.json())
     setItems(Array.isArray(data)?data:[])
-    setLoading(false)
+    setItemsLoading(false)
   }
 
   async function loadPurchases() {
-    setLoading(true)
-    const data = await fetch('/api/restaurant/inventory-purchases').then(r=>r.json())
+    setPurchasesLoading(true)
+    const data = await fetch('/api/restaurant/inventory-purchases', FRESH_FETCH_OPTIONS).then(r=>r.json())
     setPurchases(Array.isArray(data)?data:[])
-    setLoading(false)
+    setPurchasesLoading(false)
   }
 
-  useEffect(()=>{load()},[])
-  useEffect(()=>{ if(tab==='purchases') loadPurchases() },[tab])
+  useEffect(() => {
+    void load()
+    void loadPurchases()
+  }, [])
 
-  async function save(e: React.FormEvent) {
-    e.preventDefault()
-    await fetch('/api/restaurant/ingredients',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:form.name,unit:form.unit,unitCost:form.unitCost?Number(form.unitCost):null,quantity:Number(form.quantity||0),reorderLevel:Number(form.reorderLevel||0),category:form.category||null})})
-    if (recordFinancial && form.unitCost && Number(form.unitCost) > 0 && Number(form.quantity) > 0) {
-      const totalCost = Number(form.unitCost) * Number(form.quantity)
-      await fetch('/api/transactions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          description: `Inventory purchase - ${form.name} (${form.quantity} ${form.unit})`,
-          amount: totalCost,
-          direction: 'out',
-          categoryType: 'expense',
-          accountName: 'Inventory Purchase',
-          paymentMethod: 'Cash'
-        })
-      })
+  function resolvePurchaseFormUnits() {
+    const purchaseUnit = pForm.purchaseUnit.trim()
+    const usageUnit = (pForm.usageUnit.trim() || purchaseUnit).trim()
+    const sameUnit = purchaseUnit.toLowerCase() === usageUnit.toLowerCase()
+    const unitsPerPurchaseUnit = sameUnit ? 1 : Number(pForm.unitsPerPurchaseUnit)
+    return { purchaseUnit, usageUnit, unitsPerPurchaseUnit, sameUnit }
+  }
+
+  function updatePurchaseUnit(nextPurchaseUnit: string) {
+    setPForm((current) => {
+      if (isDualUnitPurchaseUnit(nextPurchaseUnit)) {
+        const defaultUsage = DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT[nextPurchaseUnit.toLowerCase()] || ''
+        const shouldFollowPurchaseUnit = !current.usageUnit || current.usageUnit.toLowerCase() === current.purchaseUnit.toLowerCase()
+        const nextUsageUnit = shouldFollowPurchaseUnit ? defaultUsage : current.usageUnit
+        const sameUnit = nextPurchaseUnit.toLowerCase() === nextUsageUnit.toLowerCase()
+        return {
+          ...current,
+          purchaseUnit: nextPurchaseUnit,
+          usageUnit: nextUsageUnit,
+          unitsPerPurchaseUnit: sameUnit ? '' : current.unitsPerPurchaseUnit,
+        }
+      }
+      return {
+        ...current,
+        purchaseUnit: nextPurchaseUnit,
+        usageUnit: '',
+        unitsPerPurchaseUnit: '',
+      }
+    })
+  }
+
+  function updateUsageUnit(nextUsageUnit: string) {
+    setPForm((current) => {
+      const sameUnit = nextUsageUnit.toLowerCase() === current.purchaseUnit.toLowerCase()
+      return {
+        ...current,
+        usageUnit: nextUsageUnit,
+        unitsPerPurchaseUnit: sameUnit ? '' : current.unitsPerPurchaseUnit,
+      }
+    })
+  }
+
+  function findPurchaseAutofillPreset(itemName: string) {
+    const normalizedItemName = normalizeInventoryItemName(itemName)
+    if (!normalizedItemName) return null
+
+    const latestPurchase = purchases
+      .filter((purchase) => normalizeInventoryItemName(purchase.ingredient.name) === normalizedItemName)
+      .slice()
+      .sort(comparePurchaseRows)[0]
+
+    if (latestPurchase) {
+      const purchaseMeta = getPurchaseDisplayMeta(latestPurchase)
+      const hasKnownPurchaseCost = latestPurchase.purchaseUnitCost != null || latestPurchase.unitCost != null
+      return {
+        supplier: latestPurchase.supplier || '',
+        usageUnit: purchaseMeta.usageUnit,
+        purchaseUnit: purchaseMeta.purchaseUnit,
+        unitsPerPurchaseUnit: purchaseMeta.purchaseUnit.toLowerCase() === purchaseMeta.usageUnit.toLowerCase()
+          ? ''
+          : String(purchaseMeta.unitsPerPurchaseUnit),
+        purchaseUnitCost: hasKnownPurchaseCost ? String(purchaseMeta.purchaseUnitCost) : '',
+        notice: `Autofilled from the latest ${latestPurchase.ingredient.name} record. Keep it or edit any field before saving.`,
+      }
     }
-    setShowForm(false); setRecordFinancial(false); setForm({name:'',unit:'kg',unitCost:'',quantity:'',reorderLevel:'',category:''}); load()
+
+    const matchedItem = items.find((item) => normalizeInventoryItemName(item.name) === normalizedItemName)
+    if (!matchedItem) return null
+
+    const purchaseUnit = getPurchaseUnit(matchedItem)
+    const unitsPerPurchaseUnit = getUnitsPerPurchaseUnit(matchedItem)
+    const hasKnownCost = matchedItem.unitCost != null
+    const purchaseUnitCost = hasKnownCost
+      ? derivePurchaseUnitCost({
+          unit: matchedItem.unit,
+          purchaseUnit,
+          unitsPerPurchaseUnit,
+          unitCost: matchedItem.unitCost,
+        })
+      : null
+
+    return {
+      supplier: '',
+      usageUnit: matchedItem.unit,
+      purchaseUnit,
+      unitsPerPurchaseUnit: purchaseUnit.toLowerCase() === matchedItem.unit.toLowerCase()
+        ? ''
+        : String(unitsPerPurchaseUnit),
+      purchaseUnitCost: purchaseUnitCost == null ? '' : String(purchaseUnitCost),
+      notice: `Autofilled from saved ${matchedItem.name} settings. Keep it or edit any field before saving.`,
+    }
   }
 
-  async function savePurchase(e: React.FormEvent) {
-    e.preventDefault()
-    if (!pForm.ingredientId || !pForm.quantityPurchased || !pForm.unitCost) return
+  function handlePurchaseItemNameChange(nextItemName: string) {
+    const normalizedItemName = normalizeInventoryItemName(nextItemName)
+    const autofillPreset = !editingPurchaseId && showPurchaseRecorder
+      ? findPurchaseAutofillPreset(nextItemName)
+      : null
+    const shouldApplyAutofill = Boolean(autofillPreset && normalizedItemName && purchaseAutofillMatchKey !== normalizedItemName)
+
+    setPForm((current) => ({
+      ...current,
+      itemName: nextItemName,
+      supplier: shouldApplyAutofill ? autofillPreset!.supplier : current.supplier,
+      usageUnit: shouldApplyAutofill ? autofillPreset!.usageUnit : current.usageUnit,
+      purchaseUnit: shouldApplyAutofill ? autofillPreset!.purchaseUnit : current.purchaseUnit,
+      unitsPerPurchaseUnit: shouldApplyAutofill ? autofillPreset!.unitsPerPurchaseUnit : current.unitsPerPurchaseUnit,
+      purchaseUnitCost: shouldApplyAutofill ? autofillPreset!.purchaseUnitCost : current.purchaseUnitCost,
+    }))
+
+    if (shouldApplyAutofill) {
+      setPurchaseAutofillMatchKey(normalizedItemName)
+      setPurchaseAutofillNotice(autofillPreset!.notice)
+      return
+    }
+
+    if (!autofillPreset || !normalizedItemName) {
+      setPurchaseAutofillMatchKey('')
+      setPurchaseAutofillNotice(null)
+    }
+  }
+
+  function closePurchaseForm() {
+    setShowPurchaseForm(false)
+    setShowPurchaseRecorder(false)
+    setActiveBatchSuffix('')
+    setActiveBatchDate(todayInputValue())
+    setEditingPurchaseId(null)
+    setPurchaseError(null)
+    setPurchaseAutofillNotice(null)
+    setPurchaseAutofillMatchKey('')
+    setPForm(createEmptyPurchaseForm())
+  }
+
+  function cancelPurchaseEdit() {
+    setEditingPurchaseId(null)
+    setPurchaseError(null)
+    setPurchaseAutofillNotice(null)
+    setPurchaseAutofillMatchKey('')
+    setPForm(createEmptyPurchaseForm(activeBatchDate))
+  }
+
+  function openNewPurchaseRow() {
+    const nextBatchDate = todayInputValue()
+    setEditingPurchaseId(null)
+    setPurSearch('')
+    setPurchaseError(null)
+    setPurchaseAutofillNotice(null)
+    setPurchaseAutofillMatchKey('')
+    setActiveBatchSuffix(createInventoryBatchSuffix())
+    setActiveBatchDate(nextBatchDate)
+    setPForm(createEmptyPurchaseForm(nextBatchDate))
+    setShowPurchaseForm(true)
+    setShowPurchaseRecorder(true)
+  }
+
+  function openBatchForNewItem(batchId: string | null, purchasedAt: string) {
+    if (!batchId || pSaving) return
+
+    const batchSuffix = extractBatchSuffix(batchId)
+    if (!batchSuffix) return
+
+    const batchDate = formatDateInput(purchasedAt)
+    setEditingPurchaseId(null)
+    setPurSearch('')
+    setPurchaseError(null)
+    setPurchaseAutofillNotice(null)
+    setPurchaseAutofillMatchKey('')
+    setActiveBatchSuffix(batchSuffix)
+    setActiveBatchDate(batchDate)
+    setPForm(createEmptyPurchaseForm(batchDate))
+    setShowPurchaseForm(true)
+    setShowPurchaseRecorder(true)
+  }
+
+  function openEditPurchase(purchase: Purchase) {
+    const purchaseMeta = getPurchaseDisplayMeta(purchase)
+    setShowPurchaseForm(false)
+    setActiveBatchSuffix('')
+    setActiveBatchDate(formatDateInput(purchase.purchasedAt))
+    setPurSearch('')
+    setPurchaseError(null)
+    setPurchaseAutofillNotice(null)
+    setPurchaseAutofillMatchKey('')
+    setEditingPurchaseId(purchase.id)
+    setPForm({
+      itemName: purchase.ingredient.name,
+      usageUnit: purchaseMeta.usageUnit,
+      purchaseUnit: purchaseMeta.purchaseUnit,
+      unitsPerPurchaseUnit: purchaseMeta.unitsPerPurchaseUnit === 1 ? '' : String(purchaseMeta.unitsPerPurchaseUnit),
+      supplier: purchase.supplier || '',
+      purchaseQuantity: String(purchaseMeta.purchaseQuantity),
+      purchaseUnitCost: String(purchaseMeta.purchaseUnitCost),
+      purchasedAt: formatDateInput(purchase.purchasedAt),
+    })
+  }
+
+  async function savePurchase(e?: React.FormEvent) {
+    e?.preventDefault()
+    const unitConfig = resolvePurchaseFormUnits()
+    if (!pForm.itemName || !unitConfig.purchaseUnit || !unitConfig.usageUnit || !pForm.purchaseQuantity || !pForm.purchaseUnitCost) return
+    if (!unitConfig.sameUnit && (!Number.isFinite(unitConfig.unitsPerPurchaseUnit) || unitConfig.unitsPerPurchaseUnit <= 0)) {
+      setPurchaseError('Enter how many usage units exist in one purchase unit.')
+      return
+    }
+
+    const batchId = activeBatchSuffix ? formatInventoryBatchId(parseDateInput(activeBatchDate), activeBatchSuffix) : ''
+    if (!batchId) return
+
     setPSaving(true)
+    setPurchaseError(null)
     try {
       const res = await fetch('/api/restaurant/inventory-purchases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ingredientId: pForm.ingredientId,
+          batchId,
+          itemName: pForm.itemName,
+          unit: unitConfig.usageUnit,
+          purchaseUnit: unitConfig.purchaseUnit,
+          unitsPerPurchaseUnit: unitConfig.sameUnit ? 1 : unitConfig.unitsPerPurchaseUnit,
           supplier: pForm.supplier || null,
-          quantityPurchased: Number(pForm.quantityPurchased),
-          unitCost: Number(pForm.unitCost),
-          purchasedAt: pForm.purchasedAt,
+          purchaseQuantity: Number(pForm.purchaseQuantity),
+          purchaseUnitCost: Number(pForm.purchaseUnitCost),
+          purchasedAt: activeBatchDate,
         })
       })
-      if (!res.ok) { const err = await res.json(); alert(err.error || 'Save failed'); return }
-      setShowPurchaseForm(false)
-      setPForm({ ingredientId: '', supplier: '', quantityPurchased: '', unitCost: '', purchasedAt: new Date().toISOString().slice(0, 10) })
-      load()          // refresh ingredient qty
-      loadPurchases() // refresh list
+      if (!res.ok) {
+        const err = await res.json().catch(() => null)
+        setPurchaseError(err?.error || 'Save failed')
+        return
+      }
+      await Promise.all([load(), loadPurchases()])
+      setShowPurchaseRecorder(false)
+      setPurchaseAutofillNotice(null)
+      setPurchaseAutofillMatchKey('')
+      setPForm(createEmptyPurchaseForm(activeBatchDate))
     } finally {
       setPSaving(false)
     }
   }
 
-  const [ingSearch, setIngSearch] = useState('')
-  const [ingFilterStatus, setIngFilterStatus] = useState<'all'|'low'|'ok'>('all')
+  async function updatePurchase(e?: React.FormEvent) {
+    e?.preventDefault()
+    const unitConfig = resolvePurchaseFormUnits()
+    if (!editingPurchaseId || !pForm.itemName || !unitConfig.purchaseUnit || !unitConfig.usageUnit || !pForm.purchaseQuantity || !pForm.purchaseUnitCost) return
+    if (!unitConfig.sameUnit && (!Number.isFinite(unitConfig.unitsPerPurchaseUnit) || unitConfig.unitsPerPurchaseUnit <= 0)) {
+      setPurchaseError('Enter how many usage units exist in one purchase unit.')
+      return
+    }
+    setPSaving(true)
+    setPurchaseError(null)
+    try {
+      const res = await fetch('/api/restaurant/inventory-purchases', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editingPurchaseId,
+          itemName: pForm.itemName,
+          unit: unitConfig.usageUnit,
+          purchaseUnit: unitConfig.purchaseUnit,
+          unitsPerPurchaseUnit: unitConfig.sameUnit ? 1 : unitConfig.unitsPerPurchaseUnit,
+          supplier: pForm.supplier || null,
+          purchaseQuantity: Number(pForm.purchaseQuantity),
+          purchaseUnitCost: Number(pForm.purchaseUnitCost),
+          purchasedAt: pForm.purchasedAt,
+        })
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => null)
+        setPurchaseError(err?.error || 'Update failed')
+        return
+      }
+      cancelPurchaseEdit()
+      await Promise.all([load(), loadPurchases()])
+    } finally {
+      setPSaving(false)
+    }
+  }
+
+  async function deletePurchase(purchase: Purchase) {
+    const confirmed = window.confirm(`Delete stock entry for ${purchase.ingredient.name}?`)
+    if (!confirmed) return
+
+    setPSaving(true)
+    setPurchaseError(null)
+    try {
+      const res = await fetch(`/api/restaurant/inventory-purchases?id=${encodeURIComponent(purchase.id)}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => null)
+        setPurchaseError(err?.error || 'Delete failed')
+        return
+      }
+      if (editingPurchaseId === purchase.id) closePurchaseForm()
+      await Promise.all([load(), loadPurchases()])
+    } finally {
+      setPSaving(false)
+    }
+  }
+
+  function closePurchaseRecorder() {
+  if (editingPurchaseId) {
+    cancelPurchaseEdit()
+    return
+  }
+
+  setPurchaseError(null)
+  setPForm(createEmptyPurchaseForm(activeBatchDate))
+  if (activeBatchPurchases.length === 0) {
+    closePurchaseForm()
+    return
+  }
+  setShowPurchaseRecorder(false)
+  }
+
+  function handlePurchaseRowKeyDown(event: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (editingPurchaseId) void updatePurchase()
+      else void savePurchase()
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closePurchaseRecorder()
+    }
+  }
+
   const [purSearch, setPurSearch] = useState('')
 
   const lowStock = items.filter(i=>i.quantity<=i.reorderLevel)
   const totalValue = items.reduce((s,i)=>s+i.quantity*(i.unitCost??0),0)
   const totalPurchaseCost = purchases.reduce((s,p)=>s+p.totalCost,0)
+  const ingredientLayerTotals = purchases.reduce((map, purchase) => {
+    map.set(purchase.ingredientId, (map.get(purchase.ingredientId) ?? 0) + purchase.remainingQuantity)
+    return map
+  }, new Map<string, number>())
+  const ingredientsWithLayerDrift = new Set(
+    items
+      .filter(item => Math.abs((ingredientLayerTotals.get(item.id) ?? 0) - item.quantity) > PURCHASE_USAGE_EPSILON)
+      .map(item => item.id)
+  )
+  const searchQuery = purSearch.trim().toLowerCase()
+  const matchesPurchaseSearch = (purchase: Purchase) => {
+    const purchaseMeta = getPurchaseDisplayMeta(purchase)
+    return !searchQuery
+      || purchase.ingredient.name.toLowerCase().includes(searchQuery)
+      || purchase.ingredient.unit.toLowerCase().includes(searchQuery)
+      || purchaseMeta.purchaseUnit.toLowerCase().includes(searchQuery)
+      || (purchase.supplier??'').toLowerCase().includes(searchQuery)
+      || (purchase.batchId??'').toLowerCase().includes(searchQuery)
+  }
+  const canMutatePurchase = (purchase: Purchase) => {
+    if (ingredientsWithLayerDrift.has(purchase.ingredientId)) return false
+    return purchase.quantityPurchased - purchase.remainingQuantity <= PURCHASE_USAGE_EPSILON
+  }
+  const activeBatchId = showPurchaseForm && activeBatchSuffix ? formatInventoryBatchId(parseDateInput(activeBatchDate), activeBatchSuffix) : ''
+  const activeBatchPurchases = activeBatchId
+    ? purchases
+        .filter(purchase => purchase.batchId === activeBatchId)
+        .slice()
+        .sort(comparePurchaseRows)
+    : []
+  const getIngredientStockDisplay = (item: Ingredient) => {
+    const openPurchases = purchases.filter(purchase => purchase.ingredientId === item.id && purchase.remainingQuantity > PURCHASE_USAGE_EPSILON)
+    if (openPurchases.length === 0) {
+      const purchaseUnit = getPurchaseUnit(item)
+      const unitsPerPurchaseUnit = getUnitsPerPurchaseUnit(item)
+      return formatStockOnHand(Number(item.quantity || 0), item.unit, purchaseUnit, unitsPerPurchaseUnit)
+    }
 
-  const filteredItems = items.filter(i => {
-    const q = ingSearch.trim().toLowerCase()
-    const matchQ = !q || i.name.toLowerCase().includes(q) || (i.category??'').toLowerCase().includes(q) || i.unit.toLowerCase().includes(q)
-    const isLow = i.quantity <= i.reorderLevel
-    const matchS = ingFilterStatus==='all' || (ingFilterStatus==='low'&&isLow) || (ingFilterStatus==='ok'&&!isLow)
-    return matchQ && matchS
-  })
+    const firstMeta = getPurchaseDisplayMeta(openPurchases[0])
+    const hasMixedPackSizes = openPurchases.some((purchase) => {
+      const meta = getPurchaseDisplayMeta(purchase)
+      return meta.usageUnit.toLowerCase() !== firstMeta.usageUnit.toLowerCase()
+        || meta.purchaseUnit.toLowerCase() !== firstMeta.purchaseUnit.toLowerCase()
+        || Math.abs(meta.unitsPerPurchaseUnit - firstMeta.unitsPerPurchaseUnit) > PURCHASE_USAGE_EPSILON
+    })
 
-  const filteredPurchases = purchases.filter(p => {
-    const q = purSearch.trim().toLowerCase()
-    return !q || p.ingredient.name.toLowerCase().includes(q) || (p.supplier??'').toLowerCase().includes(q)
-  })
-  const selectedIngredient = items.find(i=>i.id===pForm.ingredientId)
-  const estimatedTotal = selectedIngredient && pForm.quantityPurchased && pForm.unitCost
-    ? Number(pForm.quantityPurchased) * Number(pForm.unitCost) : null
+    if (hasMixedPackSizes) {
+      return `${fmtQty(Number(item.quantity || 0))} ${item.unit} (mixed pack sizes)`
+    }
+
+    return formatStockOnHand(Number(item.quantity || 0), firstMeta.usageUnit, firstMeta.purchaseUnit, firstMeta.unitsPerPurchaseUnit)
+  }
+  const filteredPurchaseCount = purchases.filter(matchesPurchaseSearch).length
+  const purchaseGroups = groupPurchasesByBatch(
+    purchases.filter(purchase => purchase.batchId !== activeBatchId && matchesPurchaseSearch(purchase))
+  )
+  const batchCount = new Set(purchases.map(purchase => purchase.batchId || purchase.id)).size + (showPurchaseForm && activeBatchPurchases.length === 0 ? 1 : 0)
+  const estimatedTotal = pForm.purchaseQuantity && pForm.purchaseUnitCost
+    ? Number(pForm.purchaseQuantity) * Number(pForm.purchaseUnitCost) : null
+  const knownItemNames = Array.from(new Set([
+    ...items.map(item => item.name.trim()).filter(Boolean),
+    ...purchases.map(purchase => purchase.ingredient.name.trim()).filter(Boolean),
+  ])).sort((left, right) => left.localeCompare(right))
+  const purchaseUnitOptions = pForm.purchaseUnit && !INVENTORY_UNITS.some(option => option.value === pForm.purchaseUnit)
+    ? [{ value: pForm.purchaseUnit, label: pForm.purchaseUnit }, ...INVENTORY_UNITS]
+    : INVENTORY_UNITS
+  const usageUnitOptions = pForm.usageUnit && !INVENTORY_UNITS.some(option => option.value === pForm.usageUnit)
+    ? [{ value: pForm.usageUnit, label: pForm.usageUnit }, ...INVENTORY_UNITS]
+    : INVENTORY_UNITS
+
+  function renderPurchaseRow(purchase: Purchase) {
+    const purchaseLocked = !canMutatePurchase(purchase)
+    const hasLayerDrift = ingredientsWithLayerDrift.has(purchase.ingredientId)
+    const purchaseMeta = getPurchaseDisplayMeta(purchase)
+    const displayedStockQuantity = purchase.remainingQuantity
+    const displayedStockValue = displayedStockQuantity * purchase.unitCost
+    const purchaseLockReason = hasLayerDrift
+      ? 'This stock row is locked because stock has already moved on this ingredient.'
+      : 'This stock entry has already been used by orders and cannot be edited.'
+
+    if (editingPurchaseId === purchase.id) {
+      return (
+        <Fragment key={purchase.id}>
+          <tr className="bg-amber-50/80">
+            <td className="px-3 py-2 align-top">
+              <input value={pForm.itemName} onChange={e=>setPForm(f=>({...f,itemName:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                className="w-full rounded-md border border-amber-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                placeholder="Item name"/>
+            </td>
+            <td className="px-3 py-2 align-top">
+              <input value={pForm.supplier} onChange={e=>setPForm(f=>({...f,supplier:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                placeholder="Supplier (optional)"/>
+            </td>
+            <td className="px-3 py-2 align-top">
+              <div className="space-y-2">
+                <select value={pForm.purchaseUnit} onChange={e=>updatePurchaseUnit(e.target.value)} onKeyDown={handlePurchaseRowKeyDown}
+                  className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300">
+                  <option value="">Buy in…</option>
+                  {purchaseUnitOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                {isDualUnitPurchaseUnit(pForm.purchaseUnit) && (<>
+                <select value={pForm.usageUnit} onChange={e=>updateUsageUnit(e.target.value)} onKeyDown={handlePurchaseRowKeyDown}
+                  className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300">
+                  <option value="">Use in…</option>
+                  {usageUnitOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                {pForm.purchaseUnit && pForm.usageUnit && pForm.purchaseUnit.toLowerCase() !== pForm.usageUnit.toLowerCase() && (
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <span>1 {pForm.purchaseUnit} =</span>
+                    <input required type="number" min="0.001" step="any" value={pForm.unitsPerPurchaseUnit} onChange={e=>setPForm(f=>({...f,unitsPerPurchaseUnit:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                      className="w-20 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-amber-300"
+                      placeholder="300"/>
+                    <span>{pForm.usageUnit}</span>
+                  </div>
+                )}
+                </>)}
+              </div>
+            </td>
+            <td className="px-3 py-2 align-top">
+              <input required type="number" min="0.001" step="any" value={pForm.purchaseQuantity} onChange={e=>setPForm(f=>({...f,purchaseQuantity:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                placeholder="Qty bought"/>
+            </td>
+            <td className="px-3 py-2 align-top">
+              <input required type="number" min="0" step="any" value={pForm.purchaseUnitCost} onChange={e=>setPForm(f=>({...f,purchaseUnitCost:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                placeholder="Cost per bought unit"/>
+            </td>
+            <td className="px-4 py-2 text-sm text-gray-500">Auto</td>
+            <td className="px-4 py-2 text-sm font-semibold text-gray-800">{estimatedTotal!=null?`${fmt(estimatedTotal)} RWF`:'auto'}</td>
+            <td className="px-4 py-2">
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={()=>void updatePurchase()} disabled={pSaving} className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-amber-700 disabled:opacity-50">Done</button>
+                <button type="button" onClick={cancelPurchaseEdit} disabled={pSaving} className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-50">Cancel</button>
+              </div>
+            </td>
+          </tr>
+          <tr className="bg-amber-50/80">
+            <td colSpan={8} className="px-4 py-2 text-xs text-amber-800">
+              <span className="rounded border border-amber-300 bg-white px-1.5 py-0.5 font-semibold">Enter</span>
+              <span className="ml-2 mr-4">Update row</span>
+              <span className="rounded border border-amber-300 bg-white px-1.5 py-0.5 font-semibold">Esc</span>
+              <span className="ml-2">Cancel</span>
+            </td>
+          </tr>
+        </Fragment>
+      )
+    }
+
+    return (
+      <tr key={purchase.id} className="hover:bg-gray-50 transition-colors">
+        <td className="px-4 py-3 font-medium text-gray-900">{purchase.ingredient.name}</td>
+        <td className="px-4 py-3 text-gray-500">{purchase.supplier||'—'}</td>
+        <td className="px-4 py-3 text-gray-700">
+          <p>{formatUnitSummary(purchaseMeta.purchaseUnit, purchaseMeta.usageUnit, purchaseMeta.unitsPerPurchaseUnit)}</p>
+          {purchaseMeta.purchaseUnit.toLowerCase() !== purchaseMeta.usageUnit.toLowerCase() && (
+            <p className="text-xs text-gray-400">1 {purchaseMeta.purchaseUnit} = {fmtQty(purchaseMeta.unitsPerPurchaseUnit)} {purchaseMeta.usageUnit}</p>
+          )}
+        </td>
+        <td className="px-4 py-3 text-gray-700">{fmtQty(purchaseMeta.purchaseQuantity)} {purchaseMeta.purchaseUnit}</td>
+        <td className="px-4 py-3 text-gray-700">
+          <p>{fmt(purchaseMeta.purchaseUnitCost)} RWF</p>
+          <p className="text-xs text-gray-400">per {purchaseMeta.purchaseUnit}</p>
+        </td>
+        <td className="px-4 py-3">
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${displayedStockQuantity<=0?'bg-gray-100 text-gray-400':'bg-green-100 text-green-700'}`}>
+            {formatStockOnHand(displayedStockQuantity, purchaseMeta.usageUnit, purchaseMeta.purchaseUnit, purchaseMeta.unitsPerPurchaseUnit)}
+          </span>
+        </td>
+        <td className="px-4 py-3 font-semibold text-gray-900">{fmt(displayedStockValue)} RWF</td>
+        <td className="px-4 py-3">
+          <button
+            type="button"
+            onClick={()=>void deletePurchase(purchase)}
+            disabled={purchaseLocked || pSaving}
+            title={purchaseLocked ? purchaseLockReason : 'Delete stock row'}
+            className={purchaseLocked || pSaving
+              ? 'rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-300 cursor-not-allowed'
+              : 'rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600 transition-colors hover:bg-red-100'}
+          >
+            Delete
+          </button>
+        </td>
+      </tr>
+    )
+  }
 
   return (
     <div className="space-y-5">
-      {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-gray-800">Ingredient Inventory</h2>
+        <h2 className="text-lg font-bold text-gray-800">Inventory</h2>
         <div className="flex items-center gap-2">
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse
           </button>
-          {tab === 'ingredients' ? (
-            <button onClick={()=>setShowForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-              <Plus className="h-4 w-4" /> Add Ingredient
-            </button>
-          ) : (
-            <button onClick={()=>setShowPurchaseForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-              <ShoppingCart className="h-4 w-4" /> Record Purchase
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex gap-1">
-        {([['ingredients','Ingredients'],['purchases','Purchase History']] as const).map(([id,label])=>(
-          <button key={id} onClick={()=>setTab(id)}
-            className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${tab===id?'bg-orange-500 text-white shadow-sm':'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
-            {label}
+          <button onClick={openNewPurchaseRow} className="bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+            + Record new Batch
           </button>
-        ))}
+        </div>
       </div>
 
-      {/* ── INGREDIENTS TAB ──────────────────────────────── */}
-      {tab === 'ingredients' && (<>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
-          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
-            <p className="text-xs text-gray-500">Total Ingredients</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{items.length}</p>
-          </div>
-          <div className={`bg-white rounded-xl border p-4 shadow-sm text-center ${lowStock.length>0?'border-red-200':'border-gray-200'}`}>
-            <p className="text-xs text-gray-500">Low Stock Alerts</p>
-            <p className={`text-2xl font-bold mt-1 ${lowStock.length>0?'text-red-600':'text-gray-900'}`}>{lowStock.length}</p>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
-            <p className="text-xs text-gray-500">Total Stock Value</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{fmt(totalValue)} RWF</p>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
+        <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
+          <p className="text-xs text-gray-500">Total Items</p>
+          <p className="text-2xl font-bold text-gray-900 mt-1">{items.length}</p>
+        </div>
+        <div className={`bg-white rounded-xl border p-4 shadow-sm text-center ${lowStock.length>0?'border-red-200':'border-gray-200'}`}>
+          <p className="text-xs text-gray-500">Low Stock Alerts</p>
+          <p className={`text-2xl font-bold mt-1 ${lowStock.length>0?'text-red-600':'text-gray-900'}`}>{lowStock.length}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
+          <p className="text-xs text-gray-500">Total Stock Value</p>
+          <p className="text-2xl font-bold text-gray-900 mt-1">{fmt(totalValue)} RWF</p>
+        </div>
+      </div>
+
+      {lowStock.length>0&&(
+        <div className="bg-red-50 border border-red-200 rounded-xl p-3 flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0"/>
+          <div className="text-sm text-red-700">
+            <span className="font-semibold">Low stock: </span>
+            {lowStock.map(i=>`${i.name} (${getIngredientStockDisplay(i)})`).join(', ')}
           </div>
         </div>
+      )}
 
-        {lowStock.length>0&&(
-          <div className="bg-red-50 border border-red-200 rounded-xl p-3 flex items-start gap-2">
-            <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0"/>
-            <div className="text-sm text-red-700">
-              <span className="font-semibold">Low stock: </span>
-              {lowStock.map(i=>`${i.name} (${i.quantity} ${i.unit})`).join(', ')}
-            </div>
-          </div>
-        )}
+      <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 text-sm text-gray-600 shadow-sm">
+        {batchCount} batch{batchCount===1?'':'es'} • {purchases.length} inventory row{purchases.length===1?'':'s'} • {fmt(totalPurchaseCost)} RWF recorded
+      </div>
 
-        {/* Ingredient search + status filter */}
-        {!loading && items.length>0 && (
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none"/>
-              <input value={ingSearch} onChange={e=>setIngSearch(e.target.value)}
-                placeholder="Search ingredients…"
-                className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-orange-400 bg-gray-50"/>
-            </div>
-            <select value={ingFilterStatus} onChange={e=>setIngFilterStatus(e.target.value as any)}
-              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-gray-50 text-gray-600">
-              <option value="all">All status</option>
-              <option value="low">Low stock</option>
-              <option value="ok">OK only</option>
-            </select>
-          </div>
-        )}
-
-        {loading ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-10 text-center text-gray-400">Loading...</div>
-        ) : items.length===0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
-            <Package className="h-10 w-10 text-gray-300 mx-auto mb-3"/>
-            <p className="font-medium text-gray-600">No ingredients yet</p>
-            <p className="text-sm text-gray-400 mt-1">Add ingredients so you can build dish recipes and track stock.</p>
-          </div>
-        ) : filteredItems.length===0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-6 text-center text-sm text-gray-400">No ingredients match your search.</div>
-        ) : (
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            {(ingSearch||ingFilterStatus!=='all')&&<p className="px-4 py-2 text-xs text-gray-400 border-b border-gray-100">Showing {filteredItems.length} of {items.length} ingredients</p>}
-            <div className="overflow-x-auto"><table className="w-full text-sm min-w-[600px]">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>{['Ingredient','Unit','Cost/Unit','Qty in Stock','Stock Value','Reorder At','Status'].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>)}</tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {filteredItems.map(item=>{
-                  const isLow=item.quantity<=item.reorderLevel
-                  return (
-                    <tr key={item.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 font-medium text-gray-900">{item.name}{item.category&&<span className="ml-2 text-xs text-gray-400">{item.category}</span>}</td>
-                      <td className="px-4 py-3 text-gray-600">{item.unit}</td>
-                      <td className="px-4 py-3 text-gray-700">{item.unitCost!=null?`${fmt(item.unitCost)} RWF`:''}</td>
-                      <td className="px-4 py-3 font-semibold text-gray-900">{item.quantity}</td>
-                      <td className="px-4 py-3 text-gray-700">{fmt((item.unitCost??0)*item.quantity)} RWF</td>
-                      <td className="px-4 py-3 text-gray-600">{item.reorderLevel}</td>
-                      <td className="px-4 py-3">
-                        {isLow ? <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">Low Stock</span>
-                                : <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">OK</span>}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table></div>
-          </div>
-        )}
-      </>)}
-
-      {/* ── PURCHASES TAB ────────────────────────────────── */}
-      {tab === 'purchases' && (<>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
-          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
-            <p className="text-xs text-gray-500">Total Batches</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{purchases.length}</p>
-          </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
-            <p className="text-xs text-gray-500">Total Spent</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{fmt(totalPurchaseCost)} RWF</p>
-          </div>
-          <div className="bg-orange-50 rounded-xl border border-orange-100 p-4 shadow-sm text-center">
-            <p className="text-xs text-orange-600 font-semibold">FIFO Batch Tracking</p>
-            <p className="text-xs text-gray-500 mt-1">Enable in Settings → Costing</p>
-          </div>
+      {!purchasesLoading && (purchases.length>0 || showPurchaseForm) && (
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none"/>
+          <input value={purSearch} onChange={e=>setPurSearch(e.target.value)}
+            placeholder="Search batch ID, item or supplier…"
+            className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-orange-400 bg-gray-50"/>
         </div>
+      )}
 
-        {/* Purchase search */}
-        {!loading && purchases.length>0 && (
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none"/>
-            <input value={purSearch} onChange={e=>setPurSearch(e.target.value)}
-              placeholder="Search by ingredient or supplier…"
-              className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-orange-400 bg-gray-50"/>
-          </div>
-        )}
+      {knownItemNames.length > 0 && (
+        <datalist id="inventory-known-items">
+          {knownItemNames.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+      )}
 
-        {loading ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-10 text-center text-gray-400">Loading...</div>
-        ) : purchases.length===0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
-            <ShoppingCart className="h-10 w-10 text-gray-300 mx-auto mb-3"/>
-            <p className="font-medium text-gray-600">No purchases recorded yet</p>
-            <p className="text-sm text-gray-400 mt-1">Record ingredient purchases to track actual costs and enable FIFO costing.</p>
-          </div>
-        ) : filteredPurchases.length===0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 p-6 text-center text-sm text-gray-400">No purchases match your search.</div>
-        ) : (
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            {purSearch && <p className="px-4 py-2 text-xs text-gray-400 border-b border-gray-100">Showing {filteredPurchases.length} of {purchases.length} purchases</p>}
-            <div className="overflow-x-auto"><table className="w-full text-sm min-w-[580px]">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>{['Date','Ingredient','Supplier','Qty Bought','Unit Cost','Total Cost','Remaining'].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>)}</tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {filteredPurchases.map(p=>(
-                  <tr key={p.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 text-gray-500 text-xs">{new Date(p.purchasedAt).toLocaleDateString()}</td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{p.ingredient.name}</td>
-                    <td className="px-4 py-3 text-gray-500">{p.supplier||'—'}</td>
-                    <td className="px-4 py-3 text-gray-700">{p.quantityPurchased} {p.ingredient.unit}</td>
-                    <td className="px-4 py-3 text-gray-700">{fmt(p.unitCost)} RWF</td>
-                    <td className="px-4 py-3 font-semibold text-gray-900">{fmt(p.totalCost)} RWF</td>
-                    <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${p.remainingQuantity<=0?'bg-gray-100 text-gray-400':'bg-green-100 text-green-700'}`}>
-                        {p.remainingQuantity} {p.ingredient.unit}
-                      </span>
+      {purchaseError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
+          {purchaseError}
+        </div>
+      )}
+
+      {purchasesLoading ? (
+        <div className="bg-white rounded-xl border border-gray-200 p-10 text-center text-gray-400">Loading...</div>
+      ) : purchases.length===0 && !showPurchaseForm ? (
+        <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
+          <ShoppingCart className="h-10 w-10 text-gray-300 mx-auto mb-3"/>
+          <p className="font-medium text-gray-600">No inventory recorded yet</p>
+          <p className="text-sm text-gray-400 mt-1">Use + Record new Batch to add the orange batch row, choose a date, then type each inventory line directly into the table.</p>
+        </div>
+      ) : filteredPurchaseCount===0 && !showPurchaseForm ? (
+        <div className="bg-white rounded-xl border border-gray-200 p-6 text-center text-sm text-gray-400">No inventory rows match your search.</div>
+      ) : (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          {purSearch && <p className="px-4 py-2 text-xs text-gray-400 border-b border-gray-100">Showing {filteredPurchaseCount} of {purchases.length} inventory rows</p>}
+          <div className="overflow-x-auto"><table className="w-full text-sm min-w-[920px]">
+            <tbody className="divide-y divide-gray-50">
+              {showPurchaseForm && (
+                <>
+                  <tr className="bg-orange-400 border-y border-orange-700">
+                    <td colSpan={8} className="px-3 py-1.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] font-semibold text-gray-900">
+                          <span>BATCH_ID: {activeBatchId}</span>
+                          <span>|</span>
+                          <label className="flex items-center gap-2 font-medium">
+                            <span>Date</span>
+                            <input
+                              type="date"
+                              value={activeBatchDate}
+                              onChange={e=>{
+                                setActiveBatchDate(e.target.value)
+                                setPForm(f=>({...f,purchasedAt:e.target.value}))
+                              }}
+                              disabled={activeBatchPurchases.length>0 || pSaving}
+                              className="rounded border border-orange-700 bg-white px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-orange-200 disabled:bg-orange-100 disabled:text-gray-500"
+                            />
+                          </label>
+                          <span>|</span>
+                          <span>{activeBatchPurchases.length} row{activeBatchPurchases.length===1?'':'s'}</span>
+                          <button type="button" onClick={closePurchaseForm} disabled={pSaving} className="font-semibold text-gray-900 underline-offset-2 hover:underline disabled:opacity-50">
+                            Close batch
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openBatchForNewItem(activeBatchId || null, activeBatchDate)}
+                          disabled={showPurchaseRecorder || pSaving}
+                          className="rounded-md border border-orange-200 bg-white px-3 py-1 text-xs font-semibold text-orange-600 transition-colors hover:bg-orange-50 disabled:opacity-50"
+                        >
+                          {showPurchaseRecorder ? 'Recording…' : '+ Add item'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table></div>
-          </div>
-        )}
-      </>)}
-
-      {/* ── ADD INGREDIENT MODAL ──────────────────────────── */}
-      {showForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold text-gray-900">Add Ingredient</h3>
-              <button onClick={()=>setShowForm(false)}><X className="h-5 w-5 text-gray-400 hover:text-gray-600"/></button>
-            </div>
-            <form onSubmit={save} className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2"><label className="text-xs font-semibold text-gray-600 mb-1 block">Ingredient Name</label>
-                  <input required className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Tomatoes"/></div>
-                <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Unit</label>
-                  <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))}>
-                    {UNITS.map(u=><option key={u} value={u}>{u}</option>)}
-                  </select></div>
-                <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Cost per Unit (RWF)</label>
-                  <input type="number" min="0" step="any" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={form.unitCost} onChange={e=>setForm(f=>({...f,unitCost:e.target.value}))} placeholder="500"/></div>
-                <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Current Qty</label>
-                  <input type="number" min="0" step="any" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={form.quantity} onChange={e=>setForm(f=>({...f,quantity:e.target.value}))} placeholder="0"/></div>
-                <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Reorder Level</label>
-                  <input type="number" min="0" step="any" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={form.reorderLevel} onChange={e=>setForm(f=>({...f,reorderLevel:e.target.value}))} placeholder="5"/></div>
-                <div className="col-span-2"><label className="text-xs font-semibold text-gray-600 mb-1 block">Category (optional)</label>
-                  <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} placeholder="e.g. Produce, Proteins, Dairy"/></div>
-              </div>
-              <div className="flex items-center justify-between bg-orange-50 border border-orange-200 rounded-lg px-3 py-2.5">
-                <div>
-                  <p className="text-xs font-semibold text-gray-800">Record in Financial Reports</p>
-                  <p className="text-xs text-gray-500 mt-0.5">Also log this as a purchase expense in Transactions</p>
-                </div>
-                <button type="button" onClick={()=>setRecordFinancial(v=>!v)}
-                  className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none ${recordFinancial?'bg-orange-500':'bg-gray-300'}`}>
-                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${recordFinancial?'translate-x-4':'translate-x-0.5'}`}/>
-                </button>
-              </div>
-              <div className="flex gap-2 pt-1">
-                <button type="button" onClick={()=>{setShowForm(false);setRecordFinancial(false)}} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
-                <button type="submit" className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium py-2 rounded-lg transition-colors">Add Ingredient</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── RECORD PURCHASE MODAL ────────────────────────── */}
-      {showPurchaseForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold text-gray-900">Record Purchase</h3>
-              <button onClick={()=>setShowPurchaseForm(false)}><X className="h-5 w-5 text-gray-400 hover:text-gray-600"/></button>
-            </div>
-            <form onSubmit={savePurchase} className="space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-gray-600 mb-1 block">Ingredient *</label>
-                <select required className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={pForm.ingredientId} onChange={e=>setPForm(f=>({...f,ingredientId:e.target.value}))}>
-                  <option value="">Select ingredient…</option>
-                  {items.map(i=><option key={i.id} value={i.id}>{i.name} ({i.unit})</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-600 mb-1 block">Supplier (optional)</label>
-                <input className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={pForm.supplier} onChange={e=>setPForm(f=>({...f,supplier:e.target.value}))} placeholder="e.g. Fresh Market"/>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-gray-600 mb-1 block">Quantity *</label>
-                  <input required type="number" min="0.001" step="any" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={pForm.quantityPurchased} onChange={e=>setPForm(f=>({...f,quantityPurchased:e.target.value}))} placeholder="10"/>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-600 mb-1 block">Unit Cost (RWF) *</label>
-                  <input required type="number" min="0" step="any" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={pForm.unitCost} onChange={e=>setPForm(f=>({...f,unitCost:e.target.value}))} placeholder="500"/>
-                </div>
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-600 mb-1 block">Purchase Date</label>
-                <input type="date" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={pForm.purchasedAt} onChange={e=>setPForm(f=>({...f,purchasedAt:e.target.value}))}/>
-              </div>
-              {estimatedTotal !== null && (
-                <div className="bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 flex items-center justify-between">
-                  <span className="text-sm text-gray-600">Total Cost</span>
-                  <span className="font-bold text-orange-700">{fmt(estimatedTotal)} RWF</span>
-                </div>
+                  {renderBatchColumnLabels()}
+                  {showPurchaseRecorder && (
+                    <>
+                  <tr className="bg-emerald-50/80">
+                    <td className="px-3 py-2 align-top">
+                      <input value={pForm.itemName} onChange={e=>handlePurchaseItemNameChange(e.target.value)} onKeyDown={handlePurchaseRowKeyDown} list="inventory-known-items"
+                        className="w-full rounded-md border border-emerald-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"
+                        placeholder="Item name"/>
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <input value={pForm.supplier} onChange={e=>setPForm(f=>({...f,supplier:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                        className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"
+                        placeholder="Supplier (optional)"/>
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <div className="space-y-2">
+                        <select value={pForm.purchaseUnit} onChange={e=>updatePurchaseUnit(e.target.value)} onKeyDown={handlePurchaseRowKeyDown}
+                          className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300">
+                          <option value="">Buy in…</option>
+                          {purchaseUnitOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </select>
+                        {isDualUnitPurchaseUnit(pForm.purchaseUnit) && (<>
+                        <select value={pForm.usageUnit} onChange={e=>updateUsageUnit(e.target.value)} onKeyDown={handlePurchaseRowKeyDown}
+                          className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300">
+                          <option value="">Use in…</option>
+                          {usageUnitOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </select>
+                        {pForm.purchaseUnit && pForm.usageUnit && pForm.purchaseUnit.toLowerCase() !== pForm.usageUnit.toLowerCase() && (
+                          <div className="flex items-center gap-2 text-xs text-gray-500">
+                            <span>1 {pForm.purchaseUnit} =</span>
+                            <input required type="number" min="0.001" step="any" value={pForm.unitsPerPurchaseUnit} onChange={e=>setPForm(f=>({...f,unitsPerPurchaseUnit:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                              className="w-20 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-emerald-300"
+                              placeholder="300"/>
+                            <span>{pForm.usageUnit}</span>
+                          </div>
+                        )}
+                        </>)}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <input required type="number" min="0.001" step="any" value={pForm.purchaseQuantity} onChange={e=>setPForm(f=>({...f,purchaseQuantity:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                        className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"
+                        placeholder="Qty bought"/>
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      <input required type="number" min="0" step="any" value={pForm.purchaseUnitCost} onChange={e=>setPForm(f=>({...f,purchaseUnitCost:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                        className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"
+                        placeholder="Cost per bought unit"/>
+                    </td>
+                    <td className="px-4 py-2 text-sm text-gray-500">Auto</td>
+                    <td className="px-4 py-2 text-sm font-semibold text-gray-800">{estimatedTotal!=null?`${fmt(estimatedTotal)} RWF`:'auto'}</td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={()=>void savePurchase()} disabled={pSaving} className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50">Done</button>
+                        <button type="button" onClick={closePurchaseRecorder} disabled={pSaving} className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-50">Cancel</button>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr className="bg-emerald-50/80">
+                    <td colSpan={8} className="px-4 py-2 text-xs text-emerald-800">
+                      {purchaseAutofillNotice && <span className="mr-4 font-medium">{purchaseAutofillNotice}</span>}
+                      <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Enter</span>
+                      <span className="ml-2 mr-4">Done and close recorder</span>
+                      <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Esc</span>
+                      <span className="ml-2">Cancel recorder</span>
+                    </td>
+                  </tr>
+                    </>
+                  )}
+                  {activeBatchPurchases.map(renderPurchaseRow)}
+                </>
               )}
-              <p className="text-xs text-gray-400">Stock quantity will increase and an expense will be recorded in transactions.</p>
-              <div className="flex gap-2 pt-1">
-                <button type="button" onClick={()=>setShowPurchaseForm(false)} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
-                <button type="submit" disabled={pSaving} className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-60 text-white text-sm font-medium py-2 rounded-lg transition-colors">
-                  {pSaving ? 'Saving…' : 'Record Purchase'}
-                </button>
-              </div>
-            </form>
-          </div>
+              {purchaseGroups.map(group => (
+                <Fragment key={group.key}>
+                  <tr className="bg-orange-400 border-y border-orange-700">
+                    <td colSpan={8} className="px-3 py-1.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] font-semibold text-gray-900">
+                          <span>BATCH_ID: {group.batchId || 'NO BATCH ID'}</span>
+                          <span>|</span>
+                          <span>{formatBatchDateLabel(group.purchasedAt)}</span>
+                          <span>|</span>
+                          <span>Created {formatBatchCreatedTimeLabel(group.earliestCreatedAt)}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openBatchForNewItem(group.batchId, group.purchasedAt)}
+                          disabled={!group.batchId || pSaving}
+                          className="rounded-md border border-orange-200 bg-white px-3 py-1 text-xs font-semibold text-orange-600 transition-colors hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          + Add item
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  {renderBatchColumnLabels()}
+                  {group.purchases.map(renderPurchaseRow)}
+                </Fragment>
+              ))}
+            </tbody>
+          </table></div>
         </div>
       )}
+
     </div>
   )
 }

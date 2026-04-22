@@ -1,11 +1,71 @@
 ﻿'use client'
-import { useState, useEffect, useCallback } from 'react'
-import { Search, X, ShoppingBag, CheckCircle2, Sparkles, Receipt, CreditCard, RefreshCw, ArrowLeftRight, UtensilsCrossed, ArrowLeft, Printer } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useSession } from 'next-auth/react'
+import { Search, X, ShoppingBag, CheckCircle2, Sparkles, Receipt, CreditCard, RefreshCw, ArrowLeftRight, UtensilsCrossed, ArrowLeft, Printer, ClipboardList, Ban, CircleHelp, ChefHat, Clock, Trash2 } from 'lucide-react'
+import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
+import { parseRestaurantBillTemplate } from '@/lib/restaurantBillTemplate'
+import {
+  RESTAURANT_OFFLINE_QUEUE_CHANGED_EVENT,
+  enqueueRestaurantOfflineQueue,
+  isLikelyOfflineError,
+  isOfflineDraftOrderId,
+  loadRestaurantOfflineQueue,
+  projectRestaurantPendingItems,
+  removeRestaurantOfflineQueueEntries,
+  removeRestaurantOfflineQueueEntry,
+  updateRestaurantOfflineQueueEntry,
+  type RestaurantOfflinePendingItem,
+  type RestaurantOfflineQueueEntry,
+} from '@/lib/restaurantOfflineQueue'
+import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type Dish        = { id: string; name: string; sellingPrice: number; category: string | null; isActive: boolean }
-type Sale        = { id: string; dish: { name: string }; quantitySold: number; totalSaleAmount: number; calculatedFoodCost: number; paymentMethod: string; saleDate: string }
+type Sale        = {
+  id: string
+  dish: { name: string }
+  quantitySold: number
+  totalSaleAmount: number
+  calculatedFoodCost: number
+  paymentMethod: string
+  saleDate: string
+  waiterName?: string | null
+  orderNumber?: string | null
+  tableName?: string | null
+}
 type Table       = { id: string; name: string; seats: number; status: string }
-type PendingItem = { id: string; tableId: string | null; tableName: string; dishId: string; dishName: string; dishPrice: number; qty: number; status?: string; waiter?: { name: string } }
+type PendingItem = RestaurantOfflinePendingItem
+
+type ApprovalPayload = {
+  supervisorPin: string
+  reason: string
+}
+
+type OrderSummary = {
+  total: number; pending: number; served: number; paid: number; canceled: number
+}
+type ManagerOrder = {
+  id: string; orderNumber: string; tableName: string; totalAmount: number
+  createdAt: string; createdByName: string
+  displayStatus: 'PENDING' | 'SERVED' | 'PAID' | 'CANCELED'
+  canceledByName?: string | null
+  cancelReason?: string | null
+  cancellationApprovedByEmployeeName?: string | null
+  paymentMethod?: string | null
+  timeline: string[]
+  items: Array<{ id: string; dishName: string; qty: number }>
+}
+
+type RestaurantOrdersSnapshot = {
+  updatedAt: string
+  dishes?: Dish[]
+  sales?: Sale[]
+  tables?: Table[]
+  pending?: PendingItem[]
+  orderSummary?: OrderSummary | null
+  recentOrders?: ManagerOrder[]
+  billHeader?: string
+}
 
 const PAY_METHODS  = ['Cash', 'MoMo', 'Card', 'Bank Transfer']
 const VAT_RATE     = 0.18
@@ -23,6 +83,14 @@ const COLOR_POOL   = [
 ] as const
 
 function fmtRWF(n: number) { return n.toLocaleString('en-RW', { maximumFractionDigits: 0 }) }
+function createActionId(prefix: string) {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}-${crypto.randomUUID()}`
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 function getTimeLabel() {
   const h = new Date().getHours()
   if (h < 11) return 'Breakfast'
@@ -40,6 +108,8 @@ export default function RestaurantOrders({
   mode?: 'pos' | 'bills' | 'history'
   onPendingCountChange?: (count: number) => void
 }) {
+  const { data: session } = useSession()
+  const restaurantBranch = useRestaurantBranch()
   const [dishes,  setDishes]   = useState<Dish[]>([])
   const [sales,   setSales]    = useState<Sale[]>([])
   const [tables,  setTables]   = useState<Table[]>([])
@@ -56,61 +126,270 @@ export default function RestaurantOrders({
   const [addedFlash,       setAddedFlash]        = useState(false)
   // Local cart: items tapped but not yet confirmed (per table key)
   const [localCart, setLocalCart] = useState<Record<string, {dishId:string; dishName:string; dishPrice:number; qty:number}[]>>({})
+  const [waiterByTableKey, setWaiterByTableKey] = useState<Record<string, string>>({})
   // Mobile: which panel is visible ('dishes' | 'order')
   const [showPanel, setShowPanel] = useState<'dishes' | 'order'>('dishes')
   // Payment state
   const [payingTableKey, setPayingTableKey] = useState<string | null>(null)
   const [payMethod,      setPayMethod]      = useState('Cash')
   const [payingSaving,   setPayingSaving]   = useState(false)
+  const [confirmingOrder, setConfirmingOrder] = useState(false)
+  const [submitError,    setSubmitError]    = useState<string | null>(null)
   // When true: show empty build-mode panel even if confirmed orders exist
   const [addingNew, setAddingNew] = useState(false)
+  // Manager order-history state
+  const [mgmtStatus, setMgmtStatus] = useState<'ALL' | 'PENDING' | 'SERVED' | 'PAID' | 'CANCELED'>('ALL')
+  const [mgmtPeriod, setMgmtPeriod] = useState<'all' | 'today' | 'week' | 'month'>('all')
+  const [orderSummary, setOrderSummary] = useState<OrderSummary | null>(null)
+  const [recentOrders, setRecentOrders] = useState<ManagerOrder[]>([])
+  const [offlineQueueEntries, setOfflineQueueEntries] = useState<RestaurantOfflineQueueEntry[]>([])
+  const [offlineQueueSyncing, setOfflineQueueSyncing] = useState(false)
+  const [offlineQueueMessage, setOfflineQueueMessage] = useState<string | null>(null)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
+  const orderSubmitLockRef = useRef(false)
+  const paymentLockRef = useRef(false)
+  const currentUserRole = (session?.user as any)?.role ?? 'admin'
+  const isManager = currentUserRole === 'admin' || currentUserRole === 'owner'
+  const canRequestCancellation = currentUserRole !== 'kitchen'
+  const canMarkServed = currentUserRole === 'admin' || currentUserRole === 'owner' || currentUserRole === 'waiter'
+  const snapshotScopeId = buildRestaurantSnapshotScope({
+    restaurantId: restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null,
+    branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
+    fallbackUserId: session?.user?.id ?? null,
+  })
+  const snapshotStorageScope = snapshotScopeId ? `restaurant-orders:${snapshotScopeId}` : null
+
+  const refreshOfflineQueue = useCallback(() => {
+    setOfflineQueueEntries(loadRestaurantOfflineQueue())
+  }, [])
+
+  const hydrateCachedSnapshot = useCallback(() => {
+    if (!snapshotStorageScope) return false
+
+    const snapshot = loadRestaurantDeviceSnapshot<RestaurantOrdersSnapshot>(snapshotStorageScope)
+    if (!snapshot) return false
+
+    if (Array.isArray(snapshot.dishes)) setDishes(snapshot.dishes)
+    if (Array.isArray(snapshot.sales)) setSales(snapshot.sales)
+    if (Array.isArray(snapshot.tables)) setTables(snapshot.tables)
+    if (Array.isArray(snapshot.pending)) setPending(snapshot.pending)
+    if (Array.isArray(snapshot.recentOrders)) setRecentOrders(snapshot.recentOrders)
+    if ('orderSummary' in snapshot) setOrderSummary(snapshot.orderSummary ?? null)
+    if (typeof snapshot.billHeader === 'string') setBillHeader(snapshot.billHeader)
+
+    setSnapshotUpdatedAt(snapshot.updatedAt ?? null)
+    setShowingCachedSnapshot(true)
+    setLoading(false)
+    return true
+  }, [snapshotStorageScope])
+
+  const persistSnapshot = useCallback((partial: Partial<RestaurantOrdersSnapshot>) => {
+    if (!snapshotStorageScope) return
+
+    const snapshot = mergeRestaurantDeviceSnapshot<RestaurantOrdersSnapshot>(snapshotStorageScope, partial)
+    if (!snapshot) return
+
+    setSnapshotUpdatedAt(snapshot.updatedAt)
+    setShowingCachedSnapshot(false)
+  }, [snapshotStorageScope])
 
   const loadTables = useCallback(async () => {
     try {
       const res = await fetch('/api/restaurant/tables-db', { credentials: 'include' })
       const data = await res.json()
-      setTables(Array.isArray(data) ? data : [])
+      const nextTables = Array.isArray(data) ? data : []
+      setTables(nextTables)
+      persistSnapshot({ tables: nextTables })
     } catch {}
-  }, [])
+  }, [persistSnapshot])
 
   const loadPending = useCallback(async () => {
     try {
-      const res = await fetch('/api/restaurant/pending', { credentials: 'include' })
+      const res = await fetch('/api/restaurant/pending?includeServed=1', { credentials: 'include' })
       const data = await res.json()
-      setPending(Array.isArray(data) ? data : [])
+      const nextPending = Array.isArray(data) ? data : []
+      setPending(nextPending)
+      persistSnapshot({ pending: nextPending })
     } catch {}
-  }, [])
+  }, [persistSnapshot])
 
   const loadSales = useCallback(async () => {
-    setLoading(true)
+    setLoading(sales.length === 0)
     try {
       const [d, s] = await Promise.all([
         fetch('/api/restaurant/dishes').then(r=>r.json()),
         fetch('/api/restaurant/dish-sales').then(r=>r.json()),
       ])
-      setDishes((Array.isArray(d)?d:[]).filter((x:Dish)=>x.isActive))
-      setSales(Array.isArray(s)?s:[])
+      const nextDishes = (Array.isArray(d)?d:[]).filter((x:Dish)=>x.isActive)
+      const nextSales = Array.isArray(s)?s:[]
+      setDishes(nextDishes)
+      setSales(nextSales)
+      persistSnapshot({ dishes: nextDishes, sales: nextSales })
     } catch {}
     setLoading(false)
-  }, [])
+  }, [persistSnapshot, sales.length])
+
+  const loadOrders = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({ status: mgmtStatus, limit: 'all', period: mgmtPeriod })
+      const res = await fetch(`/api/restaurant/orders?${params.toString()}`, { credentials: 'include' })
+      if (!res.ok) return
+      const payload = await res.json()
+      const nextSummary = payload.summary ?? null
+      const nextOrders = Array.isArray(payload.orders) ? payload.orders : []
+      setOrderSummary(nextSummary)
+      setRecentOrders(nextOrders)
+      persistSnapshot({ orderSummary: nextSummary, recentOrders: nextOrders })
+    } catch {}
+  }, [mgmtStatus, mgmtPeriod, persistSnapshot])
+
+  const flushOfflineQueue = useCallback(async () => {
+    if (typeof window === 'undefined' || offlineQueueSyncing) return
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+
+    const queuedEntries = loadRestaurantOfflineQueue()
+    if (queuedEntries.length === 0) return
+
+    setOfflineQueueSyncing(true)
+    setOfflineQueueMessage(`Syncing ${queuedEntries.length} queued action${queuedEntries.length === 1 ? '' : 's'}...`)
+
+    let processedCount = 0
+    let stoppedError: string | null = null
+
+    for (const entry of queuedEntries) {
+      try {
+        const res = await fetch(entry.request.url, {
+          method: entry.request.method,
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(entry.request.body),
+        })
+
+        if (!res.ok) {
+          const payload = await res.json().catch(() => null)
+          stoppedError = payload?.error || payload?.message || `${entry.label} failed to sync`
+          updateRestaurantOfflineQueueEntry(entry.id, (current) => ({
+            ...current,
+            attempts: current.attempts + 1,
+            lastError: stoppedError,
+          }))
+          break
+        }
+
+        removeRestaurantOfflineQueueEntry(entry.id)
+        processedCount += 1
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Network error while syncing queued actions'
+        stoppedError = message
+        updateRestaurantOfflineQueueEntry(entry.id, (current) => ({
+          ...current,
+          attempts: current.attempts + 1,
+          lastError: message,
+        }))
+        break
+      }
+    }
+
+    refreshOfflineQueue()
+
+    if (processedCount > 0) {
+      await Promise.all([loadPending(), loadTables(), loadSales()])
+      window.dispatchEvent(new CustomEvent('refreshTables'))
+      window.dispatchEvent(new CustomEvent('refreshTransactions', {
+        detail: { count: 2, source: 'restaurant_offline_queue_flush' },
+      }))
+    }
+
+    if (stoppedError) {
+      setOfflineQueueMessage(stoppedError)
+    } else if (processedCount > 0) {
+      setOfflineQueueMessage(`Synced ${processedCount} queued action${processedCount === 1 ? '' : 's'}.`)
+    } else {
+      setOfflineQueueMessage(null)
+    }
+
+    setOfflineQueueSyncing(false)
+  }, [loadPending, loadSales, loadTables, offlineQueueSyncing, refreshOfflineQueue])
 
   useEffect(() => {
+    refreshOfflineQueue()
+
+    const queueChangedHandler = () => refreshOfflineQueue()
+    const onlineHandler = () => { void flushOfflineQueue() }
+    const visibilityHandler = () => {
+      if (document.visibilityState === 'visible') {
+        void flushOfflineQueue()
+      }
+    }
+
+    window.addEventListener(RESTAURANT_OFFLINE_QUEUE_CHANGED_EVENT, queueChangedHandler)
+    window.addEventListener('online', onlineHandler)
+    document.addEventListener('visibilitychange', visibilityHandler)
+
+    if (mode === 'pos' && isManager) {
+      return () => {
+        window.removeEventListener(RESTAURANT_OFFLINE_QUEUE_CHANGED_EVENT, queueChangedHandler)
+        window.removeEventListener('online', onlineHandler)
+        document.removeEventListener('visibilitychange', visibilityHandler)
+      }
+    }
+
     loadTables(); loadPending(); loadSales()
     fetch('/api/restaurant/setup', { credentials: 'include' })
       .then(r => r.json())
-      .then(data => setBillHeader(data.restaurant?.billHeader ?? ''))
+      .then(data => {
+        const nextBillHeader = data.restaurant?.billHeader ?? ''
+        setBillHeader(nextBillHeader)
+        persistSnapshot({ billHeader: nextBillHeader })
+      })
       .catch(() => {})
     // Poll pending + tables every 5 s so the ready banner and table status stay live
     const t = setInterval(() => { loadPending(); loadTables() }, 5000)
-    return () => clearInterval(t)
-  }, [loadTables, loadPending, loadSales])
+    void flushOfflineQueue()
+
+    return () => {
+      clearInterval(t)
+      window.removeEventListener(RESTAURANT_OFFLINE_QUEUE_CHANGED_EVENT, queueChangedHandler)
+      window.removeEventListener('online', onlineHandler)
+      document.removeEventListener('visibilitychange', visibilityHandler)
+    }
+  }, [flushOfflineQueue, isManager, loadTables, loadPending, loadSales, mode, persistSnapshot, refreshOfflineQueue])
+
+  useEffect(() => {
+    hydrateCachedSnapshot()
+  }, [hydrateCachedSnapshot])
 
   // Notify parent of pending count
-  const byTable    = pending.reduce<Record<string, PendingItem[]>>((a, i) => { const k = i.tableId ?? 'takeaway'; (a[k] ??= []).push(i); return a }, {})
+  const projectedPending = projectRestaurantPendingItems(pending, offlineQueueEntries)
+  const snapshotUpdatedLabel = snapshotUpdatedAt
+    ? new Date(snapshotUpdatedAt).toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
+    : null
+  const byTable    = projectedPending.reduce<Record<string, PendingItem[]>>((a, i) => { const k = i.tableId ?? 'takeaway'; (a[k] ??= []).push(i); return a }, {})
   const activeKeys = Object.keys(byTable)
   useEffect(() => { onPendingCountChange?.(activeKeys.length) }, [activeKeys.length, onPendingCountChange])
 
   const todayPaid = sales.filter(s => new Date(s.saleDate).toDateString() === new Date().toDateString()).reduce((s, x) => s + x.totalSaleAmount, 0)
+  useEffect(() => { if (isManager) loadOrders() }, [loadOrders, isManager])
+
+  function requestSupervisorApproval(actionLabel: string, reasonPrompt: string, defaultReason: string): ApprovalPayload | null {
+    const supervisorPin = window.prompt(`Supervisor PIN required to ${actionLabel}`, '')
+    if (supervisorPin == null) return null
+
+    const normalizedPin = supervisorPin.trim()
+    if (!/^\d{5}$/.test(normalizedPin)) {
+      window.alert('Supervisor PIN must be exactly 5 digits.')
+      return null
+    }
+
+    const reason = window.prompt(reasonPrompt, defaultReason)
+    if (reason == null) return null
+
+    return {
+      supervisorPin: normalizedPin,
+      reason: reason.trim() || defaultReason,
+    }
+  }
 
   function addDishToOrder(dish: Dish) {
     setAddingNew(false) // once a dish is tapped, we're genuinely building
@@ -125,6 +404,96 @@ export default function RestaurantOrders({
     setAddedFlash(true); setTimeout(() => setAddedFlash(false), 1500)
   }
 
+  function buildOfflineQueueEntryId(prefix: string) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  }
+
+  async function queueOrderCreatesOffline(params: {
+    cart: Array<{ dishId: string; dishName: string; dishPrice: number; qty: number }>
+    batchActionId: string
+    tableId: string | null
+    tableName: string
+    waiterName: string
+  }) {
+    const localOrderId = `offline-order-${params.batchActionId}`
+    const totalAmount = calculateGrossFromNet(params.cart.reduce((sum, item) => sum + item.dishPrice * item.qty, 0))
+    const createdAt = new Date().toISOString()
+
+    const entries = params.cart.map((item, index) => {
+      const localItemId = `offline-item-${params.batchActionId}-${index + 1}`
+      return {
+        id: buildOfflineQueueEntryId('queue-create'),
+        kind: 'pending.create' as const,
+        label: `Create ${item.dishName} for ${params.tableName}`,
+        createdAt,
+        attempts: 0,
+        lastError: null,
+        request: {
+          url: '/api/restaurant/pending',
+          method: 'POST' as const,
+          body: {
+            tableId: params.tableId ?? 'takeaway',
+            tableName: params.tableName,
+            waiterName: params.waiterName,
+            dishId: item.dishId,
+            dishName: item.dishName,
+            dishPrice: item.dishPrice,
+            qty: item.qty,
+            actionKey: `${params.batchActionId}-${item.dishId}`,
+          },
+        },
+        projection: {
+          type: 'append-pending-item' as const,
+          item: {
+            id: localItemId,
+            orderId: localOrderId,
+            orderNumber: 'Queued offline',
+            tableId: params.tableId,
+            tableName: params.tableName,
+            dishId: item.dishId,
+            dishName: item.dishName,
+            dishPrice: item.dishPrice,
+            qty: item.qty,
+            status: 'new',
+            waiter: { id: session?.user?.id, name: params.waiterName },
+            addedAt: createdAt,
+            orderServedAt: null,
+            paymentMethod: null,
+            totalAmount,
+            notes: null,
+          },
+        },
+      }
+    })
+
+    enqueueRestaurantOfflineQueue(entries)
+    setLocalCart((current) => ({ ...current, [selectedTableKey]: [] }))
+    setAddingNew(false)
+    setSelectedTableKey(params.tableId ?? 'takeaway')
+    setShowPanel('order')
+    setOfflineQueueMessage(`Queued ${entries.length} item${entries.length === 1 ? '' : 's'} offline. They will sync automatically when internet returns.`)
+  }
+
+  async function queueLifecycleActionOffline(entry: RestaurantOfflineQueueEntry, successMessage: string) {
+    enqueueRestaurantOfflineQueue(entry)
+    refreshOfflineQueue()
+    setOfflineQueueMessage(successMessage)
+  }
+
+  function discardOfflineDraftOrder(orderId: string) {
+    removeRestaurantOfflineQueueEntries((entry) => (
+      entry.projection.type === 'append-pending-item' && entry.projection.item.orderId === orderId
+    ))
+    setOfflineQueueMessage('Queued offline order discarded before sync.')
+  }
+
+  function discardOfflineDraftItem(itemId: string) {
+    removeRestaurantOfflineQueueEntries((entry) => (
+      entry.projection.type === 'append-pending-item' && entry.projection.item.id === itemId
+    ))
+    setOfflineQueueMessage('Queued offline item removed before sync.')
+  }
+
   function removeLocalCartItem(dishId: string) {
     setLocalCart(prev => {
       const updated = (prev[selectedTableKey] ?? []).filter(i => i.dishId !== dishId)
@@ -135,37 +504,93 @@ export default function RestaurantOrders({
   async function confirmOrder() {
     const cart = localCart[selectedTableKey] ?? []
     if (!cart.length) return
+    if (orderSubmitLockRef.current) return
+    setSubmitError(null)
+    const waiterName = selectedWaiterName.trim()
+    if (!waiterName) {
+      setSubmitError('Waiter name is required before confirming this order.')
+      return
+    }
     const tableName = selectedTableKey === 'takeaway'
       ? 'Takeaway'
       : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
-    await Promise.all(cart.map(item =>
-      fetch('/api/restaurant/pending', {
+    orderSubmitLockRef.current = true
+    setConfirmingOrder(true)
+    try {
+      const batchActionId = createActionId(`pending-${selectedTableKey}`)
+      const normalizedTableId = selectedTableKey === 'takeaway' ? null : selectedTableKey
+      const responses = await Promise.all(cart.map(item =>
+        fetch('/api/restaurant/pending', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
         body: JSON.stringify({
-          tableId:   selectedTableKey === 'takeaway' ? 'takeaway' : selectedTableKey,
-          tableName, dishId: item.dishId, dishName: item.dishName, dishPrice: item.dishPrice, qty: item.qty,
+          tableId:   normalizedTableId ?? 'takeaway',
+          tableName,
+          waiterName,
+          dishId: item.dishId,
+          dishName: item.dishName,
+          dishPrice: item.dishPrice,
+          qty: item.qty,
+          actionKey: `${batchActionId}-${item.dishId}`,
         })
-      })
-    ))
-    setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
-    setAddingNew(false)
-    setSelectedTableKey('takeaway')
-    setShowPanel('dishes')
-    await loadPending(); await loadTables()
-    window.dispatchEvent(new CustomEvent('refreshTables'))
+        })
+      ))
+
+      const failed = responses.find((response) => !response.ok)
+      if (failed) {
+        const payload = await failed.json().catch(() => null)
+        throw new Error(payload?.error || 'Failed to confirm order')
+      }
+
+      setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+      setAddingNew(false)
+      setSelectedTableKey('takeaway')
+      setShowPanel('dishes')
+      await loadPending(); await loadTables()
+      window.dispatchEvent(new CustomEvent('refreshTables'))
+    } catch (error: any) {
+      if ((typeof navigator !== 'undefined' && navigator.onLine === false) || isLikelyOfflineError(error)) {
+        await queueOrderCreatesOffline({
+          cart,
+          batchActionId: createActionId(`pending-${selectedTableKey}`),
+          tableId: selectedTableKey === 'takeaway' ? null : selectedTableKey,
+          tableName,
+          waiterName,
+        })
+        return
+      }
+
+      setSubmitError(error?.message || 'Failed to confirm order')
+    } finally {
+      orderSubmitLockRef.current = false
+      setConfirmingOrder(false)
+    }
   }
 
-  function printBill(tableKey: string) {
+  async function printBill(tableKey: string) {
     const items    = pending.filter(p => (p.tableId ?? 'takeaway') === tableKey)
     if (!items.length) return
     const tName    = tableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === tableKey)?.name ?? 'Table')
     const sub      = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
-    const vat      = Math.round(sub * VAT_RATE)
-    const tot      = sub + vat
+    const vat      = Math.round(calculateVatFromNet(sub))
+    const tot      = Math.round(calculateGrossFromNet(sub))
     const now      = new Date().toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
-    const headerLines = billHeader.trim()
-      ? billHeader.trim().split('\n').map(l => `<p class="center">${l}</p>`).join('')
+    // Always fetch the latest saved template so edits in Settings take effect immediately
+    let latestBillHeader = billHeader
+    try {
+      const setupRes = await fetch('/api/restaurant/setup', { credentials: 'include', cache: 'no-store' })
+      if (setupRes.ok) {
+        const setupData = await setupRes.json()
+        latestBillHeader = setupData.restaurant?.billHeader ?? ''
+        setBillHeader(latestBillHeader)
+      }
+    } catch { /* use cached value on network error */ }
+    const template = parseRestaurantBillTemplate(latestBillHeader)
+    const headerLines = template.topText
+      ? template.topText.split('\n').map(l => `<p class="center">${l}</p>`).join('')
       : '<p class="center" style="font-size:15px;font-weight:bold">RECEIPT</p>'
+    const footerLines = template.bottomText
+      ? template.bottomText.split('\n').map(l => `<p class="center">${l}</p>`).join('')
+      : '<p class="center">Thank you for dining with us!</p>'
     const rows     = items.map(i =>
       `<tr><td>${i.dishName}${i.qty > 1 ? ` x${i.qty}` : ''}</td><td style="text-align:right">${(i.dishPrice * i.qty).toLocaleString()} RWF</td></tr>`
     ).join('')
@@ -189,12 +614,12 @@ ${headerLines}
 <p class="center">Table: ${tName}</p>
 <div class="divider"></div>
 <table>${rows}
-  <tr><td>Subtotal</td><td>${sub.toLocaleString()} RWF</td></tr>
+  <tr><td>Price before VAT</td><td>${sub.toLocaleString()} RWF</td></tr>
   <tr><td>VAT (18%)</td><td>${vat.toLocaleString()} RWF</td></tr>
   <tr class="total-row"><td>TOTAL</td><td>${tot.toLocaleString()} RWF</td></tr>
 </table>
 <div class="divider"></div>
-<p class="footer">Thank you for dining with us!</p>
+<div class="footer">${footerLines}</div>
 </body></html>`
     const win = window.open('', '_blank', 'width=350,height=600')
     if (!win) return
@@ -205,45 +630,232 @@ ${headerLines}
   }
 
   async function voidOrder(tableKey: string) {
+    const tableItems = pending.filter(p => (p.tableId ?? 'takeaway') === tableKey)
+    if (!tableItems.length) return
+    if (tableItems.length > 0 && isOfflineDraftOrderId(tableItems[0]?.orderId)) {
+      discardOfflineDraftOrder(tableItems[0].orderId)
+      return
+    }
+    if (!tableItems.every((item) => item.status === 'new')) {
+      window.alert('Once a dish is already in kitchen or ready, it must be marked as wasted instead of canceled.')
+      return
+    }
+
+    const orderIds = [...new Set(tableItems.map(item => item.orderId))]
+    const approval = requestSupervisorApproval('cancel this order', 'Cancellation reason', 'Canceled by staff')
+    if (!approval) return
+    const cancellationActionId = createActionId(`cancel-${tableKey}`)
+
+    const responses = await Promise.all(orderIds.map(orderId =>
+      fetch(`/api/restaurant/orders/${orderId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ action: 'cancel', cancelReason: approval.reason, supervisorPin: approval.supervisorPin, actionKey: `${cancellationActionId}-${orderId}` })
+      })
+    ))
+
+    const failed = responses.find(res => !res.ok)
+    if (failed) {
+      const payload = await failed.json().catch(() => null)
+      window.alert(payload?.error || 'Cancellation failed.')
+      return
+    }
+
     setLocalCart(prev => ({ ...prev, [tableKey]: [] }))
-    await fetch('/api/restaurant/pending', {
-      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-      body: JSON.stringify({ tableKey, clearTable: true })
-    })
+
     setSelectedTableKey('takeaway')
     setShowPanel('dishes')
     await loadPending(); await loadTables()
     window.dispatchEvent(new CustomEvent('refreshTables'))
   }
 
-  async function removePendingItem(id: string) {
-    setPending(prev => prev.filter(p => p.id !== id))
-    await fetch('/api/restaurant/pending', {
-      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-      body: JSON.stringify({ orderId: id })
-    })
+  async function markOrderWasted(tableKey: string) {
+    const tableItems = pending.filter(p => (p.tableId ?? 'takeaway') === tableKey)
+    if (!tableItems.length) return
+    if (tableItems.length > 0 && isOfflineDraftOrderId(tableItems[0]?.orderId)) {
+      window.alert('This order is still queued offline. Let it sync first before marking kitchen items as wasted.')
+      return
+    }
+    if (!tableItems.some((item) => item.status === 'in_kitchen' || item.status === 'ready')) {
+      window.alert('Only dishes already in kitchen or ready can be marked as wasted.')
+      return
+    }
+
+    const approval = requestSupervisorApproval('mark this dish as wasted', 'Why is this being wasted?', 'Wrong order prepared')
+    if (!approval) return
+
+    const orderIds = [...new Set(
+      tableItems
+        .filter((item) => item.status === 'in_kitchen' || item.status === 'ready')
+        .map((item) => item.orderId)
+    )]
+
+    const responses = await Promise.all(orderIds.map(orderId =>
+      fetch(`/api/restaurant/orders/${orderId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ action: 'waste', cancelReason: approval.reason, supervisorPin: approval.supervisorPin, actionKey: `${createActionId(`waste-${tableKey}`)}-${orderId}` })
+      })
+    ))
+
+    const failed = responses.find(res => !res.ok)
+    if (failed) {
+      const payload = await failed.json().catch(() => null)
+      window.alert(payload?.error || 'Failed to mark dishes as wasted.')
+      return
+    }
+
+    await Promise.all([loadPending(), loadTables()])
+    window.dispatchEvent(new CustomEvent('refreshTables'))
+    window.dispatchEvent(new Event('refreshWastePending'))
+  }
+
+  async function removePendingItem(item: PendingItem) {
+    if (isOfflineDraftOrderId(item.orderId)) {
+      discardOfflineDraftItem(item.id)
+      return
+    }
+
+    if (item.status !== 'new') {
+      window.alert('Once a dish is already in kitchen or ready, it must be marked as wasted instead of removed.')
+      return
+    }
+
+    const approval = requestSupervisorApproval('remove this item', 'Cancellation reason', 'Canceled by staff')
+    if (!approval) return
+
+    const actionKey = createActionId(`remove-${item.id}`)
+
+    try {
+      const res = await fetch('/api/restaurant/pending', {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ orderId: item.id, cancelReason: approval.reason, supervisorPin: approval.supervisorPin, actionKey })
+      })
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null)
+        window.alert(payload?.error || 'Cancellation failed.')
+        return
+      }
+      await Promise.all([loadPending(), loadTables()])
+    } catch (error) {
+      if ((typeof navigator !== 'undefined' && navigator.onLine === false) || isLikelyOfflineError(error)) {
+        await queueLifecycleActionOffline({
+          id: buildOfflineQueueEntryId('queue-remove'),
+          kind: 'pending.delete',
+          label: `Remove ${item.dishName}`,
+          createdAt: new Date().toISOString(),
+          attempts: 0,
+          lastError: null,
+          request: {
+            url: '/api/restaurant/pending',
+            method: 'DELETE',
+            body: { orderId: item.id, cancelReason: approval.reason, supervisorPin: approval.supervisorPin, actionKey },
+          },
+          projection: {
+            type: 'remove-pending-item',
+            itemId: item.id,
+          },
+        }, 'Queued item removal offline. It will sync automatically when internet returns.')
+        return
+      }
+
+      window.alert(error instanceof Error ? error.message : 'Cancellation failed.')
+    }
+  }
+
+  async function markOrderServed(orderId: string) {
+    if (isOfflineDraftOrderId(orderId)) {
+      window.alert('This order is still queued offline. Let it sync first before marking it served.')
+      return
+    }
+
+    const actionKey = createActionId(`serve-${orderId}`)
+
+    try {
+      await fetch(`/api/restaurant/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ action: 'serve', actionKey }),
+      })
+      await loadPending()
+    } catch (error) {
+      if ((typeof navigator !== 'undefined' && navigator.onLine === false) || isLikelyOfflineError(error)) {
+        await queueLifecycleActionOffline({
+          id: buildOfflineQueueEntryId('queue-serve'),
+          kind: 'order.serve',
+          label: `Mark order ${orderId} served`,
+          createdAt: new Date().toISOString(),
+          attempts: 0,
+          lastError: null,
+          request: {
+            url: `/api/restaurant/orders/${orderId}`,
+            method: 'PATCH',
+            body: { action: 'serve', actionKey },
+          },
+          projection: {
+            type: 'mark-order-served',
+            orderId,
+            servedAt: new Date().toISOString(),
+          },
+        }, 'Queued serve action offline. It will sync automatically when internet returns.')
+      }
+    }
   }
 
   async function collectPayment(key: string) {
     const items = pending.filter(p => (p.tableId ?? 'takeaway') === key)
     if (!items.length) return
+    const orderId = items[0].orderId
+    if (isOfflineDraftOrderId(orderId)) {
+      window.alert('This order is still queued offline. Let it sync first before collecting payment.')
+      return
+    }
+    if (paymentLockRef.current) return
+    paymentLockRef.current = true
     setPayingSaving(true)
+    const actionKey = createActionId(`pay-${orderId}`)
     try {
-      await Promise.all(items.map(item =>
-        fetch('/api/restaurant/dish-sales', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-          body: JSON.stringify({ dishId: item.dishId, quantitySold: item.qty, paymentMethod: payMethod })
-        })
-      ))
-      await fetch('/api/restaurant/pending', {
-        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-        body: JSON.stringify({ tableKey: key, clearTable: true })
+      const res = await fetch(`/api/restaurant/orders/${orderId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ action: 'pay', paymentMethod: payMethod, actionKey })
       })
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null)
+        throw new Error(payload?.error || 'Payment failed.')
+      }
       await Promise.all([loadPending(), loadSales(), loadTables()])
       window.dispatchEvent(new CustomEvent('refreshTables'))
+      window.dispatchEvent(new CustomEvent('refreshTransactions', {
+        detail: { count: 2, source: 'restaurant_order_payment' }
+      }))
       setPayingTableKey(null); setPayMethod('Cash')
-    } catch (e) { console.error(e) }
-    setPayingSaving(false)
+    } catch (error) {
+      if ((typeof navigator !== 'undefined' && navigator.onLine === false) || isLikelyOfflineError(error)) {
+        await queueLifecycleActionOffline({
+          id: buildOfflineQueueEntryId('queue-pay'),
+          kind: 'order.pay',
+          label: `Collect payment for order ${orderId}`,
+          createdAt: new Date().toISOString(),
+          attempts: 0,
+          lastError: null,
+          request: {
+            url: `/api/restaurant/orders/${orderId}`,
+            method: 'PATCH',
+            body: { action: 'pay', paymentMethod: payMethod, actionKey },
+          },
+          projection: {
+            type: 'remove-order',
+            orderId,
+          },
+        }, 'Queued payment offline. The order will sync and post its accounting entries when internet returns.')
+        setPayingTableKey(null)
+        setPayMethod('Cash')
+      } else {
+        window.alert(error instanceof Error ? error.message : 'Payment failed.')
+      }
+    } finally {
+      paymentLockRef.current = false
+      setPayingSaving(false)
+    }
   }
 
   const categories     = Array.from(new Set(dishes.map(d => d.category).filter(Boolean))) as string[]
@@ -253,16 +865,34 @@ ${headerLines}
     return true
   })
   const cartItems      = localCart[selectedTableKey] ?? []
-  const confirmedItems = pending.filter(p => (p.tableId ?? 'takeaway') === selectedTableKey)
+  const confirmedItems = projectedPending.filter(p => (p.tableId ?? 'takeaway') === selectedTableKey)
+  const currentOrderId = confirmedItems[0]?.orderId ?? null
+  const currentOrderNumber = confirmedItems[0]?.orderNumber ?? null
+  const currentOrderServed = Boolean(confirmedItems[0]?.orderServedAt)
+  const currentOrderReady = confirmedItems.length > 0 && confirmedItems.every(item => item.status === 'ready')
+  const currentOrderHasStarted = confirmedItems.some((item) => item.status === 'in_kitchen' || item.status === 'ready')
+  const currentOrderCanBeCanceled = confirmedItems.length > 0 && confirmedItems.every((item) => item.status === 'new')
+  const currentOrderQueuedOffline = isOfflineDraftOrderId(currentOrderId)
+  const storedWaiterName = (waiterByTableKey[selectedTableKey] ?? '').trim()
+  const selectedConfirmedWaiterName = (confirmedItems[0]?.waiter?.name ?? '').trim()
+  const selectedWaiterName = selectedConfirmedWaiterName || storedWaiterName
+  const waiterFieldLocked = Boolean(selectedConfirmedWaiterName)
   // While building OR user hit "New order": show cart (empty or filling). Otherwise show pending.
   const isBuilding     = cartItems.length > 0 || addingNew
   // Reset addingNew whenever the user switches table
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setAddingNew(false) }, [selectedTableKey])
+  useEffect(() => {
+    if (selectedConfirmedWaiterName) {
+      if (storedWaiterName !== selectedConfirmedWaiterName) {
+        setWaiterByTableKey((prev) => ({ ...prev, [selectedTableKey]: selectedConfirmedWaiterName }))
+      }
+    }
+  }, [selectedConfirmedWaiterName, selectedTableKey, storedWaiterName])
   const rightItems     = isBuilding ? cartItems : confirmedItems
   const subtotal       = rightItems.reduce((s, i) => s + i.dishPrice * i.qty, 0)
-  const vatAmt         = subtotal * VAT_RATE
-  const total          = subtotal + vatAmt
+  const vatAmt         = calculateVatFromNet(subtotal)
+  const total          = calculateGrossFromNet(subtotal)
   const tableNumber    = selectedTableKey === 'takeaway'
     ? 'T/A'
     : `#${tables.findIndex(t => t.id === selectedTableKey) + 1}`
@@ -270,12 +900,53 @@ ${headerLines}
     ? 'Takeaway'
     : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
 
+  function OfflineQueueBanner() {
+    if (offlineQueueEntries.length === 0 && !offlineQueueMessage && !showingCachedSnapshot) return null
+
+    const toneClass = offlineQueueEntries.length > 0
+      ? 'border-amber-200 bg-amber-50 text-amber-900'
+      : showingCachedSnapshot
+        ? 'border-sky-200 bg-sky-50 text-sky-900'
+        : 'border-green-200 bg-green-50 text-green-800'
+
+    return (
+      <div className={`rounded-xl border px-4 py-3 text-sm ${toneClass}`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-semibold">
+              {offlineQueueEntries.length > 0
+                ? `${offlineQueueEntries.length} action${offlineQueueEntries.length === 1 ? '' : 's'} queued on this device`
+                : showingCachedSnapshot
+                  ? 'Showing last synced data from this device'
+                  : 'Offline queue is clear'}
+            </p>
+            {showingCachedSnapshot && snapshotUpdatedLabel ? (
+              <p className="mt-1 text-xs opacity-90">Last synced snapshot: {snapshotUpdatedLabel}</p>
+            ) : null}
+            {offlineQueueMessage ? <p className="mt-1 text-xs opacity-90">{offlineQueueMessage}</p> : null}
+          </div>
+          {offlineQueueEntries.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => { void flushOfflineQueue() }}
+              disabled={offlineQueueSyncing}
+              className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${offlineQueueSyncing ? 'animate-spin' : ''}`} />
+              {offlineQueueSyncing ? 'Syncing…' : 'Sync queued actions'}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+
   // ── Shared payment modal ──────────────────────────────────────────────────────
   function PayModal({ tableKey, onClose }: { tableKey: string; onClose: () => void }) {
     const items = pending.filter(p => (p.tableId ?? 'takeaway') === tableKey)
     const sub   = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
-    const vat   = sub * VAT_RATE
-    const tot   = sub + vat
+    const vat   = calculateVatFromNet(sub)
+    const tot   = calculateGrossFromNet(sub)
     const name  = tableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === tableKey)?.name ?? 'Table')
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -326,6 +997,7 @@ ${headerLines}
   if (mode === 'bills') {
     return (
       <div className="space-y-4">
+        <OfflineQueueBanner />
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold text-gray-800">Active Orders</h2>
@@ -345,26 +1017,37 @@ ${headerLines}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {activeKeys.map(key => {
               const items = byTable[key]
+              const orderId = items[0]?.orderId
+              const orderNumber = items[0]?.orderNumber
+              const orderServed = Boolean(items[0]?.orderServedAt)
+              const allReady = items.every(item => item.status === 'ready')
               const sub   = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
-              const tot   = sub * (1 + VAT_RATE)
+              const tot   = calculateGrossFromNet(sub)
               return (
                 <div key={key} className="bg-white rounded-2xl border-2 border-amber-200 shadow-sm overflow-hidden">
                   <div className="bg-amber-50 px-4 py-3 flex items-center justify-between border-b border-amber-200">
                     <div className="flex items-center gap-2">
                       <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
                       <span className="font-bold text-gray-900 text-sm">{items[0].tableName}</span>
-                      <span className="text-xs text-amber-600 font-semibold bg-amber-100 px-1.5 py-0.5 rounded-full">Pending</span>
+                      <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-full ${orderServed ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-600'}`}>
+                        {orderServed ? 'Served' : 'Pending'}
+                      </span>
                     </div>
-                    <span className="text-xs text-gray-400">{items.length} item{items.length > 1 ? 's' : ''}</span>
+                    <span className="text-xs text-gray-400">{orderNumber ?? `${items.length} item${items.length > 1 ? 's' : ''}`}</span>
                   </div>
                   <div className="px-4 py-3 space-y-2">
+                    <div className="rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                      Waiter: <span className="font-semibold text-gray-900">{items[0].waiter?.name ?? 'Unassigned'}</span>
+                    </div>
                     {items.map(item => (
                       <div key={item.id} className="flex items-center justify-between group">
                         <div className="flex items-center gap-1.5 min-w-0">
-                          <button onClick={() => removePendingItem(item.id)}
-                            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
-                            <X className="h-3 w-3 text-red-400" />
-                          </button>
+                          {canRequestCancellation && (
+                              <button onClick={() => removePendingItem(item)}
+                              className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
+                              <X className="h-3 w-3 text-red-400" />
+                            </button>
+                          )}
                           <span className="text-xs text-gray-700 truncate">{item.dishName}</span>
                           {item.qty > 1 && <span className="text-xs text-gray-400 flex-shrink-0">×{item.qty}</span>}
                         </div>
@@ -373,9 +1056,15 @@ ${headerLines}
                     ))}
                   </div>
                   <div className="px-4 pb-4 pt-2 border-t border-gray-100 space-y-1">
-                    <div className="flex justify-between text-xs text-gray-500"><span>Subtotal</span><span>{fmtRWF(sub)} RWF</span></div>
+                    <div className="flex justify-between text-xs text-gray-500"><span>Price before VAT</span><span>{fmtRWF(sub)} RWF</span></div>
                     <div className="flex justify-between text-xs text-orange-600"><span>VAT (18%)</span><span>+{fmtRWF(sub * VAT_RATE)} RWF</span></div>
                     <div className="flex justify-between text-sm font-bold text-gray-900 border-t border-gray-100 pt-1.5"><span>Total</span><span>{fmtRWF(tot)} RWF</span></div>
+                    {orderId && allReady && !orderServed && canMarkServed && (
+                      <button onClick={() => markOrderServed(orderId)}
+                        className="w-full mt-2 bg-white border border-green-300 hover:bg-green-50 text-green-700 text-sm font-semibold py-2.5 rounded-xl flex items-center justify-center gap-2">
+                        <CheckCircle2 className="h-4 w-4" /> Mark Served
+                      </button>
+                    )}
                     <button onClick={() => { setSelectedTableKey(key); setPayingTableKey(key) }}
                       className="w-full mt-2 bg-green-500 hover:bg-green-600 text-white text-sm font-semibold py-2.5 rounded-xl flex items-center justify-center gap-2">
                       <CreditCard className="h-4 w-4" /> Collect Payment
@@ -395,6 +1084,7 @@ ${headerLines}
   if (mode === 'history') {
     return (
       <div className="space-y-4">
+        <OfflineQueueBanner />
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold text-gray-800">Transactions</h2>
@@ -413,9 +1103,9 @@ ${headerLines}
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
+            <table className="w-full min-w-[760px] text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>{['Date', 'Dish', 'Qty', 'Revenue', 'Food Cost', 'Margin', 'Payment'].map(h => (
+                <tr>{['Date', 'Dish', 'Waiter', 'Qty', 'Revenue', 'Food Cost', 'Margin', 'Payment'].map(h => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>
                 ))}</tr>
               </thead>
@@ -425,7 +1115,13 @@ ${headerLines}
                   return (
                     <tr key={s.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 text-gray-500 text-xs">{new Date(s.saleDate).toLocaleString('en-RW', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
-                      <td className="px-4 py-3 font-medium text-gray-900">{s.dish.name}</td>
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-gray-900">{s.dish.name}</p>
+                        {(s.orderNumber || s.tableName) && (
+                          <p className="mt-0.5 text-xs text-gray-400">{[s.orderNumber, s.tableName].filter(Boolean).join(' · ')}</p>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-700">{s.waiterName || '—'}</td>
                       <td className="px-4 py-3 text-gray-700">{s.quantitySold}</td>
                       <td className="px-4 py-3 font-semibold text-green-700">{fmtRWF(s.totalSaleAmount)} RWF</td>
                       <td className="px-4 py-3 text-orange-600">{fmtRWF(s.calculatedFoodCost)} RWF</td>
@@ -438,6 +1134,128 @@ ${headerLines}
             </table>
           </div>
         )}
+      </div>
+    )
+  }
+
+  if (mode === 'pos' && isManager) {
+    return (
+      <div className="space-y-5">
+        <OfflineQueueBanner />
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <div className="flex items-center gap-2">
+                <ClipboardList className="h-5 w-5 text-orange-500" />
+                <h2 className="font-semibold text-gray-800">Orders History</h2>
+              </div>
+              <p className="mt-1 text-sm text-gray-500">See each order from creation to completion or cancellation.</p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {(['all', 'today', 'week', 'month'] as const).map((period) => (
+                <button
+                  key={period}
+                  onClick={() => setMgmtPeriod(period)}
+                  className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-all ${mgmtPeriod === period ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                >
+                  {period === 'all' ? 'All time' : period === 'today' ? 'Today' : period === 'week' ? '7 Days' : 'Month'}
+                </button>
+              ))}
+              {(['ALL', 'PENDING', 'SERVED', 'PAID', 'CANCELED'] as const).map((status) => (
+                <button
+                  key={status}
+                  onClick={() => setMgmtStatus(status)}
+                  className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-all ${mgmtStatus === status ? 'bg-orange-500 text-white' : 'bg-orange-50 text-orange-700 hover:bg-orange-100'}`}
+                >
+                  {status}
+                </button>
+              ))}
+              <button onClick={loadOrders} className="p-2 rounded-lg hover:bg-gray-100" title="Refresh orders history">
+                <RefreshCw className="h-4 w-4 text-gray-500" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 p-4 border-b border-gray-100 bg-gray-50/60">
+            {[
+              { label: 'Total', value: orderSummary?.total ?? 0, icon: ClipboardList, tone: 'text-gray-700', bg: 'bg-white' },
+              { label: 'Pending', value: orderSummary?.pending ?? 0, icon: Clock, tone: 'text-amber-600', bg: 'bg-amber-50' },
+              { label: 'Served', value: orderSummary?.served ?? 0, icon: ChefHat, tone: 'text-green-600', bg: 'bg-green-50' },
+              { label: 'Paid', value: orderSummary?.paid ?? 0, icon: CheckCircle2, tone: 'text-emerald-600', bg: 'bg-emerald-50' },
+              { label: 'Canceled', value: orderSummary?.canceled ?? 0, icon: Ban, tone: 'text-red-600', bg: 'bg-red-50' },
+            ].map(({ label, value, icon: Icon, tone, bg }) => (
+              <div key={label} className={`${bg} rounded-xl border border-gray-200 p-3`}>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-gray-500">{label}</p>
+                  <Icon className={`h-4 w-4 ${tone}`} />
+                </div>
+                <p className={`mt-2 text-2xl font-bold ${tone}`}>{value}</p>
+              </div>
+            ))}
+          </div>
+
+          {recentOrders.length === 0 ? (
+            <div className="p-10 text-center text-gray-400 text-sm">No orders found for this filter.</div>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {recentOrders.map((order) => (
+                <div key={order.id} className="px-5 py-4 flex flex-col gap-3">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-bold text-gray-900">{order.orderNumber}</p>
+                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${order.displayStatus === 'PAID' ? 'bg-emerald-100 text-emerald-700' : order.displayStatus === 'CANCELED' ? 'bg-red-100 text-red-700' : order.displayStatus === 'SERVED' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {order.displayStatus}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600 mt-1">{order.tableName} · {order.createdByName} · {new Date(order.createdAt).toLocaleString('en-RW', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-gray-900">{fmtRWF(order.totalAmount)} RWF</p>
+                      {order.paymentMethod && <p className="text-xs text-gray-400 mt-1">{order.paymentMethod}</p>}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {order.items.map((item) => (
+                      <span key={item.id} className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">
+                        {item.dishName}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-2">Order timeline</p>
+                    <div className="flex flex-wrap gap-2">
+                      {order.timeline.map((step, index) => (
+                        <span key={`${order.id}-${index}`} className="text-xs bg-white border border-gray-200 text-gray-700 px-2 py-1 rounded-full">
+                          {step}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {order.displayStatus === 'CANCELED' && order.cancelReason && (
+                    <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold">Cancellation recorded</span>
+                        <button
+                          type="button"
+                          className="inline-flex items-center justify-center rounded-full text-red-500 hover:text-red-700"
+                          title={`Reason: ${order.cancelReason}${order.cancellationApprovedByEmployeeName && order.cancellationApprovedByEmployeeName !== order.canceledByName ? `\nApproved by: ${order.cancellationApprovedByEmployeeName}` : ''}`}
+                        >
+                          <CircleHelp className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <p className="mt-2 text-sm text-red-800">Reason: {order.cancelReason}</p>
+                      {order.cancellationApprovedByEmployeeName && order.cancellationApprovedByEmployeeName !== order.canceledByName && <p className="mt-1 text-gray-600">Approved by {order.cancellationApprovedByEmployeeName}</p>}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     )
   }
@@ -458,6 +1276,9 @@ ${headerLines}
 
       {/* ── LEFT PANEL: categories + dishes ── */}
       <div className={`flex-1 flex flex-col min-w-0 overflow-hidden bg-gray-50 ${showPanel === 'order' ? 'hidden md:flex' : ''}`}>
+        <div className="px-4 pt-4">
+          <OfflineQueueBanner />
+        </div>
 
         {/* Header */}
         <div className="bg-white border-b border-gray-200 px-5 flex flex-col flex-shrink-0">
@@ -512,7 +1333,7 @@ ${headerLines}
                 const hasOrders  = tItems.length > 0
                 const allReady   = hasOrders && tItems.every(i => i.status === 'ready')
                 const hasCooking = hasOrders && !allReady
-                const tTotal     = tItems.reduce((s, i) => s + i.dishPrice * i.qty, 0) * (1 + VAT_RATE)
+                const tTotal     = calculateGrossFromNet(tItems.reduce((s, i) => s + i.dishPrice * i.qty, 0))
                 const isSelected = key === selectedTableKey
                 return (
                   <button key={key} onClick={() => { setSelectedTableKey(key); setShowPanel('order') }}
@@ -584,7 +1405,7 @@ ${headerLines}
           {filteredDishes.length === 0 ? (
             <div className="py-12 text-center text-gray-500 text-sm">No dishes found</div>
           ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
               {filteredDishes.map(dish => {
                 const qtyInOrder = cartItems.filter(i => i.dishId === dish.id).reduce((s, i) => s + i.qty, 0)
                 const catIdx     = categories.indexOf(dish.category ?? '')
@@ -596,12 +1417,12 @@ ${headerLines}
                     onClick={() => addDishToOrder(dish)}
                     className="relative rounded-2xl overflow-hidden hover:shadow-lg hover:scale-[1.03] active:scale-[0.97] transition-all text-left flex flex-col h-full"
                   >
-                    <div className={`${bgTop} h-[76px] w-full flex items-center justify-center`}>
-                      <span className="text-white font-black text-2xl tracking-tight select-none drop-shadow">{initials}</span>
+                    <div className={`${bgTop} h-[90px] w-full flex items-center justify-center`}>
+                      <span className="text-white font-black text-3xl tracking-tight select-none drop-shadow">{initials}</span>
                     </div>
                     <div className={`${bgBottom} px-2.5 py-2.5 flex-1 w-full`}>
                       <p className="text-white text-[13px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
-                      <p className="text-white/70 font-medium text-[11px] mt-1">{fmtRWF(dish.sellingPrice)} RWF</p>
+                      <p className="text-white/70 font-medium text-[11px] mt-1">{fmtRWF(calculateGrossFromNet(dish.sellingPrice))} RWF incl. VAT</p>
                     </div>
                     {qtyInOrder > 0 && (
                       <span className="absolute top-2 right-2 h-6 min-w-[24px] bg-gray-900 border-2 border-white text-white text-xs font-bold rounded-full flex items-center justify-center px-1.5 shadow-sm">
@@ -648,6 +1469,27 @@ ${headerLines}
           ))}
         </div>
 
+        <div className="border-b border-gray-100 px-4 py-3 flex-shrink-0">
+          <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">Waiter Taking Order</label>
+          <input
+            type="text"
+            value={selectedWaiterName}
+            onChange={(e) => {
+              const nextName = e.target.value
+              setWaiterByTableKey((prev) => ({ ...prev, [selectedTableKey]: nextName }))
+              if (submitError) setSubmitError(null)
+            }}
+            placeholder="Enter waiter name"
+            disabled={waiterFieldLocked || confirmingOrder}
+            className={`mt-2 w-full rounded-xl border px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors ${selectedWaiterName.trim() ? 'border-gray-200 focus:border-orange-400 focus:ring-2 focus:ring-orange-100' : 'border-red-300 focus:border-red-400 focus:ring-2 focus:ring-red-100'} disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500`}
+          />
+          <p className="mt-1 text-[11px] text-gray-400">
+            {waiterFieldLocked
+              ? 'Saved from this table\'s active order.'
+              : 'Enter the waiter name before confirming. This same name will be used when payment is recorded.'}
+          </p>
+        </div>
+
         {/* ── Check tab ── */}
         {orderTab === 'check' && (
           <>
@@ -657,6 +1499,24 @@ ${headerLines}
             }`}>
               {isBuilding ? 'Building order — not sent yet' : confirmedItems.length > 0 ? 'Pending Orders' : 'No items'}
             </div>
+
+            {!isBuilding && confirmedItems.length > 0 && (
+              <div className="px-4 pt-3 pb-1 flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Order</p>
+                  <p className="text-sm font-bold text-gray-900">{currentOrderNumber}</p>
+                </div>
+                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${currentOrderQueuedOffline ? 'bg-blue-100 text-blue-700' : currentOrderServed ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                  {currentOrderQueuedOffline ? 'Queued offline' : currentOrderServed ? 'Served' : 'Pending'}
+                </span>
+              </div>
+            )}
+
+            {currentOrderQueuedOffline && (
+              <div className="mx-4 mb-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                This order exists only on this device for now. It will become a real server order after the queued create actions sync.
+              </div>
+            )}
 
             <div className="flex-1 overflow-y-auto px-4 py-3">
               {rightItems.length === 0 ? (
@@ -673,7 +1533,7 @@ ${headerLines}
                           <div className="flex-1 min-w-0 flex items-center gap-1">
                             <button onClick={() => removeLocalCartItem(item.dishId)}
                               className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
-                              <X className="h-3 w-3 text-red-400" />
+                              <Trash2 className="h-3.5 w-3.5 text-red-400" />
                             </button>
                             <span className="text-sm text-gray-800 font-medium leading-snug">
                               {item.dishName}{item.qty > 1 ? ` x ${item.qty}` : ''}
@@ -685,10 +1545,12 @@ ${headerLines}
                     : confirmedItems.map(item => (
                         <div key={item.id} className="flex items-start justify-between group">
                           <div className="flex-1 min-w-0 flex items-center gap-1">
-                            <button onClick={() => removePendingItem(item.id)}
-                              className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
-                              <X className="h-3 w-3 text-red-400" />
-                            </button>
+                            {canRequestCancellation && item.status === 'new' && (
+                              <button onClick={() => removePendingItem(item)}
+                                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
+                                <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                              </button>
+                            )}
                             <span className="text-sm text-gray-800 font-medium leading-snug">
                               {item.dishName}{item.qty > 1 ? ` x ${item.qty}` : ''}
                             </span>
@@ -703,29 +1565,40 @@ ${headerLines}
 
             {rightItems.length > 0 && (
               <div className="flex-shrink-0 border-t border-gray-200 px-4 py-4 space-y-2">
-                <div className="flex justify-between text-sm text-gray-600"><span>Subtotal</span><span>{fmtRWF(subtotal)} RWF</span></div>
+                {submitError && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+                    {submitError}
+                  </div>
+                )}
+                <div className="flex justify-between text-sm text-gray-600"><span>Price before VAT</span><span>{fmtRWF(subtotal)} RWF</span></div>
                 <div className="flex justify-between text-sm text-gray-600"><span>Tax (18%)</span><span>{fmtRWF(vatAmt)} RWF</span></div>
                 <div className="flex justify-between text-base font-bold text-gray-900 border-t border-gray-100 pt-2">
                   <span>Total</span><span>{fmtRWF(total)} RWF</span>
                 </div>
                 {isBuilding ? (
                   <>
-                    <button onClick={confirmOrder}
-                      className="w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm">
-                      Confirm Order
+                    <button onClick={confirmOrder} disabled={confirmingOrder || !selectedWaiterName.trim()}
+                      className="w-full bg-orange-500 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm">
+                      {confirmingOrder ? 'Confirming…' : 'Confirm Order'}
                     </button>
-                    <button onClick={() => { setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] })); setAddingNew(false) }}
+                    <button onClick={() => { setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] })); setAddingNew(false) }} disabled={confirmingOrder}
                       className="w-full text-xs text-gray-400 hover:text-red-500 py-1 transition-colors">
                       Clear cart
                     </button>
                   </>
                 ) : (
                   <>
+                    {currentOrderId && currentOrderReady && !currentOrderServed && canMarkServed && (
+                      <button onClick={() => markOrderServed(currentOrderId)}
+                        className="w-full flex items-center justify-center gap-2 bg-white border border-green-300 hover:bg-green-50 text-green-700 font-semibold py-3 rounded-2xl text-sm transition-colors mt-1 shadow-sm">
+                        <CheckCircle2 className="h-4 w-4" /> Mark Served
+                      </button>
+                    )}
                     <button onClick={() => printBill(selectedTableKey)}
                       className="w-full flex items-center justify-center gap-2 bg-gray-900 hover:bg-gray-700 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm">
                       <Printer className="h-5 w-5" /> Print Bill
                     </button>
-                    <button onClick={() => setPayingTableKey(selectedTableKey)}
+                    <button onClick={() => setPayingTableKey(selectedTableKey)} disabled={currentOrderQueuedOffline}
                       className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-2xl text-base transition-colors shadow-sm">
                       Confirm Payment
                     </button>
@@ -733,10 +1606,18 @@ ${headerLines}
                       className="w-full bg-orange-50 hover:bg-orange-100 text-orange-600 font-semibold py-3 rounded-2xl text-sm transition-colors border border-orange-200">
                       ＋ New order for this table
                     </button>
-                    <button onClick={() => voidOrder(selectedTableKey)}
-                      className="w-full text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
-                      Delete all orders
-                    </button>
+                    {canRequestCancellation && currentOrderCanBeCanceled && (
+                      <button onClick={() => voidOrder(selectedTableKey)}
+                        className="w-full text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
+                        Cancel order
+                      </button>
+                    )}
+                    {canRequestCancellation && currentOrderHasStarted && (
+                      <button onClick={() => markOrderWasted(selectedTableKey)}
+                        className="w-full text-xs text-red-500 hover:text-red-700 py-1 transition-colors font-semibold">
+                        Mark as wasted
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -750,7 +1631,7 @@ ${headerLines}
             {onAskJesse && (
               <button onClick={onAskJesse}
                 className="w-full flex items-center gap-2 px-4 py-3 rounded-xl border border-orange-200 bg-orange-50 text-orange-600 hover:bg-orange-100 text-sm font-medium transition-colors">
-                <Sparkles className="h-4 w-4" /> Ask Jesse (AI)
+                <Sparkles className="h-4 w-4" /> Ask Jesse AI
               </button>
             )}
             <button onClick={() => { loadPending(); loadTables() }}

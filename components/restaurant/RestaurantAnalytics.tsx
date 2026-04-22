@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { RefreshCw, Sparkles, AlertTriangle, TrendingUp, TrendingDown, UtensilsCrossed, Key, ExternalLink, Eye, EyeOff, CheckCircle, MessageCircle } from 'lucide-react'
+import { AI_ANALYTICS_DISABLED_MESSAGE, AI_ANALYTICS_ENABLED } from '@/lib/aiAnalyticsFeature'
 import {
   BarChart, Bar, LineChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -28,6 +29,14 @@ type AIInsights = {
   advice: string[]
   charts: AIChart[]
   tables: AITable[]
+}
+
+type GeminiDiagnostics = {
+  configuredKeyCount: number
+  configuredEnvVars: string[]
+  usesGroupedKeyList: boolean
+  usesSharedQuota: boolean
+  geminiModel: string | null
 }
 
 function fmt(n: number) {
@@ -132,27 +141,59 @@ function GeminiSetup({ onKeySaved }: { onKeySaved: () => void }) {
 
 export default function RestaurantAnalytics({ onAskJesse }: { onAskJesse?: () => void }) {
   const [hasKey, setHasKey] = useState<boolean | null>(null)
+  const [gemini, setGemini] = useState<GeminiDiagnostics | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [quotaMessage, setQuotaMessage] = useState<string | null>(null)
   const [insights, setInsights] = useState<AIInsights | null>(null)
   const [generatedAt, setGeneratedAt] = useState<string>('')
   const [summary, setSummary] = useState<any>(null)
   const [alerts, setAlerts] = useState<string[]>([])
 
-  // First check if key is configured
+  // Check if key is configured — do NOT auto-call Gemini to avoid quota exhaustion
   useEffect(() => {
+    if (!AI_ANALYTICS_ENABLED) {
+      setHasKey(false)
+      return
+    }
+
     fetch('/api/config', { credentials: 'include' })
       .then(r => r.json())
       .then(d => {
         setHasKey(Boolean(d.hasGeminiKey))
-        if (d.hasGeminiKey) loadInsights()
+        setGemini(d.gemini || null)
       })
       .catch(() => setHasKey(false))
   }, [])
 
+  if (!AI_ANALYTICS_ENABLED) {
+    return (
+      <div className="max-w-2xl mx-auto mt-8 rounded-2xl border border-amber-200 bg-amber-50 p-8 text-center space-y-4">
+        <AlertTriangle className="h-10 w-10 text-amber-600 mx-auto" />
+        <div className="space-y-2">
+          <h2 className="text-xl font-bold text-gray-900">Jesse AI Analytics is disabled</h2>
+          <p className="text-sm text-amber-900">{AI_ANALYTICS_DISABLED_MESSAGE}</p>
+          <p className="text-xs text-amber-800">The analytics code is still stored in the app so it can be turned back on later without rebuilding it from scratch.</p>
+        </div>
+        {onAskJesse && (
+          <div className="pt-2">
+            <button
+              onClick={onAskJesse}
+              className="inline-flex items-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors"
+            >
+              <MessageCircle className="h-4 w-4" />
+              Ask Jesse AI
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   async function loadInsights() {
     setLoading(true)
     setError(null)
+    setQuotaMessage(null)
     try {
       const res = await fetch('/api/analytics/ai', { credentials: 'include' })
       const data = await res.json()
@@ -161,6 +202,7 @@ export default function RestaurantAnalytics({ onAskJesse }: { onAskJesse?: () =>
       setGeneratedAt(data.generatedAt)
       setSummary(data.dataset?.summary || null)
       setAlerts(data.dataset?.spendingAlerts || [])
+      setQuotaMessage(data.quotaLimited ? (data.quotaMessage || 'Gemini quota is exhausted, so fallback analytics are being shown.') : null)
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -200,6 +242,11 @@ export default function RestaurantAnalytics({ onAskJesse }: { onAskJesse?: () =>
         <AlertTriangle className="h-8 w-8 text-red-500 mx-auto" />
         <p className="text-sm font-semibold text-red-700">AI Analytics Failed</p>
         <p className="text-xs text-red-600 bg-white/70 rounded-lg px-3 py-2">{error}</p>
+      {(error.toLowerCase().includes('jesse ai is temporarily unavailable') || error.toLowerCase().includes('shared jesse ai service') || error.toLowerCase().includes('shared gemini quota') || error.toLowerCase().includes('all configured ai keys are currently unavailable')) && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-xs text-amber-800">
+        All configured AI keys are currently unavailable. This may be caused by shared project limits, stale packaged keys, or exhausted provider quotas. Replace the active key configuration or wait for the provider reset window.
+          </div>
+        )}
         <div className="flex justify-center gap-3 pt-1">
           <button
             onClick={loadInsights}
@@ -212,7 +259,23 @@ export default function RestaurantAnalytics({ onAskJesse }: { onAskJesse?: () =>
     )
   }
 
-  if (!insights) return null
+  if (!insights) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 gap-4 text-gray-500">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-400 to-red-600 flex items-center justify-center">
+          <Sparkles className="h-7 w-7 text-white" />
+        </div>
+        <p className="text-sm font-semibold text-gray-700">Jesse AI Analytics</p>
+        <p className="text-xs text-gray-400">Click below to generate AI-powered insights for your restaurant</p>
+        <button
+          onClick={loadInsights}
+          className="inline-flex items-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors"
+        >
+          <Sparkles className="h-4 w-4" /> Analyse My Business
+        </button>
+      </div>
+    )
+  }
 
   const netProfit = summary?.netProfit ?? 0
   const isProfit = netProfit >= 0
@@ -225,7 +288,14 @@ export default function RestaurantAnalytics({ onAskJesse }: { onAskJesse?: () =>
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-orange-700">
             <Sparkles className="h-5 w-5" />
-            <span className="text-sm font-semibold uppercase tracking-wide">Jesse AI Analytics</span>
+            <div>
+              <span className="text-sm font-semibold uppercase tracking-wide">Jesse AI Analytics</span>
+              {gemini && (
+                <p className="mt-1 text-[11px] font-medium normal-case tracking-normal text-orange-800">
+                Configured AI keys · {gemini.configuredKeyCount} Gemini key{gemini.configuredKeyCount === 1 ? '' : 's'} configured{gemini.geminiModel ? ` · model ${gemini.geminiModel}` : ''}
+                </p>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -258,11 +328,16 @@ export default function RestaurantAnalytics({ onAskJesse }: { onAskJesse?: () =>
                 className="inline-flex items-center gap-1.5 rounded-md border border-orange-400 bg-gradient-to-r from-orange-500 to-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:from-orange-600 hover:to-red-700 transition-colors shadow-sm"
               >
                 <MessageCircle className="h-3.5 w-3.5" />
-                Ask Jesse
+                Ask Jesse AI
               </button>
             )}
           </div>
         </div>
+        {quotaMessage && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {quotaMessage}
+          </div>
+        )}
         <h2 className="text-xl font-bold text-gray-900">{insights.headline}</h2>
         <p className="mt-1 text-xs text-gray-500">Generated: {new Date(generatedAt).toLocaleString()}</p>
       </div>

@@ -2,10 +2,18 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { AI_ANALYTICS_ENABLED } from '@/lib/aiAnalyticsFeature'
 import { prisma } from '@/lib/prisma'
-import { getGeminiCandidates, getGeminiApiKeys, isQuotaError } from '@/lib/openai'
+import { clearGeminiQuotaFailure, getGeminiAttemptPlan, getGeminiApiKeys, getGeminiKeyAvailability, getGeminiRetryConfig, getGeminiUnavailableMessage, isQuotaError, isRetryableGeminiServiceError, markGeminiQuotaFailure } from '@/lib/openai'
+import { generateInventoryBatchId } from '@/lib/inventoryBatch'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+
+async function delay(ms: number) {
+	if (ms <= 0) return
+	await new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 function sanitizeProviderMentions(text: string): string {
 	return text
@@ -47,15 +55,644 @@ function extractAllJsonBlocks(text: string): any[] {
 	return results
 }
 
+function pickFirstDefined(...values: unknown[]) {
+	for (const value of values) {
+		if (value === undefined || value === null) continue
+		if (typeof value === 'string' && !value.trim()) continue
+		return value
+	}
+
+	return undefined
+}
+
+function toTrimmedString(value: unknown) {
+	if (value === undefined || value === null) return undefined
+	const normalized = String(value).trim()
+	return normalized || undefined
+}
+
+function parseNumericValue(value: unknown) {
+	if (typeof value === 'number') {
+		return Number.isFinite(value) ? value : null
+	}
+
+	if (typeof value === 'string') {
+		const cleaned = value.replace(/,/g, '').replace(/[^0-9.-]/g, '')
+		if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === '-.') return null
+		const parsed = Number(cleaned)
+		return Number.isFinite(parsed) ? parsed : null
+	}
+
+	return null
+}
+
+function normalizeAiActionName(action: unknown) {
+	const normalized = String(action || '').trim().toLowerCase().replace(/[\s-]+/g, '_')
+	if (!normalized) return null
+
+	if (normalized === 'delete' || normalized === 'delete_transaction') return 'delete_transaction'
+	if (['create_transaction', 'create_transactions', 'record_transaction', 'record_transactions', 'transaction', 'journal_entry', 'journal_entries'].includes(normalized)) {
+		return 'create_transaction'
+	}
+	if (['add_inventory', 'inventory_add', 'add_item', 'add_items', 'update_inventory'].includes(normalized)) return 'add_inventory'
+	if (['record_sale', 'record_sales', 'sale', 'inventory_sale'].includes(normalized)) return 'record_sale'
+	if (['record_purchase', 'record_purchases', 'purchase', 'inventory_purchase', 'purchase_existing'].includes(normalized)) return 'record_purchase'
+	if (['add_and_purchase', 'add_purchase', 'purchase_new', 'record_new_purchase', 'new_inventory_purchase'].includes(normalized)) return 'add_and_purchase'
+
+	return normalized
+}
+
+function normalizeAiItemEntry(raw: any) {
+	if (typeof raw === 'string') {
+		const name = toTrimmedString(raw)
+		return name ? { name } : null
+	}
+
+	if (!raw || typeof raw !== 'object') return null
+
+	const name = toTrimmedString(
+		pickFirstDefined(
+			raw.name,
+			raw.itemName,
+			raw.item_name,
+			raw.productName,
+			raw.product_name,
+			raw.product,
+			raw.item,
+			raw.description,
+		),
+	)
+	if (!name) return null
+
+	const quantity = parseNumericValue(pickFirstDefined(raw.quantity, raw.qty, raw.qtyPurchased, raw.qty_purchased, raw.count))
+	const unitPrice = parseNumericValue(
+		pickFirstDefined(
+			raw.unitPrice,
+			raw.unit_price,
+			raw.pricePerUnit,
+			raw.price_per_unit,
+			raw.unitCost,
+			raw.unit_cost,
+			raw.costPerUnit,
+			raw.cost_per_unit,
+			raw.cost,
+			raw.price,
+		),
+	)
+	const totalCost = parseNumericValue(
+		pickFirstDefined(raw.totalCost, raw.total_cost, raw.totalPrice, raw.total_price, raw.amount, raw.total),
+	)
+
+	const normalizedItem: Record<string, any> = { name }
+	const unit = toTrimmedString(pickFirstDefined(raw.unit, raw.units, raw.measurementUnit, raw.measurement_unit))
+	const category = toTrimmedString(raw.category)
+	const inventoryType = toTrimmedString(pickFirstDefined(raw.inventoryType, raw.inventory_type))
+	const customerName = toTrimmedString(
+		pickFirstDefined(raw.customerName, raw.customer_name, raw.customer, raw.clientName, raw.client_name, raw.client),
+	)
+	const supplier = toTrimmedString(
+		pickFirstDefined(raw.supplier, raw.supplierName, raw.supplier_name, raw.vendor, raw.vendorName, raw.vendor_name),
+	)
+	const itemDate = pickFirstDefined(raw.date, raw.purchasedAt, raw.purchased_at, raw.transactionDate, raw.transaction_date)
+
+	if (unit) normalizedItem.unit = unit
+	if (quantity !== null) normalizedItem.quantity = quantity
+	if (unitPrice !== null) normalizedItem.unitPrice = unitPrice
+	if (totalCost !== null) normalizedItem.totalCost = totalCost
+	if (category) normalizedItem.category = category
+	if (inventoryType) normalizedItem.inventoryType = inventoryType
+	if (customerName) normalizedItem.customerName = customerName
+	if (supplier) normalizedItem.supplier = supplier
+	if (itemDate !== undefined) normalizedItem.date = itemDate
+
+	return normalizedItem
+}
+
+function normalizeAiTransactionEntry(raw: any) {
+	if (!raw || typeof raw !== 'object') return null
+
+	const amount = parseNumericValue(pickFirstDefined(raw.amount, raw.totalCost, raw.total_cost, raw.totalPrice, raw.total_price, raw.value))
+	const description = toTrimmedString(pickFirstDefined(raw.description, raw.memo, raw.narration, raw.details))
+	const type = toTrimmedString(pickFirstDefined(raw.type, raw.transactionType, raw.transaction_type, raw.entryType, raw.entry_type))
+	const date = pickFirstDefined(raw.date, raw.transactionDate, raw.transaction_date)
+	const debitAccount = toTrimmedString(pickFirstDefined(raw.debitAccount, raw.debit_account, raw.debit))
+	const creditAccount = toTrimmedString(pickFirstDefined(raw.creditAccount, raw.credit_account, raw.credit))
+
+	if (!amount || !description) return null
+
+	const transaction: Record<string, any> = {
+		amount,
+		description,
+	}
+	if (type) transaction.type = type
+	if (date !== undefined) transaction.date = date
+	if (debitAccount) transaction.debitAccount = debitAccount
+	if (creditAccount) transaction.creditAccount = creditAccount
+
+	return transaction
+}
+
+function buildNormalizedAiBlockKey(block: any) {
+	if (!block?.action) return null
+	const groupable = Array.isArray(block.items) || Array.isArray(block.transactions)
+	if (!groupable) return null
+
+	return JSON.stringify({
+		action: block.action,
+		date: block.date ?? null,
+		paymentMethod: block.paymentMethod ?? null,
+		supplier: block.supplier ?? null,
+		message: block.message ?? null,
+		createItemizedEntries: block.createItemizedEntries ?? null,
+	})
+}
+
+function groupNormalizedAiBlocks(blocks: any[]) {
+	const grouped: any[] = []
+	const indexByKey = new Map<string, number>()
+
+	for (const block of blocks) {
+		const key = buildNormalizedAiBlockKey(block)
+		if (!key) {
+			grouped.push(block)
+			continue
+		}
+
+		const existingIndex = indexByKey.get(key)
+		if (existingIndex === undefined) {
+			grouped.push({
+				...block,
+				...(Array.isArray(block.items) ? { items: [...block.items] } : {}),
+				...(Array.isArray(block.transactions) ? { transactions: [...block.transactions] } : {}),
+			})
+			indexByKey.set(key, grouped.length - 1)
+			continue
+		}
+
+		const existing = grouped[existingIndex]
+		if (Array.isArray(block.items)) {
+			existing.items.push(...block.items)
+		}
+		if (Array.isArray(block.transactions)) {
+			existing.transactions.push(...block.transactions)
+		}
+	}
+
+	return grouped
+}
+
+function normalizeAiActionBlock(rawBlock: any): any | null {
+	if (!rawBlock || typeof rawBlock !== 'object' || Array.isArray(rawBlock)) return null
+
+	const action = normalizeAiActionName(
+		pickFirstDefined(rawBlock.action, rawBlock.intent, rawBlock.operation, rawBlock.kind),
+	)
+	if (!action) return null
+
+	const date = pickFirstDefined(rawBlock.date, rawBlock.purchasedAt, rawBlock.purchased_at, rawBlock.transactionDate, rawBlock.transaction_date)
+	const paymentMethod = toTrimmedString(
+		pickFirstDefined(rawBlock.paymentMethod, rawBlock.payment_method, rawBlock.payment, rawBlock.method),
+	)
+	const supplier = toTrimmedString(
+		pickFirstDefined(rawBlock.supplier, rawBlock.supplierName, rawBlock.supplier_name, rawBlock.vendor, rawBlock.vendorName, rawBlock.vendor_name),
+	)
+	const message = toTrimmedString(pickFirstDefined(rawBlock.message, rawBlock.responseMessage, rawBlock.response_message))
+
+	if (action === 'create_transaction') {
+		const rawTransactions = Array.isArray(rawBlock.transactions)
+			? rawBlock.transactions
+			: Array.isArray(rawBlock.entries)
+				? rawBlock.entries
+				: Array.isArray(rawBlock.records)
+					? rawBlock.records
+					: [rawBlock]
+
+		const transactions = rawTransactions
+			.map((entry) => normalizeAiTransactionEntry(entry))
+			.filter(Boolean)
+
+		if (!transactions.length) return null
+
+		return {
+			action,
+			transactions,
+			...(message ? { message } : {}),
+		}
+	}
+
+	const rawItems = Array.isArray(rawBlock.items)
+		? rawBlock.items
+		: Array.isArray(rawBlock.products)
+			? rawBlock.products
+			: Array.isArray(rawBlock.rows)
+				? rawBlock.rows
+				: rawBlock.item !== undefined || rawBlock.product !== undefined
+					? [{
+						...rawBlock,
+						...(typeof rawBlock.item === 'object' && rawBlock.item !== null
+							? rawBlock.item
+							: typeof rawBlock.product === 'object' && rawBlock.product !== null
+								? rawBlock.product
+								: { name: rawBlock.item ?? rawBlock.product }),
+					}]
+					: [rawBlock]
+
+	const items = rawItems
+		.map((entry) => normalizeAiItemEntry(entry))
+		.filter(Boolean)
+
+	const normalizedBlock: Record<string, any> = {
+		action,
+		...(items.length ? { items } : {}),
+		...(date !== undefined ? { date } : {}),
+		...(paymentMethod ? { paymentMethod } : {}),
+		...(supplier ? { supplier } : {}),
+		...(message ? { message } : {}),
+	}
+
+	const createItemizedEntries = pickFirstDefined(rawBlock.createItemizedEntries, rawBlock.create_itemized_entries)
+	if (createItemizedEntries !== undefined) {
+		normalizedBlock.createItemizedEntries = createItemizedEntries === true || String(createItemizedEntries).toLowerCase() === 'true'
+	}
+
+	return normalizedBlock
+}
+
+function normalizeAiJsonBlocks(rawBlocks: any[]) {
+	const expandedBlocks: any[] = []
+
+	for (const rawBlock of rawBlocks) {
+		if (Array.isArray(rawBlock)) {
+			expandedBlocks.push(...normalizeAiJsonBlocks(rawBlock))
+			continue
+		}
+
+		if (rawBlock && typeof rawBlock === 'object') {
+			const wrapperEntries = Array.isArray(rawBlock.actions)
+				? rawBlock.actions
+				: Array.isArray(rawBlock.entries)
+					? rawBlock.entries
+					: Array.isArray(rawBlock.records)
+						? rawBlock.records
+						: null
+
+			if (wrapperEntries) {
+				const wrapperBase = { ...rawBlock }
+				delete wrapperBase.actions
+				delete wrapperBase.entries
+				delete wrapperBase.records
+				expandedBlocks.push(
+					...normalizeAiJsonBlocks(
+						wrapperEntries.map((entry: any) => entry && typeof entry === 'object' && !Array.isArray(entry)
+							? { ...wrapperBase, ...entry }
+							: entry,
+						),
+					),
+				)
+				continue
+			}
+		}
+
+		const normalizedBlock = normalizeAiActionBlock(rawBlock)
+		if (normalizedBlock) expandedBlocks.push(normalizedBlock)
+	}
+
+	return groupNormalizedAiBlocks(expandedBlocks)
+}
+
+function formatAiDiagnosticsNote(aiDiagnostics: any) {
+	if (!aiDiagnostics) return ''
+
+	const details = [`key #${aiDiagnostics.keyIndex}/${aiDiagnostics.keyCount}`, `model ${aiDiagnostics.modelName}`]
+	if (aiDiagnostics.usedFallbackKey) details.push('fallback key')
+	if (aiDiagnostics.usedFallbackModel) details.push('fallback model')
+
+	return `[AI diagnostics: ${details.join(', ')}]`
+}
+
+function buildAiResponsePayload(payload: Record<string, any>, aiDiagnostics: any, showAiDiagnostics: boolean) {
+	const nextPayload: Record<string, any> = { ...payload }
+	if (aiDiagnostics) {
+		nextPayload.aiDiagnostics = aiDiagnostics
+		if (showAiDiagnostics && typeof nextPayload.response === 'string') {
+			const note = formatAiDiagnosticsNote(aiDiagnostics)
+			nextPayload.response = nextPayload.response ? `${nextPayload.response}\n\n${note}` : note
+		}
+	}
+
+	return nextPayload
+}
+
+function normalizePaymentMethod(paymentMethod?: string): string {
+	const raw = String(paymentMethod || 'Cash').trim().toLowerCase()
+	if (raw.includes('note')) return 'Notes Payable'
+	if (raw === 'credit' || raw.includes('accounts payable') || raw.includes('payable')) return 'Credit'
+	if (raw.includes('mobile') || raw.includes('momo')) return raw.includes('owner') ? 'Owner Momo' : 'Mobile Money'
+	if (raw.includes('bank') || raw.includes('transfer') || raw.includes('current account')) return 'Bank'
+	return 'Cash'
+}
+
+function formatDateKey(date: Date) {
+	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function shiftDate(base: Date, days: number) {
+	const date = new Date(base)
+	date.setDate(date.getDate() + days)
+	return date
+}
+
+function parseExplicitDateFromMessage(message: string, now = new Date()): string | null {
+	const text = String(message || '').trim()
+	if (!text) return null
+	const normalized = text.toLowerCase()
+
+	if (/\btoday\b/.test(normalized)) return formatDateKey(now)
+	if (/\byesterday\b/.test(normalized)) return formatDateKey(shiftDate(now, -1))
+	if (/\btomorrow\b/.test(normalized)) return formatDateKey(shiftDate(now, 1))
+
+	const daysAgoMatch = normalized.match(/\b(\d{1,3})\s+days?\s+ago\b/)
+	if (daysAgoMatch) return formatDateKey(shiftDate(now, -Number(daysAgoMatch[1])))
+
+	if (/\blast week\b/.test(normalized)) return formatDateKey(shiftDate(now, -7))
+	if (/\blast month\b/.test(normalized)) {
+		const lastMonth = new Date(now)
+		lastMonth.setMonth(lastMonth.getMonth() - 1)
+		return formatDateKey(lastMonth)
+	}
+
+	const isoMatch = normalized.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/)
+	if (isoMatch) {
+		return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`
+	}
+
+	const slashMatch = normalized.match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](20\d{2})\b/)
+	if (slashMatch) {
+		const day = slashMatch[1].padStart(2, '0')
+		const month = slashMatch[2].padStart(2, '0')
+		return `${slashMatch[3]}-${month}-${day}`
+	}
+
+	const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+	const shortMonths = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec']
+	const monthMap = new Map<string, number>()
+	months.forEach((month, index) => monthMap.set(month, index + 1))
+	shortMonths.forEach((month, index) => monthMap.set(month, index + 1))
+
+	const dayMonthYearMatch = normalized.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(20\d{2}))?\b/)
+	if (dayMonthYearMatch) {
+		const month = monthMap.get(dayMonthYearMatch[2])
+		if (month) return `${dayMonthYearMatch[3] || now.getFullYear()}-${String(month).padStart(2, '0')}-${dayMonthYearMatch[1].padStart(2, '0')}`
+	}
+
+	const monthDayYearMatch = normalized.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(20\d{2}))?\b/)
+	if (monthDayYearMatch) {
+		const month = monthMap.get(monthDayYearMatch[1])
+		if (month) return `${monthDayYearMatch[3] || now.getFullYear()}-${String(month).padStart(2, '0')}-${monthDayYearMatch[2].padStart(2, '0')}`
+	}
+
+	return null
+}
+
+function resolveActionDate(rawDate: unknown, message: string) {
+	const explicitMessageDate = parseExplicitDateFromMessage(message)
+	if (explicitMessageDate) return new Date(`${explicitMessageDate}T00:00:00`)
+	if (rawDate) {
+		const parsed = new Date(String(rawDate))
+		if (Number.isFinite(parsed.getTime())) return parsed
+	}
+	return new Date()
+}
+
+function resolveInventoryEntryDate(rawActionDate: unknown, rawItemDate: unknown, message: string) {
+	if (rawItemDate) {
+		const parsed = new Date(String(rawItemDate))
+		if (Number.isFinite(parsed.getTime())) return parsed
+	}
+
+	return resolveActionDate(rawActionDate, message)
+}
+
+function buildRestaurantReadScope(restaurantId: string | null, fieldName = 'restaurantId') {
+	if (!restaurantId) {
+		return { [fieldName]: null }
+	}
+
+	return {
+		OR: [
+			{ [fieldName]: restaurantId },
+			{ [fieldName]: null },
+		],
+	}
+}
+
+function buildRestaurantWriteScope(restaurantId: string | null, fieldName = 'restaurantId') {
+	return { [fieldName]: restaurantId ?? null }
+}
+
+async function ensureCategoryByType(type: string, fallbackName: string, restaurantId: string | null) {
+	let category = await prisma.category.findFirst({
+		where: {
+			type,
+			...buildRestaurantReadScope(restaurantId),
+		},
+	})
+	if (!category) {
+		category = await prisma.category.create({
+			data: {
+				...buildRestaurantWriteScope(restaurantId),
+				name: fallbackName,
+				type,
+			} as any,
+		})
+	}
+	return category
+}
+
+async function findScopedAccountByName(name: string, restaurantId: string | null) {
+	return prisma.account.findFirst({
+		where: {
+			name,
+			...buildRestaurantReadScope(restaurantId),
+		},
+	})
+}
+
+async function ensureNamedAccount(name: string, type: string, categoryId: string, codePrefix: string, restaurantId: string | null) {
+	let account = await findScopedAccountByName(name, restaurantId)
+	if (!account) {
+		account = await prisma.account.create({
+			data: {
+				...buildRestaurantWriteScope(restaurantId),
+				code: `${codePrefix}-${Date.now().toString(36).toUpperCase()}`,
+				name,
+				type,
+				categoryId,
+			},
+		})
+	}
+	return account
+}
+
+async function findInventoryItemByName(userId: string, restaurantId: string | null, name: string) {
+	const scope = buildRestaurantReadScope(restaurantId)
+	return await prisma.inventoryItem.findFirst({
+		where: { userId, name, ...scope }
+	}) ?? await prisma.inventoryItem.findFirst({
+		where: { userId, name: name.toLowerCase(), ...scope }
+	}) ?? (await prisma.inventoryItem.findMany({
+		where: { userId, ...scope }
+	})).find((row: any) => row.name.toLowerCase() === name.toLowerCase()) ?? null
+}
+
+async function resolveSettlementAccount(paymentMethod: string | undefined, restaurantId: string | null) {
+	const normalizedPaymentMethod = normalizePaymentMethod(paymentMethod)
+	if (normalizedPaymentMethod === 'Credit') {
+		const liabilityCategory = await ensureCategoryByType('liability', 'Liability', restaurantId)
+		const account = await ensureNamedAccount('Accounts Payable', 'liability', liabilityCategory.id, 'LIB-AP', restaurantId)
+		return { paymentMethod: normalizedPaymentMethod, account }
+	}
+	if (normalizedPaymentMethod === 'Notes Payable') {
+		const liabilityCategory = await ensureCategoryByType('liability', 'Liability', restaurantId)
+		const account = await ensureNamedAccount('Notes Payable', 'liability', liabilityCategory.id, 'LIB-NP', restaurantId)
+		return { paymentMethod: normalizedPaymentMethod, account }
+	}
+	if (normalizedPaymentMethod === 'Bank') {
+		const assetCategory = await ensureCategoryByType('asset', 'Asset', restaurantId)
+		const account = await ensureNamedAccount('Current Account', 'asset', assetCategory.id, 'AST-BANK', restaurantId)
+		return { paymentMethod: normalizedPaymentMethod, account }
+	}
+	if (normalizedPaymentMethod === 'Mobile Money') {
+		const assetCategory = await ensureCategoryByType('asset', 'Asset', restaurantId)
+		const account = await ensureNamedAccount('Mobile Money', 'asset', assetCategory.id, 'AST-MM', restaurantId)
+		return { paymentMethod: normalizedPaymentMethod, account }
+	}
+	if (normalizedPaymentMethod === 'Owner Momo') {
+		const assetCategory = await ensureCategoryByType('asset', 'Asset', restaurantId)
+		const account = await ensureNamedAccount('Owner Momo', 'asset', assetCategory.id, 'AST-OMM', restaurantId)
+		return { paymentMethod: normalizedPaymentMethod, account }
+	}
+	const assetCategory = await ensureCategoryByType('asset', 'Asset', restaurantId)
+	const account = await ensureNamedAccount('Cash', 'asset', assetCategory.id, 'AST-CASH', restaurantId)
+	return { paymentMethod: 'Cash', account }
+}
+
+async function createInventoryPurchaseBatch(params: {
+	userId: string
+	restaurantId?: string | null
+	ingredientId: string
+	quantity: number
+	unitCost?: number | null
+	totalCost?: number | null
+	purchasedAt?: Date
+	journalPairId?: string | null
+	supplier?: string | null
+}) {
+	const quantity = Number(params.quantity || 0)
+	const totalCost = Number(params.totalCost || 0)
+	const explicitUnitCost = params.unitCost ?? null
+	const resolvedUnitCost = explicitUnitCost !== null && Number.isFinite(explicitUnitCost)
+		? explicitUnitCost
+		: quantity > 0 && totalCost > 0
+			? totalCost / quantity
+			: null
+
+	if (!(quantity > 0) || !(resolvedUnitCost !== null && resolvedUnitCost > 0)) {
+		return null
+	}
+
+	return prisma.inventoryPurchase.create({
+		data: {
+			userId: params.userId,
+			restaurantId: params.restaurantId ?? null,
+			batchId: generateInventoryBatchId(params.purchasedAt || new Date()),
+			journalPairId: params.journalPairId ?? null,
+			ingredientId: params.ingredientId,
+			supplier: params.supplier || 'AI Purchase',
+			quantityPurchased: quantity,
+			remainingQuantity: quantity,
+			unitCost: resolvedUnitCost,
+			totalCost: totalCost > 0 ? totalCost : quantity * resolvedUnitCost,
+			purchasedAt: params.purchasedAt || new Date(),
+		}
+	})
+}
+
+async function createJournalPair(params: {
+	userId: string
+	restaurantId: string | null
+	date: Date
+	description: string
+	amount: number
+	paymentMethod: string
+	debitAccountId: string
+	debitCategoryId: string
+	creditAccountId: string
+	creditCategoryId: string
+	sourceKind: string
+	authoritativeForRevenue?: boolean
+	pairId?: string
+}) {
+	const pairId = params.pairId || `pair-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+	const authoritativeForRevenue = params.authoritativeForRevenue ?? true
+
+	await prisma.transaction.createMany({
+		data: [
+			{
+				userId: params.userId,
+				restaurantId: params.restaurantId,
+				accountId: params.debitAccountId,
+				categoryId: params.debitCategoryId,
+				date: params.date,
+				description: params.description,
+				amount: params.amount,
+				type: 'debit',
+				isManual: true,
+				paymentMethod: params.paymentMethod,
+				pairId,
+				sourceKind: params.sourceKind,
+				authoritativeForRevenue,
+			},
+			{
+				userId: params.userId,
+				restaurantId: params.restaurantId,
+				accountId: params.creditAccountId,
+				categoryId: params.creditCategoryId,
+				date: params.date,
+				description: params.description,
+				amount: params.amount,
+				type: 'credit',
+				isManual: true,
+				paymentMethod: params.paymentMethod,
+				pairId,
+				sourceKind: params.sourceKind,
+				authoritativeForRevenue,
+			},
+		],
+	})
+
+	return pairId
+}
+
 export async function POST(req: NextRequest) {
+	let lastAiDiagnostics: any = null
+	let showAiDiagnostics = process.env.NODE_ENV !== 'production'
 	try {
 		const session = await getServerSession(authOptions)
-		if (!session?.user) {
+		if (!session?.user?.id) {
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
+		showAiDiagnostics = showAiDiagnostics || Boolean((session.user as any).isSuperAdmin)
 
 		const body = await req.json()
 		const { message, images, conversationHistory } = body
+		const restaurantContext = await getRestaurantContextForUser(session.user.id)
+		if (!restaurantContext) {
+			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+		}
+		const restaurantId = restaurantContext.restaurantId
+		const billingUserId = restaurantContext.billingUserId
+		const restaurantReadScope = buildRestaurantReadScope(restaurantId)
 
 		if (!message || typeof message !== 'string') {
 			return NextResponse.json({ error: 'Message required' }, { status: 400 })
@@ -65,9 +702,16 @@ export async function POST(req: NextRequest) {
 		if (apiKeys.length === 0) {
 			return NextResponse.json({ error: 'AI service not configured' }, { status: 500 })
 		}
+		const keyAvailability = getGeminiKeyAvailability(apiKeys)
+		if (keyAvailability.availableKeyCount === 0) {
+			console.warn(`[AI Chat] All ${apiKeys.length} keys blocked. Blocked: ${keyAvailability.blockedKeyCount}, cooldowns active.`)
+			return NextResponse.json(buildAiResponsePayload({
+				response: getGeminiUnavailableMessage('Jesse AI')
+			}, lastAiDiagnostics, showAiDiagnostics), { status: 200 })
+		}
 
 		const recentTransactions = await prisma.transaction.findMany({
-			where: { userId: session.user.id },
+			where: { userId: billingUserId, ...restaurantReadScope },
 			take: 50,
 			orderBy: { date: 'desc' },
 			select: {
@@ -90,7 +734,7 @@ export async function POST(req: NextRequest) {
 		})
 
 		const transactions = await prisma.transaction.findMany({
-			where: { userId: session.user.id },
+			where: { userId: billingUserId, ...restaurantReadScope },
 			select: {
 				amount: true,
 				type: true,
@@ -116,7 +760,7 @@ export async function POST(req: NextRequest) {
 
 		// Fetch inventory items for product sales
 		const inventoryItems = await prisma.inventoryItem.findMany({
-			where: { userId: session.user.id },
+			where: { userId: billingUserId, ...restaurantReadScope },
 			select: {
 				id: true,
 				name: true,
@@ -127,26 +771,28 @@ export async function POST(req: NextRequest) {
 			}
 		})
 
-		const snapshotType = `ai_daily_insight_${session.user.id}`
-		const latestSnapshotRow = await prisma.financialStatement.findFirst({
-			where: { type: snapshotType },
-			orderBy: { createdAt: 'desc' }
-		})
 		let latestSnapshotContext = ''
-		if (latestSnapshotRow) {
-			try {
-				const parsed = JSON.parse(latestSnapshotRow.data)
-				latestSnapshotContext = `\n\nLATEST AI ANALYTICS SNAPSHOT (use this when the user asks about their analytics, performance, or strategy):\n${JSON.stringify({
-					generatedAt: parsed.generatedAt,
-					businessProfile: parsed.businessProfile,
-					summary: parsed.summary,
-					headline: parsed.ai?.headline,
-					comments: parsed.ai?.comments || [],
-					advice: parsed.ai?.advice || [],
-					alerts: parsed.dataset?.spendingAlerts || []
-				}, null, 2)}\n\nWhen user says "let's talk about my analytics", "what do you think of my numbers", "analyse my business", or similar: give a structured strategic breakdown using the RESPONSE STYLE format. Reference specific numbers from the snapshot above. Be direct, personal, and actionable.`
-			} catch {
-				latestSnapshotContext = ''
+		if (AI_ANALYTICS_ENABLED) {
+			const snapshotType = `ai_daily_insight_${session.user.id}`
+			const latestSnapshotRow = await prisma.financialStatement.findFirst({
+				where: { type: snapshotType },
+				orderBy: { createdAt: 'desc' }
+			})
+			if (latestSnapshotRow) {
+				try {
+					const parsed = JSON.parse(latestSnapshotRow.data)
+					latestSnapshotContext = `\n\nLATEST AI ANALYTICS SNAPSHOT (use this when the user asks about their analytics, performance, or strategy):\n${JSON.stringify({
+						generatedAt: parsed.generatedAt,
+						businessProfile: parsed.businessProfile,
+						summary: parsed.summary,
+						headline: parsed.ai?.headline,
+						comments: parsed.ai?.comments || [],
+						advice: parsed.ai?.advice || [],
+						alerts: parsed.dataset?.spendingAlerts || []
+					}, null, 2)}\n\nWhen user says "let's talk about my analytics", "what do you think of my numbers", "analyse my business", or similar: give a structured strategic breakdown using the RESPONSE STYLE format. Reference specific numbers from the snapshot above. Be direct, personal, and actionable.`
+				} catch {
+					latestSnapshotContext = ''
+				}
 			}
 		}
 
@@ -157,13 +803,13 @@ export async function POST(req: NextRequest) {
 		sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60)
 
 		const recentDishSales = await prisma.dishSale.findMany({
-			where: { userId: session.user.id, saleDate: { gte: thirtyDaysAgo } },
+			where: { userId: billingUserId, saleDate: { gte: thirtyDaysAgo }, ...restaurantReadScope },
 			include: { dish: true },
 			orderBy: { saleDate: 'desc' }
 		}).catch(() => [])
 
 		const prevDishSales = await prisma.dishSale.findMany({
-			where: { userId: session.user.id, saleDate: { gte: sixtyDaysAgo, lt: thirtyDaysAgo } },
+			where: { userId: billingUserId, saleDate: { gte: sixtyDaysAgo, lt: thirtyDaysAgo }, ...restaurantReadScope },
 			include: { dish: true }
 		}).catch(() => [])
 
@@ -275,6 +921,117 @@ What to do this week:
 What's your biggest expense right now?
 Tell me and I'll show you exactly where the money is leaking.
 
+🚨 HIGHEST PRIORITY WORKFLOW — EVIDENCE FIRST, IMAGE FIRST:
+
+You are an accounting and inventory assistant that records business data from user messages and uploaded images.
+
+Your job is not just to answer. Your job is to inspect the evidence, infer the user's intent, extract complete data when possible, and return the correct structured action without asking for information that is already visible.
+
+IDENTITY AND ROLE:
+- Help users record purchases, sales, inventory additions, and normal accounting transactions.
+- When the user uploads an image, treat the image as a primary data source.
+- Combine the current message, prior conversation history, prior uploaded images, and the current inventory list before deciding what to do.
+
+CORE RULE:
+- Never ask the user for data that is already visible in an uploaded image or already present in conversation history.
+- If the user says "check the image", "it's in the form", "I already sent it", "record the new items", or "add the missing ones", re-read the existing image and act.
+- Only ask a question if the required field is truly missing from both the image and the conversation context.
+
+REQUIRED INTERNAL REASONING ORDER:
+STEP 1: Identify intent
+- "add to inventory", "put these in inventory", "inventory list" → inventory creation or update
+- "I bought", "purchase", "stock in", "received goods", "purchase form" → inventory purchase recording
+- "I sold", "customer bought", "sales form", "receipt", "invoice" → sale recording
+- "record the new items", "record the missing ones", "add those items" after a partial failure → use the earlier image and prior failed-item context
+
+STEP 2: Gather all context
+- Read the current message
+- Read conversation history
+- Check whether an image was uploaded earlier in this same conversation
+- Check prior assistant responses for failed item lists or missing item warnings
+- Check the current inventory list for existing items, units, and known prices
+
+STEP 3: Decide whether the answer is already available
+- If the image contains item names, quantities, prices, totals, or dates, use them
+- If the inventory list contains the unit for an item, use that unit to interpret the image
+- If recent history contains a prior known price, use that price when the image lacks one
+- Do not ask again if the needed value is already recoverable
+
+STEP 4: Choose the correct action
+- add_inventory → inventory definitions or setup only, no purchase transaction
+- record_purchase → user bought items that already exist in inventory
+- add_and_purchase → user bought new items from a purchase form that are not yet in inventory
+- record_sale → user sold inventory items and the sale is complete enough to record safely
+
+CRITICAL IMAGE HANDLING RULES:
+- When an image is present, look at the image carefully and classify the document before extracting anything
+- Use titles, headers, and columns to decide whether it is a purchase document, sales document, or inventory setup sheet
+
+DOCUMENT TYPE DETECTION:
+- "PURCHASE FORM", "PURCHASE ORDER", "BUYING LIST", "STOCK IN", "RECEIVED" → purchase document
+- "SALES FORM", "INVOICE", "RECEIPT", "SALES ORDER", "SOLD" → sales document
+
+PURCHASE FORM INTERPRETATION:
+- Item column: "ITEMS", "PRODUCT", "DESCRIPTION", "NAME"
+- Quantity column: "KGS/F", "QTY", "QUANTITY", "PCS", "KG"
+- Unit cost column: "UNIT PRICE", "PRICE/UNIT", "UNIT COST", "BUY PRICE"
+- Total column: "TOTAL PR", "TOTAL PRICE", "AMOUNT", "TOTAL COST", "TOTAL"
+- "COMMENTS" is only relevant if it clearly indicates payment status like cash or credit
+
+PURCHASE VS SELLING PRICE:
+- On a purchase form, "unit price" means unit cost
+- On a sales form, "price" means selling price
+- Never silently place a purchase cost into a selling-price field or vice versa
+
+MISSING DATA RULES:
+- If quantity is visible but price is missing for all items, ask: "I can see the items and quantities. What was the unit cost per item, or should I record them with 0 cost for now?"
+- If price is missing for only some items, record the complete items and list only the incomplete ones still needing unit cost
+- Never silently record zero cost without telling the user
+
+CONTEXT RECOVERY RULE:
+- If the user refers back to an earlier image, reuse that image, re-read the rows, extract the missing data, and act immediately
+- Do not ask the user to repeat quantity, unit, price, or total if they are already on the image
+
+PARTIAL FAILURE RULE:
+- If a prior attempt failed because some items were not in inventory, and the user says "record the new items", "record the missing ones", "add those items", or uploads the same form again:
+	1. Identify the failed items from the prior response
+	2. Find those exact items in the earlier purchase form image
+	3. Read quantity, unit cost, and total cost from the image
+	4. Use add_and_purchase immediately
+	5. Do not ask for data already visible in the form
+
+INVENTORY MATCHING RULE:
+- Check whether each extracted item already exists in inventory before choosing the action
+- Use fuzzy matching only for minor naming differences
+- Existing item + purchase document → record_purchase
+- New item + purchase document → add_and_purchase
+- Inventory setup only → add_inventory
+
+UNIT INFERENCE RULES:
+- Prefer the unit from existing inventory
+- If there is no inventory match, infer conservatively from the form and item type
+- If the unit is truly ambiguous and cannot be inferred from inventory, form, or history, ask one short specific question
+
+DATE RULE:
+- If the form has a visible date, use it
+- If the date is not visible, use the current date only if that is the established product behavior
+- Never invent a date when the date is actually missing and not recoverable
+
+RESPONSE FORMAT RULE:
+- When recording or adding inventory, output pure JSON only
+- No explanation before the JSON
+- No explanation after the JSON
+- No markdown fences
+- No conversational filler
+
+DECISION SUMMARY:
+- Inventory list only → add_inventory
+- Purchase form + existing inventory item → record_purchase
+- Purchase form + new item → add_and_purchase
+- Sales document → record_sale
+- If data is already in the image or history, extract and act
+- If truly missing, ask one short specific question only
+
 1. **CONTEXT AWARENESS (CRITICAL)**:
    - You have access to the FULL conversation history - USE IT!
    - Remember items, prices, customers, and details mentioned earlier in this chat
@@ -285,14 +1042,24 @@ Tell me and I'll show you exactly where the money is leaking.
 2. **SMART COMPLETENESS DETECTION**:
    ✅ COMPLETE INFO - Record directly without asking:
    - "Sold 10 kgs of rice at 20,000 to Green Lounge" → Has: item, quantity, price, customer. JUST RECORD IT.
-   - "Bought 50 liters diesel for 75,000" → Has: item, quantity, total cost. JUST RECORD IT.
+	 - "Bought 50 liters diesel for 75,000 cash" → Has: item, quantity, total cost, payment method. JUST RECORD IT.
    - "Received 100,000 from John Doe for transport" → Has: amount, customer, service. JUST RECORD IT.
    - "Paid driver 60,000 for 3 trips yesterday" → Has: amount, description, date. JUST RECORD IT.
+
+	 PURCHASE PAYMENT METHOD RULE:
+	 - For inventory purchases, quantity + cost is NOT fully complete if payment method is missing
+	 - If the user did not say cash, momo, bank, payable, or notes payable, ask EXACTLY:
+		 "Did you buy it as a payable or with cash/momo/bank?"
+	 - "on notes payable" or "with a note payable" → paymentMethod: "Notes Payable"
+	 - "on credit", "pay later", "owe supplier" → paymentMethod: "Credit"
+	 - "bank", "transfer", "current account" → paymentMethod: "Bank"
+	 - "momo", "mobile money" → paymentMethod: "Mobile Money"
    
    ❌ INCOMPLETE INFO - Ask ONLY for missing details using SPECIFIC field names:
    - "Sold rice" → Missing: quantity, price. Ask: "How many kg did you sell and at what price?"
    - "Sold 20 kgs rice" → Missing: price. Ask: "What price per kg?" (check chat history first!)
    - "Bought diesel for 75,000" → Missing: quantity. Ask: "How many liters?"
+	 - "Purchased 2 boxes of oil for 45,000" → Missing: payment method. Ask exactly: "Did you buy it as a payable or with cash/momo/bank?"
    - "Received payment from customer" → Missing: amount, customer name. Ask: "How much and from whom?"
    - "Add bananas" → Missing: unit. Ask: "How do you sell bananas? (by kg, bunch, piece, etc.)"
    - "Add diesel, 2500 per liter" → Missing: nothing. Has name and unit price - RECORD IT.
@@ -380,6 +1147,8 @@ RESTRICTIONS:
    - If image shows a **stock catalog / list only** (no purchase transaction, just a list of products) → use "add_inventory" action
    - If image shows a **transaction** (receipt/invoice), extract transaction details
    - Extract data: date, amount, description, vendor/client name, item names, quantities, prices
+	- If a purchase document shows a purchase date or supplier, preserve that exact date/supplier in the JSON
+	- Inventory purchases create NEW stock batches; never use "add_inventory" to merge a purchase document into existing stock
    - Check conversation history and previous images for context about products/customers
    - If all info is extractable, create transactions or add inventory items directly
    - If it's an invoice, extract both Cost of Goods Sold and Sales Revenue
@@ -392,6 +1161,7 @@ RESTRICTIONS:
    BUT: If the image is a PURCHASE FORM / INVOICE (items with costs, supplier, total):
    → Use "add_and_purchase" for items NOT yet in inventory
    → Use "record_purchase" for items already in inventory
+	→ Preserve the purchase date from the document when visible because inventory is consumed from the oldest batch first
    
    THEN YOU MUST:
    1. Extract ALL items with their name, unit, and price from the image
@@ -698,8 +1468,9 @@ When user buys or receives inventory items, use "record_purchase" action:
       "unitPrice": number (optional - cost per unit)
     }
   ],
+	"supplier": "Supplier name if visible (optional)",
   "date": "YYYY-MM-DD (optional)",
-  "paymentMethod": "Cash|Credit (optional)",
+	"paymentMethod": "Cash|Bank|Mobile Money|Credit|Notes Payable (optional)",
   "message": "User-friendly confirmation"
 }
 
@@ -715,6 +1486,18 @@ User: "Bought 200 liters of diesel for 300,000"
 → Creates: DR Inventory Expense (or COGS) 300,000 / CR Cash
 → Updates inventory: Diesel quantity increased by 200
 
+Example: Notes payable purchase
+User: "We bought 1 ton of potatoes on notes payable for 800,000"
+{
+	"action": "record_purchase",
+	"items": [
+		{ "name": "Potatoes", "quantity": 1, "unit": "ton", "totalCost": 800000 }
+	],
+	"paymentMethod": "Notes Payable",
+	"message": "Recorded purchase of 1 ton of potatoes on notes payable (800,000 RWF). Inventory updated."
+}
+→ Creates: DR Inventory Purchase / CR Notes Payable
+
 **ACTION DECISION RULES — READ BEFORE EVERY PURCHASE/INVENTORY RESPONSE:**
 
 When a user uploads a purchase form or says "bought X items":
@@ -725,6 +1508,13 @@ When a user uploads a purchase form or says "bought X items":
 NEVER use "add_inventory" for items from a purchase form!
 "add_inventory" only updates the stock list — it does NOT record the financial transaction.
 Always use "add_and_purchase" for NEW items purchased.
+"record_purchase" and "add_and_purchase" create purchase batches that are consumed oldest first, so preserve the document date whenever it is visible.
+
+🚨 CRITICAL — CASH/CREDIT PURCHASES ALWAYS NEED A TRANSACTION:
+When the user says "bought", "purchased", "received inventory paid with cash/credit", ALWAYS use:
+→ "add_and_purchase" for items NOT yet in inventory
+→ "record_purchase" for items ALREADY in inventory
+NEVER use "add_inventory" for ANY purchase — it will not create a financial transaction!
 
 **PRICE vs COST — CRITICAL RULE:**
 
@@ -748,6 +1538,7 @@ If user says "it's in the form / check the image / I already sent it" → re-rea
 {
   "action": "add_and_purchase",
   "items": [{ "name": "...", "unit": "kg|piece|liter|etc", "unitPrice": 0, "quantity": 0, "totalCost": 0, "inventoryType": "ingredient|resale" }],
+	"supplier": "Supplier name if visible (optional)",
   "date": "YYYY-MM-DD",
   "paymentMethod": "Cash|Credit",
   "message": "..."
@@ -873,8 +1664,9 @@ Examples of INCOMPLETE requests (ask specifically with conversational text):
 }
 
 If item already exists in inventory and user wants to update price/quantity:
-- Use same action format with updated values
-- System will update existing item automatically
+- Use the same action format to update price/unit/category metadata
+- Only use "add_inventory" to set opening stock when there is no purchase history yet
+- If the user is increasing stock for an existing purchased item, use "record_purchase" instead so a new batch is created
 
 **INVENTORY CHECKING:**
 When user asks about inventory status:
@@ -1377,21 +2169,29 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 			console.log(`[AI Chat] Prepared ${imageParts.length} image part(s) for AI`)
 		}
 
-		const _chatPairs: Array<{ki: number; pKey: string; modelName: string}> = []
-		for (let _ki = 0; _ki < apiKeys.length; _ki++) {
-			const _ms = await getGeminiCandidates(apiKeys[_ki])
-			for (const _m of _ms) _chatPairs.push({ ki: _ki, pKey: apiKeys[_ki], modelName: _m })
-		}
-		const _chatExhausted = new Set<number>()
+		const exhaustedKeyIndexes = new Set<number>()
+		const keyOnlyQuotaFailures = new Map<number, boolean>(apiKeys.map((_, index) => [index, true]))
+		const retryConfig = getGeminiRetryConfig()
 		let lastError: any
-		for (const { ki: _ki, pKey: _pKey, modelName } of _chatPairs) {
-		if (_chatExhausted.has(_ki)) continue
-		const genAI = new GoogleGenerativeAI(_pKey)
-		let parsedResponse: any = null
-		let responseText: string = ''
-		try {
-			console.log(`[AI Chat] Trying model: ${modelName}${imageParts.length > 0 ? ' (with images)' : ''}`)
-			const model = genAI.getGenerativeModel({ model: modelName })
+		for (const attempt of getGeminiAttemptPlan(apiKeys)) {
+			if (exhaustedKeyIndexes.has(attempt.keyIndex)) continue
+
+			let parsedResponse: any = null
+			let responseText = ''
+			let serviceUnavailableRetryCount = 0
+			while (true) {
+				try {
+			console.log(`[AI Chat] Trying model: ${attempt.modelName}${imageParts.length > 0 ? ' (with images)' : ''}`)
+			const requestDiagnostics = {
+				keyIndex: attempt.keyIndex + 1,
+				keyCount: attempt.keyCount,
+				modelName: attempt.modelName,
+				usedFallbackKey: attempt.usedFallbackKey,
+				usedFallbackModel: attempt.usedFallbackModel,
+			}
+			lastAiDiagnostics = requestDiagnostics
+			const genAI = new GoogleGenerativeAI(attempt.apiKey)
+			const model = genAI.getGenerativeModel({ model: attempt.modelName })
 			
 			// If we have images, send them with the prompt
 			let result
@@ -1405,16 +2205,32 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 			}
 			
 			responseText = result.response.text()
-			console.log(`[AI Chat] Model ${modelName} response length:`, responseText.length)
+			clearGeminiQuotaFailure(attempt.apiKey)
+			console.log(`[AI Chat] Model ${attempt.modelName} response length:`, responseText.length)
 
 			// Extract all JSON blocks (supports multi-action AI responses)
 			const jsonBlocks = extractAllJsonBlocks(responseText)
+			const normalizedJsonBlocks = normalizeAiJsonBlocks(jsonBlocks)
+			const aiDiagnostics = {
+				...requestDiagnostics,
+				rawJsonBlockCount: jsonBlocks.length,
+				normalizedBlockCount: normalizedJsonBlocks.length,
+				primaryAction: normalizedJsonBlocks[0]?.action ?? null,
+			}
+			lastAiDiagnostics = aiDiagnostics
 			if (jsonBlocks.length === 0) {
 				console.log(`[AI Chat] Non-JSON response (conversational message)`)
-				return NextResponse.json({ response: sanitizeProviderMentions(responseText) })
+				console.log(`[AI Chat] Served by key #${aiDiagnostics.keyIndex}/${aiDiagnostics.keyCount} model ${aiDiagnostics.modelName} (fallbackKey=${aiDiagnostics.usedFallbackKey}, fallbackModel=${aiDiagnostics.usedFallbackModel})`)
+				return NextResponse.json(buildAiResponsePayload({ response: sanitizeProviderMentions(responseText) }, aiDiagnostics, showAiDiagnostics))
 			}
-			console.log(`[AI Chat] Found ${jsonBlocks.length} JSON block(s), primary action: ${jsonBlocks[0].action}`)
-			parsedResponse = jsonBlocks[0]
+			if (normalizedJsonBlocks.length === 0) {
+				console.log(`[AI Chat] JSON response could not be normalized into actions`)
+				console.log(`[AI Chat] Served by key #${aiDiagnostics.keyIndex}/${aiDiagnostics.keyCount} model ${aiDiagnostics.modelName} (fallbackKey=${aiDiagnostics.usedFallbackKey}, fallbackModel=${aiDiagnostics.usedFallbackModel})`)
+				return NextResponse.json(buildAiResponsePayload({ response: sanitizeProviderMentions(responseText) }, aiDiagnostics, showAiDiagnostics))
+			}
+			console.log(`[AI Chat] Found ${jsonBlocks.length} raw JSON block(s), normalized to ${normalizedJsonBlocks.length}; primary action: ${normalizedJsonBlocks[0].action}`)
+			console.log(`[AI Chat] Served by key #${aiDiagnostics.keyIndex}/${aiDiagnostics.keyCount} model ${aiDiagnostics.modelName} (fallbackKey=${aiDiagnostics.usedFallbackKey}, fallbackModel=${aiDiagnostics.usedFallbackModel})`)
+			parsedResponse = normalizedJsonBlocks[0]
 
 			const accumulated = {
 				messages: [] as string[],
@@ -1425,7 +2241,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 				addAndPurchaseResults: [] as any[]
 			}
 
-		for (const block of jsonBlocks) {
+		for (const block of normalizedJsonBlocks) {
 		parsedResponse = block
 
 		// If it's a delete transaction request - AI cannot delete
@@ -1436,22 +2252,22 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 
 		// If it's a transaction creation request
 		if (parsedResponse.action === 'create_transaction' && parsedResponse.transactions) {
-			const userId = session.user.id
+			const userId = billingUserId
 			const createdTransactions = []
 
 			// Get necessary accounts and categories
-			const assetCategory = await prisma.category.findFirst({ where: { type: 'asset' } })
-			const incomeCategory = await prisma.category.findFirst({ where: { type: 'income' } })
-			const expenseCategory = await prisma.category.findFirst({ where: { type: 'expense' } })
+			const assetCategory = await ensureCategoryByType('asset', 'Asset', restaurantId)
+			const incomeCategory = await ensureCategoryByType('income', 'Income', restaurantId)
+			const expenseCategory = await ensureCategoryByType('expense', 'Expense', restaurantId)
 
-			const cashAccount = await prisma.account.findFirst({ where: { name: 'Cash' } })
+			const cashAccount = await ensureNamedAccount('Cash', 'asset', assetCategory.id, 'AST-CASH', restaurantId)
 			if (!cashAccount) throw new Error('Cash account not found')
 
 			for (const txn of parsedResponse.transactions) {
 					const amount = typeof txn.amount === 'number' ? txn.amount : parseFloat(String(txn.amount).replace(/[^0-9.]/g, ''))
 					if (!amount || amount <= 0) continue
 
-					const date = txn.date ? new Date(txn.date) : new Date()
+					const date = resolveActionDate(txn.date, message)
 					const description = txn.description || 'Transaction from AI Chat'
 					const pairId = `pair-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
 
@@ -1459,7 +2275,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 					if (txn.type === 'adjustment') {
 						// Get or create debit account
 						const debitAccountName = txn.debitAccount || 'General Expense'
-						let debitAccount = await prisma.account.findFirst({ where: { name: debitAccountName } })
+						let debitAccount = await findScopedAccountByName(debitAccountName, restaurantId)
 						
 						if (!debitAccount) {
 							// Auto-determine account type and category
@@ -1470,6 +2286,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 							if (category) {
 								debitAccount = await prisma.account.create({
 									data: {
+										restaurantId,
 										code: `AUTO-${Date.now().toString(36).toUpperCase()}`,
 										name: debitAccountName,
 										type: isExpense ? 'expense' : isAsset ? 'asset' : 'expense',
@@ -1481,7 +2298,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 
 						// Get or create credit account
 						const creditAccountName = txn.creditAccount || 'Cash'
-						let creditAccount = await prisma.account.findFirst({ where: { name: creditAccountName } })
+						let creditAccount = await findScopedAccountByName(creditAccountName, restaurantId)
 						
 						if (!creditAccount) {
 							// Auto-determine account type and category
@@ -1496,7 +2313,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 								category = incomeCategory
 								accountType = 'revenue'
 							} else if (isLiability) {
-								category = await prisma.category.findFirst({ where: { type: 'liability' } })
+								category = await ensureCategoryByType('liability', 'Liability', restaurantId)
 								accountType = 'liability'
 							} else if (isContraAsset) {
 								category = assetCategory
@@ -1509,6 +2326,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 							if (category) {
 								creditAccount = await prisma.account.create({
 									data: {
+										restaurantId,
 										code: `AUTO-${Date.now().toString(36).toUpperCase()}`,
 										name: creditAccountName,
 										type: accountType,
@@ -1519,33 +2337,20 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						}
 
 						if (debitAccount && creditAccount) {
-							await prisma.transaction.createMany({
-								data: [
-									{
-										userId,
-										accountId: debitAccount.id,
-										categoryId: debitAccount.categoryId,
-										date,
-										description,
-										amount,
-										type: 'debit',
-										isManual: true,
-										paymentMethod: 'Adjustment',
-										pairId
-									},
-									{
-										userId,
-										accountId: creditAccount.id,
-										categoryId: creditAccount.categoryId,
-										date,
-										description,
-										amount,
-										type: 'credit',
-										isManual: true,
-										paymentMethod: 'Adjustment',
-										pairId
-									}
-								]
+							await createJournalPair({
+								userId,
+								restaurantId,
+								date,
+								description,
+								amount,
+								paymentMethod: 'Adjustment',
+								debitAccountId: debitAccount.id,
+								debitCategoryId: debitAccount.categoryId,
+								creditAccountId: creditAccount.id,
+								creditCategoryId: creditAccount.categoryId,
+								sourceKind: 'ai_adjustment',
+								authoritativeForRevenue: false,
+								pairId,
 							})
 							createdTransactions.push({ 
 								amount, 
@@ -1556,10 +2361,11 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						}
 					} else if (txn.type === 'income') {
 						// Income: DR Cash, CR Service Revenue
-						let serviceRevenueAccount = await prisma.account.findFirst({ where: { name: 'Service Revenue' } })
+						let serviceRevenueAccount = await findScopedAccountByName('Service Revenue', restaurantId)
 						if (!serviceRevenueAccount && incomeCategory) {
 							serviceRevenueAccount = await prisma.account.create({
 								data: {
+									restaurantId,
 									code: 'REV-001',
 									name: 'Service Revenue',
 									type: 'revenue',
@@ -1569,43 +2375,31 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						}
 
 						if (serviceRevenueAccount) {
-							await prisma.transaction.createMany({
-								data: [
-									{
-										userId,
-										accountId: cashAccount.id,
-										categoryId: cashAccount.categoryId,
-										date,
-										description,
-										amount,
-										type: 'debit',
-										isManual: true,
-										paymentMethod: 'Cash',
-										pairId
-									},
-									{
-										userId,
-										accountId: serviceRevenueAccount.id,
-										categoryId: serviceRevenueAccount.categoryId,
-										date,
-										description,
-										amount,
-										type: 'credit',
-										isManual: true,
-										paymentMethod: 'Cash',
-										pairId
-									}
-								]
+							await createJournalPair({
+								userId,
+								restaurantId,
+								date,
+								description,
+								amount,
+								paymentMethod: 'Cash',
+								debitAccountId: cashAccount.id,
+								debitCategoryId: cashAccount.categoryId,
+								creditAccountId: serviceRevenueAccount.id,
+								creditCategoryId: serviceRevenueAccount.categoryId,
+								sourceKind: 'ai_income',
+								authoritativeForRevenue: true,
+								pairId,
 							})
 							createdTransactions.push({ amount, description, type: 'income' })
 						}
 					} else if (txn.type === 'expense') {
 						// Expense: DR specific expense account, CR specific credit account (Cash or AP)
 						const expenseAccountName = txn.debitAccount || 'General Expense'
-						let expenseAccount = await prisma.account.findFirst({ where: { name: expenseAccountName } })
+						let expenseAccount = await findScopedAccountByName(expenseAccountName, restaurantId)
 						if (!expenseAccount && expenseCategory) {
 							expenseAccount = await prisma.account.create({
 								data: {
+									restaurantId,
 									code: `EXP-${Date.now().toString(36).toUpperCase()}`,
 									name: expenseAccountName,
 									type: 'expense',
@@ -1618,15 +2412,16 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						const expenseCreditName = txn.creditAccount || 'Cash'
 						let expenseCreditAccount = expenseCreditName === 'Cash'
 							? cashAccount
-							: await prisma.account.findFirst({ where: { name: expenseCreditName } })
+							: await findScopedAccountByName(expenseCreditName, restaurantId)
 
 						if (!expenseCreditAccount && expenseCreditName !== 'Cash') {
 							const isLiability = expenseCreditName.toLowerCase().includes('payable')
-							const liabilityCat = await prisma.category.findFirst({ where: { type: 'liability' } })
+							const liabilityCat = await ensureCategoryByType('liability', 'Liability', restaurantId)
 							const creditCat = isLiability ? liabilityCat : assetCategory
 							if (creditCat) {
 								expenseCreditAccount = await prisma.account.create({
 									data: {
+										restaurantId,
 										code: `AUTO-${Date.now().toString(36).toUpperCase()}`,
 										name: expenseCreditName,
 										type: isLiability ? 'liability' : 'asset',
@@ -1640,33 +2435,20 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						const expensePaymentMethod = expenseCreditName.toLowerCase().includes('payable') ? 'Credit' : 'Cash'
 
 						if (expenseAccount && expenseCreditAccount) {
-							await prisma.transaction.createMany({
-								data: [
-									{
-										userId,
-										accountId: expenseAccount.id,
-										categoryId: expenseAccount.categoryId,
-										date,
-										description,
-										amount,
-										type: 'debit',
-										isManual: true,
-										paymentMethod: expensePaymentMethod,
-										pairId
-									},
-									{
-										userId,
-										accountId: expenseCreditAccount.id,
-										categoryId: expenseCreditAccount.categoryId,
-										date,
-										description,
-										amount,
-										type: 'credit',
-										isManual: true,
-										paymentMethod: expensePaymentMethod,
-										pairId
-									}
-								]
+							await createJournalPair({
+								userId,
+								restaurantId,
+								date,
+								description,
+								amount,
+								paymentMethod: expensePaymentMethod,
+								debitAccountId: expenseAccount.id,
+								debitCategoryId: expenseAccount.categoryId,
+								creditAccountId: expenseCreditAccount.id,
+								creditCategoryId: expenseCreditAccount.categoryId,
+								sourceKind: 'ai_expense',
+								authoritativeForRevenue: false,
+								pairId,
 							})
 							createdTransactions.push({ amount, description, type: 'expense' })
 						}
@@ -1681,72 +2463,117 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 
 				// If it's an inventory management request
 				if (parsedResponse.action === 'add_inventory' && parsedResponse.items) {
-					const userId = session.user.id
+					const userId = billingUserId
 					const createdItems = []
+					const inventoryMessages: string[] = []
 
 					for (const item of parsedResponse.items) {
 						if (!item.name || !item.unit) continue
+						const inventoryDate = resolveInventoryEntryDate(parsedResponse.date, (item as any).purchasedAt ?? (item as any).date, message)
+						const requestedQuantity = Number(item.quantity ?? 0)
+						const hasRequestedQuantity = Number.isFinite(requestedQuantity) && requestedQuantity > 0
+						const resolvedUnitPrice = item.unitPrice !== undefined && item.unitPrice !== null ? Number(item.unitPrice) : null
+						const hasUnitPrice = Number.isFinite(resolvedUnitPrice) && Number(resolvedUnitPrice) > 0
+						const purchaseSupplier = (item as any).supplier || parsedResponse.supplier || 'Opening Stock'
 
 						// Case-insensitive lookup compatible with SQLite
-						const existingItem = await prisma.inventoryItem.findFirst({
-							where: { userId, name: item.name }
-						}) ?? await prisma.inventoryItem.findFirst({
-							where: { userId, name: item.name.toLowerCase() }
-						}) ?? (await prisma.inventoryItem.findMany({ where: { userId } })).find(
-							(r: any) => r.name.toLowerCase() === item.name.toLowerCase()
-						) ?? null
+						const existingItem = await findInventoryItemByName(userId, restaurantId, item.name)
 
 						if (existingItem) {
+							const existingPurchaseCount = await prisma.inventoryPurchase.count({
+								where: { userId, ingredientId: (existingItem as any).id, ...restaurantReadScope }
+							})
+							const canSeedOpeningStock = hasRequestedQuantity && hasUnitPrice && existingPurchaseCount === 0
+							const nextQuantity = canSeedOpeningStock ? requestedQuantity : (existingItem as any).quantity
+
 							// Update existing item — write to unitCost, set inventoryType ingredient
 							const updatedItem = await prisma.inventoryItem.update({
 								where: { id: (existingItem as any).id },
 								data: {
 									unit: item.unit,
 									unitCost: item.unitPrice !== undefined ? (item.unitPrice || null) : (existingItem as any).unitCost,
-									quantity: item.quantity !== undefined ? item.quantity : (existingItem as any).quantity,
+									quantity: nextQuantity,
 									category: item.category || (existingItem as any).category,
-									inventoryType: 'ingredient'
+									inventoryType: 'ingredient',
+									...(canSeedOpeningStock ? { lastRestockedAt: inventoryDate } : {})
 								} as any
 							})
-							createdItems.push({ name: updatedItem.name, updated: true, unitPrice: item.unitPrice || 0, quantity: item.quantity !== undefined ? item.quantity : (existingItem as any).quantity || 0, unit: item.unit })
+							if (canSeedOpeningStock) {
+								await createInventoryPurchaseBatch({
+									userId,
+									restaurantId,
+									ingredientId: updatedItem.id,
+									quantity: requestedQuantity,
+									unitCost: resolvedUnitPrice,
+									totalCost: requestedQuantity * Number(resolvedUnitPrice),
+									purchasedAt: inventoryDate,
+									supplier: purchaseSupplier,
+								})
+							} else if (hasRequestedQuantity && existingPurchaseCount > 0) {
+								inventoryMessages.push(`Kept existing batch quantities for ${updatedItem.name}; use a purchase action to add more stock instead of resetting the item quantity.`)
+							} else if (hasRequestedQuantity && !hasUnitPrice) {
+								inventoryMessages.push(`Added ${updatedItem.name} without opening stock because no unit cost was provided.`)
+							}
+							createdItems.push({ name: updatedItem.name, updated: true, unitPrice: item.unitPrice || 0, quantity: nextQuantity || 0, unit: item.unit })
 						} else {
+							const openingQuantity = hasRequestedQuantity && hasUnitPrice ? requestedQuantity : 0
+
 							// Create new item — always ingredient type, always unitCost
 							const newItem = await prisma.inventoryItem.create({
 								data: {
 									userId,
+									restaurantId,
 									name: item.name,
 									unit: item.unit,
 									unitCost: item.unitPrice || null,
-									quantity: item.quantity || 0,
+									quantity: openingQuantity,
 									category: item.category || null,
-									inventoryType: 'ingredient'
+									inventoryType: 'ingredient',
+									...(openingQuantity > 0 ? { lastRestockedAt: inventoryDate } : {})
 								} as any
 							})
-							createdItems.push({ name: newItem.name, updated: false, unitPrice: item.unitPrice || 0, quantity: item.quantity || 0, unit: item.unit })
+							if (openingQuantity > 0) {
+								await createInventoryPurchaseBatch({
+									userId,
+									restaurantId,
+									ingredientId: newItem.id,
+									quantity: openingQuantity,
+									unitCost: resolvedUnitPrice,
+									totalCost: openingQuantity * Number(resolvedUnitPrice),
+									purchasedAt: inventoryDate,
+									supplier: purchaseSupplier,
+								})
+							} else if (hasRequestedQuantity) {
+								inventoryMessages.push(`Added ${newItem.name} to inventory without opening stock because no unit cost was provided.`)
+							}
+							createdItems.push({ name: newItem.name, updated: false, unitPrice: item.unitPrice || 0, quantity: openingQuantity || 0, unit: item.unit })
 						}
 					}
 
 				if (parsedResponse.message) accumulated.messages.push(parsedResponse.message)
 					else accumulated.messages.push('Inventory item(s) added successfully!')
+					if (inventoryMessages.length > 0) accumulated.messages.push(inventoryMessages.join(' '))
 					accumulated.itemsCreated.push(...createdItems)
 					continue
 				}
 
 				// If it's an inventory sale request with tracking
 				if (parsedResponse.action === 'record_sale' && parsedResponse.items) {
-					const userId = session.user.id
+					const userId = billingUserId
 					const salesResults = []
 					const createdTransactions = []
 
 					// Get or create Sales Revenue account
-					const incomeCategory = await prisma.category.findFirst({ where: { type: 'income' } })
-					const cashAccount = await prisma.account.findFirst({ where: { name: 'Cash' } })
-					const arAccount = await prisma.account.findFirst({ where: { name: 'Accounts Receivable' } })
+					const incomeCategory = await ensureCategoryByType('income', 'Income', restaurantId)
+					const assetCategory = await ensureCategoryByType('asset', 'Asset', restaurantId)
+					const cashAccount = await ensureNamedAccount('Cash', 'asset', assetCategory.id, 'AST-CASH', restaurantId)
+					const arAccount = await ensureNamedAccount('Accounts Receivable', 'asset', assetCategory.id, 'AST-AR', restaurantId)
 					
-					let salesRevenueAccount = await prisma.account.findFirst({ where: { name: 'Sales Revenue' } })
+					let salesRevenueAccount = await findScopedAccountByName('Sales Revenue', restaurantId)
 					if (!salesRevenueAccount && incomeCategory) {
 						salesRevenueAccount = await prisma.account.create({
 							data: {
+								restaurantId,
 								code: 'REV-002',
 								name: 'Sales Revenue',
 								type: 'revenue',
@@ -1756,17 +2583,11 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 					}
 
 					const paymentMethod = parsedResponse.paymentMethod || 'Cash'
-					const saleDate = parsedResponse.date ? new Date(parsedResponse.date) : new Date()
+					const saleDate = resolveActionDate(parsedResponse.date, message)
 
 					for (const item of parsedResponse.items) {
 						// Case-insensitive lookup compatible with SQLite
-						let inventoryItem: any = await prisma.inventoryItem.findFirst({
-							where: { userId, name: item.name }
-						}) ?? await prisma.inventoryItem.findFirst({
-							where: { userId, name: item.name.toLowerCase() }
-						}) ?? (await prisma.inventoryItem.findMany({ where: { userId } })).find(
-							(r: any) => r.name.toLowerCase() === item.name.toLowerCase()
-						) ?? null
+						let inventoryItem: any = await findInventoryItemByName(userId, restaurantId, item.name)
 
 						if (!inventoryItem) {
 							salesResults.push({ name: item.name, error: `Item not found in inventory. Please add it first.` })
@@ -1796,33 +2617,20 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 							? `Sale of ${quantity} ${inventoryItem.unit} ${inventoryItem.name} to ${customerName}`
 							: `Sale of ${quantity} ${inventoryItem.unit} ${inventoryItem.name}`
 
-						await prisma.transaction.createMany({
-							data: [
-								{
-									userId,
-									accountId: debitAccount.id,
-									categoryId: debitAccount.categoryId,
-									date: saleDate,
-									description,
-									amount: totalAmount,
-									type: 'debit',
-									isManual: true,
-									paymentMethod,
-									pairId
-								},
-								{
-									userId,
-									accountId: salesRevenueAccount.id,
-									categoryId: salesRevenueAccount.categoryId,
-									date: saleDate,
-									description,
-									amount: totalAmount,
-									type: 'credit',
-									isManual: true,
-									paymentMethod,
-									pairId
-								}
-							]
+						await createJournalPair({
+							userId,
+							restaurantId,
+							date: saleDate,
+							description,
+							amount: totalAmount,
+							paymentMethod,
+							debitAccountId: debitAccount.id,
+							debitCategoryId: debitAccount.categoryId,
+							creditAccountId: salesRevenueAccount.id,
+							creditCategoryId: salesRevenueAccount.categoryId,
+							sourceKind: 'ai_inventory_sale',
+							authoritativeForRevenue: true,
+							pairId,
 						})
 
 // Update inventory quantity (DEDUCT sold amount)
@@ -1858,53 +2666,43 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 
 				// If it's an inventory purchase request
 				if (parsedResponse.action === 'record_purchase' && parsedResponse.items) {
-					const userId = session.user.id
+					const userId = billingUserId
 					const purchaseResults = []
 					const createdTransactions = []
 
 					// Get or create necessary accounts
-					const expenseCategory = await prisma.category.findFirst({ where: { type: 'expense' } })
-					const cashAccount = await prisma.account.findFirst({ where: { name: 'Cash' } })
-					let apAccount = await prisma.account.findFirst({ where: { name: 'Accounts Payable' } })
-					if (!apAccount) {
-						const apLiabilityCat = await prisma.category.findFirst({ where: { type: 'liability' } })
-						if (apLiabilityCat) {
-							apAccount = await prisma.account.create({
-								data: { code: 'LIB-AP', name: 'Accounts Payable', type: 'liability', categoryId: apLiabilityCat.id }
-							})
-						}
-					}
+					const expenseCategory = await ensureCategoryByType('expense', 'Expense', restaurantId)
 
-					let inventoryExpenseAccount = await prisma.account.findFirst({ 
-						where: { name: 'Inventory Purchase' } 
-					})
-					if (!inventoryExpenseAccount && expenseCategory) {
-						inventoryExpenseAccount = await prisma.account.create({
-							data: {
-								code: 'EXP-INV',
-								name: 'Inventory Purchase',
-								type: 'expense',
-								categoryId: expenseCategory.id
-							}
-						})
-					}
+					const inventoryExpenseAccount = await ensureNamedAccount('Inventory Purchase', 'expense', expenseCategory.id, 'EXP-INV', restaurantId)
 
-					const paymentMethod = parsedResponse.paymentMethod || 'Cash'
-					const purchaseDate = parsedResponse.date ? new Date(parsedResponse.date) : new Date()
+					const settlement = await resolveSettlementAccount(parsedResponse.paymentMethod, restaurantId)
+					const paymentMethod = settlement.paymentMethod
 
 					for (const item of parsedResponse.items) {
+						const purchaseDate = resolveInventoryEntryDate(parsedResponse.date, (item as any).purchasedAt ?? (item as any).date, message)
 						// Case-insensitive lookup compatible with SQLite
-						let inventoryItem: any = await prisma.inventoryItem.findFirst({
-							where: { userId, name: item.name }
-						}) ?? await prisma.inventoryItem.findFirst({
-							where: { userId, name: item.name.toLowerCase() }
-						}) ?? (await prisma.inventoryItem.findMany({ where: { userId } })).find(
-							(r: any) => r.name.toLowerCase() === item.name.toLowerCase()
-						) ?? null
+						let inventoryItem: any = await findInventoryItemByName(userId, restaurantId, item.name)
 
 						if (!inventoryItem) {
-							purchaseResults.push({ name: item.name, error: `Item not found in inventory. Cannot record purchase.` })
-							continue
+							// Item not yet in inventory — auto-create it so the purchase can still be recorded
+							const unit = (item as any).unit || 'unit'
+							const unitPrice = item.unitPrice ?? (item.totalCost && item.quantity && item.quantity > 0 ? item.totalCost / item.quantity : null)
+							try {
+								inventoryItem = await prisma.inventoryItem.create({
+									data: {
+										userId,
+										restaurantId,
+										name: item.name,
+										unit,
+										unitCost: unitPrice,
+										quantity: 0,
+										inventoryType: 'ingredient'
+									} as any
+								})
+							} catch (_createErr) {
+								purchaseResults.push({ name: item.name, error: `Item not found in inventory and could not be created.` })
+								continue
+							}
 						}
 
 						const quantity = item.quantity || 0
@@ -1919,36 +2717,34 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						const description = `Purchase of ${quantity} ${inventoryItem.unit} ${inventoryItem.name}`
 
 						// Create transaction entry
-						const creditAccount = paymentMethod === 'Credit' ? apAccount : cashAccount
+						const creditAccount = settlement.account
 						if (!creditAccount || !inventoryExpenseAccount) continue
 
-						await prisma.transaction.createMany({
-							data: [
-								{
-									userId,
-									accountId: inventoryExpenseAccount.id,
-									categoryId: inventoryExpenseAccount.categoryId,
-									date: purchaseDate,
-									description,
-									amount: totalCost,
-									type: 'debit',
-									isManual: true,
-									paymentMethod,
-									pairId
-								},
-								{
-									userId,
-									accountId: creditAccount.id,
-									categoryId: creditAccount.categoryId,
-									date: purchaseDate,
-									description,
-									amount: totalCost,
-									type: 'credit',
-									isManual: true,
-									paymentMethod,
-									pairId
-								}
-							]
+						await createJournalPair({
+							userId,
+							restaurantId,
+							date: purchaseDate,
+							description,
+							amount: totalCost,
+							paymentMethod,
+							debitAccountId: inventoryExpenseAccount.id,
+							debitCategoryId: inventoryExpenseAccount.categoryId,
+							creditAccountId: creditAccount.id,
+							creditCategoryId: creditAccount.categoryId,
+							sourceKind: 'inventory_purchase',
+							authoritativeForRevenue: false,
+							pairId,
+						})
+						await createInventoryPurchaseBatch({
+							userId,
+							restaurantId,
+							ingredientId: inventoryItem.id,
+							quantity,
+							unitCost: item.unitPrice ?? inventoryItem.unitCost ?? (quantity > 0 ? totalCost / quantity : null),
+							totalCost,
+							purchasedAt: purchaseDate,
+							journalPairId: pairId,
+							supplier: (item as any).supplier || parsedResponse.supplier || 'AI Purchase'
 						})
 
 // Update inventory quantity (ADD purchased amount) and refresh unitCost
@@ -1957,7 +2753,8 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						where: { id: inventoryItem.id },
 						data: { 
 							quantity: newQuantity,
-							...(item.unitPrice ? { unitCost: item.unitPrice } : {})
+							...(item.unitPrice ? { unitCost: item.unitPrice } : {}),
+							lastRestockedAt: purchaseDate
 						}
 						})
 
@@ -1986,73 +2783,73 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 
 				// NEW: add_and_purchase — creates new inventory item AND records purchase transaction
 				if (parsedResponse.action === 'add_and_purchase' && parsedResponse.items) {
-					const userId = session.user.id
+					const userId = billingUserId
 					const aapResults: any[] = []
 
-					const aapExpenseCat = await prisma.category.findFirst({ where: { type: 'expense' } })
-					const aapCash = await prisma.account.findFirst({ where: { name: 'Cash' } })
-					let aapAP = await prisma.account.findFirst({ where: { name: 'Accounts Payable' } })
-					if (!aapAP) {
-						const aapLiabilityCat = await prisma.category.findFirst({ where: { type: 'liability' } })
-						if (aapLiabilityCat) {
-							aapAP = await prisma.account.create({
-								data: { code: 'LIB-AP', name: 'Accounts Payable', type: 'liability', categoryId: aapLiabilityCat.id }
-							})
-						}
-					}
+					const aapExpenseCat = await ensureCategoryByType('expense', 'Expense', restaurantId)
+					const aapInvExpense = await ensureNamedAccount('Inventory Purchase', 'expense', aapExpenseCat.id, 'EXP-INV', restaurantId)
 
-					let aapInvExpense = await prisma.account.findFirst({ where: { name: 'Inventory Purchase' } })
-					if (!aapInvExpense && aapExpenseCat) {
-						aapInvExpense = await prisma.account.create({
-							data: { code: 'EXP-INV', name: 'Inventory Purchase', type: 'expense', categoryId: aapExpenseCat.id }
-						})
-					}
-
-					const aapPayMethod = parsedResponse.paymentMethod || 'Cash'
-					const aapDate = parsedResponse.date ? new Date(parsedResponse.date) : new Date()
+					const aapSettlement = await resolveSettlementAccount(parsedResponse.paymentMethod, restaurantId)
+					const aapPayMethod = aapSettlement.paymentMethod
 
 					for (const item of parsedResponse.items) {
 						if (!item.name) continue
+						const aapDate = resolveInventoryEntryDate(parsedResponse.date, (item as any).purchasedAt ?? (item as any).date, message)
 						const unit = item.unit || 'kg'
 						const unitCost = item.unitPrice || null
 						const qty = item.quantity || 0
 						const totalCost = item.totalCost || (unitCost ? unitCost * qty : 0)
 
 					// Case-insensitive upsert lookup compatible with SQLite
-					let invItem: any = await prisma.inventoryItem.findFirst({ where: { userId, name: item.name } })
-						?? await prisma.inventoryItem.findFirst({ where: { userId, name: item.name.toLowerCase() } })
-						?? (await prisma.inventoryItem.findMany({ where: { userId } })).find(
-							(r: any) => r.name.toLowerCase() === item.name.toLowerCase()
-						) ?? null
+					let invItem: any = await findInventoryItemByName(userId, restaurantId, item.name)
 					if (invItem) {
 						invItem = await prisma.inventoryItem.update({
 							where: { id: invItem.id },
-							data: { quantity: invItem.quantity + qty, unitCost: unitCost || invItem.unitCost, inventoryType: 'ingredient' } as any
+								data: { quantity: invItem.quantity + qty, unitCost: unitCost || invItem.unitCost, inventoryType: 'ingredient', ...(qty > 0 ? { lastRestockedAt: aapDate } : {}) } as any
 						})
 					} else {
 						invItem = await prisma.inventoryItem.create({
-							data: { userId, name: item.name, unit, unitCost, quantity: qty, inventoryType: 'ingredient' } as any
+								data: { userId, restaurantId, name: item.name, unit, unitCost, quantity: qty, inventoryType: 'ingredient', ...(qty > 0 ? { lastRestockedAt: aapDate } : {}) } as any
 							})
 						}
 
 						// Record purchase transaction if cost is known
-						if (totalCost > 0 && aapInvExpense) {
-							const creditAcct = aapPayMethod === 'Credit' ? aapAP : aapCash
-							const pairId = `pair-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+						let pairId: string | null = null
+						if (totalCost > 0) {
+							const creditAcct = aapSettlement.account
+							pairId = `pair-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
 							if (creditAcct) {
-								await prisma.transaction.createMany({
-									data: [
-										{ userId, accountId: aapInvExpense.id, categoryId: aapInvExpense.categoryId, date: aapDate, description: `Purchase of ${qty} ${unit} ${item.name}`, amount: totalCost, type: 'debit', isManual: true, paymentMethod: aapPayMethod, pairId },
-										{ userId, accountId: creditAcct.id, categoryId: creditAcct.categoryId, date: aapDate, description: `Purchase of ${qty} ${unit} ${item.name}`, amount: totalCost, type: 'credit', isManual: true, paymentMethod: aapPayMethod, pairId }
-									]
+								await createJournalPair({
+									userId,
+									restaurantId,
+									date: aapDate,
+									description: `Purchase of ${qty} ${unit} ${item.name}`,
+									amount: totalCost,
+									paymentMethod: aapPayMethod,
+									debitAccountId: aapInvExpense.id,
+									debitCategoryId: aapInvExpense.categoryId,
+									creditAccountId: creditAcct.id,
+									creditCategoryId: creditAcct.categoryId,
+									sourceKind: 'inventory_purchase',
+									authoritativeForRevenue: false,
+									pairId,
 								})
+								accumulated.transactionsCreated.push({ amount: totalCost, description: `Purchase of ${qty} ${unit} ${item.name}`, type: 'purchase' })
 							}
 						}
+						await createInventoryPurchaseBatch({
+							userId,
+							restaurantId,
+							ingredientId: invItem.id,
+							quantity: qty,
+							unitCost: unitCost ?? (qty > 0 ? totalCost / qty : null),
+							totalCost,
+							purchasedAt: aapDate,
+							journalPairId: pairId,
+							supplier: (item as any).supplier || parsedResponse.supplier || 'AI Purchase'
+						})
 
 						aapResults.push({ name: item.name, quantity: qty, unit, totalCost, newQuantity: invItem.quantity })
-						if (totalCost > 0) {
-							accumulated.transactionsCreated.push({ amount: totalCost, description: `Purchase of ${qty} ${unit} ${item.name}`, type: 'purchase' })
-						}
 					}
 
 					if (parsedResponse.message) accumulated.messages.push(parsedResponse.message)
@@ -2066,51 +2863,70 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 		} // end for (const block of jsonBlocks)
 
 		// Return accumulated results from all processed blocks
-		return NextResponse.json({
+		return NextResponse.json(buildAiResponsePayload({
 			response: accumulated.messages.join('\n\n') || sanitizeProviderMentions(responseText),
 			...(accumulated.transactionsCreated.length && { transactionsCreated: accumulated.transactionsCreated }),
 			...(accumulated.purchaseResults.length && { purchaseResults: accumulated.purchaseResults }),
 			...(accumulated.itemsCreated.length && { itemsCreated: accumulated.itemsCreated }),
 			...(accumulated.salesResults.length && { salesResults: accumulated.salesResults }),
 			...(accumulated.addAndPurchaseResults.length && { addAndPurchaseResults: accumulated.addAndPurchaseResults }),
-		})
-		} catch (e: any) {
-			console.error(`[AI Chat] Error with model ${modelName}:`, e)
-			lastError = e
-			// If we successfully parsed an action but database operation failed, don't try other models
-			if (parsedResponse && parsedResponse.action) {
-				console.error(`[AI Chat] Database error while processing action "${parsedResponse.action}":`, e)
-				throw e // Re-throw to be caught by outer handler
-			}
-			if (isQuotaError(e)) _chatExhausted.add(_ki)
-			continue
+		}, aiDiagnostics, showAiDiagnostics))
+					} catch (e: any) {
+						console.error(`[AI Chat] Error with model ${attempt.modelName}:`, e?.message || e, 'status:', e?.status, 'statusText:', e?.statusText, 'errorDetails:', JSON.stringify(e?.error || e?.body || '').slice(0, 500))
+						lastError = e
+						// If we successfully parsed an action but database operation failed, don't try other models
+						if (parsedResponse && parsedResponse.action) {
+							console.error(`[AI Chat] Database error while processing action "${parsedResponse.action}":`, e)
+							throw e
+						}
+						if (isQuotaError(e)) {
+							markGeminiQuotaFailure(attempt.apiKey, e)
+							exhaustedKeyIndexes.add(attempt.keyIndex)
+							break
+						}
+						keyOnlyQuotaFailures.set(attempt.keyIndex, false)
+						if (isRetryableGeminiServiceError(e)) {
+							if (serviceUnavailableRetryCount < retryConfig.serviceUnavailableRetries) {
+								serviceUnavailableRetryCount++
+								console.warn(`[AI Chat] Retrying model ${attempt.modelName} after service-unavailable response (${serviceUnavailableRetryCount}/${retryConfig.serviceUnavailableRetries})`)
+								await delay(retryConfig.serviceUnavailableDelayMs)
+								continue
+							}
+						}
+						break
+					}
+				}
 		}
-	}
 
-	if (_chatExhausted.size === apiKeys.length) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
-	throw lastError || new Error('All AI models failed')
+		const quotaExhaustedCount = exhaustedKeyIndexes.size
+		const allKeysQuotaExhausted =
+			keyAvailability.blockedKeyCount + quotaExhaustedCount === apiKeys.length &&
+			apiKeys.every((_, index) => keyOnlyQuotaFailures.get(index) === true)
+
+		if (allKeysQuotaExhausted) throw new Error('GEMINI_DAILY_LIMIT_REACHED')
+	throw lastError || new Error('All configured AI attempts failed')
 } catch (e: any) {
 	
 	// If the error contains validation or missing field information, pass it through
 	const errorMessage = e?.message || ''
 	if (errorMessage.includes('GEMINI_DAILY_LIMIT_REACHED')) {
-		return NextResponse.json({
-			response: "Jesse AI has reached its daily limit. It resets automatically — try again later today or tomorrow."
-		}, { status: 200 })
+		return NextResponse.json(buildAiResponsePayload({
+			response: getGeminiUnavailableMessage('Jesse AI')
+		}, lastAiDiagnostics ? { ...lastAiDiagnostics, quotaExhausted: true } : null, showAiDiagnostics), { status: 200 })
 	}
 	if (errorMessage.includes('required') || 
 	    errorMessage.includes('missing') || 
 	    errorMessage.includes('need') ||
 	    errorMessage.includes('must provide') ||
 	    errorMessage.includes('invalid')) {
-		return NextResponse.json({ 
+		return NextResponse.json(buildAiResponsePayload({ 
 			response: errorMessage
-		}, { status: 200 })
+		}, lastAiDiagnostics, showAiDiagnostics), { status: 200 })
 	}
 	
 	// For other errors, return a friendly generic message
-	return NextResponse.json({ 
+	return NextResponse.json(buildAiResponsePayload({ 
 		response: "I encountered an issue processing your request. Could you please try rephrasing your question or provide more details?" 
-	}, { status: 200 })
+	}, lastAiDiagnostics, showAiDiagnostics), { status: 200 })
 }
 }

@@ -2,6 +2,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { ChefHat, RefreshCw, Clock, CheckCircle2, LogOut, Flame, Trash2, Plus, X } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
+import RestaurantCloudSync from '@/components/restaurant/RestaurantCloudSync'
+import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type PendingOrder = {
   id: string
@@ -20,6 +22,12 @@ type Ticket = {
   tableName: string
   items: PendingOrder[]
   oldestAddedAt: string
+}
+
+type KitchenShellSnapshot = {
+  updatedAt: string
+  orders: PendingOrder[]
+  wasteIngredients: { id: string; name: string; unit: string }[]
 }
 
 function getAgeMinutes(addedAt: string): number {
@@ -74,6 +82,25 @@ export default function KitchenShell() {
   const [wasteSaving, setWasteSaving] = useState(false)
   const [wasteError, setWasteError] = useState<string | null>(null)
   const [wasteSuccess, setWasteSuccess] = useState(false)
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
+  const snapshotScopeId = buildRestaurantSnapshotScope({
+    restaurantId: (session?.user as any)?.restaurantId ?? null,
+    branchId: (session?.user as any)?.branchId ?? null,
+    fallbackUserId: session?.user?.id ?? null,
+  })
+  const snapshotStorageScope = snapshotScopeId ? `kitchen-shell:${snapshotScopeId}` : null
+
+  const persistSnapshot = useCallback((nextOrders: PendingOrder[], nextWasteIngredients: { id: string; name: string; unit: string }[]) => {
+    if (!snapshotStorageScope) return
+    const snapshot = mergeRestaurantDeviceSnapshot<KitchenShellSnapshot>(snapshotStorageScope, {
+      orders: nextOrders,
+      wasteIngredients: nextWasteIngredients,
+    })
+    if (!snapshot) return
+    setSnapshotUpdatedAt(snapshot.updatedAt)
+    setShowingCachedSnapshot(false)
+  }, [snapshotStorageScope])
 
   async function openWasteModal() {
     setShowWaste(true)
@@ -83,7 +110,9 @@ export default function KitchenShell() {
     if (wasteIngredients.length === 0) {
       const res = await fetch('/api/restaurant/ingredients', { credentials: 'include' })
       const data = await res.json()
-      setWasteIngredients(Array.isArray(data) ? data : [])
+      const nextWasteIngredients = Array.isArray(data) ? data : []
+      setWasteIngredients(nextWasteIngredients)
+      persistSnapshot(orders, nextWasteIngredients)
     }
   }
 
@@ -122,13 +151,28 @@ export default function KitchenShell() {
       const res = await fetch('/api/restaurant/pending', { credentials: 'include' })
       if (!res.ok) { setFetchError(`Server error ${res.status}`); return }
       const data = await res.json()
-      setOrders(Array.isArray(data) ? data : [])
+      const nextOrders = Array.isArray(data) ? data : []
+      setOrders(nextOrders)
+      persistSnapshot(nextOrders, wasteIngredients)
       setLastRefresh(new Date())
       setFetchError(null)
     } catch (e: any) {
       setFetchError(e?.message ?? 'Network error')
     }
-  }, [])
+  }, [persistSnapshot, wasteIngredients])
+
+  useEffect(() => {
+    if (!snapshotStorageScope) return
+
+    const snapshot = loadRestaurantDeviceSnapshot<KitchenShellSnapshot>(snapshotStorageScope)
+    if (!snapshot) return
+
+    setOrders(Array.isArray(snapshot.orders) ? snapshot.orders : [])
+    setWasteIngredients(Array.isArray(snapshot.wasteIngredients) ? snapshot.wasteIngredients : [])
+    setSnapshotUpdatedAt(snapshot.updatedAt ?? null)
+    setLastRefresh(snapshot.updatedAt ? new Date(snapshot.updatedAt) : new Date())
+    setShowingCachedSnapshot(true)
+  }, [snapshotStorageScope])
 
   useEffect(() => {
     refresh()
@@ -164,9 +208,19 @@ export default function KitchenShell() {
   const readyTickets   = groupToTickets(orders.filter(o => o.status === 'ready'))
 
   const restaurantName = (session?.user as any)?.restaurantName ?? 'Kitchen'
+  const snapshotUpdatedLabel = snapshotUpdatedAt
+    ? new Date(snapshotUpdatedAt).toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
+    : null
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
+      <RestaurantCloudSync />
+      {showingCachedSnapshot && snapshotUpdatedLabel ? (
+        <div className="mx-6 mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          <p className="font-semibold">Showing last synced kitchen snapshot from this device</p>
+          <p className="mt-1 text-xs opacity-90">Last synced snapshot: {snapshotUpdatedLabel}</p>
+        </div>
+      ) : null}
 
       {/* ── Header ────────────────────────────────────────────────────────────── */}
       <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between flex-wrap gap-2 flex-shrink-0">
@@ -209,7 +263,7 @@ export default function KitchenShell() {
       <div className="flex justify-center px-6 pb-2">
         <button
           onClick={openWasteModal}
-          className="flex items-center gap-2 bg-red-500 hover:bg-red-600 active:scale-95 text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-sm transition-all"
+          className="flex items-center gap-2 bg-red-500 hover:bg-red-600 active:scale-95 text-white text-sm font-semibold px-5 py-3 rounded-xl shadow-sm transition-all"
         >
           <Trash2 className="h-4 w-4" />
           Log Wasted Item
@@ -236,7 +290,7 @@ export default function KitchenShell() {
               <button
                 onClick={() => updateStatus(ticket.items.map(i => i.id), 'in_kitchen')}
                 disabled={ticket.items.some(i => updating.has(i.id))}
-                className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-lg transition-colors"
+                className="flex-1 bg-orange-500 hover:bg-orange-600 active:scale-95 disabled:opacity-50 text-white text-base font-bold py-4 rounded-xl transition-all"
               >
                 Start Cooking
               </button>
@@ -261,7 +315,7 @@ export default function KitchenShell() {
               <button
                 onClick={() => updateStatus(ticket.items.map(i => i.id), 'ready')}
                 disabled={ticket.items.some(i => updating.has(i.id))}
-                className="flex-1 bg-green-500 hover:bg-green-600 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-lg transition-colors"
+                className="flex-1 bg-green-500 hover:bg-green-600 active:scale-95 disabled:opacity-50 text-white text-base font-bold py-4 rounded-xl transition-all"
               >
                 Mark Ready
               </button>
@@ -353,9 +407,9 @@ export default function KitchenShell() {
                 {wasteError && <p className="text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg">{wasteError}</p>}
                 <div className="flex gap-2 pt-1">
                   <button type="button" onClick={() => setShowWaste(false)}
-                    className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+                    className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
                   <button type="submit" disabled={wasteSaving}
-                    className="flex-1 bg-red-500 hover:bg-red-600 disabled:opacity-60 text-white text-sm font-semibold py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5">
+                    className="flex-1 bg-red-500 hover:bg-red-600 disabled:opacity-60 text-white text-sm font-semibold py-3 rounded-lg transition-colors flex items-center justify-center gap-1.5">
                     {wasteSaving ? 'Saving…' : <><Plus className="h-4 w-4"/>Log Waste</>}
                   </button>
                 </div>
@@ -413,14 +467,14 @@ function TicketCard({
   return (
     <div className={`bg-white rounded-xl border border-gray-200 shadow-sm p-4 space-y-3 transition-opacity ${isLoading ? 'opacity-60' : ''}`}>
       <div className="flex items-center justify-between">
-        <span className="font-bold text-gray-900 text-base">{ticket.tableName}</span>
+        <span className="font-bold text-gray-900 text-lg">{ticket.tableName}</span>
         <AgeTag addedAt={ticket.oldestAddedAt} />
       </div>
       <div className="space-y-1.5">
         {ticket.items.map(item => (
           <div key={item.id} className="flex items-center justify-between">
-            <span className="text-sm text-gray-800">{item.dishName}</span>
-            <span className="text-sm font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
+            <span className="text-base text-gray-800">{item.dishName}</span>
+            <span className="text-base font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
               ×{item.qty}
             </span>
           </div>

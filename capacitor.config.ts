@@ -1,12 +1,19 @@
 import type { CapacitorConfig } from '@capacitor/cli'
 
+const configuredAppUrl = process.env.CAPACITOR_SERVER_URL?.trim()
+  || process.env.NEXT_PUBLIC_APP_URL?.trim()
+  || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : '')
+  || 'https://magnify-app-tau.vercel.app'
+
+const appUrl = configuredAppUrl.replace(/\/$/, '')
+
 const config: CapacitorConfig = {
   appId: 'com.magnify.restaurant',
   appName: 'Magnify',
-  // Point the WebView at the live Vercel deployment.
-  // When you push code to Vercel the app updates automatically — no APK rebuild needed.
+  // Point the WebView at the live deployment so content updates come from Vercel
+  // without requiring a fresh Android build for every web-only change.
   server: {
-    url: 'https://magnify-app-tau.vercel.app',
+    url: appUrl,
     cleartext: false,
   },
   // webDir is still required by Capacitor even in remote-URL mode

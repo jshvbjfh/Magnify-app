@@ -17,6 +17,8 @@ async function requireUserId() {
 
 type DbClient = PrismaClient | Prisma.TransactionClient
 
+const shouldLogExtractionDebug = process.env.NODE_ENV !== 'production' && process.env.DEBUG_OCR === '1'
+
 function parseAmount(raw: unknown): number {
 	if (typeof raw === 'number') return raw
 	const s = String(raw ?? '').trim()
@@ -112,13 +114,14 @@ export async function POST(req: Request) {
 			dictionary
 		})
 
-		// Debug: Log what AI extracted
-		console.log('=== AI EXTRACTION DEBUG ===')
-		console.log('Raw Text:', extracted.rawText)
-		console.log('Translated:', extracted.translatedText)
-		console.log('Unknown Words:', extracted.unknownWords)
-		console.log('Transactions:', JSON.stringify(extracted.transactions, null, 2))
-		console.log('=========================')
+		if (shouldLogExtractionDebug) {
+			console.log('=== AI EXTRACTION DEBUG ===')
+			console.log('Raw Text:', extracted.rawText)
+			console.log('Translated:', extracted.translatedText)
+			console.log('Unknown Words:', extracted.unknownWords)
+			console.log('Transactions:', JSON.stringify(extracted.transactions, null, 2))
+			console.log('=========================')
+		}
 
 		// Validate and filter transactions
 		extracted.transactions = validateAndFilterTransactions(extracted.transactions)

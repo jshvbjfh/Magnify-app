@@ -1,6 +1,9 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
+import { useSession } from 'next-auth/react'
 import { ChefHat, CheckCircle2, Clock, Flame, RefreshCw, Utensils, Receipt } from 'lucide-react'
+import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type LiveOrder = {
   id: string; tableName: string; dishName: string; qty: number
@@ -16,6 +19,12 @@ type Ticket = {
 type Sale = {
   id: string; dish: { name: string }; quantitySold: number
   totalSaleAmount: number; saleDate: string; paymentMethod: string
+}
+
+type RestaurantLiveSnapshot = {
+  updatedAt: string
+  orders: LiveOrder[]
+  sales: Sale[]
 }
 
 function fmt(n: number) { return n.toLocaleString('en-RW', { maximumFractionDigits: 0 }) }
@@ -68,30 +77,68 @@ function groupToTickets(orders: LiveOrder[]): Ticket[] {
 }
 
 export default function RestaurantLive() {
+  const { data: session } = useSession()
+  const restaurantBranch = useRestaurantBranch()
   const [orders, setOrders] = useState<LiveOrder[]>([])
   const [sales, setSales] = useState<Sale[]>([])
   const [lastRefresh, setLastRefresh] = useState(new Date())
+  const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
+  const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
+  const snapshotScopeId = buildRestaurantSnapshotScope({
+    restaurantId: restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null,
+    branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
+    fallbackUserId: session?.user?.id ?? null,
+  })
+  const snapshotStorageScope = snapshotScopeId ? `restaurant-live:${snapshotScopeId}` : null
+
+  const persistSnapshot = useCallback((nextOrders: LiveOrder[], nextSales: Sale[]) => {
+    if (!snapshotStorageScope) return
+    const snapshot = mergeRestaurantDeviceSnapshot<RestaurantLiveSnapshot>(snapshotStorageScope, {
+      orders: nextOrders,
+      sales: nextSales,
+    })
+    if (!snapshot) return
+    setSnapshotUpdatedAt(snapshot.updatedAt)
+    setShowingCachedSnapshot(false)
+  }, [snapshotStorageScope])
 
   const loadOrders = useCallback(async () => {
     try {
       const res = await fetch('/api/restaurant/pending', { credentials: 'include' })
       if (res.ok) {
         const data = await res.json()
-        setOrders(Array.isArray(data) ? data : [])
+        const nextOrders = Array.isArray(data) ? data : []
+        setOrders(nextOrders)
+        persistSnapshot(nextOrders, sales)
         setLastRefresh(new Date())
       }
     } catch {}
-  }, [])
+  }, [persistSnapshot, sales])
 
   const loadSales = useCallback(async () => {
     try {
       const res = await fetch('/api/restaurant/dish-sales', { credentials: 'include' })
       if (res.ok) {
         const data = await res.json()
-        setSales(Array.isArray(data) ? data : [])
+        const nextSales = Array.isArray(data) ? data : []
+        setSales(nextSales)
+        persistSnapshot(orders, nextSales)
       }
     } catch {}
-  }, [])
+  }, [orders, persistSnapshot])
+
+  useEffect(() => {
+    if (!snapshotStorageScope) return
+
+    const snapshot = loadRestaurantDeviceSnapshot<RestaurantLiveSnapshot>(snapshotStorageScope)
+    if (!snapshot) return
+
+    setOrders(Array.isArray(snapshot.orders) ? snapshot.orders : [])
+    setSales(Array.isArray(snapshot.sales) ? snapshot.sales : [])
+    setSnapshotUpdatedAt(snapshot.updatedAt ?? null)
+    setLastRefresh(snapshot.updatedAt ? new Date(snapshot.updatedAt) : new Date())
+    setShowingCachedSnapshot(true)
+  }, [snapshotStorageScope])
 
   useEffect(() => {
     loadOrders(); loadSales()
@@ -106,12 +153,21 @@ export default function RestaurantLive() {
 
   const todaySales = sales.filter(s => new Date(s.saleDate).toDateString() === new Date().toDateString())
   const todayRevenue = todaySales.reduce((s, x) => s + x.totalSaleAmount, 0)
+  const snapshotUpdatedLabel = snapshotUpdatedAt
+    ? new Date(snapshotUpdatedAt).toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
+    : null
 
   const now = new Date()
   const showCompletedToday = !(now.getHours() === 23 && now.getMinutes() >= 59)
 
   return (
     <div className="space-y-6">
+      {showingCachedSnapshot && snapshotUpdatedLabel ? (
+        <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          <p className="font-semibold">Showing last synced live activity snapshot from this device</p>
+          <p className="mt-1 text-xs opacity-90">Last synced snapshot: {snapshotUpdatedLabel}</p>
+        </div>
+      ) : null}
 
       {/* Live header */}
       <div className="flex items-center justify-between">

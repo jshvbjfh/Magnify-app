@@ -2,7 +2,7 @@ export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { getOperationalReportMetrics, requireReportingContext } from '@/lib/restaurantReporting'
 
 export async function GET(request: Request) {
 	try {
@@ -19,74 +19,29 @@ export async function GET(request: Request) {
 			return NextResponse.json({ error: 'Start and end dates required' }, { status: 400 })
 		}
 
-		// Fetch all sales transactions in the date range
-		const transactions = await prisma.transaction.findMany({
-			where: {
-				userId: session.user.id,
-				date: {
-					gte: new Date(start),
-					lte: new Date(end + 'T23:59:59')
-				},
-				type: 'credit',
-				account: {
-					name: 'Sales Revenue'
-				}
-			},
-			include: {
-				account: true
-			},
-			orderBy: {
-				date: 'desc'
-			}
+		const reportingContext = await requireReportingContext(session.user.id)
+		const metrics = await getOperationalReportMetrics(reportingContext, {
+			start: new Date(start + 'T00:00:00'),
+			end: new Date(end + 'T23:59:59'),
 		})
 
-		// Get all inventory items for the user
-		const inventoryItems = await prisma.inventoryItem.findMany({
-			where: {
-				userId: session.user.id
+		const salesWithProfit = metrics.salesWithProfit.map((sale) => {
+			const date = new Date(sale.date)
+			const formattedDate = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`
+
+			return {
+				date: formattedDate,
+				itemName: sale.itemName,
+				quantity: sale.quantity,
+				unit: sale.unit,
+				unitCost: sale.unitCost,
+				unitPrice: sale.unitPrice,
+				revenue: sale.revenue,
+				cost: sale.cost,
+				profit: sale.profit,
+				profitMargin: sale.profitMargin,
 			}
 		})
-
-		// Create a map for quick lookup
-		const itemMap = new Map(inventoryItems.map((item: any) => [item.name.toLowerCase(), item]))
-
-		// Process sales and calculate profits
-		const salesWithProfit = transactions.map((txn: any) => {
-			// Extract item name from description (e.g., "Sale: Diesel (50 kg)")
-			const match = txn.description.match(/Sale:\s*(.+?)\s*\(([0-9.]+)\s*(.+?)\)/)
-			
-			if (!match) {
-				return null
-			}
-
-			const itemName = match[1].trim()
-			const quantity = parseFloat(match[2])
-			const unit = match[3].trim()
-
-			// Find inventory item
-			const inventoryItem = itemMap.get(itemName.toLowerCase())
-			
-			if (!inventoryItem) {
-				return null
-			}
-
-			const revenue = txn.amount
-			const unitPrice = (inventoryItem as any).unitPrice || (revenue / quantity)
-			const unitCost = (inventoryItem as any).unitCost || 0
-			const cost = unitCost * quantity
-			const profit = revenue - cost
-			const profitMargin = revenue > 0 ? (profit / revenue * 100) : 0
-
-		// Format date as DD/MM/YYYY for Excel
-		const date = new Date(txn.date)
-		const formattedDate = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`
-
-		return {
-			date: formattedDate,
-				profit,
-				profitMargin: profitMargin.toFixed(2)
-			}
-	}).filter((sale: any) => sale !== null) as any[]
 
 	// Create CSV content
 	const headers = [

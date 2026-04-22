@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
+import { recordJournalEntry } from '@/lib/accounting'
 import { prisma } from '@/lib/prisma'
+import { ensureRestaurantForOwner } from '@/lib/restaurantAccess'
 
 async function requireUserId() {
 	const session = await getServerSession(authOptions)
@@ -14,10 +16,12 @@ async function requireUserId() {
 export async function GET() {
 	try {
 		const userId = await requireUserId()
+		const restaurant = await ensureRestaurantForOwner(userId)
 
 		// Find the Accounts Receivable account
 		const arAccount = await prisma.account.findFirst({
 			where: { 
+				restaurantId: restaurant.id,
 				OR: [
 					{ code: '1200' },
 					{ name: { contains: 'Accounts Receivable' } },
@@ -38,6 +42,7 @@ export async function GET() {
 		const arTransactions = await prisma.transaction.findMany({
 			where: {
 				userId,
+				restaurantId: restaurant.id,
 				accountId: arAccount.id
 			},
 			orderBy: { date: 'desc' },
@@ -135,6 +140,7 @@ export async function GET() {
 export async function POST(req: Request) {
 	try {
 		const userId = await requireUserId()
+		const restaurant = await ensureRestaurantForOwner(userId)
 		const body = await req.json()
 
 		const amount = parseFloat(String(body.amount || 0))
@@ -146,97 +152,25 @@ export async function POST(req: Request) {
 		const serviceDescription = String(body.description || 'Service provided').trim()
 		const date = body.date ? new Date(body.date) : new Date()
 
-		// Ensure core categories exist
-		const assetCategory = await prisma.category.upsert({
-			where: { restaurantId_name: { restaurantId: null, name: 'Asset' } },
-			update: { type: 'asset' },
-			create: { restaurantId: null, name: 'Asset', type: 'asset' }
-		})
-
-		const incomeCategory = await prisma.category.upsert({
-			where: { restaurantId_name: { restaurantId: null, name: 'Income' } },
-			update: { type: 'income' },
-			create: { restaurantId: null, name: 'Income', type: 'income' }
-		})
-
-		// Ensure Accounts Receivable account exists
-		let arAccount = await prisma.account.findFirst({
-			where: { code: '1200' }
-		})
-
-		if (!arAccount) {
-			arAccount = await prisma.account.create({
-				data: {
-					code: '1200',
-					name: 'Accounts Receivable',
-					type: 'asset',
-					categoryId: assetCategory.id,
-					description: 'Money owed to us for services provided but not yet paid'
-				}
-			})
-		}
-
-		// Ensure Service Revenue account exists
-		let revenueAccount = await prisma.account.findFirst({
-			where: { 
-				OR: [
-					{ name: { contains: 'Service Revenue' } },
-					{ name: { contains: 'Sales' } }
-				]
-			}
-		})
-
-		if (!revenueAccount) {
-			revenueAccount = await prisma.account.create({
-				data: {
-					code: '4000',
-					name: 'Service Revenue',
-					type: 'revenue',
-					categoryId: incomeCategory.id,
-					description: 'Revenue from services provided'
-				}
-			})
-		}
-
 		const description = `Unpaid service - ${customerName}: ${serviceDescription}`
-		const pairId = `ar-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
-
-		// Double-entry bookkeeping:
-		// Debit Accounts Receivable (Asset increases)
-		// Credit Service Revenue (Income increases)
-		await prisma.transaction.createMany({
-			data: [
-				{
-					userId,
-					accountId: arAccount.id,
-					categoryId: assetCategory.id,
-					date,
-					description,
-					amount,
-					type: 'debit',
-					isManual: true,
-					paymentMethod: 'Accounts Receivable',
-					pairId
-				},
-				{
-					userId,
-					accountId: revenueAccount.id,
-					categoryId: incomeCategory.id,
-					date,
-					description,
-					amount,
-					type: 'credit',
-					isManual: true,
-					paymentMethod: 'Accounts Receivable',
-					pairId
-				}
-			]
+		const journal = await recordJournalEntry(prisma, {
+			userId,
+			restaurantId: restaurant.id,
+			date,
+			description,
+			amount,
+			direction: 'in',
+			accountName: 'Service Revenue',
+			paymentMethod: 'Credit',
+			isManual: true,
+			sourceKind: 'accounts_receivable',
+			authoritativeForRevenue: true,
 		})
 
 		return NextResponse.json({
 			success: true,
 			message: `Recorded unpaid service for ${customerName}: ${amount} RWF`,
-			pairId
+			pairId: journal.pairId
 		})
 	} catch (e: any) {
 		console.error('Error creating receivable:', e)

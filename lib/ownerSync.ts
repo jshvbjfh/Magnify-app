@@ -42,6 +42,7 @@ export type OwnerSyncSnapshot = {
     date: string
     amount: number
     type: string
+    sourceKind?: string | null
   }>
   transactions: Array<{
     id: string
@@ -54,6 +55,7 @@ export type OwnerSyncSnapshot = {
     categoryName: string
     categoryType: string
     isManual: boolean
+    sourceKind?: string | null
   }>
   ingredients: Array<{
     id: string
@@ -79,28 +81,28 @@ export type OwnerSyncSnapshot = {
 
 function startOf(period: Period) {
   const now = new Date()
-  if (period === 'today') return new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  if (period === 'today') return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
   if (period === 'week') {
     const date = new Date(now)
-    date.setDate(date.getDate() - 6)
-    date.setHours(0, 0, 0, 0)
+    date.setUTCDate(date.getUTCDate() - 6)
+    date.setUTCHours(0, 0, 0, 0)
     return date
   }
-  return new Date(now.getFullYear(), now.getMonth(), 1)
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
 }
 
 function startOfDay(value: string) {
-  return new Date(`${value}T00:00:00`)
+  return new Date(`${value}T00:00:00Z`)
 }
 
 function endOfDay(value: string) {
-  return new Date(`${value}T23:59:59.999`)
+  return new Date(`${value}T23:59:59.999Z`)
 }
 
 function toDateKey(date: Date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
 
@@ -111,6 +113,12 @@ function formatDayLabel(dateKey: string) {
 function isWithinRange(dateValue: string, range: OwnerDashboardRange) {
   const date = new Date(dateValue)
   return date >= range.from && date <= range.to
+}
+
+function isWasteLikeTransaction(entry: { sourceKind?: string | null; description?: string }) {
+  const normalizedSourceKind = String(entry.sourceKind || '').trim().toLowerCase()
+  if (normalizedSourceKind === 'inventory_waste') return true
+  return String(entry.description || '').trim().toLowerCase().startsWith('waste:')
 }
 
 export function parseOwnerDashboardRange(searchParams: URLSearchParams): OwnerDashboardRange {
@@ -194,6 +202,7 @@ export function buildOwnerSyncSnapshot(params: {
       date: txn.date.toISOString(),
       amount: txn.amount ?? 0,
       type: txn.type,
+      sourceKind: txn.sourceKind ?? null,
     })),
     transactions: params.transactions.map((txn) => ({
       id: txn.id,
@@ -206,6 +215,7 @@ export function buildOwnerSyncSnapshot(params: {
       categoryName: txn.category?.name ?? '',
       categoryType: txn.category?.type ?? '',
       isManual: Boolean(txn.isManual),
+      sourceKind: txn.sourceKind ?? null,
     })),
     ingredients: params.ingredients.map((ingredient) => ({
       id: ingredient.id,
@@ -230,22 +240,29 @@ export function buildOwnerSyncSnapshot(params: {
   }
 }
 
-export function buildOwnerDashboardPayload(snapshot: OwnerSyncSnapshot, range: OwnerDashboardRange, source: 'live' | 'snapshot') {
+export function buildOwnerDashboardPayload(
+  snapshot: OwnerSyncSnapshot,
+  range: OwnerDashboardRange,
+  source: 'live' | 'snapshot',
+  options?: { includeFullTransactionHistory?: boolean },
+) {
   const sales = snapshot.sales.filter((sale) => isWithinRange(sale.date, range))
   const shifts = snapshot.shifts.filter((shift) => isWithinRange(shift.date, range))
   const wasteLogs = snapshot.wasteLogs.filter((waste) => isWithinRange(waste.date, range))
-  const expenseTransactions = snapshot.expenseTransactions.filter((txn) => isWithinRange(txn.date, range))
-  const recentTransactions = snapshot.transactions
+  const expenseTransactions = snapshot.expenseTransactions.filter((txn) => isWithinRange(txn.date, range) && !isWasteLikeTransaction(txn))
+  const filteredTransactions = snapshot.transactions
     .filter((txn) => isWithinRange(txn.date, range))
     .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, 20)
+  const recentTransactions = options?.includeFullTransactionHistory
+    ? filteredTransactions
+    : filteredTransactions.slice(0, 20)
 
   const revenue = sales.reduce((sum, sale) => sum + sale.totalSaleAmount, 0)
   const cogs = sales.reduce((sum, sale) => sum + sale.calculatedFoodCost, 0)
   const laborCost = shifts.reduce((sum, shift) => sum + shift.calculatedWage, 0)
   const wasteCost = wasteLogs.reduce((sum, waste) => sum + waste.calculatedCost, 0)
   const recordedExpenses = expenseTransactions.reduce((sum, txn) => sum + (txn.type === 'debit' ? txn.amount : -txn.amount), 0)
-  const expenses = cogs + laborCost + wasteCost + recordedExpenses
+  const expenses = cogs + laborCost + recordedExpenses
   const profit = revenue - expenses
   const foodCostPct = revenue > 0 ? (cogs / revenue) * 100 : 0
   const laborPct = revenue > 0 ? (laborCost / revenue) * 100 : 0
@@ -325,12 +342,6 @@ export function buildOwnerDashboardPayload(snapshot: OwnerSyncSnapshot, range: O
     current.expenses += shift.calculatedWage
     historyMap.set(key, current)
   }
-  for (const waste of wasteLogs) {
-    const key = toDateKey(new Date(waste.date))
-    const current = historyMap.get(key) ?? { revenue: 0, expenses: 0 }
-    current.expenses += waste.calculatedCost
-    historyMap.set(key, current)
-  }
   for (const txn of expenseTransactions) {
     const key = toDateKey(new Date(txn.date))
     const current = historyMap.get(key) ?? { revenue: 0, expenses: 0 }
@@ -396,7 +407,7 @@ export function buildOwnerDashboardPayload(snapshot: OwnerSyncSnapshot, range: O
       expenses,
       profit,
       salesCount: sales.length,
-      transactionCount: recentTransactions.length,
+      transactionCount: filteredTransactions.length,
       activeOrders: snapshot.activeOrders,
     },
     costBreakdown: {

@@ -10,8 +10,8 @@ export const viewport: Viewport = {
 }
 
 export const metadata = {
-	title: 'Magnify - Personal Accountant',
-	description: 'AI-powered accounting from WhatsApp screenshots',
+	title: 'Magnify - Restaurant Management System',
+	description: 'AI-powered restaurant management system',
 	icons: {
 		icon: '/icon.svg'
 	}

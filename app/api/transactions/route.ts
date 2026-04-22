@@ -1,7 +1,16 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
+import { databaseUnavailableJson, isPrismaDatabaseUnavailableError, logDatabaseUnavailable } from '@/lib/apiDatabase'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { recordJournalEntry } from '@/lib/accounting'
+import { getRestaurantContextForUser, isMainRestaurantBranch } from '@/lib/restaurantAccess'
+
+class UnauthorizedError extends Error {
+	constructor() {
+		super('Unauthorized')
+	}
+}
 
 function parseAmount(raw: unknown): number {
 	if (typeof raw === 'number') return raw
@@ -20,46 +29,38 @@ function parseDateOrNow(raw: unknown): Date {
 async function requireUserId() {
 	const session = await getServerSession(authOptions)
 	const userId = session?.user?.id
-	if (!userId) throw new Error('Unauthorized')
+	if (!userId) throw new UnauthorizedError()
 	return userId
 }
 
-async function ensureCoreCategories() {
-	const types = ['income', 'expense', 'asset', 'liability', 'equity'] as const
-	const byType: Record<string, { id: string; type: string; name: string }> = {}
-	for (const t of types) {
-		const name = t.charAt(0).toUpperCase() + t.slice(1)
-		const cat = await prisma.category.upsert({
-			where: { restaurantId_name: { restaurantId: null, name } },
-			update: { type: t },
-			create: { restaurantId: null, name, type: t }
-		})
-		byType[t] = cat
+async function requireTransactionContext() {
+	const userId = await requireUserId()
+	const context = await getRestaurantContextForUser(userId)
+
+	return {
+		currentUserId: userId,
+		billingUserId: context?.billingUserId ?? userId,
+		restaurantId: context?.restaurantId ?? null,
+		branchId: context?.branchId ?? null,
 	}
-	return byType
 }
 
-async function ensureAccount(params: { name: string; type: string; categoryId: string; code?: string }) {
-	const existing = await prisma.account.findFirst({ where: { name: params.name } })
-	if (existing) return existing
+async function buildTransactionScopeFilter(restaurantId: string | null, branchId: string | null) {
+	if (!restaurantId) return {}
+	if (!branchId) return { restaurantId, branchId: null }
 
-	const code =
-		params.code ||
-		`AUTO-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`.toUpperCase()
-
-	return prisma.account.create({
-		data: {
-			code,
-			name: params.name,
-			type: params.type,
-			categoryId: params.categoryId
-		}
-	})
+	const includeBranchlessRows = await isMainRestaurantBranch(restaurantId, branchId)
+	return {
+		restaurantId,
+		...(includeBranchlessRows
+			? { OR: [{ branchId }, { branchId: null }] }
+			: { branchId }),
+	}
 }
 
 export async function GET(req: Request) {
 	try {
-		const userId = await requireUserId()
+		const context = await requireTransactionContext()
 		const { searchParams } = new URL(req.url)
 		const startDate = searchParams.get('startDate')
 		const endDate = searchParams.get('endDate')
@@ -72,7 +73,11 @@ export async function GET(req: Request) {
 			}
 			: {}
 		const transactions = await prisma.transaction.findMany({
-			where: { userId, ...dateFilter },
+			where: {
+				userId: context.billingUserId,
+				...(await buildTransactionScopeFilter(context.restaurantId, context.branchId)),
+				...dateFilter,
+			},
 			orderBy: { date: 'desc' },
 			include: {
 				account: true,
@@ -88,22 +93,37 @@ export async function GET(req: Request) {
 				description: t.description,
 				amount: t.amount,
 				type: t.type,
-				accountName: t.account.name,
+				accountName: t.accountName || t.account.name,
 				categoryType: t.category.type,
 				paymentMethod: t.paymentMethod,
 				pairId: t.pairId,
+				isManual: t.isManual,
+				sourceKind: t.sourceKind,
 				uploadId: t.uploadId,
 				screenshotUrl: t.upload?.filePath || null
 			}))
 		})
-	} catch (e: any) {
-		return new NextResponse(e?.message || 'Unauthorized', { status: 401 })
+	} catch (error) {
+		if (error instanceof UnauthorizedError) {
+			return new NextResponse('Unauthorized', { status: 401 })
+		}
+
+		if (isPrismaDatabaseUnavailableError(error)) {
+			logDatabaseUnavailable('api/transactions GET', error)
+			return databaseUnavailableJson({
+				body: { transactions: [] },
+				message: 'Transactions are temporarily unavailable while the database connection is down.',
+			})
+		}
+
+		console.error('Error fetching transactions:', error)
+		return new NextResponse('Failed to load transactions', { status: 500 })
 	}
 }
 
 export async function POST(req: Request) {
 	try {
-		const userId = await requireUserId()
+		const context = await requireTransactionContext()
 		const body = await req.json()
 
 		const amount = parseAmount(body.amount)
@@ -121,95 +141,37 @@ export async function POST(req: Request) {
 		const description = String(body.description || 'Manual entry')
 		const date = parseDateOrNow(body.date)
 		const paymentMethod = body.paymentMethod || 'Cash'
-		const pairId = `pair-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
 
-		const categories = await ensureCoreCategories()
-		const cashAccount = await ensureAccount({
-			name: 'Cash',
-			type: 'asset',
-			categoryId: categories.asset.id,
-			code: '1000'
+		await recordJournalEntry(prisma, {
+			userId: context.billingUserId,
+			restaurantId: context.restaurantId,
+			branchId: context.branchId,
+			date,
+			description,
+			amount,
+			direction,
+			accountName: body.accountName ? String(body.accountName) : undefined,
+			categoryType,
+			paymentMethod,
+			isManual: true,
+			sourceKind: 'manual_entry',
 		})
 
-		const mainCategory = categories[categoryType] || categories.expense
-		const mainAccountType =
-			mainCategory.type === 'income'
-				? 'revenue'
-				: mainCategory.type === 'expense'
-					? 'expense'
-					: mainCategory.type
-		const mainAccountName = body.accountName ? String(body.accountName) : mainCategory.type === 'income' ? 'Sales' : 'General Expense'
-		const mainAccount = await ensureAccount({
-			name: mainAccountName,
-			type: mainAccountType,
-			categoryId: mainCategory.id
-		})
+		return NextResponse.json({ ok: true })
+	} catch (error) {
+		if (error instanceof UnauthorizedError) {
+			return new NextResponse('Unauthorized', { status: 401 })
+		}
 
-		// Cash by default: every entry creates two journal lines.
-		if (direction === 'out') {
-			await prisma.transaction.createMany({
-				data: [
-					{
-						userId,
-						accountId: mainAccount.id,
-						categoryId: mainAccount.categoryId,
-						date,
-						description,
-						amount,
-						type: 'debit',
-						isManual: true,
-						paymentMethod,
-						pairId
-					},
-					{
-						userId,
-						accountId: cashAccount.id,
-						categoryId: cashAccount.categoryId,
-						date,
-						description,
-						amount,
-						type: 'credit',
-						isManual: true,
-						paymentMethod,
-						pairId
-					}
-				]
-			})
-		} else {
-			await prisma.transaction.createMany({
-				data: [
-					{
-						userId,
-						accountId: cashAccount.id,
-						categoryId: cashAccount.categoryId,
-						date,
-						description,
-						amount,
-						type: 'debit',
-						isManual: true,
-						paymentMethod,
-						pairId
-					},
-					{
-						userId,
-						accountId: mainAccount.id,
-						categoryId: mainAccount.categoryId,
-						date,
-						description,
-						amount,
-						type: 'credit',
-						isManual: true,
-						paymentMethod,
-						pairId
-					}
-				]
+		if (isPrismaDatabaseUnavailableError(error)) {
+			logDatabaseUnavailable('api/transactions POST', error)
+			return databaseUnavailableJson({
+				message: 'Transaction changes could not be saved because the database connection is down.',
 			})
 		}
 
-		return NextResponse.json({ ok: true })
-	} catch (e: any) {
-		const msg = e?.message || 'Error'
-		const status = msg === 'Unauthorized' ? 401 : 500
-		return new NextResponse(msg, { status })
+		const message = error instanceof Error ? error.message : 'Error'
+		console.error('Error saving transaction:', error)
+		return new NextResponse(message, { status: 500 })
 	}
 }

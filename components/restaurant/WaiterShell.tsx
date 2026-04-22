@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { UtensilsCrossed, ArrowLeftRight, Layout, ChefHat, LogOut } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
+import RestaurantCloudSync from '@/components/restaurant/RestaurantCloudSync'
 import RestaurantOrders from '@/components/restaurant/RestaurantOrders'
 import RestaurantTables from '@/components/restaurant/RestaurantTables'
 import RestaurantKitchen from '@/components/restaurant/RestaurantKitchen'
@@ -13,7 +14,7 @@ const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'menu',         label: 'Menu',         icon: <UtensilsCrossed className="h-4 w-4" /> },
   { id: 'transactions', label: 'Transactions', icon: <ArrowLeftRight className="h-4 w-4" /> },
   { id: 'tables',       label: 'Tables',       icon: <Layout className="h-4 w-4" /> },
-  { id: 'kitchen',      label: 'Kitchen',      icon: <ChefHat className="h-4 w-4" /> },
+  { id: 'kitchen',      label: 'Waste Management', icon: <ChefHat className="h-4 w-4" /> },
 ]
 
 export default function WaiterShell() {
@@ -21,14 +22,19 @@ export default function WaiterShell() {
   const [activeTab, setActiveTab] = useState<TabId>('menu')
   const [pendingCount, setPendingCount] = useState(0)
 
-  const waiterName = (session?.user as any)?.name ?? 'Waiter'
-  const initials   = waiterName.split(' ').slice(0, 2).map((w: string) => w[0]).join('').toUpperCase()
+  const waiterName = typeof (session?.user as any)?.name === 'string'
+    ? ((session?.user as any)?.name as string).trim()
+    : ''
+  const initials   = waiterName
+    ? waiterName.split(' ').slice(0, 2).map((w: string) => w[0]).join('').toUpperCase()
+    : ''
 
   // POS (menu) tab fills the entire remaining height; others scroll normally
   const isPOS = activeTab === 'menu'
 
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+      <RestaurantCloudSync />
 
       {/* ── Top navigation bar ── */}
       <header className="bg-gray-900 text-white shadow-md flex-shrink-0 z-30">
@@ -39,7 +45,7 @@ export default function WaiterShell() {
             <div className="w-7 h-7 rounded-lg bg-orange-500 flex items-center justify-center text-white font-black text-xs select-none">
               {initials || 'W'}
             </div>
-            <span className="text-sm font-bold text-white leading-none hidden sm:block">{waiterName}</span>
+            {waiterName ? <span className="text-sm font-bold text-white leading-none hidden sm:block">{waiterName}</span> : null}
           </div>
 
           {/* Tab navigation */}
@@ -48,7 +54,7 @@ export default function WaiterShell() {
               <button
                 key={t.id}
                 onClick={() => setActiveTab(t.id)}
-                className={`relative flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap flex-shrink-0 ${
+                className={`relative flex items-center gap-1.5 px-3 py-3 rounded-lg text-sm font-medium transition-colors whitespace-nowrap flex-shrink-0 ${
                   activeTab === t.id
                     ? 'bg-white/10 text-white'
                     : 'text-gray-400 hover:text-white hover:bg-white/5'
