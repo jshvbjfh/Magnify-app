@@ -112,6 +112,35 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
     return () => window.removeEventListener('refreshTables', handler)
   }, [load])
 
+  // Silent background poll — refreshes table statuses and pending order counts
+  // every 30 seconds so new QR orders are reflected without a manual page reload.
+  useEffect(() => {
+    const silentRefresh = async () => {
+      try {
+        const [tablesRes, ordersRes] = await Promise.all([
+          fetch('/api/restaurant/tables-db', { credentials: 'include' }),
+          fetch('/api/restaurant/pending', { credentials: 'include' }),
+        ])
+        if (tablesRes.ok) {
+          const tablesData = await tablesRes.json()
+          if (Array.isArray(tablesData)) setTables(tablesData)
+        }
+        if (ordersRes.ok) {
+          const orders = await ordersRes.json()
+          if (Array.isArray(orders)) {
+            const nextCounts: PendingCount = {}
+            orders.forEach((o: any) => {
+              if (o.tableId && o.status !== 'ready') nextCounts[o.tableId] = (nextCounts[o.tableId] || 0) + 1
+            })
+            setPendingCounts(nextCounts)
+          }
+        }
+      } catch { /* silent — ignore errors during background poll */ }
+    }
+    const interval = setInterval(silentRefresh, 30_000)
+    return () => clearInterval(interval)
+  }, [])
+
   async function addTable() {
     if (!form.name.trim()) return
     setSaving(true)
