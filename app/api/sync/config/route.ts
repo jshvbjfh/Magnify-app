@@ -18,7 +18,7 @@ export async function GET() {
   const usesSharedSecret = Boolean(String(process.env.OWNER_SYNC_SHARED_SECRET ?? '').trim())
   const hasPassword = Boolean(String(process.env.OWNER_SYNC_PASSWORD ?? '').trim())
   const email = usesSharedSecret
-    ? (configuredOwnerEmail || sessionEmail)
+    ? configuredOwnerEmail
     : (configuredOwnerEmail || sessionEmail)
 
   return NextResponse.json({

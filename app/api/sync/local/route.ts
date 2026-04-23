@@ -355,6 +355,9 @@ export async function POST(req: Request) {
     const password = pickFirstSecret(body.password, process.env.OWNER_SYNC_PASSWORD)
     const sharedSecret = String(process.env.OWNER_SYNC_SHARED_SECRET ?? '').trim()
     const configuredOwnerEmail = String(process.env.OWNER_SYNC_EMAIL ?? '').trim().toLowerCase()
+    if (sharedSecret && !configuredOwnerEmail) {
+      return NextResponse.json({ error: 'OWNER_SYNC_EMAIL must be configured for shared-secret owner sync' }, { status: 400 })
+    }
     const email = sharedSecret
       ? pickFirstNonEmpty(configuredOwnerEmail, body.email, syncUser.email).toLowerCase()
       : pickFirstNonEmpty(body.email, configuredOwnerEmail, syncUser.email).toLowerCase()
