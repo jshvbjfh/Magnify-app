@@ -7,7 +7,7 @@ import { buildHybridSyncBatchSignature, buildSyncTransactions, mapSummaryPayload
 import { ensureRestaurantForOwner, getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { applyIncomingSyncChanges } from '@/lib/syncEngine'
 import { logSyncActivity } from '@/lib/syncLogging'
-import { enqueueSyncChange, GLOBAL_SYNC_SCOPE_ID, getSyncCursor, getSyncDeviceId, isRestaurantWideSyncEntity, listPendingSyncOutboxChanges, mapSyncOutboxRows, markSyncOutboxChangesFailed, markSyncOutboxChangesSynced, resetSyncOutboxRowsForRetry, updateSyncCursor } from '@/lib/syncOutbox'
+import { enqueueSyncChange, GLOBAL_SYNC_SCOPE_ID, getSyncCursor, getSyncDeviceId, isRestaurantWideSyncEntity, listPendingSyncOutboxChanges, mapSyncOutboxRows, markSyncOutboxChangesFailed, markSyncOutboxChangesSynced, resetSyncOutboxRowsForRetry, SYNC_OUTBOX_MAX_ATTEMPTS, updateSyncCursor } from '@/lib/syncOutbox'
 
 async function recordSyncEvent(restaurantId: string, event: { status: 'success' | 'failure'; message: string; syncedTransactions: number; syncedSummaries: number; consecutiveFailures: number }) {
   await prisma.restaurantSyncEvent.create({
@@ -235,6 +235,79 @@ async function seedFullSnapshotIfNeeded(restaurantId: string, billingUserId: str
   return total > 0
 }
 
+async function ensureEssentialSyncIdentityRows(restaurantId: string) {
+  const [restaurant, branches, existingRows] = await Promise.all([
+    prisma.restaurant.findUnique({ where: { id: restaurantId } }),
+    prisma.restaurantBranch.findMany({ where: { restaurantId, isActive: true } }),
+    prisma.syncOutbox.findMany({
+      where: {
+        scopeId: restaurantId,
+        entityType: { in: ['restaurant', 'restaurantBranch'] },
+      },
+      select: {
+        entityType: true,
+        entityId: true,
+      },
+    }),
+  ])
+
+  const existingKeys = new Set(existingRows.map((row) => `${row.entityType}:${row.entityId}`))
+
+  if (restaurant && !existingKeys.has(`restaurant:${restaurant.id}`)) {
+    await enqueueSyncChange(prisma, {
+      restaurantId,
+      branchId: null,
+      entityType: 'restaurant',
+      entityId: restaurant.id,
+      operation: 'upsert',
+      payload: restaurant,
+    })
+  }
+
+  for (const branch of branches) {
+    if (existingKeys.has(`restaurantBranch:${branch.id}`)) continue
+    await enqueueSyncChange(prisma, {
+      restaurantId,
+      branchId: null,
+      entityType: 'restaurantBranch',
+      entityId: branch.id,
+      operation: 'upsert',
+      payload: branch,
+    })
+  }
+}
+
+async function listPrioritizedPendingSyncOutboxChanges(restaurantId: string, branchId: string | null, limit: number) {
+  const now = new Date()
+  const priorityRows = await prisma.syncOutbox.findMany({
+    where: {
+      scopeId: restaurantId,
+      entityType: { in: ['restaurant', 'restaurantBranch'] },
+      syncedAt: null,
+      attempts: { lt: SYNC_OUTBOX_MAX_ATTEMPTS },
+      OR: [
+        { availableAt: null },
+        { availableAt: { lte: now } },
+      ],
+    },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    take: limit,
+  })
+
+  const regularRows = await listPendingSyncOutboxChanges(prisma, {
+    scopeIds: [restaurantId, GLOBAL_SYNC_SCOPE_ID],
+    limit,
+    branchId,
+  })
+
+  const seenIds = new Set<string>()
+  return [...priorityRows, ...regularRows].filter((row) => {
+    if (seenIds.has(row.id)) return false
+    seenIds.add(row.id)
+    return true
+  }).slice(0, limit)
+}
+
 async function hasInternet(targetUrl: string) {
   try {
     const controller = new AbortController()
@@ -311,10 +384,8 @@ export async function POST(req: Request) {
     })
 
     const affectedDates = unsyncedTransactions.map((row) => row.date).map((date) => {
-      const year = date.getFullYear()
-      const month = String(date.getMonth() + 1).padStart(2, '0')
-      const day = String(date.getDate()).padStart(2, '0')
-      return `${year}-${month}-${day}`
+      // Use Kigali timezone so dates are not shifted to the previous UTC day
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(date)
     })
 
     // Also refresh summaries for all existing daily-summary dates so that any
@@ -325,8 +396,8 @@ export async function POST(req: Request) {
       select: { date: true },
     })
     const summaryDates = existingSummaries.map((row) => {
-      const d = row.date
-      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+      // Use Kigali timezone — summary dates stored at UTC noon fall on the correct Kigali day
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(row.date)
     })
     const allDatesToRefresh = Array.from(new Set([...affectedDates, ...summaryDates]))
 
@@ -334,6 +405,7 @@ export async function POST(req: Request) {
 
     // On first-ever sync, seed outbox with all existing data so cloud gets everything
     await seedFullSnapshotIfNeeded(restaurant.id, billingUserId, branchId)
+    await ensureEssentialSyncIdentityRows(restaurant.id)
 
     const unsyncedSummaries = await prisma.dailySummary.findMany({
       where: { userId: billingUserId, restaurantId: restaurant.id, ...(branchId ? { branchId } : {}), synced: false },
@@ -343,7 +415,7 @@ export async function POST(req: Request) {
     const [restaurantCursor, globalCursor, pendingOutboxRows] = await Promise.all([
       getSyncCursor(prisma, { scopeId: restaurant.id, restaurantId: restaurant.id }),
       getSyncCursor(prisma, { scopeId: GLOBAL_SYNC_SCOPE_ID, restaurantId: restaurant.id }),
-      listPendingSyncOutboxChanges(prisma, { scopeIds: [restaurant.id, GLOBAL_SYNC_SCOPE_ID], limit: 30, branchId }),
+      listPrioritizedPendingSyncOutboxChanges(restaurant.id, branchId, 30),
     ])
 
     const { transactions, syncedIds } = buildSyncTransactions(unsyncedTransactions)

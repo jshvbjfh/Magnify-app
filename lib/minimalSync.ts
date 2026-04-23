@@ -57,19 +57,23 @@ export type SyncEnvelopePayload = {
   summaries: SyncSummaryPayload[]
 }
 
+function kigaliDateKey(date: Date): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(date)
+}
+
 function startOfDay(value: Date) {
-  return new Date(value.getFullYear(), value.getMonth(), value.getDate())
+  // Use noon of the given date in Kigali to resolve the correct local date, then take midnight Kigali
+  const key = kigaliDateKey(value)
+  return new Date(`${key}T00:00:00+02:00`)
 }
 
 function endOfDay(value: Date) {
-  return new Date(value.getFullYear(), value.getMonth(), value.getDate(), 23, 59, 59, 999)
+  const key = kigaliDateKey(value)
+  return new Date(`${key}T23:59:59.999+02:00`)
 }
 
 function toDateKey(value: Date) {
-  const year = value.getUTCFullYear()
-  const month = String(value.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(value.getUTCDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  return kigaliDateKey(value)
 }
 
 function isWasteLikeTransaction(row: { sourceKind?: string | null; description: string }) {
@@ -104,7 +108,7 @@ export function buildSyncTransactions(rows: TransactionWithCategory[]) {
         type: primary.category.type === 'income' ? 'sale' : 'expense',
         amount: primary.amount,
         description: primary.description,
-        createdAt: primary.createdAt.toISOString(),
+        createdAt: primary.date.toISOString(),
         paymentMethod: primary.paymentMethod,
         accountName: primary.account?.name ?? null,
         sourceKind: primary.sourceKind,
@@ -126,9 +130,9 @@ export async function refreshDailySummaries(prisma: PrismaClient, userId: string
   const summaries: string[] = []
 
   for (const dateKey of uniqueDateKeys) {
-    // Parse in local time for querying — transactions are stored in the same local timezone
-    const dayStart = startOfDay(new Date(`${dateKey}T12:00:00`))
-    const dayEnd = endOfDay(new Date(`${dateKey}T12:00:00`))
+    // Use explicit Kigali offset (+02:00) so date parsing is timezone-safe on any server/OS
+    const dayStart = startOfDay(new Date(`${dateKey}T12:00:00+02:00`))
+    const dayEnd = endOfDay(new Date(`${dateKey}T12:00:00+02:00`))
     // UTC noon for storage — immune to timezone shifts when synced to cloud
     const daySummaryDate = new Date(`${dateKey}T12:00:00Z`)
     const dayTransactions = await prisma.transaction.findMany({
@@ -180,8 +184,9 @@ export async function refreshDailySummaries(prisma: PrismaClient, userId: string
         userId,
         restaurantId: restaurantId ?? null,
         branchId: branchId ?? null,
-        // Match summaries stored at either old local-midnight or new UTC-noon
-        date: { gte: new Date(`${dateKey}T00:00:00Z`), lte: new Date(`${dateKey}T23:59:59.999Z`) },
+        // Span the full Kigali calendar day (22:00Z prev day to 21:59:59Z same day)
+        // so both legacy (local-midnight-stored) and current (UTC-noon) summaries are found
+        date: { gte: new Date(`${dateKey}T00:00:00+02:00`), lte: new Date(`${dateKey}T23:59:59.999+02:00`) },
       },
       select: {
         id: true,
