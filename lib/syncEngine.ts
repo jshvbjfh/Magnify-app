@@ -88,6 +88,32 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      // Before upserting, delete any cloud-auto-created "ghost" branch that shares the same
+      // restaurantId+code or restaurantId+name but a different id.  Ghost branches are created
+      // by ensureMainBranchForRestaurant before entity-sync applies and violate the unique
+      // constraints @@unique([restaurantId, code]) / @@unique([restaurantId, name]),
+      // causing the entire sync transaction to roll back so no data ever reaches the owner.
+      {
+        const incomingId = String(payload.id || change.entityId)
+        const incomingCode = String(payload.code ?? '').trim()
+        const incomingName = String(payload.name ?? '').trim()
+        const incomingRestaurantId = String(payload.restaurantId ?? '').trim()
+        if (incomingRestaurantId) {
+          const conflictFilter: Array<{ code: string } | { name: string }> = []
+          if (incomingCode) conflictFilter.push({ code: incomingCode })
+          if (incomingName) conflictFilter.push({ name: incomingName })
+          if (conflictFilter.length > 0) {
+            await db.restaurantBranch.deleteMany({
+              where: {
+                id: { not: incomingId },
+                restaurantId: incomingRestaurantId,
+                OR: conflictFilter,
+              },
+            })
+          }
+        }
+      }
+
       await db.restaurantBranch.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {

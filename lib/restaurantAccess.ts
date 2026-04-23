@@ -305,11 +305,6 @@ export async function resolveRestaurantForSyncUser(user: {
       await syncOwnerRestaurantLink(prisma, user.id, existingRestaurant.id)
     }
 
-    const mainBranch = await ensureMainBranchForRestaurant(existingRestaurant.id)
-    if (mainBranch && user.branchId !== mainBranch.id) {
-      await syncUserBranchLink(prisma, user.id, mainBranch.id)
-    }
-
     return {
       ok: true as const,
       restaurant: existingRestaurant,
@@ -348,11 +343,6 @@ export async function resolveRestaurantForSyncUser(user: {
       await syncOwnerRestaurantLink(prisma, user.id, updatedRestaurant.id)
     }
 
-    const mainBranch = await ensureMainBranchForRestaurant(updatedRestaurant.id)
-    if (mainBranch && user.branchId !== mainBranch.id) {
-      await syncUserBranchLink(prisma, user.id, mainBranch.id)
-    }
-
     return {
       ok: true as const,
       restaurant: updatedRestaurant,
@@ -371,10 +361,6 @@ export async function resolveRestaurantForSyncUser(user: {
   })
 
   await syncOwnerRestaurantLink(prisma, user.id, createdRestaurant.id)
-  const mainBranch = await ensureMainBranchForRestaurant(createdRestaurant.id)
-  if (mainBranch) {
-    await syncUserBranchLink(prisma, user.id, mainBranch.id)
-  }
 
   return {
     ok: true as const,
