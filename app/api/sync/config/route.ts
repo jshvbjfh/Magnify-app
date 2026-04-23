@@ -14,11 +14,12 @@ export async function GET() {
 
   const targetUrl = String(process.env.OWNER_SYNC_TARGET_URL ?? getCanonicalCloudAppUrl() ?? '').trim()
   const sessionEmail = typeof session.user.email === 'string' ? session.user.email.trim().toLowerCase() : ''
+  const configuredOwnerEmail = String(process.env.OWNER_SYNC_EMAIL ?? '').trim().toLowerCase()
   const usesSharedSecret = Boolean(String(process.env.OWNER_SYNC_SHARED_SECRET ?? '').trim())
   const hasPassword = Boolean(String(process.env.OWNER_SYNC_PASSWORD ?? '').trim())
   const email = usesSharedSecret
-    ? sessionEmail
-    : String(process.env.OWNER_SYNC_EMAIL ?? sessionEmail).trim().toLowerCase()
+    ? (configuredOwnerEmail || sessionEmail)
+    : (configuredOwnerEmail || sessionEmail)
 
   return NextResponse.json({
     configured: Boolean(targetUrl && email && (usesSharedSecret || hasPassword)),

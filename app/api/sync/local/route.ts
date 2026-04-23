@@ -354,9 +354,10 @@ export async function POST(req: Request) {
     const targetUrl = pickFirstNonEmpty(body.targetUrl, process.env.OWNER_SYNC_TARGET_URL, getCanonicalCloudAppUrl())
     const password = pickFirstSecret(body.password, process.env.OWNER_SYNC_PASSWORD)
     const sharedSecret = String(process.env.OWNER_SYNC_SHARED_SECRET ?? '').trim()
+    const configuredOwnerEmail = String(process.env.OWNER_SYNC_EMAIL ?? '').trim().toLowerCase()
     const email = sharedSecret
-      ? pickFirstNonEmpty(body.email, syncUser.email, process.env.OWNER_SYNC_EMAIL).toLowerCase()
-      : pickFirstNonEmpty(body.email, process.env.OWNER_SYNC_EMAIL, syncUser.email).toLowerCase()
+      ? pickFirstNonEmpty(configuredOwnerEmail, body.email, syncUser.email).toLowerCase()
+      : pickFirstNonEmpty(body.email, configuredOwnerEmail, syncUser.email).toLowerCase()
 
     if (!targetUrl || !email || (!password && !sharedSecret)) {
       return NextResponse.json({ error: 'Sync target, sync email, and server-managed secret or password are required' }, { status: 400 })

@@ -276,6 +276,8 @@ export async function resolveRestaurantForSyncUser(user: {
   restaurantSyncId: string
   restaurantToken: string
   restaurantName?: string | null
+}, options?: {
+  allowOwnerTransfer?: boolean
 }) {
   const existingRestaurant = await prisma.restaurant.findUnique({
     where: { syncRestaurantId: params.restaurantSyncId },
@@ -285,19 +287,47 @@ export async function resolveRestaurantForSyncUser(user: {
     const isOwner = existingRestaurant.ownerId === user.id
     const isLinkedStaff = Boolean(user.restaurantId && user.restaurantId === existingRestaurant.id)
 
-    if (!isOwner && !isLinkedStaff) {
-      return {
-        ok: false as const,
-        status: 403,
-        error: 'This branch is linked to a different owner account',
-      }
-    }
-
     if (existingRestaurant.syncToken !== params.restaurantToken) {
       return {
         ok: false as const,
         status: 401,
         error: 'Invalid restaurant sync token',
+      }
+    }
+
+    if (!isOwner && !isLinkedStaff) {
+      if (options?.allowOwnerTransfer) {
+        const transferredRestaurant = await prisma.restaurant.update({
+          where: { id: existingRestaurant.id },
+          data: {
+            ownerId: user.id,
+            name: params.restaurantName || existingRestaurant.name,
+            syncToken: params.restaurantToken,
+          },
+        })
+
+        await prisma.user.updateMany({
+          where: {
+            id: existingRestaurant.ownerId,
+            restaurantId: existingRestaurant.id,
+          },
+          data: { restaurantId: null },
+        })
+
+        if (user.restaurantId !== transferredRestaurant.id) {
+          await syncOwnerRestaurantLink(prisma, user.id, transferredRestaurant.id)
+        }
+
+        return {
+          ok: true as const,
+          restaurant: transferredRestaurant,
+        }
+      }
+
+      return {
+        ok: false as const,
+        status: 403,
+        error: 'This branch is linked to a different owner account',
       }
     }
 

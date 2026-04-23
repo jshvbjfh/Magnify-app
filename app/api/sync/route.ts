@@ -135,6 +135,7 @@ export async function POST(req: Request) {
     const email = req.headers.get('x-sync-email')?.trim().toLowerCase() ?? ''
     const sharedSecret = req.headers.get('x-sync-secret')?.trim() ?? ''
     const password = req.headers.get('x-sync-password') ?? ''
+    const configuredOwnerEmail = String(process.env.OWNER_SYNC_EMAIL ?? '').trim().toLowerCase()
     if (!email || (!sharedSecret && !password)) {
       return NextResponse.json({ error: 'Sync credentials are required' }, { status: 401 })
     }
@@ -192,6 +193,8 @@ export async function POST(req: Request) {
       restaurantSyncId,
       restaurantToken,
       restaurantName,
+    }, {
+      allowOwnerTransfer: Boolean(sharedSecret && configuredOwnerEmail && email === configuredOwnerEmail),
     })
     if (!resolvedRestaurant.ok) {
       return NextResponse.json({
