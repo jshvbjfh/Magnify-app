@@ -30,13 +30,39 @@ export async function GET(req: Request) {
       )
     }
 
+    // Check whether the waiter's assigned branch is the restaurant's main branch.
+    // If so, apply the main-branch compatibility rule: include records with
+    // branchId = NULL alongside the explicit branchId match. This covers dishes
+    // and tables that were created before the branch feature was introduced and
+    // therefore have no branchId set in the database.
+    //
+    // ── TEMPORARY COMPATIBILITY LAYER ────────────────────────────────────────
+    // This OR-NULL arm exists solely to recover from historical data where
+    // dishes/tables were written with branchId = NULL before the NOT NULL
+    // constraint was enforced (migration 20260429000002).
+    //
+    // After running prisma/backfill-null-branch-ids.sql against Neon and
+    // applying migration 20260429000002, every dish/table will have a real
+    // branchId and this OR-NULL arm will match zero extra rows (i.e., it
+    // becomes a no-op).  It may be removed once the Neon migration has been
+    // confirmed as 0 remaining null-branchId rows.
+    // ─────────────────────────────────────────────────────────────────────────
+    const isMainBranch = !!(await prisma.restaurantBranch.findFirst({
+      where: { id: branchId, restaurantId, isMain: true },
+      select: { id: true },
+    }))
+
+    const dishWhere = isMainBranch
+      ? { restaurantId, isActive: true, OR: [{ branchId }, { branchId: null }] }
+      : { restaurantId, branchId, isActive: true }
+
+    const tableWhere = isMainBranch
+      ? { restaurantId, OR: [{ branchId }, { branchId: null }] }
+      : { restaurantId, branchId }
+
     const [dishes, tables, restaurant] = await Promise.all([
       prisma.dish.findMany({
-        where: {
-          restaurantId,
-          branchId,
-          isActive: true,
-        },
+        where: dishWhere,
         select: {
           id: true, name: true, sellingPrice: true,
           category: true, isActive: true, branchId: true, restaurantId: true,
@@ -45,10 +71,7 @@ export async function GET(req: Request) {
       }),
 
       prisma.restaurantTable.findMany({
-        where: {
-          restaurantId,
-          branchId,
-        },
+        where: tableWhere,
         select: {
           id: true, name: true, seats: true, status: true,
           branchId: true, restaurantId: true,
@@ -81,6 +104,17 @@ export async function GET(req: Request) {
       branch_id: t.branchId ?? null,
       restaurant_id: t.restaurantId,
     }))
+
+    if (normalisedDishes.length === 0) {
+      // Diagnostic: log when pull returns an empty menu so server logs capture
+      // the branchId/isMainBranch context without requiring a debugger.
+      console.warn('[mobile/pull] zero dishes returned', {
+        restaurantId,
+        branchId,
+        isMainBranch,
+        tablesCount: normalisedTables.length,
+      })
+    }
 
     return NextResponse.json({
       dishes: normalisedDishes,

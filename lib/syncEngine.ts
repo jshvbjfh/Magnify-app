@@ -16,6 +16,61 @@ function asDate(value: unknown) {
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
+/**
+ * Resolve a branchId for entities (dishes, tables) that must never have a null
+ * branchId in a post-migration database.  If the payload carries no branchId,
+ * look up the restaurant's main (isMain=true) branch and use that instead.
+ *
+ * Returns null only when the restaurant itself has no branch records at all,
+ * which is a data integrity error that must be logged and investigated.
+ */
+async function resolveSyncBranchId(
+  db: PrismaDb,
+  payloadBranchId: unknown,
+  restaurantId: unknown,
+  entityType: string,
+  entityId: string,
+): Promise<string | null> {
+  const candidate = String(payloadBranchId ?? '').trim()
+  if (candidate) return candidate
+
+  const resId = String(restaurantId ?? '').trim()
+  if (!resId) {
+    console.error(
+      '[syncEngine] %s %s has no branchId and no restaurantId — cannot resolve branch',
+      entityType, entityId,
+    )
+    return null
+  }
+
+  // Try the main branch first, then any active branch as a fallback.
+  const branch =
+    await (db as PrismaClient).restaurantBranch.findFirst({
+      where: { restaurantId: resId, isMain: true, isActive: true },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+    }) ??
+    await (db as PrismaClient).restaurantBranch.findFirst({
+      where: { restaurantId: resId, isActive: true },
+      select: { id: true },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    })
+
+  if (branch) {
+    console.warn(
+      '[syncEngine] %s %s missing branchId in payload — resolved to branch %s for restaurant %s',
+      entityType, entityId, branch.id, resId,
+    )
+    return branch.id
+  }
+
+  console.error(
+    '[syncEngine] %s %s missing branchId and restaurant %s has no active branches — skipping upsert',
+    entityType, entityId, resId,
+  )
+  return null
+}
+
 async function hasPendingLocalConflict(db: PrismaDb, change: SyncChangeEnvelope, localDeviceId: string) {
   const pending = await db.syncOutbox.findFirst({
     where: {
@@ -146,11 +201,18 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      // Same null-branchId guard as for dishes — tables without a branch are
+      // invisible to the waiter pull query.
+      const tableBranchId = await resolveSyncBranchId(
+        db, payload.branchId, payload.restaurantId, 'restaurantTable', change.entityId,
+      )
+      if (!tableBranchId) break  // restaurant has no branches — skip, already logged
+
       await db.restaurantTable.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
           restaurantId: payload.restaurantId,
-          branchId: payload.branchId ?? null,
+          branchId: tableBranchId,
           name: payload.name,
           seats: Number(payload.seats ?? 4),
           status: payload.status ?? 'available',
@@ -160,7 +222,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         create: {
           id: String(payload.id || change.entityId),
           restaurantId: payload.restaurantId,
-          branchId: payload.branchId ?? null,
+          branchId: tableBranchId,
           name: payload.name,
           seats: Number(payload.seats ?? 4),
           status: payload.status ?? 'available',
@@ -210,12 +272,20 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      // Reject null branchId — dishes without a branch are invisible to the
+      // waiter pull query.  Resolve to the restaurant's main branch instead of
+      // silently persisting bad data.  Log any resolution so it is auditable.
+      const dishBranchId = await resolveSyncBranchId(
+        db, payload.branchId, payload.restaurantId, 'dish', change.entityId,
+      )
+      if (!dishBranchId) break  // restaurant has no branches — skip, already logged
+
       await db.dish.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
           userId: userId,
           restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          branchId: dishBranchId,
           name: payload.name,
           sellingPrice: Number(payload.sellingPrice),
           category: payload.category ?? null,
@@ -227,7 +297,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           id: String(payload.id || change.entityId),
           userId: userId,
           restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          branchId: dishBranchId,
           name: payload.name,
           sellingPrice: Number(payload.sellingPrice),
           category: payload.category ?? null,
@@ -690,6 +760,44 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
       })
+
+      // Sync embedded order items — delete existing then recreate from payload.
+      // This is safe: the parent order upsert above runs first (same tx on cloud side),
+      // so FK constraint on RestaurantOrderItem.orderId is already satisfied.
+      if (Array.isArray(payload.items) && payload.items.length > 0) {
+        const orderId = String(payload.id || change.entityId)
+        await db.restaurantOrderItem.deleteMany({ where: { orderId } })
+        await db.restaurantOrderItem.createMany({
+          data: payload.items.map((item: any) => ({
+            id: String(item.id || ''),
+            orderId,
+            dishId: String(item.dishId),
+            dishName: String(item.dishName ?? ''),
+            dishPrice: Number(item.dishPrice ?? 0),
+            qty: Number(item.qty ?? 1),
+            kitchenStatus: String(item.kitchenStatus ?? 'new'),
+            status: String(item.status ?? 'ACTIVE'),
+            canceledById: item.canceledById ?? null,
+            canceledByName: item.canceledByName ?? null,
+            cancellationApprovedByEmployeeId: item.cancellationApprovedByEmployeeId ?? null,
+            cancellationApprovedByEmployeeName: item.cancellationApprovedByEmployeeName ?? null,
+            cancelReason: item.cancelReason ?? null,
+            wastedById: item.wastedById ?? null,
+            wastedByName: item.wastedByName ?? null,
+            wasteReason: item.wasteReason ?? null,
+            wasteAcknowledged: Boolean(item.wasteAcknowledged ?? false),
+            readyAt: asDate(item.readyAt),
+            canceledAt: asDate(item.canceledAt),
+            wastedAt: asDate(item.wastedAt),
+            createdAt: asDate(item.createdAt) ?? new Date(),
+            updatedAt: asDate(item.updatedAt) ?? new Date(),
+          })),
+        })
+      } else if (Array.isArray(payload.items) && payload.items.length === 0 && payload.status !== 'CANCELED') {
+        // Guard: warn if order arrived with 0 items and is not canceled — likely a serialization issue
+        console.warn(`[syncEngine] restaurantOrder ${String(payload.id || change.entityId)} arrived with 0 items (status=${payload.status})`)
+      }
+
       break
     }
     default:
