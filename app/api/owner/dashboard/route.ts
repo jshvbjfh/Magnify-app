@@ -27,10 +27,8 @@ function formatDayLabel(dateKey: string) {
 }
 
 function toDateKey(date: Date) {
-  const year = date.getUTCFullYear()
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(date.getUTCDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  // Africa/Kigali = UTC+2; prevents early-morning sales being pushed to the previous UTC day
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(date)
 }
 
 function listDateKeys(from: Date, to: Date) {
@@ -146,6 +144,103 @@ function withHomeMetrics<T extends {
   }
 }
 
+type MinimalSummaryRow = {
+  date: Date
+  totalRevenue: number
+  totalExpenses: number
+  profitLoss: number
+  lastUpdated: Date
+}
+
+type MinimalHistoryTransaction = {
+  date: Date
+  amount: number
+  description: string
+  sourceKind: string | null
+  category: { type: string } | null
+}
+
+function buildMinimalDailyHistory(
+  summaries: MinimalSummaryRow[],
+  historyTransactions: MinimalHistoryTransaction[],
+) {
+  const dailyHistoryMap = new Map<string, {
+    date: string
+    label: string
+    revenue: number
+    expenses: number
+    profit: number
+  }>()
+
+  for (const row of summaries) {
+    const date = toDateKey(row.date)
+    dailyHistoryMap.set(date, {
+      date,
+      label: formatDayLabel(date),
+      revenue: row.totalRevenue,
+      expenses: row.totalExpenses,
+      profit: row.profitLoss,
+    })
+  }
+
+  const transactionTotalsByDate = new Map<string, {
+    revenue: number
+    expenses: number
+    hasIncome: boolean
+    hasExpense: boolean
+  }>()
+
+  for (const row of historyTransactions) {
+    const date = toDateKey(row.date)
+    const currentTotals = transactionTotalsByDate.get(date) ?? {
+      revenue: 0,
+      expenses: 0,
+      hasIncome: false,
+      hasExpense: false,
+    }
+
+    if (isWasteLikeTransaction(row)) continue
+
+    if (row.category?.type === 'income') {
+      currentTotals.revenue += row.amount
+      currentTotals.hasIncome = true
+    } else if (row.category?.type === 'expense') {
+      currentTotals.expenses += row.amount
+      currentTotals.hasExpense = true
+    }
+
+    transactionTotalsByDate.set(date, currentTotals)
+  }
+
+  for (const [date, totals] of transactionTotalsByDate.entries()) {
+    const current = dailyHistoryMap.get(date) ?? {
+      date,
+      label: formatDayLabel(date),
+      revenue: 0,
+      expenses: 0,
+      profit: 0,
+    }
+
+    // Only replace the side that is actually represented in synced transaction
+    // history. Waiter-paid sales currently land in synced summaries, while many
+    // branch expenses land in synced transactions, so wiping both sides loses
+    // valid summary revenue on mixed days.
+    if (totals.hasIncome) {
+      current.revenue = totals.revenue
+    }
+
+    if (totals.hasExpense) {
+      current.expenses = totals.expenses
+    }
+
+    current.profit = current.revenue - current.expenses
+    dailyHistoryMap.set(date, current)
+  }
+
+  return Array.from(dailyHistoryMap.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+}
+
 function buildMinimalDashboardPayload(params: {
   restaurantName: string
   selectedRestaurantId: string
@@ -156,13 +251,8 @@ function buildMinimalDashboardPayload(params: {
   saleCount: number
   transactionCount: number
   wasteCost: number
-  summaries: Array<{
-    date: Date
-    totalRevenue: number
-    totalExpenses: number
-    profitLoss: number
-    lastUpdated: Date
-  }>
+  summaries: MinimalSummaryRow[]
+  historyTransactions: MinimalHistoryTransaction[]
   transactions: Array<{
     id: string
     date: Date
@@ -176,18 +266,7 @@ function buildMinimalDashboardPayload(params: {
     isManual: boolean
   }>
 }) {
-  const dailyHistory = params.summaries
-    .map((row) => {
-      const date = toDateKey(row.date)
-      return {
-        date,
-        label: formatDayLabel(date),
-        revenue: row.totalRevenue,
-        expenses: row.totalExpenses,
-        profit: row.profitLoss,
-      }
-    })
-    .sort((a, b) => a.date.localeCompare(b.date))
+  const dailyHistory = buildMinimalDailyHistory(params.summaries, params.historyTransactions)
 
   const revenue = dailyHistory.reduce((sum, row) => sum + row.revenue, 0)
   const expenses = dailyHistory.reduce((sum, row) => sum + row.expenses, 0)
@@ -196,7 +275,7 @@ function buildMinimalDashboardPayload(params: {
     const value = row.lastUpdated.getTime()
     return latest === null ? value : Math.max(latest, value)
   }, null)
-  const latestTransaction = params.transactions.reduce<number | null>((latest, row) => {
+  const latestTransaction = params.historyTransactions.reduce<number | null>((latest, row) => {
     const value = row.date.getTime()
     return latest === null ? value : Math.max(latest, value)
   }, null)
@@ -391,7 +470,7 @@ export async function GET(req: Request) {
     date: { gte: range.from, lte: range.to },
   }
 
-  const [homeActivityOrders, syncedSummaries, syncedTransactions, syncedTransactionCount, syncedSaleCount, syncedWasteAggregate] = await Promise.all([
+  const [homeActivityOrders, syncedSummaries, syncedHistoryTransactions, syncedTransactions, syncedTransactionCount, syncedSaleCount, syncedWasteAggregate, liveSaleInRange] = await Promise.all([
     prisma.restaurantOrder.findMany({
       where: {
         restaurantId: restaurant.id,
@@ -414,6 +493,17 @@ export async function GET(req: Request) {
         ...branchScopeWhere,
         synced: true,
         date: { gte: range.from, lte: range.to },
+      },
+      orderBy: { date: 'asc' },
+    }),
+    prisma.transaction.findMany({
+      where: syncedWhere,
+      select: {
+        date: true,
+        amount: true,
+        description: true,
+        sourceKind: true,
+        category: { select: { type: true } },
       },
       orderBy: { date: 'asc' },
     }),
@@ -445,9 +535,17 @@ export async function GET(req: Request) {
       },
       _sum: { amount: true },
     }),
+    prisma.dishSale.findFirst({
+      where: {
+        restaurantId: restaurant.id,
+        ...branchScopeWhere,
+        saleDate: { gte: range.from, lte: range.to },
+      },
+      select: { id: true },
+    }),
   ])
 
-  if (syncedSummaries.length > 0 || syncedTransactions.length > 0) {
+  if (!liveSaleInRange && (syncedSummaries.length > 0 || syncedTransactions.length > 0)) {
     return NextResponse.json(
       withHomeMetrics(buildMinimalDashboardPayload({
         restaurantName: restaurant.name,
@@ -460,6 +558,7 @@ export async function GET(req: Request) {
         transactionCount: syncedTransactionCount,
         wasteCost: syncedWasteAggregate._sum.amount ?? 0,
         summaries: syncedSummaries,
+        historyTransactions: syncedHistoryTransactions,
         transactions: syncedTransactions,
       }), homeActivityOrders, range)
     )
@@ -470,7 +569,7 @@ export async function GET(req: Request) {
     orderBy: { updatedAt: 'desc' },
   })
 
-  if (syncedSnapshot?.data) {
+  if (!liveSaleInRange && syncedSnapshot?.data) {
     try {
       const snapshot = JSON.parse(syncedSnapshot.data) as OwnerSyncSnapshot
       if (snapshot?.version === 1 && snapshot.restaurantId === restaurant.id) {

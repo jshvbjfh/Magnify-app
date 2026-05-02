@@ -31,6 +31,7 @@ export async function recordDishSalesForPaidOrder(
     restaurantId?: string | null
     branchId?: string | null
     includeBranchlessRows?: boolean
+    sourceDeviceId?: string | null
     orderId?: string | null
     paymentMethod?: string | null
     saleDate: Date
@@ -38,6 +39,9 @@ export async function recordDishSalesForPaidOrder(
   }
 ) {
   if (params.items.length === 0) return
+  if (!params.restaurantId || !params.branchId) {
+    throw new Error('recordDishSalesForPaidOrder requires restaurantId and branchId')
+  }
   const requestedDishIds = Array.from(new Set(params.items.map((item) => item.dishId)))
   const dishes = await db.dish.findMany({
     where: {
@@ -69,6 +73,16 @@ export async function recordDishSalesForPaidOrder(
 
     const quantitySold = Number(item.qty) || 0
     if (quantitySold <= 0) continue
+
+    // Idempotency guard: skip this dish line if already recorded for this order.
+    // Checked per dish (not per order) so a partial-failure retry can fill in
+    // the remaining lines without silently skipping them.
+    if (params.orderId) {
+      const existingSale = await db.dishSale.findFirst({
+        where: { orderId: params.orderId, dishId: item.dishId },
+      })
+      if (existingSale) continue
+    }
 
     const totalSaleAmount = Number(item.dishPrice) * quantitySold
     const dishSale = await db.dishSale.create({
@@ -147,6 +161,7 @@ export async function recordDishSalesForPaidOrder(
       entityType: 'dishSale',
       entityId: updatedDishSale.id,
       operation: 'upsert',
+      sourceDeviceId: params.sourceDeviceId ?? null,
       payload: {
         ...updatedDishSale,
         saleIngredients,
@@ -170,6 +185,9 @@ export async function recordDishWasteForOrderItems(
   }
 ) {
   if (params.items.length === 0) return []
+  if (!params.restaurantId || !params.branchId) {
+    throw new Error('recordDishWasteForOrderItems requires restaurantId and branchId')
+  }
   const requestedDishIds = Array.from(new Set(params.items.map((item) => item.dishId)))
   const dishes = await db.dish.findMany({
     where: {

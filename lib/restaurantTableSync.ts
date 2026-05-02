@@ -4,7 +4,12 @@ import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
 
-export async function enqueueRestaurantTableSync(db: PrismaDb, tableId: string, restaurantId: string) {
+export async function enqueueRestaurantTableSync(
+  db: PrismaDb,
+  tableId: string,
+  restaurantId: string,
+  sourceDeviceId?: string | null,
+) {
   const table = await db.restaurantTable.findUnique({ where: { id: tableId } })
   if (!table || table.restaurantId !== restaurantId) return
 
@@ -14,6 +19,7 @@ export async function enqueueRestaurantTableSync(db: PrismaDb, tableId: string, 
     entityType: 'restaurantTable',
     entityId: table.id,
     operation: 'upsert',
+    sourceDeviceId: sourceDeviceId ?? null,
     payload: table,
   })
 }

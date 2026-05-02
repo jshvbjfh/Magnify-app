@@ -7,12 +7,41 @@ import { resolveRestaurantForSyncUser } from '@/lib/restaurantAccess'
 import type { SyncSummaryPayload, SyncTransactionPayload } from '@/lib/minimalSync'
 import { applyIncomingSyncChanges, recordRemoteChangeForPull } from '@/lib/syncEngine'
 import { logSyncActivity } from '@/lib/syncLogging'
-import { GLOBAL_SYNC_SCOPE_ID, isRestaurantWideSyncEntity, latestSyncChangeTimestamp, latestSyncMutationId, mapSyncOutboxRows, type SyncChangeEnvelope } from '@/lib/syncOutbox'
+import { CLOUD_SYNC_TARGET, GLOBAL_SYNC_SCOPE_ID, isRestaurantWideSyncEntity, latestSyncChangeTimestamp, latestSyncMutationId, mapSyncOutboxRows, type SyncChangeEnvelope } from '@/lib/syncOutbox'
 
-// Allow up to 10s on Vercel Hobby; batching keeps payload small enough
-export const maxDuration = 10
+// Vercel Pro: 60s max. Hobby: 10s max (sync will time out on large batches on Hobby).
+// If still on Hobby, reduce ENTITY_ORDER batch count and use pgbouncer in DATABASE_URL.
+export const maxDuration = 60
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
+
+type BranchLookupRecord = {
+  id: string
+  name: string
+  code: string
+  isMain: boolean
+  isActive: boolean
+}
+
+type CloudBranchContext = {
+  branchIdRemap: Map<string, string>
+  existingBranchIds: Set<string>
+  resolvedBranchId: string | null
+}
+
+const REQUIRED_BRANCH_SYNC_ENTITY_TYPES = new Set([
+  'dish',
+  'inventoryItem',
+  'employee',
+  'restaurantTable',
+  'restaurantOrder',
+  'wasteLog',
+  'inventoryPurchase',
+  'inventoryBatchUsageLedger',
+  'inventoryAdjustmentLog',
+  'shift',
+  'dishSale',
+])
 
 function matchesSharedSecret(input: string, expected: string) {
   if (!input || !expected) return false
@@ -20,6 +49,90 @@ function matchesSharedSecret(input: string, expected: string) {
   const b = Buffer.from(expected)
   if (a.length !== b.length) return false
   return timingSafeEqual(a, b)
+}
+
+function normalizeSyncBranchValue(value: unknown) {
+  return String(value ?? '').trim()
+}
+
+function remapIncomingBranchId(
+  value: unknown,
+  branchIdRemap: Map<string, string>,
+  existingBranchIds: Set<string>,
+  fallbackBranchId: string | null,
+) {
+  const normalized = normalizeSyncBranchValue(value)
+  if (!normalized) return fallbackBranchId
+
+  const mappedBranchId = branchIdRemap.get(normalized)
+  if (mappedBranchId) return mappedBranchId
+  if (existingBranchIds.has(normalized)) return normalized
+  return fallbackBranchId ?? normalized
+}
+
+function ensureKnownBranchId(
+  change: SyncChangeEnvelope,
+  existingBranchIds: Set<string>,
+  payload?: Record<string, unknown>,
+) {
+  if (!REQUIRED_BRANCH_SYNC_ENTITY_TYPES.has(change.entityType)) return
+
+  const normalizedBranchId = normalizeSyncBranchValue(change.branchId ?? payload?.branchId)
+  if (!normalizedBranchId) {
+    throw new Error(`Sync change ${change.entityType}:${change.entityId} is missing a resolved branchId`)
+  }
+
+  if (!existingBranchIds.has(normalizedBranchId)) {
+    throw new Error(`Sync change ${change.entityType}:${change.entityId} resolved to unknown branch ${normalizedBranchId}`)
+  }
+}
+
+async function resolveCloudBranchContext(
+  db: PrismaDb,
+  restaurantId: string,
+  requestedBranchId: string | null,
+  changes: SyncChangeEnvelope[],
+): Promise<CloudBranchContext> {
+  const existingBranches = await db.restaurantBranch.findMany({
+    where: { restaurantId },
+    select: { id: true, name: true, code: true, isMain: true, isActive: true },
+    orderBy: [{ isMain: 'desc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }],
+  }) as BranchLookupRecord[]
+
+  const branchIdRemap = new Map<string, string>()
+
+  for (const change of changes) {
+    if (change.entityType !== 'restaurantBranch' || change.operation === 'delete') continue
+
+    const payload = (change.payload ?? {}) as Record<string, unknown>
+    const localBranchId = normalizeSyncBranchValue(payload.id ?? change.entityId)
+    if (!localBranchId) continue
+
+    const branchCode = normalizeSyncBranchValue(payload.code)
+    const branchName = normalizeSyncBranchValue(payload.name)
+    const isMain = Boolean(payload.isMain)
+
+    const existingBranch = existingBranches.find((branch) => branchCode && branch.code === branchCode)
+      ?? existingBranches.find((branch) => branchName && branch.name === branchName)
+      ?? (isMain ? existingBranches.find((branch) => branch.isMain) : undefined)
+
+    if (existingBranch) {
+      branchIdRemap.set(localBranchId, existingBranch.id)
+    }
+  }
+
+  const activeBranches = existingBranches.filter((branch) => branch.isActive)
+  const loneActiveMainBranch = activeBranches.length === 1 && activeBranches[0]?.isMain
+    ? activeBranches[0]
+    : null
+
+  return {
+    branchIdRemap,
+    existingBranchIds: new Set(existingBranches.map((branch) => branch.id)),
+    resolvedBranchId: requestedBranchId
+      ? branchIdRemap.get(requestedBranchId) ?? loneActiveMainBranch?.id ?? requestedBranchId
+      : null,
+  }
 }
 
 async function ensureSyncAccounts(db: PrismaDb, restaurantId: string, syncRestaurantId: string) {
@@ -107,7 +220,7 @@ async function collectPullChanges(db: PrismaDb, params: { restaurantId: string; 
                 ],
               }
             : {}),
-          ...(params.deviceId ? { NOT: { sourceDeviceId: params.deviceId } } : {}),
+          ...(params.deviceId && params.deviceId !== CLOUD_SYNC_TARGET ? { NOT: { sourceDeviceId: params.deviceId } } : {}),
         },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         take: 500,
@@ -148,15 +261,21 @@ export async function POST(req: Request) {
     if (!user && sharedSecret && matchesSharedSecret(sharedSecret, configuredSharedSecret)) {
       // Auto-provision user from trusted desktop sync (shared secret proves legitimacy)
       const provision = parsedBody.provisionUser
+      // Resolve the restaurant at provisioning time so the new user is immediately linked
+      const provisionSyncRestaurantId = String(parsedBody.restaurantSyncId ?? '').trim()
+      const provisionRestaurant = provisionSyncRestaurantId
+        ? await prisma.restaurant.findFirst({ where: { syncRestaurantId: provisionSyncRestaurantId }, select: { id: true, branches: { where: { isMain: true }, select: { id: true }, take: 1 } } })
+        : null
       user = await prisma.user.create({
         data: {
           email,
           name: typeof provision?.name === 'string' && provision.name ? provision.name : email,
           password: typeof provision?.passwordHash === 'string' && provision.passwordHash ? provision.passwordHash : '',
           role: typeof provision?.role === 'string' && provision.role ? provision.role : 'admin',
+          ...(provisionRestaurant ? { restaurantId: provisionRestaurant.id, branchId: provisionRestaurant.branches[0]?.id ?? null } : {}),
         },
       })
-      logSyncActivity('info', 'sync.cloud.user_auto_provisioned', { email, userId: user.id })
+      logSyncActivity('info', 'sync.cloud.user_auto_provisioned', { email, userId: user.id, linkedRestaurantId: provisionRestaurant?.id ?? null })
     }
 
     if (!user) return NextResponse.json({ error: 'Invalid sync credentials' }, { status: 401 })
@@ -203,6 +322,8 @@ export async function POST(req: Request) {
       }, { status: resolvedRestaurant.status })
     }
     const restaurant = resolvedRestaurant.restaurant
+    const branchContext = await resolveCloudBranchContext(prisma, restaurant.id, branchId, changes)
+    const resolvedBranchId = branchContext.resolvedBranchId
 
     const existingBatch = await prisma.restaurantSyncBatch.findUnique({
       where: {
@@ -218,7 +339,7 @@ export async function POST(req: Request) {
     }
 
     if (existingBatch?.status === 'success') {
-      const pull = await collectPullChanges(prisma, { restaurantId: restaurant.id, branchId, deviceId, pullCursors })
+      const pull = await collectPullChanges(prisma, { restaurantId: restaurant.id, branchId: resolvedBranchId, deviceId, pullCursors })
       logSyncActivity('info', 'sync.cloud.duplicate_acknowledged', {
         restaurantId: restaurant.id,
         restaurantSyncId,
@@ -272,80 +393,6 @@ export async function POST(req: Request) {
         },
       })
 
-      const { incomeCategory, expenseCategory, incomeAccount, expenseAccount } = await ensureSyncAccounts(tx, restaurant.id, restaurantSyncId)
-
-      for (const row of transactions) {
-        await tx.transaction.upsert({
-          where: { id: row.id },
-          update: {
-            userId: user.id,
-            restaurantId: restaurant.id,
-            branchId,
-            accountId: row.type === 'sale' ? incomeAccount.id : expenseAccount.id,
-            categoryId: row.type === 'sale' ? incomeCategory.id : expenseCategory.id,
-            date: new Date(row.createdAt),
-            description: row.description,
-            amount: row.amount,
-            type: row.type === 'sale' ? 'credit' : 'debit',
-            paymentMethod: row.paymentMethod || 'Synced',
-            accountName: row.accountName,
-            isManual: row.isManual ?? true,
-            sourceKind: row.sourceKind || 'cloud_sync',
-            authoritativeForRevenue: true,
-            synced: true,
-          },
-          create: {
-            id: row.id,
-            userId: user.id,
-            restaurantId: restaurant.id,
-            branchId,
-            accountId: row.type === 'sale' ? incomeAccount.id : expenseAccount.id,
-            categoryId: row.type === 'sale' ? incomeCategory.id : expenseCategory.id,
-            date: new Date(row.createdAt),
-            description: row.description,
-            amount: row.amount,
-            type: row.type === 'sale' ? 'credit' : 'debit',
-            paymentMethod: row.paymentMethod || 'Synced',
-            accountName: row.accountName,
-            isManual: row.isManual ?? true,
-            sourceKind: row.sourceKind || 'cloud_sync',
-            authoritativeForRevenue: true,
-            synced: true,
-          },
-        })
-      }
-
-      for (const row of summaries) {
-        await tx.dailySummary.upsert({
-          where: { id: row.id },
-          update: {
-            userId: user.id,
-            restaurantId: restaurant.id,
-            branchId,
-            date: new Date(String(row.date).split('T')[0] + 'T12:00:00Z'),
-            totalRevenue: row.totalRevenue,
-            totalExpenses: row.totalExpenses,
-            profitLoss: row.profitLoss,
-            lastUpdated: new Date(row.lastUpdated),
-            synced: true,
-          },
-          create: {
-            id: row.id,
-            userId: user.id,
-            restaurantId: restaurant.id,
-            branchId,
-            date: new Date(String(row.date).split('T')[0] + 'T12:00:00Z'),
-            totalRevenue: row.totalRevenue,
-            totalExpenses: row.totalExpenses,
-            profitLoss: row.profitLoss,
-            lastUpdated: new Date(row.lastUpdated),
-            synced: true,
-          },
-        })
-      }
-
-      // Sort entity changes so parent entities are applied before children to
-      // avoid foreign-key violations (e.g. inventoryItem before inventoryPurchase).
       const ENTITY_ORDER: Record<string, number> = {
         restaurant: 0,
         restaurantBranch: 1,
@@ -367,41 +414,127 @@ export async function POST(req: Request) {
         (a, b) => (ENTITY_ORDER[a.entityType] ?? 99) - (ENTITY_ORDER[b.entityType] ?? 99),
       )
 
-      // Remap local restaurant IDs in payloads to the resolved cloud restaurant's actual ID.
-      // The desktop sends its local SQLite primary key which doesn't exist on the cloud.
       for (const change of sortedChanges) {
         const p = change.payload as Record<string, any> | undefined
         change.restaurantId = change.scopeId === GLOBAL_SYNC_SCOPE_ID ? null : restaurant.id
-        // Remap child entities' restaurantId foreign key
+
         if (p && typeof p.restaurantId === 'string' && p.restaurantId !== restaurant.id) {
           p.restaurantId = restaurant.id
         }
-        if (isRestaurantWideSyncEntity(change.entityType)) {
-          change.branchId = null
-        } else if (branchId && change.scopeId !== GLOBAL_SYNC_SCOPE_ID) {
-          change.branchId = branchId
-          if (p && p.branchId == null) {
-            p.branchId = branchId
+
+        if (change.entityType === 'restaurantBranch') {
+          const mappedBranchId = branchContext.branchIdRemap.get(normalizeSyncBranchValue(p?.id ?? change.entityId))
+          if (mappedBranchId) {
+            change.entityId = mappedBranchId
+            if (p) p.id = mappedBranchId
           }
         }
-        // Remap the restaurant entity's own id to the cloud id.
-        // Without this, the upsert tries to CREATE a second restaurant row with the desktop's
-        // local SQLite id, which collides on the unique syncRestaurantId column and rolls back
-        // the entire transaction — silently dropping all dishes, tables, and other child rows.
+
+        if (isRestaurantWideSyncEntity(change.entityType)) {
+          change.branchId = null
+        } else if (change.scopeId !== GLOBAL_SYNC_SCOPE_ID) {
+          const mappedBranchId = remapIncomingBranchId(
+            change.branchId ?? p?.branchId,
+            branchContext.branchIdRemap,
+            branchContext.existingBranchIds,
+            resolvedBranchId,
+          )
+          change.branchId = mappedBranchId
+          if (p && (p.branchId != null || mappedBranchId != null)) {
+            p.branchId = mappedBranchId
+          }
+        }
+
+        ensureKnownBranchId(change, branchContext.existingBranchIds, p)
+
         if (change.entityType === 'restaurant') {
           change.entityId = restaurant.id
           if (p) p.id = restaurant.id
         }
       }
 
-      const appliedEntityChanges = await applyIncomingSyncChanges(tx, sortedChanges, { localDeviceId: 'cloud', remapUserId: user.id })
+      const { incomeCategory, expenseCategory, incomeAccount, expenseAccount } = await ensureSyncAccounts(tx, restaurant.id, restaurantSyncId)
+
+      const billingUserId = restaurant.ownerId
+
+      for (const row of transactions) {
+        await tx.transaction.upsert({
+          where: { id: row.id },
+          update: {
+            userId: billingUserId,
+            restaurantId: restaurant.id,
+            branchId: resolvedBranchId,
+            accountId: row.type === 'sale' ? incomeAccount.id : expenseAccount.id,
+            categoryId: row.type === 'sale' ? incomeCategory.id : expenseCategory.id,
+            date: new Date(row.createdAt),
+            description: row.description,
+            amount: row.amount,
+            type: row.type === 'sale' ? 'credit' : 'debit',
+            paymentMethod: row.paymentMethod || 'Synced',
+            accountName: row.accountName,
+            isManual: row.isManual ?? true,
+            sourceKind: row.sourceKind || 'cloud_sync',
+            authoritativeForRevenue: true,
+            synced: true,
+          },
+          create: {
+            id: row.id,
+            userId: billingUserId,
+            restaurantId: restaurant.id,
+            branchId: resolvedBranchId,
+            accountId: row.type === 'sale' ? incomeAccount.id : expenseAccount.id,
+            categoryId: row.type === 'sale' ? incomeCategory.id : expenseCategory.id,
+            date: new Date(row.createdAt),
+            description: row.description,
+            amount: row.amount,
+            type: row.type === 'sale' ? 'credit' : 'debit',
+            paymentMethod: row.paymentMethod || 'Synced',
+            accountName: row.accountName,
+            isManual: row.isManual ?? true,
+            sourceKind: row.sourceKind || 'cloud_sync',
+            authoritativeForRevenue: true,
+            synced: true,
+          },
+        })
+      }
+
+      for (const row of summaries) {
+        await tx.dailySummary.upsert({
+          where: { id: row.id },
+          update: {
+            userId: billingUserId,
+            restaurantId: restaurant.id,
+            branchId: resolvedBranchId,
+            date: new Date(String(row.date).split('T')[0] + 'T12:00:00Z'),
+            totalRevenue: row.totalRevenue,
+            totalExpenses: row.totalExpenses,
+            profitLoss: row.profitLoss,
+            lastUpdated: new Date(row.lastUpdated),
+            synced: true,
+          },
+          create: {
+            id: row.id,
+            userId: billingUserId,
+            restaurantId: restaurant.id,
+            branchId: resolvedBranchId,
+            date: new Date(String(row.date).split('T')[0] + 'T12:00:00Z'),
+            totalRevenue: row.totalRevenue,
+            totalExpenses: row.totalExpenses,
+            profitLoss: row.profitLoss,
+            lastUpdated: new Date(row.lastUpdated),
+            synced: true,
+          },
+        })
+      }
+
+      const appliedEntityChanges = await applyIncomingSyncChanges(tx, sortedChanges, { localDeviceId: 'cloud', remapUserId: billingUserId })
       for (const change of appliedEntityChanges.appliedChanges) {
         await recordRemoteChangeForPull(tx, {
           ...change,
           restaurantId: change.scopeId === GLOBAL_SYNC_SCOPE_ID ? null : restaurant.id,
           branchId: change.scopeId === GLOBAL_SYNC_SCOPE_ID || isRestaurantWideSyncEntity(change.entityType)
             ? null
-            : (change.branchId ?? branchId),
+            : (change.branchId ?? resolvedBranchId),
           payload: change.payload && typeof change.payload === 'object'
             ? {
                 ...(change.payload as Record<string, unknown>),
@@ -409,14 +542,14 @@ export async function POST(req: Request) {
                   ? {}
                   : {
                       restaurantId: restaurant.id,
-                      ...(!isRestaurantWideSyncEntity(change.entityType) && branchId ? { branchId: change.branchId ?? branchId } : {}),
+                      ...(!isRestaurantWideSyncEntity(change.entityType) && resolvedBranchId ? { branchId: change.branchId ?? resolvedBranchId } : {}),
                     }),
               }
             : change.payload,
         })
       }
 
-      const pull = await collectPullChanges(tx, { restaurantId: restaurant.id, branchId, deviceId, pullCursors })
+      const pull = await collectPullChanges(tx, { restaurantId: restaurant.id, branchId: resolvedBranchId, deviceId, pullCursors })
 
       await tx.restaurantSyncBatch.update({
         where: {
@@ -447,7 +580,7 @@ export async function POST(req: Request) {
         pullChanges: pull.pullChanges,
         pullCursors: pull.pullCursors,
       }
-    }, { timeout: 9000 })
+    }, { timeout: 55000 })
 
     logSyncActivity(result.conflicts > 0 ? 'warn' : 'info', 'sync.cloud.completed', {
       restaurantId: restaurant.id,

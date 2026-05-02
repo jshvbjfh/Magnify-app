@@ -57,11 +57,23 @@ export async function syncRestaurantOrderTotals(db: PrismaDb, orderId: string) {
   })
 }
 
-export async function enqueueOrderSync(db: PrismaDb, orderId: string, restaurantId: string, branchId?: string | null) {
+export async function enqueueOrderSync(
+  db: PrismaDb,
+  orderId: string,
+  restaurantId: string,
+  branchId?: string | null,
+  sourceDeviceId?: string | null,
+) {
   const order = await db.restaurantOrder.findUnique({
     where: { id: orderId },
+    include: { items: true },
   })
   if (!order) return
+
+  // Guard: log if order has no items — this indicates a recording issue upstream
+  if (order.items.length === 0 && order.status !== 'CANCELED') {
+    console.warn(`[sync] enqueueOrderSync: order ${orderId} has 0 items (status=${order.status})`)
+  }
 
   await enqueueSyncChange(db, {
     restaurantId,
@@ -69,7 +81,9 @@ export async function enqueueOrderSync(db: PrismaDb, orderId: string, restaurant
     entityType: 'restaurantOrder',
     entityId: orderId,
     operation: 'upsert',
-    payload: order,
+    sourceDeviceId: sourceDeviceId ?? null,
+    // items embedded in payload — syncEngine reads payload.items to recreate order items on cloud
+    payload: { ...order, items: order.items },
   })
 }
 

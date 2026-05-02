@@ -79,31 +79,33 @@ export type OwnerSyncSnapshot = {
   }>
 }
 
+function kigaliDateKey(date: Date): string {
+  // Use Africa/Kigali (UTC+2) so sales made after midnight local time are not pushed to the previous UTC day
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(date)
+}
+
 function startOf(period: Period) {
-  const now = new Date()
-  if (period === 'today') return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  const todayKigali = kigaliDateKey(new Date())
+  const [year, month] = todayKigali.split('-')
+  if (period === 'today') return new Date(`${todayKigali}T00:00:00+02:00`)
   if (period === 'week') {
-    const date = new Date(now)
-    date.setUTCDate(date.getUTCDate() - 6)
-    date.setUTCHours(0, 0, 0, 0)
-    return date
+    const d = new Date(`${todayKigali}T00:00:00+02:00`)
+    d.setUTCDate(d.getUTCDate() - 6)
+    return d
   }
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+  return new Date(`${year}-${month}-01T00:00:00+02:00`)
 }
 
 function startOfDay(value: string) {
-  return new Date(`${value}T00:00:00Z`)
+  return new Date(`${value}T00:00:00+02:00`)
 }
 
 function endOfDay(value: string) {
-  return new Date(`${value}T23:59:59.999Z`)
+  return new Date(`${value}T23:59:59.999+02:00`)
 }
 
 function toDateKey(date: Date) {
-  const year = date.getUTCFullYear()
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(date.getUTCDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  return kigaliDateKey(date)
 }
 
 function formatDayLabel(dateKey: string) {
@@ -119,6 +121,15 @@ function isWasteLikeTransaction(entry: { sourceKind?: string | null; description
   const normalizedSourceKind = String(entry.sourceKind || '').trim().toLowerCase()
   if (normalizedSourceKind === 'inventory_waste') return true
   return String(entry.description || '').trim().toLowerCase().startsWith('waste:')
+}
+
+function isSupplementalIncomeTransaction(entry: { categoryType?: string | null; sourceKind?: string | null }) {
+  const normalizedCategoryType = String(entry.categoryType || '').trim().toLowerCase()
+  if (normalizedCategoryType !== 'income') return false
+
+  // Dish sales already contribute revenue through the dishSale rows.
+  const normalizedSourceKind = String(entry.sourceKind || '').trim().toLowerCase()
+  return normalizedSourceKind !== 'dish_sale_mirror'
 }
 
 export function parseOwnerDashboardRange(searchParams: URLSearchParams): OwnerDashboardRange {
@@ -253,11 +264,13 @@ export function buildOwnerDashboardPayload(
   const filteredTransactions = snapshot.transactions
     .filter((txn) => isWithinRange(txn.date, range))
     .sort((a, b) => b.date.localeCompare(a.date))
+  const incomeTransactions = filteredTransactions.filter((txn) => isSupplementalIncomeTransaction(txn))
   const recentTransactions = options?.includeFullTransactionHistory
     ? filteredTransactions
     : filteredTransactions.slice(0, 20)
 
   const revenue = sales.reduce((sum, sale) => sum + sale.totalSaleAmount, 0)
+    + incomeTransactions.reduce((sum, txn) => sum + (txn.type === 'credit' ? txn.amount : -txn.amount), 0)
   const cogs = sales.reduce((sum, sale) => sum + sale.calculatedFoodCost, 0)
   const laborCost = shifts.reduce((sum, shift) => sum + shift.calculatedWage, 0)
   const wasteCost = wasteLogs.reduce((sum, waste) => sum + waste.calculatedCost, 0)
@@ -346,6 +359,12 @@ export function buildOwnerDashboardPayload(
     const key = toDateKey(new Date(txn.date))
     const current = historyMap.get(key) ?? { revenue: 0, expenses: 0 }
     current.expenses += txn.type === 'debit' ? txn.amount : -txn.amount
+    historyMap.set(key, current)
+  }
+  for (const txn of incomeTransactions) {
+    const key = toDateKey(new Date(txn.date))
+    const current = historyMap.get(key) ?? { revenue: 0, expenses: 0 }
+    current.revenue += txn.type === 'credit' ? txn.amount : -txn.amount
     historyMap.set(key, current)
   }
 

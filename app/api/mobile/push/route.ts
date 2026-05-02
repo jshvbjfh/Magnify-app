@@ -1,11 +1,29 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
+import { getRestaurantContextForUser, isMainRestaurantBranch } from '@/lib/restaurantAccess'
 import { enqueueOrderSync } from '@/lib/restaurantOrders'
+import { finalizeRestaurantOrderPayment } from '@/lib/restaurantOrderPayment'
+
+export const dynamic = 'force-dynamic'
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET ?? 'fallback-secret-change-me'
 )
+
+const NO_STORE_HEADERS = {
+  'Cache-Control': 'no-store, max-age=0, must-revalidate',
+}
+
+function jsonNoStore(body: unknown, init?: ResponseInit) {
+  return NextResponse.json(body, {
+    ...init,
+    headers: {
+      ...NO_STORE_HEADERS,
+      ...(init?.headers ?? {}),
+    },
+  })
+}
 
 async function verifyToken(req: Request) {
   const auth = req.headers.get('authorization') ?? ''
@@ -53,6 +71,16 @@ export async function POST(req: Request) {
   try {
     const claims = await verifyToken(req)
     const { restaurantId, branchId } = claims
+    const context = await getRestaurantContextForUser(claims.sub)
+    const mobileSourceDeviceId = `mobile:${claims.sub}`
+
+    if (!context?.restaurantId || context.restaurantId !== restaurantId) {
+      return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const includeBranchlessRows = branchId
+      ? await isMainRestaurantBranch(restaurantId, branchId)
+      : false
 
     const { orders, orderItems } = (await req.json()) as {
       orders: MobileOrder[]
@@ -60,7 +88,7 @@ export async function POST(req: Request) {
     }
 
     if (!Array.isArray(orders) || !orders.length) {
-      return NextResponse.json({ ok: true, syncedOrderIds: [] })
+      return jsonNoStore({ ok: true, syncedOrderIds: [] })
     }
 
     const syncedOrderIds: string[] = []
@@ -79,82 +107,111 @@ export async function POST(req: Request) {
       // createdById is a non-nullable column; the waiter's user ID is in claims.sub.
       const resolvedBranchId = branchId ?? null
 
-      await prisma.restaurantOrder.upsert({
-        where: { id: order.id },
-        create: {
-          id: order.id,
-          restaurantId: order.restaurant_id,
-          branchId: resolvedBranchId,
-          tableId: order.table_id,
-          tableName: order.table_name,
-          orderNumber: order.order_number,
-          status: order.status as any,
-          paymentMethod: order.payment_method,
-          subtotalAmount: order.subtotal_amount,
-          vatAmount: order.vat_amount,
-          totalAmount: order.total_amount,
-          createdById: claims.sub,
-          createdByName: order.created_by_name ?? '',
-          servedAt: order.served_at ? new Date(order.served_at) : null,
-          paidAt: order.paid_at ? new Date(order.paid_at) : null,
-          canceledAt: order.canceled_at ? new Date(order.canceled_at) : null,
-          cancelReason: order.cancel_reason,
-          createdAt: new Date(order.created_at),
-          updatedAt: new Date(order.updated_at),
-        },
-        update: {
-          status: order.status as any,
-          paymentMethod: order.payment_method,
-          subtotalAmount: order.subtotal_amount,
-          vatAmount: order.vat_amount,
-          totalAmount: order.total_amount,
-          servedAt: order.served_at ? new Date(order.served_at) : null,
-          paidAt: order.paid_at ? new Date(order.paid_at) : null,
-          canceledAt: order.canceled_at ? new Date(order.canceled_at) : null,
-          cancelReason: order.cancel_reason,
-          updatedAt: new Date(order.updated_at),
-        },
-      })
+      await prisma.$transaction(async (tx) => {
+        const existingOrder = await tx.restaurantOrder.findFirst({
+          where: { id: order.id, restaurantId: order.restaurant_id },
+          select: { status: true },
+        })
 
-      // Upsert order items
-      for (const item of items) {
-        await prisma.restaurantOrderItem.upsert({
-          where: { id: item.id },
+        const shouldFinalizePaidOrder = order.status === 'PAID' && existingOrder?.status !== 'PAID'
+        const persistedStatus = shouldFinalizePaidOrder ? 'PENDING' : order.status
+
+        await tx.restaurantOrder.upsert({
+          where: { id: order.id },
           create: {
-            id: item.id,
-            orderId: item.order_id,
-            dishId: item.dish_id,
-            dishName: item.dish_name,
-            dishPrice: item.dish_price,
-            qty: item.qty,
-            status: item.status as any,
-            createdAt: new Date(item.created_at),
-            updatedAt: new Date(item.updated_at),
+            id: order.id,
+            restaurantId: order.restaurant_id,
+            branchId: resolvedBranchId,
+            tableId: order.table_id,
+            tableName: order.table_name,
+            orderNumber: order.order_number,
+            status: persistedStatus as any,
+            paymentMethod: shouldFinalizePaidOrder ? null : order.payment_method,
+            subtotalAmount: order.subtotal_amount,
+            vatAmount: order.vat_amount,
+            totalAmount: order.total_amount,
+            createdById: claims.sub,
+            createdByName: order.created_by_name ?? '',
+            servedAt: order.served_at ? new Date(order.served_at) : null,
+            paidAt: shouldFinalizePaidOrder ? null : (order.paid_at ? new Date(order.paid_at) : null),
+            canceledAt: shouldFinalizePaidOrder ? null : (order.canceled_at ? new Date(order.canceled_at) : null),
+            cancelReason: shouldFinalizePaidOrder ? null : order.cancel_reason,
+            createdAt: new Date(order.created_at),
+            updatedAt: new Date(order.updated_at),
           },
           update: {
-            qty: item.qty,
-            status: item.status as any,
-            updatedAt: new Date(item.updated_at),
+            status: persistedStatus as any,
+            paymentMethod: shouldFinalizePaidOrder ? null : order.payment_method,
+            subtotalAmount: order.subtotal_amount,
+            vatAmount: order.vat_amount,
+            totalAmount: order.total_amount,
+            servedAt: order.served_at ? new Date(order.served_at) : null,
+            paidAt: shouldFinalizePaidOrder ? null : (order.paid_at ? new Date(order.paid_at) : null),
+            canceledAt: shouldFinalizePaidOrder ? null : (order.canceled_at ? new Date(order.canceled_at) : null),
+            cancelReason: shouldFinalizePaidOrder ? null : order.cancel_reason,
+            updatedAt: new Date(order.updated_at),
           },
         })
-      }
 
-      // Enqueue for manager Electron sync
-      try {
-        await enqueueOrderSync(prisma, order.id, order.restaurant_id, resolvedBranchId)
-      } catch {
-        // Non-fatal — order is already in Neon, sync queue failure doesn't block the response
-      }
+        for (const item of items) {
+          await tx.restaurantOrderItem.upsert({
+            where: { id: item.id },
+            create: {
+              id: item.id,
+              orderId: item.order_id,
+              dishId: item.dish_id,
+              dishName: item.dish_name,
+              dishPrice: item.dish_price,
+              qty: item.qty,
+              status: item.status as any,
+              createdAt: new Date(item.created_at),
+              updatedAt: new Date(item.updated_at),
+            },
+            update: {
+              qty: item.qty,
+              status: item.status as any,
+              updatedAt: new Date(item.updated_at),
+            },
+          })
+        }
+
+        if (shouldFinalizePaidOrder) {
+          if (!resolvedBranchId) {
+            throw new Error('Paid order sync requires branch assignment')
+          }
+
+          await finalizeRestaurantOrderPayment(tx, {
+            billingUserId: context.billingUserId,
+            restaurantId: order.restaurant_id,
+            branchId: resolvedBranchId,
+            includeBranchlessRows,
+            sourceDeviceId: mobileSourceDeviceId,
+            orderId: order.id,
+            paidById: claims.sub,
+            paidByName: context.currentUser.name ?? order.created_by_name ?? null,
+            paymentMethod: order.payment_method,
+            paidAt: order.paid_at ? new Date(order.paid_at) : undefined,
+          })
+
+          return
+        }
+
+        try {
+          await enqueueOrderSync(tx, order.id, order.restaurant_id, resolvedBranchId, mobileSourceDeviceId)
+        } catch {
+          // Non-fatal — order is already in Neon, sync queue failure doesn't block the response
+        }
+      })
 
       syncedOrderIds.push(order.id)
     }
 
-    return NextResponse.json({ ok: true, syncedOrderIds })
+    return jsonNoStore({ ok: true, syncedOrderIds })
   } catch (err: any) {
     if (err.message === 'Unauthorized') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
     console.error('[mobile/push]', err)
-    return NextResponse.json({ error: 'Server error' }, { status: 500 })
+    return jsonNoStore({ error: 'Server error' }, { status: 500 })
   }
 }
