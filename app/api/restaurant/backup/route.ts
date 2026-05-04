@@ -19,6 +19,8 @@ export async function GET() {
   const branch = context?.branch ?? null
   const branchId = context?.branchId ?? null
 
+  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant context' }, { status: 400 })
+
   const [
     transactions,
     categories,
@@ -40,28 +42,28 @@ export async function GET() {
     dailySummaries,
     goals,
   ] = await Promise.all([
-    prisma.transaction.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
+    prisma.transaction.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
     prisma.category.findMany(),
     prisma.account.findMany(),
-    restaurant ? prisma.restaurantOrder.findMany({ where: { restaurantId: restaurant.id, ...(branchId ? { branchId } : {}) } }) : Promise.resolve([]),
-    restaurant ? prisma.restaurantOrderItem.findMany({ where: { order: { restaurantId: restaurant.id, ...(branchId ? { branchId } : {}) } } }) : Promise.resolve([]),
-    prisma.dish.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
+    restaurant ? prisma.restaurantOrder.findMany({ where: { restaurantId: restaurant.id, branchId } }) : Promise.resolve([]),
+    restaurant ? prisma.restaurantOrderItem.findMany({ where: { order: { restaurantId: restaurant.id, branchId } } }) : Promise.resolve([]),
+    prisma.dish.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
     prisma.dishIngredient.findMany({
-      where: { dish: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } },
+      where: { dish: { userId: billingUserId, restaurantId, branchId } },
     }),
-    prisma.dishSale.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
+    prisma.dishSale.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
     prisma.dishSaleIngredient.findMany({
-      where: { dishSale: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } },
+      where: { dishSale: { userId: billingUserId, restaurantId, branchId } },
     }),
-    prisma.inventoryItem.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
-    prisma.inventoryPurchase.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
-    prisma.inventoryBatchUsageLedger.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
-    prisma.inventoryAdjustmentLog.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
-    prisma.wasteLog.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
-    prisma.employee.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
-    prisma.shift.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
-    restaurant ? prisma.restaurantTable.findMany({ where: { restaurantId: restaurant.id, ...(branchId ? { branchId } : {}) } }) : Promise.resolve([]),
-    prisma.dailySummary.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } }),
+    prisma.inventoryItem.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
+    prisma.inventoryPurchase.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
+    prisma.inventoryBatchUsageLedger.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
+    prisma.inventoryAdjustmentLog.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
+    prisma.wasteLog.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
+    prisma.employee.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
+    prisma.shift.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
+    restaurant ? prisma.restaurantTable.findMany({ where: { restaurantId: restaurant.id, branchId } }) : Promise.resolve([]),
+    prisma.dailySummary.findMany({ where: { userId: billingUserId, restaurantId, branchId } }),
     prisma.goal.findMany({ where: { userId: billingUserId } }),
   ])
 
@@ -154,6 +156,22 @@ export async function POST(req: Request) {
       const restaurant = activeRestaurantId
         ? await tx.restaurant.findUnique({ where: { id: activeRestaurantId } })
         : null
+      const restoreBranchId = restaurant
+        ? activeBranchId ?? (await tx.restaurantBranch.findFirst({
+            where: { restaurantId: restaurant.id, isMain: true, isActive: true },
+            select: { id: true },
+          }))?.id ?? null
+        : null
+
+      const hasBranchScopedBackupData = Boolean(
+        (backup.tables?.length ?? 0)
+        || (backup.restaurantOrders?.length ?? 0)
+        || (backup.dishes?.length ?? 0),
+      )
+
+      if (restaurant && hasBranchScopedBackupData && !restoreBranchId) {
+        throw new Error('Active branch is required to restore branch-scoped restaurant data.')
+      }
 
       // ── Restaurant settings ──
       if (backup.restaurant && restaurant) {
@@ -248,11 +266,11 @@ export async function POST(req: Request) {
         for (const table of (backup.tables ?? [])) {
           await tx.restaurantTable.upsert({
             where: { id: table.id },
-            update: { ...(activeBranchId ? { branchId: activeBranchId } : {}), name: table.name, seats: table.seats, status: table.status },
+            update: { branchId: restoreBranchId!, name: table.name, seats: table.seats, status: table.status },
             create: {
               id: table.id,
-              restaurantId: restaurant.id,
-              ...(activeBranchId ? { branchId: activeBranchId } : {}),
+              restaurant: { connect: { id: restaurant.id } },
+              branchId: restoreBranchId!,
               name: table.name,
               seats: table.seats ?? 4,
               status: table.status ?? 'available',
@@ -269,7 +287,7 @@ export async function POST(req: Request) {
           await tx.restaurantOrder.upsert({
             where: { id: order.id },
             update: {
-              ...(activeBranchId ? { branchId: activeBranchId } : {}),
+              branchId: restoreBranchId!,
               tableId: order.tableId ?? null,
               tableName: order.tableName,
               orderNumber: order.orderNumber,
@@ -296,9 +314,9 @@ export async function POST(req: Request) {
             },
             create: {
               id: order.id,
-              restaurantId: restaurant.id,
-              ...(activeBranchId ? { branchId: activeBranchId } : {}),
-              tableId: order.tableId ?? null,
+              restaurant: { connect: { id: restaurant.id } },
+              branchId: restoreBranchId!,
+              ...(order.tableId ? { table: { connect: { id: order.tableId } } } : {}),
               tableName: order.tableName,
               orderNumber: order.orderNumber,
               status: order.status ?? 'PENDING',
@@ -537,7 +555,7 @@ export async function POST(req: Request) {
           where: { id: dish.id },
           update: {
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             name: dish.name,
             sellingPrice: dish.sellingPrice,
             category: dish.category,
@@ -545,9 +563,9 @@ export async function POST(req: Request) {
           },
           create: {
             id: dish.id,
-            userId: billingUserId,
+            user: { connect: { id: billingUserId } },
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            branchId: restoreBranchId!,
             name: dish.name,
             sellingPrice: dish.sellingPrice,
             category: dish.category ?? null,
