@@ -74,9 +74,7 @@ function isWasteLikeTransaction(entry: { sourceKind?: string | null; description
 }
 
 function buildBranchScopeWhere(branch: { id: string; isMain: boolean }) {
-  return branch.isMain
-    ? { OR: [{ branchId: branch.id }, { branchId: null }] }
-    : { branchId: branch.id }
+  return { branchId: branch.id }
 }
 
 async function listActiveBranches(restaurantId: string) {
