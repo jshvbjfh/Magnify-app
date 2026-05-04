@@ -7,7 +7,7 @@ declare global {
   var prismaConnectionRetryAttached: boolean | undefined
 }
 
-const CONNECT_RETRY_DELAYS_MS = [400, 1200, 2400]
+const CONNECT_RETRY_DELAYS_MS = [400, 1200, 2400, 4000, 6000]
 const DATABASE_UNAVAILABLE_CODES = new Set(['P1001', 'P1002', 'P1017', 'P2024'])
 
 function isTransientConnectionError(error: unknown) {
@@ -95,5 +95,6 @@ if (!global.prismaConnectionRetryAttached) {
 }
 
 export const prisma = prismaClient
+export default prisma
 
 if (process.env.NODE_ENV !== 'production') global.prisma = prisma
