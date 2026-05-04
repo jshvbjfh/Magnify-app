@@ -21,6 +21,7 @@ type ConsumeIngredientStockParams = {
 	billingUserId: string
 	restaurantId?: string | null
 	branchId?: string | null
+	includeBranchlessRows?: boolean
 	ingredientId: string
 	quantity: number
 	fifoEnabled: boolean
@@ -40,6 +41,7 @@ function buildRestaurantScopedIngredientWhere(params: {
 	billingUserId: string
 	restaurantId?: string | null
 	branchId?: string | null
+	includeBranchlessRows?: boolean
 	ingredientId: string
 }) {
 	return {
@@ -48,7 +50,11 @@ function buildRestaurantScopedIngredientWhere(params: {
 		...(params.restaurantId
 			? { restaurantId: params.restaurantId }
 			: { userId: params.billingUserId }),
-		...(params.branchId ? { branchId: params.branchId } : {}),
+		...(params.branchId
+			? params.includeBranchlessRows
+				? { OR: [{ branchId: params.branchId }, { branchId: null }] }
+				: { branchId: params.branchId }
+			: {}),
 	}
 }
 
@@ -56,6 +62,7 @@ function buildRestaurantScopedPurchaseWhere(params: {
 	billingUserId: string
 	restaurantId?: string | null
 	branchId?: string | null
+	includeBranchlessRows?: boolean
 	ingredientId: string
 }) {
 	return {
@@ -64,7 +71,11 @@ function buildRestaurantScopedPurchaseWhere(params: {
 		...(params.restaurantId
 			? { restaurantId: params.restaurantId }
 			: { userId: params.billingUserId }),
-		...(params.branchId ? { branchId: params.branchId } : {}),
+		...(params.branchId
+			? params.includeBranchlessRows
+				? { OR: [{ branchId: params.branchId }, { branchId: null }] }
+				: { branchId: params.branchId }
+			: {}),
 	}
 }
 
@@ -140,6 +151,7 @@ export async function consumeIngredientStock(
 					billingUserId: params.billingUserId,
 					restaurantId: params.restaurantId,
 					branchId: params.branchId,
+					includeBranchlessRows: params.includeBranchlessRows,
 					ingredientId: params.ingredientId,
 				}),
 				select: {
@@ -169,6 +181,7 @@ export async function consumeIngredientStock(
 			billingUserId: params.billingUserId,
 			restaurantId: params.restaurantId,
 			branchId: params.branchId,
+			includeBranchlessRows: params.includeBranchlessRows,
 			ingredientId: params.ingredientId,
 		}),
 		orderBy: [{ purchasedAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
