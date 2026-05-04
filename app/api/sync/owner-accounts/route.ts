@@ -21,13 +21,8 @@ async function authenticateSyncUser(request: Request) {
   const sharedSecret = request.headers.get('x-sync-secret')?.trim() ?? ''
   const password = request.headers.get('x-sync-password') ?? ''
 
-  if (!email || (!sharedSecret && !password)) {
+  if (!sharedSecret && (!email || !password)) {
     return { error: NextResponse.json({ error: 'Sync credentials are required' }, { status: 401 }) }
-  }
-
-  const user = await prisma.user.findUnique({ where: { email } })
-  if (!user) {
-    return { error: NextResponse.json({ error: 'Invalid sync credentials' }, { status: 401 }) }
   }
 
   const configuredSharedSecret = process.env.OWNER_SYNC_SHARED_SECRET?.trim() ?? ''
@@ -35,6 +30,13 @@ async function authenticateSyncUser(request: Request) {
     if (!matchesSharedSecret(sharedSecret, configuredSharedSecret)) {
       return { error: NextResponse.json({ error: 'Invalid sync credentials' }, { status: 401 }) }
     }
+    const user = email ? await prisma.user.findUnique({ where: { email } }) : null
+    return { user, authMode: 'shared-secret' as const }
+  }
+
+  const user = await prisma.user.findUnique({ where: { email } })
+  if (!user) {
+    return { error: NextResponse.json({ error: 'Invalid sync credentials' }, { status: 401 }) }
   } else {
     const passwordOk = await compare(password, user.password)
     if (!passwordOk) {
@@ -42,7 +44,59 @@ async function authenticateSyncUser(request: Request) {
     }
   }
 
-  return { user }
+  return { user, authMode: 'password' as const }
+}
+
+async function resolveProvisioningRestaurant(params: {
+  authUser: {
+    id: string
+    role: string
+    restaurantId: string | null
+  } | null
+  restaurantSyncId: string
+  restaurantToken: string
+  restaurantName: string
+}) {
+  const existingRestaurant = await prisma.restaurant.findUnique({
+    where: { syncRestaurantId: params.restaurantSyncId },
+    select: { id: true, name: true, syncToken: true },
+  })
+
+  // Shared-secret provisioning should bind to the restaurant identity proved by
+  // the sync id + token, not to whichever user email happens to be configured on
+  // the desktop build. This keeps account provisioning isolated from owner-sync.
+  if (existingRestaurant) {
+    if (existingRestaurant.syncToken !== params.restaurantToken) {
+      return {
+        ok: false as const,
+        status: 401,
+        error: 'Invalid restaurant sync token',
+      }
+    }
+
+    return {
+      ok: true as const,
+      restaurant: existingRestaurant,
+    }
+  }
+
+  if (!params.authUser) {
+    return {
+      ok: false as const,
+      status: 409,
+      error: 'This branch is not linked in Magnify cloud yet. Run branch sync first, then try again.',
+    }
+  }
+
+  return resolveRestaurantForSyncUser({
+    id: params.authUser.id,
+    role: params.authUser.role,
+    restaurantId: params.authUser.restaurantId,
+  }, {
+    restaurantSyncId: params.restaurantSyncId,
+    restaurantToken: params.restaurantToken,
+    restaurantName: params.restaurantName,
+  })
 }
 export async function POST(request: Request) {
   try {
@@ -54,6 +108,7 @@ export async function POST(request: Request) {
     const restaurantToken = String(body?.restaurantToken ?? '')
     const restaurantName = String(body?.restaurantName ?? '').trim()
     const requestedRole = body?.role === 'waiter' ? 'waiter' : body?.role === 'kitchen' ? 'kitchen' : 'owner'
+    const requestedBranchId = String(body?.branchId ?? '').trim() || null
     const accountName = String(body?.name ?? '').trim()
     const accountEmail = String(body?.email ?? '').trim().toLowerCase()
     const accountPassword = String(body?.password ?? '')
@@ -81,24 +136,50 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Password is too long' }, { status: 400 })
     }
 
-    const restaurantAccess = await resolveRestaurantForSyncUser({
-      id: auth.user.id,
-      role: auth.user.role,
-      restaurantId: auth.user.restaurantId ?? null,
-    }, {
-      restaurantSyncId,
-      restaurantToken,
-      restaurantName,
-    })
+    const restaurantAccess = auth.authMode === 'shared-secret'
+      ? await resolveProvisioningRestaurant({
+          authUser: auth.user
+            ? {
+                id: auth.user.id,
+                role: auth.user.role,
+                restaurantId: auth.user.restaurantId ?? null,
+              }
+            : null,
+          restaurantSyncId,
+          restaurantToken,
+          restaurantName,
+        })
+      : await resolveRestaurantForSyncUser({
+          id: auth.user.id,
+          role: auth.user.role,
+          restaurantId: auth.user.restaurantId ?? null,
+        }, {
+          restaurantSyncId,
+          restaurantToken,
+          restaurantName,
+        })
     if (!restaurantAccess.ok) {
       return NextResponse.json({
         error: restaurantAccess.error,
-        ...(restaurantAccess.linkedRestaurant ? { linkedRestaurant: restaurantAccess.linkedRestaurant } : {}),
+        ...('linkedRestaurant' in restaurantAccess && restaurantAccess.linkedRestaurant
+          ? { linkedRestaurant: restaurantAccess.linkedRestaurant }
+          : {}),
       }, { status: restaurantAccess.status })
     }
 
     const restaurant = restaurantAccess.restaurant
   const mainBranch = await ensureMainBranchForRestaurant(restaurant.id)
+
+  // Resolve which branch to assign this account to. Use the requested branchId
+  // if it's a real active branch in this restaurant; otherwise fall back to main.
+  let resolvedBranchId = mainBranch?.id ?? null
+  if (requestedBranchId) {
+    const requestedBranch = await prisma.restaurantBranch.findFirst({
+      where: { id: requestedBranchId, restaurantId: restaurant.id, isActive: true },
+      select: { id: true },
+    })
+    if (requestedBranch) resolvedBranchId = requestedBranch.id
+  }
     const existingAccount = await prisma.user.findUnique({ where: { email: accountEmail } })
     if (existingAccount && !['owner', 'waiter', 'kitchen'].includes(existingAccount.role)) {
       return NextResponse.json({ error: 'This email is already used by another account type' }, { status: 409 })
@@ -138,7 +219,7 @@ export async function POST(request: Request) {
               businessType: 'restaurant',
               trackingMode: existingAccount.trackingMode ?? 'simple',
               restaurantId: restaurant.id,
-              branchId: existingAccount.branchId ?? mainBranch.id,
+              branchId: resolvedBranchId,
               isActive: true,
             },
             select: { id: true, name: true, email: true, role: true, restaurantId: true },
@@ -152,7 +233,7 @@ export async function POST(request: Request) {
               businessType: 'restaurant',
               trackingMode: 'simple',
               restaurantId: restaurant.id,
-              branchId: mainBranch.id,
+              branchId: resolvedBranchId,
               isActive: true,
             },
             select: { id: true, name: true, email: true, role: true, restaurantId: true },
@@ -180,7 +261,7 @@ export async function POST(request: Request) {
           businessType: 'restaurant',
           trackingMode: existingAfterConflict.trackingMode ?? 'simple',
           restaurantId: restaurant.id,
-          branchId: existingAfterConflict.branchId ?? mainBranch.id,
+          branchId: resolvedBranchId,
           isActive: true,
         },
         select: { id: true, name: true, email: true, role: true, restaurantId: true },
