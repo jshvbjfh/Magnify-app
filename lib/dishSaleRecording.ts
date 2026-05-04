@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 
 import { recordJournalEntry } from '@/lib/accounting'
-import { consumeIngredientStock, InsufficientFifoStockError, InsufficientInventoryStockError } from '@/lib/inventoryConsumption'
+import { consumeIngredientStock, getRestaurantFifoEnabled, InsufficientFifoStockError, InsufficientInventoryStockError } from '@/lib/inventoryConsumption'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
@@ -24,6 +24,26 @@ function roundQuantity(value: number) {
   return Math.round(value * 1000) / 1000
 }
 
+function buildRestaurantScopedDishWhere(params: {
+  requestedDishIds: string[]
+  billingUserId: string
+  restaurantId?: string | null
+  branchId?: string | null
+  includeBranchlessRows?: boolean
+}) {
+  return {
+    id: { in: params.requestedDishIds },
+    ...(params.restaurantId
+      ? { restaurantId: params.restaurantId }
+      : { userId: params.billingUserId }),
+    ...(params.branchId
+      ? params.includeBranchlessRows
+        ? { OR: [{ branchId: params.branchId }, { branchId: null }] }
+        : { branchId: params.branchId }
+      : {}),
+  }
+}
+
 export async function recordDishSalesForPaidOrder(
   db: PrismaDb,
   params: {
@@ -42,18 +62,19 @@ export async function recordDishSalesForPaidOrder(
   if (!params.restaurantId || !params.branchId) {
     throw new Error('recordDishSalesForPaidOrder requires restaurantId and branchId')
   }
+  const fifoEnabled = await getRestaurantFifoEnabled(db, {
+    billingUserId: params.billingUserId,
+    restaurantId: params.restaurantId,
+  })
   const requestedDishIds = Array.from(new Set(params.items.map((item) => item.dishId)))
   const dishes = await db.dish.findMany({
-    where: {
-      id: { in: requestedDishIds },
-      userId: params.billingUserId,
-      ...(params.restaurantId ? { restaurantId: params.restaurantId } : {}),
-      ...(params.branchId
-        ? params.includeBranchlessRows
-          ? { OR: [{ branchId: params.branchId }, { branchId: null }] }
-          : { branchId: params.branchId }
-        : {}),
-    },
+    where: buildRestaurantScopedDishWhere({
+      requestedDishIds,
+      billingUserId: params.billingUserId,
+      restaurantId: params.restaurantId,
+      branchId: params.branchId,
+      includeBranchlessRows: params.includeBranchlessRows,
+    }),
     include: {
       ingredients: {
         include: {
@@ -112,7 +133,7 @@ export async function recordDishSalesForPaidOrder(
           branchId: params.branchId,
           ingredientId: row.ingredientId,
           quantity: totalNeeded,
-          fifoEnabled: true,
+          fifoEnabled,
           sourceType: 'dishSale',
           sourceId: dishSale.id,
           consumedAt: params.saleDate,
@@ -188,18 +209,19 @@ export async function recordDishWasteForOrderItems(
   if (!params.restaurantId || !params.branchId) {
     throw new Error('recordDishWasteForOrderItems requires restaurantId and branchId')
   }
+  const fifoEnabled = await getRestaurantFifoEnabled(db, {
+    billingUserId: params.billingUserId,
+    restaurantId: params.restaurantId,
+  })
   const requestedDishIds = Array.from(new Set(params.items.map((item) => item.dishId)))
   const dishes = await db.dish.findMany({
-    where: {
-      id: { in: requestedDishIds },
-      userId: params.billingUserId,
-      ...(params.restaurantId ? { restaurantId: params.restaurantId } : {}),
-      ...(params.branchId
-        ? params.includeBranchlessRows
-          ? { OR: [{ branchId: params.branchId }, { branchId: null }] }
-          : { branchId: params.branchId }
-        : {}),
-    },
+    where: buildRestaurantScopedDishWhere({
+      requestedDishIds,
+      billingUserId: params.billingUserId,
+      restaurantId: params.restaurantId,
+      branchId: params.branchId,
+      includeBranchlessRows: params.includeBranchlessRows,
+    }),
     include: {
       ingredients: {
         include: {
@@ -302,7 +324,7 @@ export async function recordDishWasteForOrderItems(
       branchId: params.branchId,
       ingredientId: waste.ingredientId,
       quantity: waste.quantityWasted,
-      fifoEnabled: true,
+      fifoEnabled,
       sourceType: 'waste',
       sourceId: createdLog.id,
       consumedAt: params.wasteDate,

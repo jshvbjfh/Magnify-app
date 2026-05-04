@@ -36,6 +36,38 @@ function roundQuantity(value: number) {
 	return Math.round(value * 1000) / 1000
 }
 
+function buildRestaurantScopedIngredientWhere(params: {
+	billingUserId: string
+	restaurantId?: string | null
+	branchId?: string | null
+	ingredientId: string
+}) {
+	return {
+		id: params.ingredientId,
+		inventoryType: 'ingredient',
+		...(params.restaurantId
+			? { restaurantId: params.restaurantId }
+			: { userId: params.billingUserId }),
+		...(params.branchId ? { branchId: params.branchId } : {}),
+	}
+}
+
+function buildRestaurantScopedPurchaseWhere(params: {
+	billingUserId: string
+	restaurantId?: string | null
+	branchId?: string | null
+	ingredientId: string
+}) {
+	return {
+		ingredientId: params.ingredientId,
+		remainingQuantity: { gt: 0 },
+		...(params.restaurantId
+			? { restaurantId: params.restaurantId }
+			: { userId: params.billingUserId }),
+		...(params.branchId ? { branchId: params.branchId } : {}),
+	}
+}
+
 export class InsufficientFifoStockError extends Error {
 	constructor(
 		public readonly ingredientId: string,
@@ -104,13 +136,12 @@ export async function consumeIngredientStock(
 	const ingredient = params.ingredientSnapshot
 		? params.ingredientSnapshot
 		: await db.inventoryItem.findFirst({
-				where: {
-					id: params.ingredientId,
-					userId: params.billingUserId,
-					inventoryType: 'ingredient',
-					...(params.restaurantId ? { restaurantId: params.restaurantId } : {}),
-					...(params.branchId ? { branchId: params.branchId } : {}),
-				},
+				where: buildRestaurantScopedIngredientWhere({
+					billingUserId: params.billingUserId,
+					restaurantId: params.restaurantId,
+					branchId: params.branchId,
+					ingredientId: params.ingredientId,
+				}),
 				select: {
 					id: true,
 					name: true,
@@ -134,13 +165,12 @@ export async function consumeIngredientStock(
 	}> = []
 	let totalCost = 0
 	const layers = await db.inventoryPurchase.findMany({
-		where: {
-			userId: params.billingUserId,
+		where: buildRestaurantScopedPurchaseWhere({
+			billingUserId: params.billingUserId,
+			restaurantId: params.restaurantId,
+			branchId: params.branchId,
 			ingredientId: params.ingredientId,
-			remainingQuantity: { gt: 0 },
-			...(params.restaurantId ? { restaurantId: params.restaurantId } : {}),
-			...(params.branchId ? { branchId: params.branchId } : {}),
-		},
+		}),
 		orderBy: [{ purchasedAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
 	})
 	const layerSnapshots = layers.map((layer) => ({
@@ -149,7 +179,9 @@ export async function consumeIngredientStock(
 		unitCost: Number(layer.unitCost || 0),
 	}))
 
-	const consumesFromBatches = params.fifoEnabled || layerSnapshots.length > 0
+	// When FIFO runtime is off, current stock is tracked on inventoryItem.quantity
+	// even if historical purchase rows still exist.
+	const consumesFromBatches = params.fifoEnabled
 	const availableBatchQuantity = roundQuantity(
 		layerSnapshots.reduce((sum, layer) => sum + Number(layer.remainingQuantity || 0), 0),
 	)
