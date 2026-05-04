@@ -36,11 +36,7 @@ function buildRestaurantScopedDishWhere(params: {
     ...(params.restaurantId
       ? { restaurantId: params.restaurantId }
       : { userId: params.billingUserId }),
-    ...(params.branchId
-      ? params.includeBranchlessRows
-        ? { OR: [{ branchId: params.branchId }, { branchId: null }] }
-        : { branchId: params.branchId }
-      : {}),
+    ...(params.branchId ? { branchId: params.branchId } : {}),
   }
 }
 
