@@ -318,6 +318,8 @@ function buildMinimalDashboardPayload(params: {
     sync: {
       source: 'minimal' as const,
       generatedAt: lastActivityAt?.toISOString() ?? new Date().toISOString(),
+      detailLevel: 'financial' as const,
+      note: 'This owner view is using cloud financial sync only. Revenue, expenses, profit, daily history, and journal entries are live here, but food cost, labor, top dishes, and inventory are unavailable in this mode.',
     },
     summary: {
       revenue,

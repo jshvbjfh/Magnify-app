@@ -420,6 +420,8 @@ export function buildOwnerDashboardPayload(
     sync: {
       source,
       generatedAt: snapshot.generatedAt,
+      detailLevel: 'full' as const,
+      note: null,
     },
     summary: {
       revenue,

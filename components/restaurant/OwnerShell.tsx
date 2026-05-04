@@ -46,6 +46,8 @@ type DashboardData = {
   sync: {
     source: 'live' | 'snapshot' | 'minimal'
     generatedAt: string
+    detailLevel: 'full' | 'financial'
+    note: string | null
   }
   summary: {
     revenue: number
@@ -199,6 +201,8 @@ function normalizeDashboardData(payload: unknown, fallbackDate: string): Dashboa
         ? rawSync.source
         : 'minimal',
       generatedAt: asString(rawSync?.generatedAt, new Date().toISOString()),
+      detailLevel: rawSync?.detailLevel === 'financial' ? 'financial' : 'full',
+      note: typeof rawSync?.note === 'string' && rawSync.note.trim() ? rawSync.note : null,
     },
     summary: {
       revenue: asNumber(rawSummary?.revenue),
@@ -607,6 +611,8 @@ export default function OwnerShell() {
     ? 'Today'
     : new Intl.DateTimeFormat('en-RW', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${selectedDetailsDate}T12:00:00`))
   const ownerBranches = data?.branches ?? []
+  const isFinancialOnly = data?.sync.detailLevel === 'financial'
+  const syncNotice = data?.sync.note ?? null
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -685,6 +691,12 @@ export default function OwnerShell() {
                     </button>
                   )
                 })}
+              </div>
+            ) : null}
+
+            {syncNotice ? (
+              <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                {syncNotice}
               </div>
             ) : null}
 
@@ -1019,49 +1031,79 @@ export default function OwnerShell() {
               {/* â”€â”€ REPORTS view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
               {view === 'reports' ? (
                 <div className="grid grid-cols-1 gap-5 xl:grid-cols-[0.9fr_1.1fr]">
-                  <SectionCard title="Cost breakdown" sub="Food, labor, waste, prime cost.">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="rounded-2xl bg-orange-50 p-4">
-                        <div className="flex items-center gap-2 text-orange-600">
-                          <ChefHat className="h-4 w-4" />
-                          <p className="text-xs font-semibold uppercase tracking-wide">Food cost</p>
+                  <SectionCard title="Cost breakdown" sub={isFinancialOnly ? 'Only waste and recorded expense totals are available from cloud financial sync.' : 'Food, labor, waste, prime cost.'}>
+                    {isFinancialOnly ? (
+                      <div className="space-y-3">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                          Food cost, labor, and prime cost stay unavailable until this owner view has a full branch data source.
                         </div>
-                        <p className="mt-2 text-xl font-bold text-gray-900">{costBreakdown.foodCostPct}%</p>
-                        <p className="mt-1 text-xs text-gray-400">{formatCurrency(costBreakdown.cogs)}</p>
-                      </div>
-                      <div className="rounded-2xl bg-blue-50 p-4">
-                        <div className="flex items-center gap-2 text-blue-600">
-                          <Wallet className="h-4 w-4" />
-                          <p className="text-xs font-semibold uppercase tracking-wide">Labor</p>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="rounded-2xl bg-red-50 p-4">
+                            <div className="flex items-center gap-2 text-red-600">
+                              <AlertTriangle className="h-4 w-4" />
+                              <p className="text-xs font-semibold uppercase tracking-wide">Waste</p>
+                            </div>
+                            <p className="mt-2 text-xl font-bold text-gray-900">{costBreakdown.wastePct}%</p>
+                            <p className="mt-1 text-xs text-gray-400">{formatCurrency(costBreakdown.wasteCost)}</p>
+                          </div>
+                          <div className="rounded-2xl bg-gray-100 p-4">
+                            <div className="flex items-center gap-2 text-gray-600">
+                              <ReceiptText className="h-4 w-4" />
+                              <p className="text-xs font-semibold uppercase tracking-wide">Recorded expenses</p>
+                            </div>
+                            <p className="mt-2 text-xl font-bold text-gray-900">{formatCurrency(costBreakdown.recordedExpenses)}</p>
+                            <p className="mt-1 text-xs text-gray-400">Excludes waste and unavailable cost inputs</p>
+                          </div>
                         </div>
-                        <p className="mt-2 text-xl font-bold text-gray-900">{costBreakdown.laborPct}%</p>
-                        <p className="mt-1 text-xs text-gray-400">{formatCurrency(costBreakdown.laborCost)}</p>
                       </div>
-                      <div className="rounded-2xl bg-red-50 p-4">
-                        <div className="flex items-center gap-2 text-red-600">
-                          <AlertTriangle className="h-4 w-4" />
-                          <p className="text-xs font-semibold uppercase tracking-wide">Waste</p>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-2xl bg-orange-50 p-4">
+                          <div className="flex items-center gap-2 text-orange-600">
+                            <ChefHat className="h-4 w-4" />
+                            <p className="text-xs font-semibold uppercase tracking-wide">Food cost</p>
+                          </div>
+                          <p className="mt-2 text-xl font-bold text-gray-900">{costBreakdown.foodCostPct}%</p>
+                          <p className="mt-1 text-xs text-gray-400">{formatCurrency(costBreakdown.cogs)}</p>
                         </div>
-                        <p className="mt-2 text-xl font-bold text-gray-900">{costBreakdown.wastePct}%</p>
-                        <p className="mt-1 text-xs text-gray-400">{formatCurrency(costBreakdown.wasteCost)}</p>
-                      </div>
-                      <div className="rounded-2xl bg-gray-100 p-4">
-                        <div className="flex items-center gap-2 text-gray-600">
-                          <BarChart3 className="h-4 w-4" />
-                          <p className="text-xs font-semibold uppercase tracking-wide">Prime cost</p>
+                        <div className="rounded-2xl bg-blue-50 p-4">
+                          <div className="flex items-center gap-2 text-blue-600">
+                            <Wallet className="h-4 w-4" />
+                            <p className="text-xs font-semibold uppercase tracking-wide">Labor</p>
+                          </div>
+                          <p className="mt-2 text-xl font-bold text-gray-900">{costBreakdown.laborPct}%</p>
+                          <p className="mt-1 text-xs text-gray-400">{formatCurrency(costBreakdown.laborCost)}</p>
                         </div>
-                        <p className="mt-2 text-xl font-bold text-gray-900">{costBreakdown.primeCostPct}%</p>
-                        <p className="mt-1 text-xs text-gray-400">{formatCurrency(costBreakdown.primeCost)}</p>
+                        <div className="rounded-2xl bg-red-50 p-4">
+                          <div className="flex items-center gap-2 text-red-600">
+                            <AlertTriangle className="h-4 w-4" />
+                            <p className="text-xs font-semibold uppercase tracking-wide">Waste</p>
+                          </div>
+                          <p className="mt-2 text-xl font-bold text-gray-900">{costBreakdown.wastePct}%</p>
+                          <p className="mt-1 text-xs text-gray-400">{formatCurrency(costBreakdown.wasteCost)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-gray-100 p-4">
+                          <div className="flex items-center gap-2 text-gray-600">
+                            <BarChart3 className="h-4 w-4" />
+                            <p className="text-xs font-semibold uppercase tracking-wide">Prime cost</p>
+                          </div>
+                          <p className="mt-2 text-xl font-bold text-gray-900">{costBreakdown.primeCostPct}%</p>
+                          <p className="mt-1 text-xs text-gray-400">{formatCurrency(costBreakdown.primeCost)}</p>
+                        </div>
                       </div>
-                    </div>
-                    <div className="mt-3 rounded-2xl bg-gray-50 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Recorded expenses</p>
-                      <p className="mt-2 text-lg font-bold text-gray-900">{formatCurrency(costBreakdown.recordedExpenses)}</p>
-                    </div>
+                    )}
+                    {!isFinancialOnly ? (
+                      <div className="mt-3 rounded-2xl bg-gray-50 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Recorded expenses</p>
+                        <p className="mt-2 text-lg font-bold text-gray-900">{formatCurrency(costBreakdown.recordedExpenses)}</p>
+                      </div>
+                    ) : null}
                   </SectionCard>
 
-                  <SectionCard title="Top dishes" sub="Best earners in the selected range.">
-                    {data.topDishes.length === 0 ? (
+                  <SectionCard title="Top dishes" sub={isFinancialOnly ? 'Dish-level sales are not included in cloud financial sync.' : 'Best earners in the selected range.'}>
+                    {isFinancialOnly ? (
+                      <p className="text-sm text-gray-500">Top dishes become available only when this owner view has a full branch data source instead of financial-only sync.</p>
+                    ) : data.topDishes.length === 0 ? (
                       <p className="text-sm text-gray-400">No dish sales in this range yet.</p>
                     ) : (
                       <div className="space-y-3">
@@ -1082,67 +1124,75 @@ export default function OwnerShell() {
 
               {/* â”€â”€ INVENTORY view â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
               {view === 'inventory' ? (
-                <div className="grid grid-cols-1 gap-5 xl:grid-cols-[0.9fr_1.1fr]">
-                  <SectionCard title="Stock overview" sub="Purchased, used, and on hand.">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="rounded-2xl bg-orange-50 p-4">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-orange-600">Purchased</p>
-                        <p className="mt-2 text-xl font-bold text-gray-900">{formatCurrency(data.inventory.purchaseCost)}</p>
+                isFinancialOnly ? (
+                  <div className="grid grid-cols-1 gap-5">
+                    <SectionCard title="Inventory unavailable" sub="Cloud financial sync does not include stock balances or ingredient usage.">
+                      <p className="text-sm text-gray-600">Inventory value, low-stock watchlists, and ingredient usage stay unavailable here until this owner view has a full branch data source.</p>
+                    </SectionCard>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+                    <SectionCard title="Stock overview" sub="Purchased, used, and on hand.">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-2xl bg-orange-50 p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-orange-600">Purchased</p>
+                          <p className="mt-2 text-xl font-bold text-gray-900">{formatCurrency(data.inventory.purchaseCost)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-red-50 p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-red-600">Used</p>
+                          <p className="mt-2 text-xl font-bold text-gray-900">{formatCurrency(data.inventory.usedCost)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-green-50 p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-green-600">Stock value</p>
+                          <p className="mt-2 text-xl font-bold text-gray-900">{formatCurrency(data.inventory.stockValue)}</p>
+                        </div>
+                        <div className="rounded-2xl bg-gray-100 p-4">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Low stock items</p>
+                          <p className="mt-2 text-xl font-bold text-gray-900">{data.inventory.lowStockCount}</p>
+                        </div>
                       </div>
-                      <div className="rounded-2xl bg-red-50 p-4">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-red-600">Used</p>
-                        <p className="mt-2 text-xl font-bold text-gray-900">{formatCurrency(data.inventory.usedCost)}</p>
-                      </div>
-                      <div className="rounded-2xl bg-green-50 p-4">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-green-600">Stock value</p>
-                        <p className="mt-2 text-xl font-bold text-gray-900">{formatCurrency(data.inventory.stockValue)}</p>
-                      </div>
-                      <div className="rounded-2xl bg-gray-100 p-4">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Low stock items</p>
-                        <p className="mt-2 text-xl font-bold text-gray-900">{data.inventory.lowStockCount}</p>
-                      </div>
-                    </div>
-                  </SectionCard>
+                    </SectionCard>
 
-                  <SectionCard title="Inventory watchlist" sub="Remote stock check.">
-                    {data.inventory.items.length === 0 ? (
-                      <p className="text-sm text-gray-400">No inventory in this range yet.</p>
-                    ) : (
-                      <div className="space-y-3">
-                        {data.inventory.items.map((item) => (
-                          <div key={item.name} className={`rounded-2xl border px-4 py-3 ${item.isLow ? 'border-red-200 bg-red-50' : 'border-gray-100 bg-gray-50'}`}>
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <Package className="h-4 w-4 text-gray-400" />
-                                  <p className="truncate text-sm font-semibold text-gray-900">{item.name}</p>
+                    <SectionCard title="Inventory watchlist" sub="Remote stock check.">
+                      {data.inventory.items.length === 0 ? (
+                        <p className="text-sm text-gray-400">No inventory in this range yet.</p>
+                      ) : (
+                        <div className="space-y-3">
+                          {data.inventory.items.map((item) => (
+                            <div key={item.name} className={`rounded-2xl border px-4 py-3 ${item.isLow ? 'border-red-200 bg-red-50' : 'border-gray-100 bg-gray-50'}`}>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <Package className="h-4 w-4 text-gray-400" />
+                                    <p className="truncate text-sm font-semibold text-gray-900">{item.name}</p>
+                                  </div>
+                                  <p className="mt-1 text-xs text-gray-400">
+                                    Remaining: {item.remainingQty} {item.unit} Â· Used: {item.usedQty} {item.unit}
+                                  </p>
                                 </div>
-                                <p className="mt-1 text-xs text-gray-400">
-                                  Remaining: {item.remainingQty} {item.unit} Â· Used: {item.usedQty} {item.unit}
-                                </p>
+                                {item.isLow ? <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-red-600">Low</span> : null}
                               </div>
-                              {item.isLow ? <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-red-600">Low</span> : null}
-                            </div>
-                            <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-                              <div className="rounded-xl bg-white px-3 py-2">
-                                <p className="text-gray-400">Bought</p>
-                                <p className="mt-1 font-semibold text-gray-900">{formatCurrency(item.purchaseCost)}</p>
-                              </div>
-                              <div className="rounded-xl bg-white px-3 py-2">
-                                <p className="text-gray-400">Used</p>
-                                <p className="mt-1 font-semibold text-gray-900">{formatCurrency(item.usedCost)}</p>
-                              </div>
-                              <div className="rounded-xl bg-white px-3 py-2">
-                                <p className="text-gray-400">On hand</p>
-                                <p className="mt-1 font-semibold text-gray-900">{formatCurrency(item.stockValue)}</p>
+                              <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                                <div className="rounded-xl bg-white px-3 py-2">
+                                  <p className="text-gray-400">Bought</p>
+                                  <p className="mt-1 font-semibold text-gray-900">{formatCurrency(item.purchaseCost)}</p>
+                                </div>
+                                <div className="rounded-xl bg-white px-3 py-2">
+                                  <p className="text-gray-400">Used</p>
+                                  <p className="mt-1 font-semibold text-gray-900">{formatCurrency(item.usedCost)}</p>
+                                </div>
+                                <div className="rounded-xl bg-white px-3 py-2">
+                                  <p className="text-gray-400">On hand</p>
+                                  <p className="mt-1 font-semibold text-gray-900">{formatCurrency(item.stockValue)}</p>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                          ))}
+                        </div>
+                      )}
                   </SectionCard>
                 </div>
+                  )
               ) : null}
 
             </div>
