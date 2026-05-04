@@ -159,12 +159,11 @@ export async function POST(request: Request) {
           restaurantName,
         })
     if (!restaurantAccess.ok) {
+      const failed = restaurantAccess as { ok: false; status: number; error: string; linkedRestaurant?: { id: string; name: string; syncRestaurantId: string; syncToken: string } }
       return NextResponse.json({
-        error: restaurantAccess.error,
-        ...('linkedRestaurant' in restaurantAccess && restaurantAccess.linkedRestaurant
-          ? { linkedRestaurant: restaurantAccess.linkedRestaurant }
-          : {}),
-      }, { status: restaurantAccess.status })
+        error: failed.error,
+        ...(failed.linkedRestaurant ? { linkedRestaurant: failed.linkedRestaurant } : {}),
+      }, { status: failed.status })
     }
 
     const restaurant = restaurantAccess.restaurant
@@ -201,6 +200,39 @@ export async function POST(request: Request) {
 
       if (ownedRestaurant && ownedRestaurant.id !== restaurant.id) {
         return NextResponse.json({ error: 'This owner email is already linked to a different restaurant' }, { status: 409 })
+      }
+    }
+
+    // For owner-role provisioning, verify the resolved restaurant is actually owned
+    // by the requesting admin (not just linked via restaurantId). This prevents an
+    // admin drifted onto a stale/wrong restaurant from provisioning owner accounts
+    // into a restaurant they don't own.
+    if (requestedRole === 'owner') {
+      if (auth.user) {
+        // Password-auth path: the requesting user must be the restaurant owner.
+        const adminOwnsRestaurant = await prisma.restaurant.findFirst({
+          where: { id: restaurant.id, ownerId: auth.user.id },
+          select: { id: true },
+        })
+        if (!adminOwnsRestaurant) {
+          return NextResponse.json(
+            { error: 'You can only provision owner accounts for a restaurant you own' },
+            { status: 403 }
+          )
+        }
+      } else {
+        // Shared-secret path: no user identity, but the restaurant's ownerId must
+        // resolve to a real active admin account so we don't provision into orphans.
+        const restaurantOwner = await prisma.user.findFirst({
+          where: { id: (await prisma.restaurant.findUnique({ where: { id: restaurant.id }, select: { ownerId: true } }))?.ownerId ?? '', isActive: true },
+          select: { id: true },
+        })
+        if (!restaurantOwner) {
+          return NextResponse.json(
+            { error: 'Cannot provision owner account: restaurant has no active owner' },
+            { status: 403 }
+          )
+        }
       }
     }
 

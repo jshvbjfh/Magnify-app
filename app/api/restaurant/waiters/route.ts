@@ -11,7 +11,7 @@ async function requireAdmin() {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) throw new Error('Unauthorized')
   const user = session.user as any
-  if (user.role !== 'admin') throw new Error('Admin only')
+  if (!['admin', 'owner'].includes(String(user.role))) throw new Error('Admin only')
   return {
     id: session.user.id,
     email: typeof session.user.email === 'string' ? session.user.email.trim().toLowerCase() : '',
@@ -43,7 +43,7 @@ export async function GET() {
     }
 
     const waiters = await prisma.user.findMany({
-      where: { restaurantId: restaurant.id, branchId: adminContext.branchId },
+      where: { restaurantId: restaurant.id, branchId: adminContext.branchId, role: { in: ['waiter', 'kitchen'] } },
       select: { id: true, name: true, email: true, role: true, createdAt: true }
     })
 
@@ -61,6 +61,17 @@ export async function POST(req: Request) {
     const adminContext = await getRestaurantContextForUser(admin.id)
     if (!adminContext?.branchId || adminContext.restaurantId !== restaurant.id) {
       return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+    }
+
+    // Verify the resolved restaurant is actually owned by this admin.
+    // getOrCreateRestaurant uses ownerId-based resolution but this guard
+    // catches any edge case where the restaurant row has a different ownerId.
+    const ownerCheck = await prisma.restaurant.findFirst({
+      where: { id: restaurant.id, ownerId: admin.id },
+      select: { id: true },
+    })
+    if (!ownerCheck) {
+      return NextResponse.json({ error: 'You do not own this restaurant' }, { status: 403 })
     }
 
     const { name, email, password, role: reqRole, syncTargetUrl, syncEmail, syncPassword } = await req.json()
@@ -90,6 +101,7 @@ export async function POST(req: Request) {
         name: trimmedName,
         email: normalizedEmail,
         password,
+        branchId: adminContext.branchId,
         syncTargetUrl,
         syncEmail,
         syncPassword,

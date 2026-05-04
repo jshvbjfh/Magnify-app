@@ -41,6 +41,7 @@ model User {
   restaurant              Restaurant?         @relation("RestaurantWaiters", fields: [restaurantId], references: [id])
   wasteLogs               WasteLog[]
 
+  @@index([restaurantId])
   @@map("users")
 }
 

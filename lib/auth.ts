@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto'
 import type { User } from '@prisma/client'
 import { isLocalFirstDesktopAuthBridgeEnabled, verifyCloudCredentials, type RemoteVerifiedRestaurant } from '@/lib/cloudAuthBridge'
 import { prisma } from '@/lib/prisma'
-import { ensureRestaurantForOwner, findOwnedRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { findOwnedRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 function isStaleJwtSessionError(metadata: unknown) {
   const error = (metadata as { error?: { name?: string; message?: string } } | undefined)?.error
@@ -81,13 +81,43 @@ async function attachLocalRestaurantFromCloud(user: {
       ? await prisma.restaurant.findUnique({ where: { id: (await prisma.user.findUnique({ where: { id: user.id }, select: { restaurantId: true } }))?.restaurantId ?? '' } }).catch(() => null)
       : null
 
-  const restaurant = existingBySyncId
+  // Step 3: if the cloud owner id differs from the logged-in user (e.g. admin linked
+  // to a restaurant owned by a different cloud user), findOwnedRestaurant(user.id)
+  // won't find it. Look up directly by ownerId to avoid creating a ghost restaurant.
+  const existingByOwnerId =
+    !existingBySyncId && !linkedRestaurant && ownerId !== user.id
+      ? await prisma.restaurant.findFirst({ where: { ownerId }, orderBy: { createdAt: 'asc' } })
+      : null
+
+  const baseTarget = existingBySyncId ?? linkedRestaurant ?? existingByOwnerId
+
+  function buildRestaurantUpdate(base: { id: string; name: string; joinCode: string; syncRestaurantId: string | null; syncToken: string | null }) {
+    return {
+      ownerId,
+      name: remoteRestaurant.name || base.name,
+      joinCode: remoteRestaurant.joinCode || base.joinCode,
+      qrOrderingMode: remoteRestaurant.qrOrderingMode === 'view_only'
+        ? 'view_only'
+        : remoteRestaurant.qrOrderingMode === 'disabled'
+          ? 'disabled'
+          : 'order',
+      licenseActive: remoteRestaurant.licenseActive,
+      licenseExpiry: remoteRestaurant.licenseExpiry ? new Date(remoteRestaurant.licenseExpiry) : null,
+      syncRestaurantId: remoteRestaurant.syncRestaurantId ?? base.syncRestaurantId,
+      syncToken: remoteRestaurant.syncToken ?? base.syncToken,
+    }
+  }
+
+  const restaurant = baseTarget
     ? await prisma.restaurant.update({
-        where: { id: existingBySyncId.id },
+        where: { id: baseTarget.id },
+        data: buildRestaurantUpdate(baseTarget),
+      })
+    : await prisma.restaurant.create({
         data: {
           ownerId,
-          name: remoteRestaurant.name || existingBySyncId.name,
-          joinCode: remoteRestaurant.joinCode || existingBySyncId.joinCode,
+          name: remoteRestaurant.name || 'My Restaurant',
+          joinCode: remoteRestaurant.joinCode || `SYNC${randomUUID().slice(0, 6).toUpperCase()}`,
           qrOrderingMode: remoteRestaurant.qrOrderingMode === 'view_only'
             ? 'view_only'
             : remoteRestaurant.qrOrderingMode === 'disabled'
@@ -95,44 +125,10 @@ async function attachLocalRestaurantFromCloud(user: {
               : 'order',
           licenseActive: remoteRestaurant.licenseActive,
           licenseExpiry: remoteRestaurant.licenseExpiry ? new Date(remoteRestaurant.licenseExpiry) : null,
-          syncRestaurantId: remoteRestaurant.syncRestaurantId ?? existingBySyncId.syncRestaurantId,
-          syncToken: remoteRestaurant.syncToken ?? existingBySyncId.syncToken,
+          syncRestaurantId: remoteRestaurant.syncRestaurantId,
+          syncToken: remoteRestaurant.syncToken,
         },
       })
-    : linkedRestaurant
-      ? await prisma.restaurant.update({
-          where: { id: linkedRestaurant.id },
-          data: {
-            ownerId,
-            name: remoteRestaurant.name || linkedRestaurant.name,
-            joinCode: remoteRestaurant.joinCode || linkedRestaurant.joinCode,
-            qrOrderingMode: remoteRestaurant.qrOrderingMode === 'view_only'
-              ? 'view_only'
-              : remoteRestaurant.qrOrderingMode === 'disabled'
-                ? 'disabled'
-                : 'order',
-            licenseActive: remoteRestaurant.licenseActive,
-            licenseExpiry: remoteRestaurant.licenseExpiry ? new Date(remoteRestaurant.licenseExpiry) : null,
-            syncRestaurantId: remoteRestaurant.syncRestaurantId ?? linkedRestaurant.syncRestaurantId,
-            syncToken: remoteRestaurant.syncToken ?? linkedRestaurant.syncToken,
-          },
-        })
-      : await prisma.restaurant.create({
-          data: {
-            ownerId,
-            name: remoteRestaurant.name || 'My Restaurant',
-            joinCode: remoteRestaurant.joinCode || `SYNC${randomUUID().slice(0, 6).toUpperCase()}`,
-            qrOrderingMode: remoteRestaurant.qrOrderingMode === 'view_only'
-              ? 'view_only'
-              : remoteRestaurant.qrOrderingMode === 'disabled'
-                ? 'disabled'
-                : 'order',
-            licenseActive: remoteRestaurant.licenseActive,
-            licenseExpiry: remoteRestaurant.licenseExpiry ? new Date(remoteRestaurant.licenseExpiry) : null,
-            syncRestaurantId: remoteRestaurant.syncRestaurantId,
-            syncToken: remoteRestaurant.syncToken,
-          },
-        })
 
   await prisma.user.update({
     where: { id: user.id },
@@ -194,8 +190,6 @@ async function syncLocalUserFromCloud(email: string, password: string) {
 
   if (remote.restaurant) {
     await attachLocalRestaurantFromCloud(syncedUser, remote.restaurant)
-  } else if (syncedUser.role === 'admin' || syncedUser.role === 'owner') {
-    await ensureRestaurantForOwner(syncedUser.id)
   }
 
   return prisma.user.findUnique({ where: { email } })
