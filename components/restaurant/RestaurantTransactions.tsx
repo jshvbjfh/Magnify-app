@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import { Plus, ArrowDownLeft, ArrowUpRight, RefreshCw, Search, X, Calendar, TrendingUp, TrendingDown, Layers, Check } from 'lucide-react'
 import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
@@ -43,8 +43,12 @@ function fmtRWF(n: number) {
 }
 
 function todayStr(): string {
-  const n = new Date()
-  return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(new Date())
+}
+
+function toKigaliDateKey(value: string | Date): string {
+  const date = value instanceof Date ? value : new Date(value)
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(date)
 }
 
 function ordinal(n: number): string {
@@ -99,6 +103,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
+  const initializedSelectedDateRef = useRef(false)
   const snapshotScopeId = buildRestaurantSnapshotScope({
     restaurantId: restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null,
     branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
@@ -190,16 +195,27 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   // Count unique journal entries per date (pairId = 1 entry; solo = 1 entry each)
   const entriesPerDate: Record<string, Set<string>> = {}
   for (const t of transactions) {
-    const d = t.date.slice(0, 10)
+    const d = toKigaliDateKey(t.date)
     if (!entriesPerDate[d]) entriesPerDate[d] = new Set()
     entriesPerDate[d].add(t.pairId ?? t.id)
   }
   if (!entriesPerDate[today]) entriesPerDate[today] = new Set() // always show today
 
   const sortedDates = Object.keys(entriesPerDate).sort((a, b) => b.localeCompare(a))
+  const firstDateWithEntries = sortedDates.find((dateKey) => (entriesPerDate[dateKey]?.size ?? 0) > 0) ?? today
+
+  useEffect(() => {
+    if (initializedSelectedDateRef.current || loading) return
+
+    if ((entriesPerDate[selectedDate]?.size ?? 0) === 0 && firstDateWithEntries !== selectedDate) {
+      setSelectedDate(firstDateWithEntries)
+    }
+
+    initializedSelectedDateRef.current = true
+  }, [entriesPerDate, firstDateWithEntries, loading, selectedDate])
 
   // â”€â”€ Transactions for selected date â”€â”€
-  const dateTransactions = transactions.filter(t => t.date.slice(0, 10) === selectedDate)
+  const dateTransactions = transactions.filter(t => toKigaliDateKey(t.date) === selectedDate)
 
   const seen = new Set<string>()
   const rows: Transaction[] = []
@@ -222,6 +238,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
 
   const totalIn  = dateTransactions.filter(t => !isWasteLikeTransaction(t) && t.type === 'debit'  && isCashEquivalentAccountName(t.accountName)).reduce((s, t) => s + t.amount, 0)
   const totalOut = dateTransactions.filter(t => !isWasteLikeTransaction(t) && t.type === 'credit' && isCashEquivalentAccountName(t.accountName)).reduce((s, t) => s + t.amount, 0)
+  const hasEntriesOnOtherDates = sortedDates.some((dateKey) => dateKey !== selectedDate && (entriesPerDate[dateKey]?.size ?? 0) > 0)
 
   const openAddRow = () => {
     setSaveError(null)
@@ -438,7 +455,11 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <Calendar className="h-10 w-10 text-gray-300 mx-auto mb-3" />
                 <p className="text-gray-500 font-medium">No transactions found</p>
                 <p className="text-gray-400 text-sm mt-1">
-                  {search ? 'Try a different search term' : `No entries recorded on ${dateLabel}`}
+                  {search
+                    ? 'Try a different search term'
+                    : hasEntriesOnOtherDates
+                      ? `No entries recorded on ${dateLabel}. Select another date from the history.`
+                      : `No entries recorded on ${dateLabel}`}
                 </p>
               </div>
             ) : (

@@ -113,8 +113,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
     setShowingCachedSnapshot(true)
     setLoading(false)
   }, [snapshotStorageScope])
-  useEffect(()=>{load()},[])
-
+  useEffect(()=>{load()},[restaurantBranch?.branchId])
   async function saveDish(e: React.FormEvent) {
     e.preventDefault()
     if (editDish) {
@@ -189,8 +188,8 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-bold text-gray-800">Restaurant Menu</h2>
         <div className="flex items-center gap-2">
-          <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
-            <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI
+          <button disabled className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-200 text-orange-300 bg-white opacity-60 cursor-not-allowed">
+            <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI <span className="ml-1 text-[10px] font-bold bg-orange-100 text-orange-400 rounded px-1 py-0.5 leading-none">Soon</span>
           </button>
           <button onClick={()=>{setShowForm(true);setEditDish(null);setForm({name:'',sellingPrice:'',category:''})}}
           className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">

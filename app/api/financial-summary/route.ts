@@ -13,14 +13,11 @@ export async function GET() {
 
 		const reportingContext = await requireReportingContext(session.user.id)
 
-		const today = new Date()
-		const year = today.getFullYear()
-		const month = today.getMonth()
-		const day = today.getDate()
-		const startOfDay = new Date(year, month, day, 0, 0, 0, 0)
-		const startOfNextDay = new Date(year, month, day + 1, 0, 0, 0, 0)
+		const todayKigali = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(new Date())
+		const startOfDay = new Date(`${todayKigali}T00:00:00+02:00`)
+		const endOfDay = new Date(`${todayKigali}T23:59:59.999+02:00`)
 		const [metrics, cashBalance] = await Promise.all([
-			getOperationalReportMetrics(reportingContext, { start: startOfDay, end: new Date(startOfNextDay.getTime() - 1) }),
+			getOperationalReportMetrics(reportingContext, { start: startOfDay, end: endOfDay }),
 			getScopedCashBalance(reportingContext),
 		])
 

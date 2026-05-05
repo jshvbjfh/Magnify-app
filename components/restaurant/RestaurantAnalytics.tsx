@@ -178,11 +178,12 @@ export default function RestaurantAnalytics({ onAskJesse }: { onAskJesse?: () =>
         {onAskJesse && (
           <div className="pt-2">
             <button
-              onClick={onAskJesse}
-              className="inline-flex items-center gap-2 rounded-xl bg-orange-500 hover:bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors"
+              disabled
+              className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white opacity-60 cursor-not-allowed"
             >
               <MessageCircle className="h-4 w-4" />
               Ask Jesse AI
+              <span className="text-[10px] font-bold bg-white/25 rounded px-1.5 py-0.5 leading-none">Soon</span>
             </button>
           </div>
         )}
@@ -307,28 +308,12 @@ export default function RestaurantAnalytics({ onAskJesse }: { onAskJesse?: () =>
             </button>
             {onAskJesse && (
               <button
-                onClick={() => {
-                  // Store analytics summary so Jesse has full context
-                  if (insights) {
-                    localStorage.setItem('jesseAnalyticsContext', JSON.stringify({
-                      headline: insights.headline,
-                      comments: insights.comments,
-                      advice: insights.advice,
-                      summary,
-                      alerts,
-                      generatedAt,
-                    }))
-                  }
-                  // Signal the chat to open with analytics context
-                  window.dispatchEvent(new CustomEvent('openJesseWithContext', {
-                    detail: { prompt: "Let\'s talk about my analytics. What do you see?" }
-                  }))
-                  onAskJesse()
-                }}
-                className="inline-flex items-center gap-1.5 rounded-md border border-orange-400 bg-gradient-to-r from-orange-500 to-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:from-orange-600 hover:to-red-700 transition-colors shadow-sm"
+                disabled
+                className="inline-flex items-center gap-1.5 rounded-md border border-orange-300 bg-gradient-to-r from-orange-500 to-red-600 px-3 py-1.5 text-xs font-semibold text-white opacity-60 cursor-not-allowed shadow-sm"
               >
                 <MessageCircle className="h-3.5 w-3.5" />
                 Ask Jesse AI
+                <span className="text-[10px] font-bold bg-white/25 rounded px-1 py-0.5 leading-none">Soon</span>
               </button>
             )}
           </div>

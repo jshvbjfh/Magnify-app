@@ -67,8 +67,8 @@ export async function GET(req: Request) {
 		const dateFilter = startDate && endDate
 			? {
 				date: {
-					gte: new Date(`${startDate}T00:00:00`),
-					lte: new Date(`${endDate}T23:59:59.999`)
+					gte: new Date(`${startDate}T00:00:00+02:00`),
+					lte: new Date(`${endDate}T23:59:59.999+02:00`)
 				}
 			}
 			: {}

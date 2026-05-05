@@ -27,8 +27,8 @@ export async function GET(req: NextRequest) {
 		const searchParams = req.nextUrl.searchParams
 		const startDate = searchParams.get('startDate')
 		const endDate = searchParams.get('endDate')
-		const startDateValue = startDate ? new Date(startDate + 'T00:00:00') : undefined
-		const endDateValue = endDate ? new Date(endDate + 'T23:59:59') : undefined
+		const startDateValue = startDate ? new Date(startDate + 'T00:00:00+02:00') : undefined
+		const endDateValue = endDate ? new Date(endDate + 'T23:59:59.999+02:00') : undefined
 		const restaurantScope = buildRestaurantScopeCondition(reportingContext.restaurantId) as any
 		const branchScope = buildBranchScopeCondition(reportingContext.branchId) as any
 

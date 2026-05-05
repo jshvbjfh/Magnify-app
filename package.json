@@ -1,6 +1,6 @@
 {
   "name": "restaurant-app",
-  "version": "1.0.12",
+  "version": "1.0.19",
   "description": "Magnify — Restaurant Management",
   "author": "Magnify",
   "private": true,
@@ -12,6 +12,8 @@
     "prisma:generate": "npm run prisma:prepare && prisma generate --schema prisma/schema.generated.prisma",
     "prisma:migrate:deploy": "node scripts/run-prisma-migrate-deploy.mjs",
     "prisma:postgres:migrate:deploy": "cross-env PRISMA_FORCE_PROVIDER=postgresql node scripts/run-prisma-migrate-deploy.mjs",
+    "branch-integrity:check": "npm run prisma:generate && node scripts/branch-integrity-check.mjs",
+    "branch-integrity:repair": "node scripts/run-branch-integrity-repair.mjs",
     "fifo:pilot:list": "npm run prisma:generate && node scripts/fifo-pilot-check.mjs --list",
     "fifo:pilot:check": "npm run prisma:generate && node scripts/fifo-pilot-check.mjs",
     "build:web": "npm run prisma:generate && next build",
@@ -45,6 +47,7 @@
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",
     "electron-updater": "^6.8.3",
+    "jose": "^6.2.2",
     "jspdf": "^2.5.2",
     "jspdf-autotable": "^3.8.4",
     "lucide-react": "^0.468.0",
@@ -158,6 +161,7 @@
       "prisma/**/*",
       "node_modules/@prisma/**/*",
       "node_modules/prisma/**/*",
+      "node_modules/.prisma/**/*",
       ".next/standalone/**",
       ".next/standalone/node_modules/**"
     ]

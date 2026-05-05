@@ -5,22 +5,19 @@ import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 function toDateKey(date: Date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  // Africa/Kigali = UTC+2; prevents early-morning sales being pushed to the previous UTC day
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(date)
 }
 
 function parseDateParam(value: string | null) {
   if (!value) return null
-  const parsed = new Date(`${value}T00:00:00`)
+  const parsed = new Date(`${value}T00:00:00+02:00`) // midnight Kigali time
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
 function endOfDate(date: Date) {
-  const end = new Date(date)
-  end.setHours(23, 59, 59, 999)
-  return end
+  // date is already at Kigali midnight; add a full day minus 1ms to cover the entire Kigali day
+  return new Date(date.getTime() + 86400000 - 1)
 }
 
 function formatRangeLabel(from: Date, to: Date) {
@@ -37,24 +34,20 @@ function formatPresetRangeLabel(period: 'today' | 'week' | 'month' | 'quarter' |
 }
 
 function startOf(period: 'today' | 'week' | 'month' | 'quarter' | 'year'): Date {
-  const now = new Date()
-  if (period === 'today') {
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  } else if (period === 'week') {
-    const d = new Date(now)
-    d.setDate(d.getDate() - 6)
-    d.setHours(0, 0, 0, 0)
+  const todayKigali = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(new Date())
+  const [year, monthStr] = todayKigali.split('-')
+  if (period === 'today') return new Date(`${todayKigali}T00:00:00+02:00`)
+  if (period === 'week') {
+    const d = new Date(`${todayKigali}T00:00:00+02:00`)
+    d.setUTCDate(d.getUTCDate() - 6)
     return d
-  } else if (period === 'month') {
-    return new Date(now.getFullYear(), now.getMonth(), 1)
   }
-
+  if (period === 'month') return new Date(`${year}-${monthStr}-01T00:00:00+02:00`)
   if (period === 'quarter') {
-    const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3
-    return new Date(now.getFullYear(), quarterStartMonth, 1)
+    const q = Math.floor((parseInt(monthStr) - 1) / 3) * 3 + 1
+    return new Date(`${year}-${String(q).padStart(2, '0')}-01T00:00:00+02:00`)
   }
-
-  return new Date(now.getFullYear(), 0, 1)
+  return new Date(`${year}-01-01T00:00:00+02:00`)
 }
 
 export async function GET(req: Request) {
@@ -93,8 +86,8 @@ export async function GET(req: Request) {
   const sales = await prisma.dishSale.findMany({
     where: {
       userId: billingUserId,
-      ...(restaurantId ? { restaurantId } : {}),
-      ...(branchId ? { branchId } : {}),
+      restaurantId,
+      branchId,
       saleDate: { gte: from, lte: to }
     },
     include: { dish: true }
@@ -108,8 +101,8 @@ export async function GET(req: Request) {
   const shifts = await prisma.shift.findMany({
     where: {
       userId: billingUserId,
-      ...(restaurantId ? { restaurantId } : {}),
-      ...(branchId ? { branchId } : {}),
+      restaurantId,
+      branchId,
       date: { gte: from, lte: to }
     }
   })
@@ -120,8 +113,8 @@ export async function GET(req: Request) {
   const wasteLogs = await prisma.wasteLog.findMany({
     where: {
       userId: billingUserId,
-      ...(restaurantId ? { restaurantId } : {}),
-      ...(branchId ? { branchId } : {}),
+      restaurantId,
+      branchId,
       date: { gte: from, lte: to }
     }
   })

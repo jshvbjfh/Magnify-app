@@ -14,9 +14,12 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch' }, { status: 400 })
 
   const { id } = await params
-  // Ensure waiter belongs to this restaurant
+  // Ensure waiter belongs to this restaurant and is not an admin/owner
   const waiter = await prisma.user.findFirst({ where: { id, restaurantId: context.restaurantId, branchId: context.branchId } })
   if (!waiter) return NextResponse.json({ error: 'Waiter not found' }, { status: 404 })
+  if (!['waiter', 'kitchen'].includes(waiter.role)) {
+    return NextResponse.json({ error: 'Cannot delete admin or owner accounts from the staff list' }, { status: 403 })
+  }
 
   await prisma.user.delete({ where: { id } })
   return NextResponse.json({ ok: true })

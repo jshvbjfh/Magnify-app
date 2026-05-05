@@ -476,8 +476,12 @@ export default function OwnerShell() {
         params.set('branchId', currentBranchId)
       }
 
-      const res = await fetch(`/api/owner/dashboard?${params.toString()}`, { credentials: 'include' })
+      const res = await fetch(`/api/owner/dashboard?${params.toString()}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      })
       if (!res.ok) {
+        setData(null)
         setError('Failed to load owner dashboard data.')
         return
       }
@@ -485,6 +489,7 @@ export default function OwnerShell() {
       const json = await res.json()
       const normalized = normalizeDashboardData(json, today)
       if (!normalized) {
+        setData(null)
         setError('Failed to load owner dashboard data.')
         return
       }
@@ -503,6 +508,7 @@ export default function OwnerShell() {
       }
       setLastRefresh(new Date().toISOString())
     } catch {
+      setData(null)
       setError('Network error. Check your connection and try again.')
     } finally {
       setLoading(false)

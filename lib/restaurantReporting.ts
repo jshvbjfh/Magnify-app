@@ -80,12 +80,7 @@ export function buildRestaurantScopeCondition(restaurantId: string | null, field
 		return {}
 	}
 
-	return {
-		OR: [
-			{ [fieldName]: restaurantId },
-			{ [fieldName]: null },
-		],
-	}
+	return { [fieldName]: restaurantId }
 }
 
 export function buildBranchScopeCondition(branchId: string | null, fieldName = 'branchId') {
@@ -119,11 +114,16 @@ export function buildDateRangeCondition(fieldName: string, range: DateRange) {
 }
 
 function toDateKey(date: Date) {
-	return date.toISOString().split('T')[0]
+	// Africa/Kigali = UTC+2; prevents early-morning sales being pushed to the previous UTC day
+	return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(date)
 }
 
 function toMonthKey(date: Date) {
-	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+	// Africa/Kigali = UTC+2
+	const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali', year: 'numeric', month: '2-digit' }).formatToParts(date)
+	const year = parts.find(p => p.type === 'year')?.value ?? ''
+	const month = parts.find(p => p.type === 'month')?.value ?? ''
+	return `${year}-${month}`
 }
 
 function addSeriesEntry(map: Map<string, { revenue: number; expenses: number }>, key: string, revenue: number, expenses: number) {

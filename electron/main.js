@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell } = require('electron')
+const { app, BrowserWindow, dialog, shell, screen } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const http = require('http')
@@ -169,7 +169,7 @@ function startDesktopUpdateChecks() {
 	if (!app.isPackaged) return
 
 	const autoUpdateFlag = String(process.env.ELECTRON_AUTO_UPDATE || '').trim()
-	const autoUpdateEnabled = isDesktopAutoUpdateEnabled(autoUpdateFlag)
+	const autoUpdateEnabled = autoUpdateFlag.length ? isDesktopAutoUpdateEnabled(autoUpdateFlag) : true
 	appendStartupLog(`Desktop auto-update env=${autoUpdateFlag || 'unset'} enabled=${autoUpdateEnabled}`)
 
 	if (!autoUpdateEnabled) {
@@ -714,6 +714,48 @@ function createWindow(localIP, serverPort) {
 			loadingWindow.close()
 			loadingWindow = null
 		}
+
+		// Compensate for Windows display scaling so layout renders at intended size.
+		// 1.25 factor means we only neutralise 80% of the OS scaling (content stays ~25% larger than 100% baseline)
+		try {
+			const scaleFactor = screen.getPrimaryDisplay().scaleFactor
+			if (scaleFactor > 1) {
+				const zoomFactor = parseFloat((1.25 / scaleFactor).toFixed(4))
+				mainWindow.webContents.setZoomFactor(zoomFactor)
+				appendStartupLog(`Display scale=${scaleFactor} → zoom compensated to ${zoomFactor}`)
+			}
+		} catch (e) {
+			appendStartupLog(`Display scale compensation failed: ${e?.message}`)
+		}
+
+		// Show "Updated successfully" toast if the previous launch triggered an update install
+		try {
+			const justUpdatedPath = path.join(app.getPath('userData'), 'just-updated.json')
+			if (fs.existsSync(justUpdatedPath)) {
+				const flagData = JSON.parse(fs.readFileSync(justUpdatedPath, 'utf8'))
+				fs.unlinkSync(justUpdatedPath)
+				const newVer = flagData.version ? ` to v${flagData.version}` : ''
+				appendStartupLog(`Showing post-update toast for version ${flagData.version || 'unknown'}`)
+				// Delay so Next.js app finishes mounting before we inject the banner
+				setTimeout(() => {
+					showInAppBanner(
+						'<div style="' + bannerStyles.replace('border-left:4px solid #f97316', 'border-left:4px solid #22c55e') + '">' +
+							'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
+								'<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="10" fill="#22c55e"/><path d="M6 10l3 3 5-5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+								'<span style="font-weight:600;font-size:14px;color:#15803d;">Magnify updated' + newVer + '</span>' +
+							'</div>' +
+							'<div style="color:#6b7280;font-size:13px;">The app is running the latest version.</div>' +
+							'<div style="margin-top:10px;text-align:right;">' +
+								'<button onclick="document.getElementById(\'magnify-update-banner\').remove()" style="padding:4px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;color:#374151;font-size:12px;cursor:pointer;font-weight:500;">Dismiss</button>' +
+							'</div>' +
+						'</div>'
+					)
+				}, 3500)
+			}
+		} catch (e) {
+			appendStartupLog(`Post-update toast failed: ${e?.message}`)
+		}
+
 		mainWindow.show()
 
 		// Show the LAN address so the manager knows what to tell waiters
@@ -887,6 +929,12 @@ autoUpdater.on('update-downloaded', () => {
 			`).then((restarting) => {
 				if (restarting) {
 					clearInterval(restartPoll)
+					// Write flag so the next launch shows "Updated successfully" toast
+					try {
+						const flagPath = path.join(app.getPath('userData'), 'just-updated.json')
+						const newVersion = String(pendingUpdateVersion || '').replace(/^\s*v/i, '').trim()
+						fs.writeFileSync(flagPath, JSON.stringify({ version: newVersion }), 'utf8')
+					} catch {}
 					autoUpdater.quitAndInstall()
 				}
 			}).catch(() => clearInterval(restartPoll))

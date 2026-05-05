@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { Plus, Users, Clock, X, CheckCircle2, Sparkles, UserCheck, Copy, Trash2, Eye, EyeOff, Wifi, ChefHat, Crown } from 'lucide-react'
 import { loadOwnerSyncConfig, loadServerOwnerSyncConfig } from '@/lib/ownerSyncBrowser'
+import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
 
 type Employee = { id:string; name:string; role:string; payType:string; payRate:number; isActive:boolean; canApproveOrderCancellation:boolean; phone:string|null }
 type Shift = { id:string; employee:{name:string}; date:string; hoursWorked:number; calculatedWage:number; notes:string|null }
@@ -12,6 +13,7 @@ const ROLES = ['Chef','Sous Chef','Waiter','Cashier','Manager','Host','Dishwashe
 const PAY_TYPES = ['hourly','daily','monthly']
 
 export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => void }) {
+  const restaurantBranch = useRestaurantBranch()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [shifts, setShifts] = useState<Shift[]>([])
   const [waiters, setWaiters] = useState<Waiter[]>([])
@@ -121,7 +123,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
     loadKitchenAccounts()
     loadOwnerAccounts()
     fetchJson<{ waiterUrl?: string }>('/api/restaurant/server-info').then(d=>{ if(d?.waiterUrl) setWaiterUrl(d.waiterUrl) })
-  },[])
+  },[restaurantBranch?.branchId])
 
   async function saveEmployee(e:React.FormEvent) {
     e.preventDefault()
@@ -190,14 +192,22 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   async function logShift(e:React.FormEvent) {
     e.preventDefault()
     const res = await fetch('/api/restaurant/shifts',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({employeeId:shiftForm.employeeId,date:shiftForm.date,hoursWorked:Number(shiftForm.hoursWorked),notes:shiftForm.notes||null})})
-    if(res.ok){setShiftSuccess(true);setTimeout(()=>setShiftSuccess(false),3000);setShowShiftForm(false);setShiftForm({employeeId:'',date:new Date().toISOString().split('T')[0],hoursWorked:'8',notes:''});load()}
+    if(res.ok){setShiftSuccess(true);setTimeout(()=>setShiftSuccess(false),3000);setShowShiftForm(false);setShiftForm({employeeId:'',date:new Date().toISOString().split('T')[0],hoursWorked:'8',notes:''});load();window.dispatchEvent(new CustomEvent('refreshTransactions'))}
   }
 
   async function saveWaiter(e:React.FormEvent) {
     e.preventDefault()
     setActionError(null)
     const snapshot = { ...waiterForm }
-    const res = await fetch('/api/restaurant/waiters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(waiterForm),credentials:'include'})
+    let syncPayload: Record<string, string> = {}
+    try {
+      const serverSyncConfig = await loadServerOwnerSyncConfig()
+      const deviceSyncConfig = loadOwnerSyncConfig(serverSyncConfig)
+      if (deviceSyncConfig.targetUrl.trim() && deviceSyncConfig.email.trim() && deviceSyncConfig.password) {
+        syncPayload = { syncTargetUrl: deviceSyncConfig.targetUrl, syncEmail: deviceSyncConfig.email, syncPassword: deviceSyncConfig.password }
+      }
+    } catch {}
+    const res = await fetch('/api/restaurant/waiters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...waiterForm,...syncPayload}),credentials:'include'})
     if(res.ok){
       setLastCreated({ name: snapshot.name, email: snapshot.email, password: snapshot.password })
       setWaiterSuccess(true);setTimeout(()=>setWaiterSuccess(false),3000)
@@ -213,7 +223,15 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
     e.preventDefault()
     setActionError(null)
     const snapshot = { ...kitchenForm }
-    const res = await fetch('/api/restaurant/kitchen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(kitchenForm),credentials:'include'})
+    let syncPayload: Record<string, string> = {}
+    try {
+      const serverSyncConfig = await loadServerOwnerSyncConfig()
+      const deviceSyncConfig = loadOwnerSyncConfig(serverSyncConfig)
+      if (deviceSyncConfig.targetUrl.trim() && deviceSyncConfig.email.trim() && deviceSyncConfig.password) {
+        syncPayload = { syncTargetUrl: deviceSyncConfig.targetUrl, syncEmail: deviceSyncConfig.email, syncPassword: deviceSyncConfig.password }
+      }
+    } catch {}
+    const res = await fetch('/api/restaurant/kitchen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...kitchenForm,...syncPayload}),credentials:'include'})
     if(res.ok){
       setLastCreatedKitchen({ name: snapshot.name, email: snapshot.email, password: snapshot.password })
       setKitchenSuccess(true);setTimeout(()=>setKitchenSuccess(false),3000)
@@ -314,8 +332,8 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h2 className="text-lg font-bold text-gray-800">Staff Management</h2>
         <div className="flex flex-wrap items-center gap-2 justify-end">
-          <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
-            <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI
+          <button disabled className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-200 text-orange-300 bg-white opacity-60 cursor-not-allowed">
+            <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI <span className="ml-1 text-[10px] font-bold bg-orange-100 text-orange-400 rounded px-1 py-0.5 leading-none">Soon</span>
           </button>
           {tab==='employees'&&<button onClick={()=>setShowEmpForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"><Plus className="h-4 w-4"/> Add Employee</button>}
           {tab==='shifts'&&<button onClick={()=>setShowShiftForm(true)} disabled={employees.length===0} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"><Clock className="h-4 w-4"/> Log Shift</button>}

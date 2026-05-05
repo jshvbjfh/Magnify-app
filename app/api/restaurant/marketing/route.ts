@@ -56,6 +56,7 @@ export async function GET(req: NextRequest) {
   const billingUserId = restaurantCtx?.billingUserId ?? userId
   const restaurantId = restaurantCtx?.restaurantId ?? null
   const branchId = restaurantCtx?.branchId ?? null
+  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant context' }, { status: 400 })
   const campaignScopeMarker = buildCampaignScopeMarker(billingUserId, restaurantId, branchId)
   const now = new Date()
 
@@ -64,7 +65,7 @@ export async function GET(req: NextRequest) {
   weeksAgo8.setDate(weeksAgo8.getDate() - 56)
 
   const sales = await prisma.dishSale.findMany({
-    where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}), saleDate: { gte: weeksAgo8 } },
+    where: { userId: billingUserId, restaurantId, branchId, saleDate: { gte: weeksAgo8 } },
     include: { dish: true },
     orderBy: { saleDate: 'asc' },
   })
@@ -131,7 +132,7 @@ export async function GET(req: NextRequest) {
   const prev30start = new Date(thirtyAgo)
   prev30start.setDate(prev30start.getDate() - 30)
   const prev30sales = await prisma.dishSale.findMany({
-    where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}), saleDate: { gte: prev30start, lt: thirtyAgo } },
+    where: { userId: billingUserId, restaurantId, branchId, saleDate: { gte: prev30start, lt: thirtyAgo } },
     select: { totalSaleAmount: true },
   })
   const rev30 = recentSales.reduce((s, x) => s + x.totalSaleAmount, 0)

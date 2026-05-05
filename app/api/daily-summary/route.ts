@@ -20,10 +20,9 @@ export async function GET(request: Request) {
 			return new NextResponse('Date parameter required', { status: 400 })
 		}
 
-		// Parse the date and set time to start and end of day
-		const selectedDate = new Date(dateParam)
-		const startOfDay = new Date(selectedDate.setHours(0, 0, 0, 0))
-		const endOfDay = new Date(selectedDate.setHours(23, 59, 59, 999))
+		// Parse as Kigali midnight so the query covers the full local calendar day
+		const startOfDay = new Date(dateParam + 'T00:00:00+02:00')
+		const endOfDay = new Date(dateParam + 'T23:59:59.999+02:00')
 
 		const [metrics, cashBalance] = await Promise.all([
 			getOperationalReportMetrics(reportingContext, { start: startOfDay, end: endOfDay }),

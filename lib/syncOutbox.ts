@@ -142,48 +142,67 @@ export async function markSyncOutboxChangesSynced(db: PrismaDb, ids: string[]) {
 }
 
 export async function markSyncOutboxChangesFailed(db: PrismaDb, rows: Array<{ id: string }>, message: string) {
-  for (const row of rows) {
-    const existing = await db.syncOutbox.findUnique({
-      where: { id: row.id },
-      select: {
-        id: true,
-        attempts: true,
-        scopeId: true,
-        restaurantId: true,
-        entityType: true,
-        entityId: true,
-        sourceDeviceId: true,
-      },
-    })
+  if (rows.length === 0) return
 
-    if (!existing) continue
+  // Fetch current attempt counts in a single query — was 2 queries per row (N+1 pattern)
+  const existing = await db.syncOutbox.findMany({
+    where: { id: { in: rows.map((r) => r.id) } },
+    select: { id: true, attempts: true, scopeId: true, restaurantId: true, entityType: true, entityId: true, sourceDeviceId: true },
+  })
 
-    const nextAttempts = existing.attempts + 1
+  const exhaustedIds: string[] = []
+  const retryUpdates: Array<{ id: string; availableAt: Date; attempts: number; lastError: string }> = []
+
+  for (const row of existing) {
+    const nextAttempts = row.attempts + 1
     const exhausted = isSyncOutboxRetryExhausted(nextAttempts)
-    const retryAt = exhausted ? null : new Date(Date.now() + getSyncOutboxRetryDelayMs(nextAttempts))
-    const nextError = exhausted
-      ? `Retry limit reached after ${nextAttempts} attempts: ${message}`
-      : message
 
-    await db.syncOutbox.update({
-      where: { id: row.id },
-      data: {
+    if (exhausted) {
+      exhaustedIds.push(row.id)
+    } else {
+      retryUpdates.push({
+        id: row.id,
+        availableAt: new Date(Date.now() + getSyncOutboxRetryDelayMs(nextAttempts)),
         attempts: nextAttempts,
-        availableAt: retryAt,
-        lastError: nextError,
+        lastError: message,
+      })
+    }
+
+    logSyncActivity(exhausted ? 'warn' : 'info', exhausted ? 'sync.outbox.retry_exhausted' : 'sync.outbox.retry_scheduled', {
+      scopeId: row.scopeId,
+      restaurantId: row.restaurantId,
+      entityType: row.entityType,
+      entityId: row.entityId,
+      sourceDeviceId: row.sourceDeviceId,
+      attempts: nextAttempts,
+      error: exhausted ? `Retry limit reached after ${nextAttempts} attempts: ${message}` : message,
+    })
+  }
+
+  // Batch update exhausted rows (availableAt = null stops retries)
+  if (exhaustedIds.length > 0) {
+    await db.syncOutbox.updateMany({
+      where: { id: { in: exhaustedIds } },
+      data: {
+        attempts: { increment: 1 },
+        availableAt: null,
+        lastError: `Retry limit reached: ${message}`,
         claimedAt: null,
       },
     })
+  }
 
-    logSyncActivity(exhausted ? 'warn' : 'info', exhausted ? 'sync.outbox.retry_exhausted' : 'sync.outbox.retry_scheduled', {
-      scopeId: existing.scopeId,
-      restaurantId: existing.restaurantId,
-      entityType: existing.entityType,
-      entityId: existing.entityId,
-      sourceDeviceId: existing.sourceDeviceId,
-      attempts: nextAttempts,
-      retryAt: retryAt?.toISOString() ?? null,
-      error: nextError,
+  // Update retry rows individually — each has a different availableAt backoff time
+  // This is unavoidable per-row but is still O(unique rows) not O(2 * rows)
+  for (const update of retryUpdates) {
+    await db.syncOutbox.update({
+      where: { id: update.id },
+      data: {
+        attempts: update.attempts,
+        availableAt: update.availableAt,
+        lastError: update.lastError,
+        claimedAt: null,
+      },
     })
   }
 }

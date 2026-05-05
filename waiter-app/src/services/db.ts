@@ -69,6 +69,15 @@ CREATE TABLE IF NOT EXISTS session (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS app_logs (
+  id TEXT PRIMARY KEY,
+  level TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  message TEXT NOT NULL,
+  details TEXT,
+  created_at TEXT NOT NULL
+);
 `
 
 export async function initDB(): Promise<void> {
@@ -108,6 +117,34 @@ export async function getSession(key: string): Promise<string | null> {
 
 export async function clearSession(): Promise<void> {
   await getDB().run('DELETE FROM session')
+}
+
+// ─── App logs ───────────────────────────────────────────────────────────────
+
+export interface AppLogEntry {
+  id: string
+  level: 'info' | 'warn' | 'error'
+  scope: string
+  message: string
+  details: string | null
+  created_at: string
+}
+
+export async function createLogEntry(entry: AppLogEntry): Promise<void> {
+  await getDB().run(
+    'INSERT OR REPLACE INTO app_logs (id, level, scope, message, details, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [entry.id, entry.level, entry.scope, entry.message, entry.details, entry.created_at]
+  )
+}
+
+export async function getLogEntries(limit = 200): Promise<AppLogEntry[]> {
+  const safeLimit = Math.max(1, Math.floor(limit))
+  const res = await getDB().query(`SELECT * FROM app_logs ORDER BY created_at DESC LIMIT ${safeLimit}`)
+  return (res.values ?? []) as AppLogEntry[]
+}
+
+export async function clearLogEntries(): Promise<void> {
+  await getDB().run('DELETE FROM app_logs')
 }
 
 // ─── Config ─────────────────────────────────────────────────────────────────
@@ -292,8 +329,12 @@ export async function getUnsyncedOrders(): Promise<{ orders: Order[]; items: Ord
   return { orders, items }
 }
 
-export async function markOrdersSynced(orderIds: string[]): Promise<void> {
-  if (!orderIds.length) return
-  const placeholders = orderIds.map(() => '?').join(', ')
-  await getDB().run(`UPDATE orders SET synced = 1 WHERE id IN (${placeholders})`, orderIds)
+export async function markOrdersSynced(orders: Array<{ id: string; updated_at: string }>): Promise<void> {
+  if (!orders.length) return
+  for (const order of orders) {
+    await getDB().run(
+      'UPDATE orders SET synced = 1 WHERE id = ? AND updated_at = ?',
+      [order.id, order.updated_at]
+    )
+  }
 }

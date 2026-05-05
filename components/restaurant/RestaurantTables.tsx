@@ -200,9 +200,10 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
           <button onClick={load} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" title="Refresh">
             <RefreshCw className={`h-4 w-4 text-gray-500 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
+          <button disabled className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-200 text-orange-300 bg-white opacity-60 cursor-not-allowed">
             <Sparkles className="h-3.5 w-3.5"/>
             <span className="hidden sm:inline">Ask Jesse AI</span>
+            <span className="text-[10px] font-bold bg-orange-100 text-orange-400 rounded px-1 py-0.5 leading-none">Soon</span>
           </button>
           <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-3 sm:px-4 py-2 rounded-lg transition-colors">
             <Plus className="h-4 w-4"/>

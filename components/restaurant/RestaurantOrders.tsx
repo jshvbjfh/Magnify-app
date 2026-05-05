@@ -296,6 +296,9 @@ export default function RestaurantOrders({
     if (processedCount > 0) {
       await Promise.all([loadPending(), loadTables(), loadSales()])
       window.dispatchEvent(new CustomEvent('refreshTables'))
+      window.dispatchEvent(new CustomEvent('refreshInventory', {
+        detail: { source: 'restaurant_offline_queue_flush' },
+      }))
       window.dispatchEvent(new CustomEvent('refreshTransactions', {
         detail: { count: 2, source: 'restaurant_offline_queue_flush' },
       }))
@@ -354,7 +357,7 @@ export default function RestaurantOrders({
       window.removeEventListener('online', onlineHandler)
       document.removeEventListener('visibilitychange', visibilityHandler)
     }
-  }, [flushOfflineQueue, isManager, loadTables, loadPending, loadSales, mode, persistSnapshot, refreshOfflineQueue])
+  }, [flushOfflineQueue, isManager, loadTables, loadPending, loadSales, mode, persistSnapshot, refreshOfflineQueue, restaurantBranch?.branchId])
 
   useEffect(() => {
     hydrateCachedSnapshot()
@@ -824,6 +827,9 @@ ${headerLines}
       }
       await Promise.all([loadPending(), loadSales(), loadTables()])
       window.dispatchEvent(new CustomEvent('refreshTables'))
+      window.dispatchEvent(new CustomEvent('refreshInventory', {
+        detail: { source: 'restaurant_order_payment' },
+      }))
       window.dispatchEvent(new CustomEvent('refreshTransactions', {
         detail: { count: 2, source: 'restaurant_order_payment' }
       }))
@@ -1629,9 +1635,10 @@ ${headerLines}
         {orderTab === 'actions' && (
           <div className="flex-1 px-4 py-4 space-y-2">
             {onAskJesse && (
-              <button onClick={onAskJesse}
-                className="w-full flex items-center gap-2 px-4 py-3 rounded-xl border border-orange-200 bg-orange-50 text-orange-600 hover:bg-orange-100 text-sm font-medium transition-colors">
+              <button disabled
+                className="w-full flex items-center gap-2 px-4 py-3 rounded-xl border border-orange-100 bg-orange-50/50 text-orange-300 text-sm font-medium cursor-not-allowed opacity-60">
                 <Sparkles className="h-4 w-4" /> Ask Jesse AI
+                <span className="ml-auto text-[10px] font-bold bg-orange-100 text-orange-400 rounded px-1.5 py-0.5 leading-none">Soon</span>
               </button>
             )}
             <button onClick={() => { loadPending(); loadTables() }}

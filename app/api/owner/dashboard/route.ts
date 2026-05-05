@@ -77,6 +77,15 @@ function buildBranchScopeWhere(branch: { id: string; isMain: boolean }) {
   return { branchId: branch.id }
 }
 
+function ownerDashboardJson(payload: unknown) {
+  return NextResponse.json(payload, {
+    headers: {
+      'Cache-Control': 'private, no-store, max-age=0, must-revalidate',
+      Vary: 'Cookie',
+    },
+  })
+}
+
 async function listActiveBranches(restaurantId: string) {
   return prisma.restaurantBranch.findMany({
     where: { restaurantId, isActive: true },
@@ -546,7 +555,7 @@ export async function GET(req: Request) {
   ])
 
   if (!liveSaleInRange && (syncedSummaries.length > 0 || syncedTransactions.length > 0)) {
-    return NextResponse.json(
+    return ownerDashboardJson(
       withHomeMetrics(buildMinimalDashboardPayload({
         restaurantName: restaurant.name,
         selectedRestaurantId: restaurant.id,
@@ -573,7 +582,7 @@ export async function GET(req: Request) {
     try {
       const snapshot = JSON.parse(syncedSnapshot.data) as OwnerSyncSnapshot
       if (snapshot?.version === 1 && snapshot.restaurantId === restaurant.id) {
-        return NextResponse.json({
+        return ownerDashboardJson({
           ...withHomeMetrics(buildOwnerDashboardPayload(snapshot, range, 'snapshot', { includeFullTransactionHistory }), homeActivityOrders, range),
           selectedRestaurantId: restaurant.id,
           restaurants: restaurants.map((row) => ({ id: row.id, name: row.name })),
@@ -719,7 +728,7 @@ export async function GET(req: Request) {
     },
   })
 
-  return NextResponse.json({
+  return ownerDashboardJson({
     ...withHomeMetrics(buildOwnerDashboardPayload(snapshot, range, 'live', { includeFullTransactionHistory }), homeActivityOrders, range),
     selectedRestaurantId: restaurant.id,
     restaurants: restaurants.map((row) => ({ id: row.id, name: row.name })),

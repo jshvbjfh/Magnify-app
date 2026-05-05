@@ -4,9 +4,9 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser, isMainRestaurantBranch } from '@/lib/restaurantAccess'
 import { resolveCancellationApprover } from '@/lib/cancelApproval'
-import { InsufficientFifoStockError, InsufficientInventoryStockError, recordDishSalesForPaidOrder, recordDishWasteForOrderItems } from '@/lib/dishSaleRecording'
-import { calculateRestaurantOrderTotals, syncRestaurantOrderTotals, enqueueOrderSync } from '@/lib/restaurantOrders'
-import { recordJournalEntry } from '@/lib/accounting'
+import { InsufficientFifoStockError, InsufficientInventoryStockError, recordDishWasteForOrderItems } from '@/lib/dishSaleRecording'
+import { enqueueOrderSync, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
+import { finalizeRestaurantOrderPayment } from '@/lib/restaurantOrderPayment'
 import { findRestaurantAction, isRestaurantActionConflict, normalizeRestaurantActionKey, recordRestaurantAction } from '@/lib/restaurantAction'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
 
@@ -18,18 +18,6 @@ const ORDER_TRANSACTION_OPTIONS = {
 function formatOrderLocation(tableId: string | null | undefined, tableName: string | null | undefined) {
   if (!tableId) return 'Takeaway'
   return tableName?.trim() ? `Table ${tableName.trim()}` : 'Table'
-}
-
-function buildDishSaleTransactionDescription(order: {
-  items: Array<{ dishId: string; dishName: string; qty: number }>
-  tableId: string | null
-  tableName: string | null
-}) {
-  const dishSummary = order.items
-    .map((item) => `${item.dishName} [${item.dishId}] x${item.qty}`)
-    .join(', ')
-
-  return `DishSale: ${dishSummary} · ${formatOrderLocation(order.tableId, order.tableName)}`
 }
 
 function buildStockShortageResponse(error: InsufficientFifoStockError | InsufficientInventoryStockError) {
@@ -122,110 +110,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const normalizedPaymentMethod = paymentMethod || order.paymentMethod || 'Cash'
     try {
       const updated = await prisma.$transaction(async (tx) => {
-        const currentOrder = await tx.restaurantOrder.findFirst({
-          where: { id, restaurantId: context.restaurantId, branchId: context.branchId },
-          include: { items: { where: { status: 'ACTIVE' } } },
-        })
-        if (!currentOrder) {
-          throw new Error('Order not found')
-        }
-
-        if (currentOrder.status === 'PAID') {
-          return currentOrder
-        }
-
-        const syncedOrder = await syncRestaurantOrderTotals(tx, id)
-        const paidAt = new Date()
-        const paymentRecordedByName = currentOrder.createdByName.trim() || session.user.name?.trim() || 'Staff'
-        const transactionDescription = buildDishSaleTransactionDescription({
-          items: currentOrder.items.map((item) => ({
-            dishId: item.dishId,
-            dishName: item.dishName,
-            qty: item.qty,
-          })),
-          tableId: currentOrder.tableId,
-          tableName: currentOrder.tableName,
-        })
-        const paymentUpdate = await tx.restaurantOrder.updateMany({
-          where: {
-            id,
-            restaurantId: context.restaurantId,
-            branchId: context.branchId,
-            status: 'PENDING',
-          },
-          data: {
-            status: 'PAID',
-            paymentMethod: normalizedPaymentMethod,
-            paidAt,
-            paidById: session.user.id,
-            paidByName: paymentRecordedByName,
-            canceledAt: null,
-            canceledById: null,
-            canceledByName: null,
-            cancellationApprovedByEmployeeId: null,
-            cancellationApprovedByEmployeeName: null,
-            cancellationApprovedAt: null,
-            cancelReason: null,
-          },
-        })
-
-        if (paymentUpdate.count === 0) {
-          return (await tx.restaurantOrder.findFirst({
-            where: { id, restaurantId: context.restaurantId, branchId: context.branchId },
-            include: { items: { where: { status: 'ACTIVE' } } },
-          })) ?? currentOrder
-        }
-
-        const paidOrder = await tx.restaurantOrder.findFirst({
-          where: { id, restaurantId: context.restaurantId, branchId: context.branchId },
-          include: { items: { where: { status: 'ACTIVE' } } },
-        })
-        if (!paidOrder) {
-          throw new Error('Order not found after payment update')
-        }
-
-        await recordDishSalesForPaidOrder(tx, {
+        const paidOrder = await finalizeRestaurantOrderPayment(tx, {
           billingUserId: context.billingUserId,
           restaurantId: context.restaurantId,
           branchId: context.branchId,
           includeBranchlessRows,
           orderId: id,
+          paidById: session.user.id,
+          paidByName: session.user.name ?? null,
           paymentMethod: normalizedPaymentMethod,
-          saleDate: paidAt,
-          items: currentOrder.items.map((item) => ({
-            dishId: item.dishId,
-            dishPrice: item.dishPrice,
-            qty: item.qty,
-          })),
         })
-
-        const journalAmount = calculateRestaurantOrderTotals(
-          currentOrder.items.map((item) => ({ dishPrice: Number(item.dishPrice), qty: Number(item.qty) }))
-        ).totalAmount
-
-        await recordJournalEntry(tx, {
-          userId: context.billingUserId,
-          restaurantId: context.restaurantId,
-          branchId: context.branchId,
-          date: paidOrder.paidAt ?? paidAt,
-          description: transactionDescription,
-          amount: journalAmount,
-          direction: 'in',
-          accountName: 'DishSale',
-          categoryType: 'income',
-          paymentMethod: normalizedPaymentMethod,
-          isManual: false,
-          sourceKind: 'dish_sale_mirror',
-          authoritativeForRevenue: false,
-        })
-
-        if (currentOrder.tableId) {
-          await tx.restaurantTable.updateMany({
-            where: { id: currentOrder.tableId, restaurantId: context.restaurantId, branchId: context.branchId },
-            data: { status: 'available' },
-          })
-          await enqueueRestaurantTableSync(tx, currentOrder.tableId, context.restaurantId)
-        }
 
         if (normalizedActionKey) {
           await recordRestaurantAction(tx, {
@@ -235,12 +129,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
             actionKey: normalizedActionKey,
             actionType: 'order.pay',
             orderId: id,
-            tableId: currentOrder.tableId,
-            tableName: currentOrder.tableName,
+            tableId: paidOrder.tableId,
+            tableName: paidOrder.tableName,
           })
         }
-
-        await enqueueOrderSync(tx, id, context.restaurantId, context.branchId)
 
         return paidOrder
       }, ORDER_TRANSACTION_OPTIONS)

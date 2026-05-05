@@ -14,7 +14,14 @@ export async function GET() {
   const user = session.user as any
   if (user.role !== 'admin') return NextResponse.json({ error: 'Admin only' }, { status: 403 })
 
-  const restaurant = await ensureRestaurantForOwner(session.user.id)
+  let restaurant: Awaited<ReturnType<typeof ensureRestaurantForOwner>>
+  try {
+    restaurant = await ensureRestaurantForOwner(session.user.id)
+  } catch (e: any) {
+    if (e?.code === 'USER_NOT_FOUND') return NextResponse.json({ conflicts: [] }, { status: 200 })
+    throw e
+  }
+  if (!restaurant) return NextResponse.json({ conflicts: [] }, { status: 200 })
   const conflicts = await prisma.syncConflictLog.findMany({
     where: {
       OR: [

@@ -413,6 +413,30 @@ async function resolveRestaurantForUser(user: { id: string; role: string; restau
   return prisma.restaurant.findUnique({ where: { id: user.restaurantId } })
 }
 
+async function resolveRestaurantBillingUserId(restaurant: { id: string; ownerId: string }) {
+  // Restaurant-scoped rows can retain a legacy owner userId after ownership changes.
+  // Prefer the existing menu/inventory owner so downstream operational lookups stay consistent.
+  const dishOwner = await prisma.dish.findFirst({
+    where: { restaurantId: restaurant.id },
+    select: { userId: true },
+  })
+  if (dishOwner?.userId) return dishOwner.userId
+
+  const inventoryOwner = await prisma.inventoryItem.findFirst({
+    where: { restaurantId: restaurant.id },
+    select: { userId: true },
+  })
+  if (inventoryOwner?.userId) return inventoryOwner.userId
+
+  const purchaseOwner = await prisma.inventoryPurchase.findFirst({
+    where: { restaurantId: restaurant.id },
+    select: { userId: true },
+  })
+  if (purchaseOwner?.userId) return purchaseOwner.userId
+
+  return restaurant.ownerId
+}
+
 async function resolveBranchForUser(user: { id: string; role: string; restaurantId: string | null; branchId: string | null }, restaurantId: string) {
   if (user.branchId) {
     const linkedBranch = await prisma.restaurantBranch.findFirst({
@@ -449,7 +473,12 @@ export async function ensureRestaurantForOwner(ownerId: string) {
     return restaurant
   }
 
-  const user = await prisma.user.findUnique({ where: { id: ownerId }, select: { name: true } })
+  const user = await prisma.user.findUnique({ where: { id: ownerId }, select: { id: true, name: true } })
+  if (!user) {
+    // JWT is valid but the user no longer exists in this database. Throw a
+    // clean error so callers can return 409 instead of a FK constraint crash.
+    throw Object.assign(new Error('Session refers to a deleted account; please sign in again'), { code: 'USER_NOT_FOUND' })
+  }
   const joinCode = await uniqueJoinCode()
   const strictFifoActivatedAt = new Date()
 
@@ -511,6 +540,7 @@ export async function getRestaurantContextForUser(userId: string) {
   }
 
   const branch = await resolveBranchForUser(user, restaurant.id)
+  const billingUserId = await resolveRestaurantBillingUserId(restaurant)
 
   return {
     currentUser: user,
@@ -518,6 +548,6 @@ export async function getRestaurantContextForUser(userId: string) {
     branch,
     restaurantId: restaurant.id,
     branchId: branch?.id ?? null,
-    billingUserId: restaurant.ownerId,
+    billingUserId,
   }
 }

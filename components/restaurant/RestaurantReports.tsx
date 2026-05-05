@@ -803,10 +803,11 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
         {onAskJesse && (
-          <button onClick={onAskJesse}
-            className="flex items-center gap-2 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors">
+          <button disabled
+            className="flex items-center gap-2 bg-gradient-to-r from-orange-500 to-red-600 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-sm opacity-60 cursor-not-allowed">
             <Sparkles className="h-3.5 w-3.5"/>
             Ask Jesse AI
+            <span className="text-[10px] font-bold bg-white/25 rounded px-1.5 py-0.5 leading-none">Soon</span>
           </button>
         )}
         <button onClick={exportAllPDF} disabled={exporting}

@@ -428,6 +428,8 @@ export async function GET(req: NextRequest) {
 
 		const context = await getRestaurantContextForUser(session.user.id)
 		const billingUserId = context?.billingUserId ?? session.user.id
+		const restaurantId = context?.restaurantId ?? null
+		const branchId = context?.branchId ?? null
 
 		const user = await prisma.user.findUnique({
 			where: { id: billingUserId },
@@ -439,11 +441,11 @@ export async function GET(req: NextRequest) {
 
 		const [transactions, inventoryItems] = await Promise.all([
 			prisma.transaction.findMany({
-				where: { userId: billingUserId },
+				where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) },
 				include: { account: true, category: true },
 				orderBy: { date: 'desc' }
 			}),
-			prisma.inventoryItem.findMany({ where: { userId: billingUserId } })
+			prisma.inventoryItem.findMany({ where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) } })
 		])
 
 		// Layer 1: Deep business understanding from transaction signals

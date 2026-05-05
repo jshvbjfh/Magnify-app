@@ -11,12 +11,26 @@ export default function LoginForm() {
 	const [email, setEmail] = useState('')
 	const [password, setPassword] = useState('')
 	const [loading, setLoading] = useState(false)
+	const [stage, setStage] = useState<{ label: string; progress: number } | null>(null)
 	const [error, setError] = useState<string | null>(null)
 	const [showPassword, setShowPassword] = useState(false)
+
+	async function loadBootstrapStatus() {
+		const res = await fetch('/api/restaurant/bootstrap-status', {
+			credentials: 'include',
+			cache: 'no-store',
+		})
+		const payload = await res.json().catch(() => null)
+		if (!res.ok) {
+			throw new Error(payload?.error || 'Unable to confirm restaurant bootstrap state')
+		}
+		return payload as { required?: boolean; message?: string | null }
+	}
 
 	async function onSubmit(e: React.FormEvent) {
 		e.preventDefault()
 		setLoading(true)
+		setStage({ label: 'Verifying credentials…', progress: 20 })
 		setError(null)
 
 		const result = await signIn('credentials', {
@@ -26,6 +40,7 @@ export default function LoginForm() {
 		})
 		if (result?.error) {
 			setLoading(false)
+			setStage(null)
 			if (result.error === 'AccountInactive') {
 				setError('Your account has been deactivated. Contact Magnify admin to restore access.')
 			} else {
@@ -34,32 +49,95 @@ export default function LoginForm() {
 			return
 		}
 		// Redirect based on business type
+		setStage({ label: 'Loading account…', progress: 45 })
 		const session = await getSession()
 		const role = (session?.user as any)?.role
 		if (role === 'admin' || role === 'waiter' || role === 'kitchen') {
+			setStage({ label: 'Checking setup…', progress: 65 })
+			let bootstrapStatus: { required?: boolean; isLocalFirst?: boolean; message?: string | null } | null = null
 			try {
-				await fetch('/api/sync/local', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					credentials: 'include',
-					body: JSON.stringify({}),
+				bootstrapStatus = await loadBootstrapStatus()
+			} catch (bootstrapError) {
+				// If bootstrap check fails entirely, proceed to the app — the restaurant page will
+				// handle the case where bootstrap is genuinely required.
+				if (bootstrapError instanceof Error) {
+					setLoading(false)
+					setStage(null)
+					setError(bootstrapError.message)
+					return
+				}
+			}
+
+			// Only call sync/local on local-first desktop (Electron). On the cloud (Vercel) the
+			// restaurant data lives in Neon — sync/local does not apply and would always fail.
+			if (bootstrapStatus?.isLocalFirst && bootstrapStatus?.required) {
+				// Seed credentials NOW so RestaurantBootstrapGate can use them if sync fails and
+				// the user is shown the gate screen on a subsequent restart.
+				seedOwnerSyncConfigFromLogin({
+					email: email.trim().toLowerCase(),
+					password,
+				})
+
+				setStage({ label: 'Syncing restaurant data…', progress: 80 })
+				let syncFailureMessage: string | null = null
+				try {
+					const res = await fetch('/api/sync/local', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						credentials: 'include',
+						// Pass credentials directly — targetUrl is resolved server-side from env
+						body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+					})
+					const payload = await res.json().catch(() => null)
+					if (!res.ok || payload?.ok === false) {
+						syncFailureMessage = payload?.message || payload?.error || 'Unable to load restaurant data on this device.'
+					}
+				} catch {
+					syncFailureMessage = 'Unable to load restaurant data on this device. Please check your connection and retry.'
+				}
+
+				if (syncFailureMessage) {
+					setLoading(false)
+					setStage(null)
+					setError(syncFailureMessage)
+					return
+				}
+
+				// Re-check bootstrap status after sync completes
+				try {
+					const postSyncStatus = await loadBootstrapStatus()
+					if (postSyncStatus?.required) {
+						setLoading(false)
+						setStage(null)
+						setError(postSyncStatus.message || 'Unable to load restaurant data on this device. Please retry sync.')
+						return
+					}
+				} catch {
+					// Sync succeeded but re-check failed — let the restaurant page decide
+				}
+			} else if (bootstrapStatus?.required) {
+				// Bootstrap required but not local-first — shouldn't happen, but guard anyway
+				setLoading(false)
+				setStage(null)
+				setError(bootstrapStatus.message || 'Unable to load restaurant data on this device. Please retry sync.')
+				return
+			}
+		}
+		// Seed sync credentials for all desktop-capable roles so RestaurantBootstrapGate
+		// can authenticate on the next restart without prompting for credentials again.
+		if (role === 'admin' || role === 'waiter' || role === 'kitchen') {
+			try {
+				const serverSyncConfig = role === 'admin' ? await loadServerOwnerSyncConfig().catch(() => null) : null
+				seedOwnerSyncConfigFromLogin({
+					email: email.trim().toLowerCase(),
+					password,
+					targetUrl: serverSyncConfig?.targetUrl,
+					serverConfig: serverSyncConfig,
 				})
 			} catch {}
 		}
-		if (role === 'admin') {
-			try {
-				const serverSyncConfig = await loadServerOwnerSyncConfig()
-				if (!serverSyncConfig?.configured) {
-					seedOwnerSyncConfigFromLogin({
-						email: email.trim().toLowerCase(),
-						password,
-						targetUrl: serverSyncConfig?.targetUrl,
-						serverConfig: serverSyncConfig,
-					})
-				}
-			} catch {}
-		}
-		setLoading(false)
+		setStage({ label: 'Done!', progress: 100 })
+		await new Promise((r) => setTimeout(r, 400))
 		router.push('/restaurant')
 	}
 
@@ -112,7 +190,21 @@ export default function LoginForm() {
 					</a>
 				</div>
 			</div>
-
+		{/* Progress bar */}
+		{stage && (
+			<div className="space-y-1.5">
+				<div className="flex items-center justify-between">
+					<span className="text-xs font-medium text-orange-600">{stage.label}</span>
+					<span className="text-xs text-gray-400">{stage.progress}%</span>
+				</div>
+				<div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+					<div
+						className="h-full rounded-full bg-gradient-to-r from-orange-500 to-red-500 transition-all duration-500 ease-out"
+						style={{ width: `${stage.progress}%` }}
+					/>
+				</div>
+			</div>
+		)}
 			{/* Error Message */}
 			{error && (
 				<div className="flex items-start gap-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3 animate-in slide-in-from-top-1 duration-300">
@@ -132,7 +224,7 @@ export default function LoginForm() {
 				{loading ? (
 					<>
 						<Loader2 className="h-5 w-5 animate-spin" />
-						<span>Signing in...</span>
+						<span>{stage?.label ?? 'Signing in…'}</span>
 					</>
 				) : (
 					<span>Sign in</span>

@@ -21,8 +21,8 @@ export async function GET(request: Request) {
 
 		const reportingContext = await requireReportingContext(session.user.id)
 		const metrics = await getOperationalReportMetrics(reportingContext, {
-			start: new Date(start + 'T00:00:00'),
-			end: new Date(end + 'T23:59:59'),
+			start: new Date(start + 'T00:00:00+02:00'),
+			end: new Date(end + 'T23:59:59.999+02:00'),
 		})
 
 		return NextResponse.json({ sales: metrics.salesWithProfit })

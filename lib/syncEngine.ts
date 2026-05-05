@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient, SyncOutbox } from '@prisma/client'
 
+import { ensureAccount, ensureCoreCategories } from '@/lib/accounting'
 import {
   getSyncDeviceId,
   logSyncConflict,
@@ -14,6 +15,29 @@ function asDate(value: unknown) {
   if (!value) return null
   const parsed = new Date(String(value))
   return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function resolveSyncedAccountType(categoryType: string) {
+  if (categoryType === 'income') return 'revenue'
+  if (categoryType === 'expense') return 'expense'
+  return categoryType
+}
+
+function inferSyncedTransactionCategoryType(payload: Record<string, any>) {
+  const explicit = String(payload.categoryType ?? '').trim().toLowerCase()
+  if (explicit) return explicit
+
+  const sourceKind = String(payload.sourceKind ?? '').trim().toLowerCase()
+  if (sourceKind === 'dish_sale_mirror') return 'income'
+
+  const accountName = String(payload.accountName ?? '').trim().toLowerCase()
+  if (accountName.includes('payable')) return 'liability'
+  if (accountName.includes('receivable')) return 'asset'
+  if (accountName.includes('cash') || accountName.includes('bank') || accountName.includes('momo') || accountName.includes('mobile money')) {
+    return 'asset'
+  }
+
+  return payload.type === 'credit' ? 'income' : 'expense'
 }
 
 /**
@@ -377,6 +401,76 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       })
       break
     }
+    case 'transaction': {
+      if (change.operation === 'delete') {
+        await db.transaction.deleteMany({ where: { id: change.entityId } })
+        break
+      }
+
+      const transactionRestaurantId = payload.restaurantId ?? null
+      const categoryType = inferSyncedTransactionCategoryType(payload)
+      const categories = await ensureCoreCategories(db, transactionRestaurantId)
+      const category = categories[categoryType] || categories.expense
+      const accountName = String(payload.accountName || 'General Expense')
+      const account = await ensureAccount(db, {
+        restaurantId: transactionRestaurantId,
+        name: accountName,
+        type: resolveSyncedAccountType(category.type),
+        categoryId: category.id,
+      })
+
+      await db.transaction.upsert({
+        where: { id: String(payload.id || change.entityId) },
+        update: {
+          userId: userId,
+          restaurantId: transactionRestaurantId,
+          branchId: payload.branchId ?? null,
+          uploadId: payload.uploadId ?? null,
+          accountId: account.id,
+          categoryId: category.id,
+          date: asDate(payload.date) ?? new Date(),
+          description: String(payload.description ?? 'Synced transaction'),
+          amount: Number(payload.amount),
+          type: String(payload.type ?? 'credit'),
+          isManual: payload.isManual == null ? false : Boolean(payload.isManual),
+          paymentMethod: payload.paymentMethod ?? 'Cash',
+          pairId: payload.pairId ?? null,
+          accountName: account.name,
+          profitAmount: payload.profitAmount == null ? null : Number(payload.profitAmount),
+          costAmount: payload.costAmount == null ? null : Number(payload.costAmount),
+          synced: payload.synced == null ? true : Boolean(payload.synced),
+          sourceKind: payload.sourceKind ?? 'manual',
+          authoritativeForRevenue: payload.authoritativeForRevenue == null ? false : Boolean(payload.authoritativeForRevenue),
+          createdAt: asDate(payload.createdAt) ?? undefined,
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
+        },
+        create: {
+          id: String(payload.id || change.entityId),
+          userId: userId,
+          restaurantId: transactionRestaurantId,
+          branchId: payload.branchId ?? null,
+          uploadId: payload.uploadId ?? null,
+          accountId: account.id,
+          categoryId: category.id,
+          date: asDate(payload.date) ?? new Date(),
+          description: String(payload.description ?? 'Synced transaction'),
+          amount: Number(payload.amount),
+          type: String(payload.type ?? 'credit'),
+          isManual: payload.isManual == null ? false : Boolean(payload.isManual),
+          paymentMethod: payload.paymentMethod ?? 'Cash',
+          pairId: payload.pairId ?? null,
+          accountName: account.name,
+          profitAmount: payload.profitAmount == null ? null : Number(payload.profitAmount),
+          costAmount: payload.costAmount == null ? null : Number(payload.costAmount),
+          synced: payload.synced == null ? true : Boolean(payload.synced),
+          sourceKind: payload.sourceKind ?? 'manual',
+          authoritativeForRevenue: payload.authoritativeForRevenue == null ? false : Boolean(payload.authoritativeForRevenue),
+          createdAt: asDate(payload.createdAt) ?? new Date(),
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
+        },
+      })
+      break
+    }
     case 'inventoryItem': {
       if (change.operation === 'delete') {
         await db.inventoryItem.deleteMany({ where: { id: change.entityId } })
@@ -396,7 +490,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           unitsPerPurchaseUnit: payload.unitsPerPurchaseUnit == null ? null : Number(payload.unitsPerPurchaseUnit),
           unitCost: payload.unitCost == null ? null : Number(payload.unitCost),
           unitPrice: payload.unitPrice == null ? null : Number(payload.unitPrice),
-          // Skip quantity on update — derived from purchase layers + consumption, not snapshots
+          quantity: Number(payload.quantity ?? 0),
           category: payload.category ?? null,
           inventoryType: payload.inventoryType ?? 'resale',
           reorderLevel: Number(payload.reorderLevel ?? 0),
@@ -449,7 +543,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           unitsPerPurchaseUnit: payload.unitsPerPurchaseUnit == null ? null : Number(payload.unitsPerPurchaseUnit),
           purchaseUnitCost: payload.purchaseUnitCost == null ? null : Number(payload.purchaseUnitCost),
           quantityPurchased: Number(payload.quantityPurchased),
-          // Skip remainingQuantity on update — managed by FIFO consumption engine
+          remainingQuantity: Number(payload.remainingQuantity),
           unitCost: Number(payload.unitCost),
           totalCost: Number(payload.totalCost),
           purchasedAt: asDate(payload.purchasedAt) ?? new Date(),

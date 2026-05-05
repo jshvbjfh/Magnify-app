@@ -31,6 +31,7 @@ export async function GET(req: Request) {
   const branchScopeWhere = includeBranchlessRows
     ? { OR: [{ branchId }, { branchId: null }] }
     : { branchId }
+  const dishBranchScopeWhere = { branchId }
 
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
@@ -87,7 +88,7 @@ export async function GET(req: Request) {
             id: { in: dishIds },
             userId: billingUserId,
             ...(restaurantId ? { restaurantId } : {}),
-            ...branchScopeWhere,
+            ...dishBranchScopeWhere,
           },
           include: {
             ingredients: {

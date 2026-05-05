@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { calculateRestaurantOrderTotals, generateRestaurantOrderNumber, isRestaurantOrderNumberConflict } from '@/lib/restaurantOrders'
+import { calculateRestaurantOrderTotals, enqueueOrderSync, generateRestaurantOrderNumber, isRestaurantOrderNumberConflict } from '@/lib/restaurantOrders'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
 import { ensureMainBranchForRestaurant } from '@/lib/restaurantAccess'
 
@@ -58,9 +58,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
         id: { in: requestedDishIds },
         userId: restaurant.ownerId,
         restaurantId: resolvedRestaurantId,
-        ...(resolvedBranchId
-          ? { OR: [{ branchId: resolvedBranchId }, { branchId: null }] }
-          : {}),
+        ...(resolvedBranchId ? { branchId: resolvedBranchId } : {}),
         isActive: true,
       },
       select: { id: true, name: true, sellingPrice: true },
@@ -86,6 +84,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
     const totals = calculateRestaurantOrderTotals(normalizedItems)
 
     let created = false
+    let createdOrderId: string | null = null
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
         await prisma.$transaction(async (tx) => {
@@ -123,8 +122,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
             })
             await enqueueRestaurantTableSync(txDb, tableId, resolvedRestaurantId)
           }
+
+          // Capture order ID before transaction closes — `order` is not visible outside
+          createdOrderId = order.id
         })
         created = true
+        // F4 FIX: QR-submitted orders were not enqueued in the sync outbox.
+        // enqueueOrderSync runs OUTSIDE the retry transaction so it always sees the
+        // committed order row and its items.
+        if (createdOrderId) {
+          await enqueueOrderSync(prisma, createdOrderId, resolvedRestaurantId, resolvedBranchId)
+        }
         break
       } catch (error) {
         if (!isRestaurantOrderNumberConflict(error) || attempt === 4) throw error

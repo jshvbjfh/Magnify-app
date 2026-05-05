@@ -41,6 +41,7 @@ const REQUIRED_BRANCH_SYNC_ENTITY_TYPES = new Set([
   'inventoryAdjustmentLog',
   'shift',
   'dishSale',
+  'transaction',
 ])
 
 function matchesSharedSecret(input: string, expected: string) {
@@ -191,12 +192,37 @@ async function collectPullChanges(db: PrismaDb, params: { restaurantId: string; 
         { scopeId: GLOBAL_SYNC_SCOPE_ID, lastPulledAt: null, lastMutationId: null },
       ]
 
-  const whereClauses = cursorInputs
+  const normalizedCursorInputs = cursorInputs
     .map((cursor) => {
-      const scopeId = String(cursor.scopeId || '').trim()
-      if (!scopeId) return null
+      const originalScopeId = String(cursor.scopeId || '').trim()
+      if (!originalScopeId) return null
+
+      // Desktop/local devices track restaurant-scoped cursors using their local SQLite
+      // restaurant id, but cloud outbox rows are scoped by the resolved cloud restaurant id.
+      // Normalize non-global cursor scope ids for querying while preserving the caller's
+      // original scope id in the response so local cursor rows stay stable.
+      const queryScopeId = originalScopeId === GLOBAL_SYNC_SCOPE_ID
+        ? GLOBAL_SYNC_SCOPE_ID
+        : params.restaurantId
+
       return {
-        scopeId,
+        originalScopeId,
+        queryScopeId,
+        lastPulledAt: cursor.lastPulledAt ?? null,
+        lastMutationId: cursor.lastMutationId ?? null,
+      }
+    })
+    .filter(Boolean) as Array<{
+      originalScopeId: string
+      queryScopeId: string
+      lastPulledAt: string | null
+      lastMutationId: string | null
+    }>
+
+  const whereClauses = normalizedCursorInputs
+    .map((cursor) => {
+      return {
+        scopeId: cursor.queryScopeId,
         ...(cursor.lastPulledAt ? { createdAt: { gt: new Date(String(cursor.lastPulledAt)) } } : {}),
       }
     })
@@ -228,11 +254,10 @@ async function collectPullChanges(db: PrismaDb, params: { restaurantId: string; 
     : []
 
   const pullChanges = mapSyncOutboxRows(rows)
-  const pullCursors = cursorInputs.map((cursor) => {
-    const scopeId = String(cursor.scopeId || '').trim()
-    const scopedChanges = pullChanges.filter((change) => change.scopeId === scopeId)
+  const pullCursors = normalizedCursorInputs.map((cursor) => {
+    const scopedChanges = pullChanges.filter((change) => change.scopeId === cursor.queryScopeId)
     return {
-      scopeId,
+      scopeId: cursor.originalScopeId,
       lastPulledAt: latestSyncChangeTimestamp(scopedChanges)?.toISOString() ?? cursor.lastPulledAt ?? null,
       lastMutationId: latestSyncMutationId(scopedChanges) ?? cursor.lastMutationId ?? null,
     }
@@ -409,6 +434,7 @@ export async function POST(req: Request) {
         wasteLog: 12,
         shift: 13,
         restaurantOrder: 14,
+        transaction: 15,
       }
       const sortedChanges = [...changes].sort(
         (a, b) => (ENTITY_ORDER[a.entityType] ?? 99) - (ENTITY_ORDER[b.entityType] ?? 99),

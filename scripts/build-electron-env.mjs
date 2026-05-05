@@ -74,7 +74,7 @@ if (!collected.has('ELECTRON_DATA_MODE')) {
 }
 
 if (!collected.has('ELECTRON_AUTO_UPDATE')) {
-	collected.set('ELECTRON_AUTO_UPDATE', 'false')
+	collected.set('ELECTRON_AUTO_UPDATE', 'true')
 }
 
 const hasOwnerSyncTarget = Boolean(String(collected.get('OWNER_SYNC_TARGET_URL') ?? '').trim())

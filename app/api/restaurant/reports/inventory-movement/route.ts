@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getIngredientLayerSnapshotAsOf } from '@/lib/inventoryLayerSnapshot'
+import { getRestaurantFifoEnabled } from '@/lib/inventoryConsumption'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser, isMainRestaurantBranch } from '@/lib/restaurantAccess'
 import { getDishSaleUsageBreakdown } from '@/lib/restaurantReportUsage'
@@ -55,7 +56,7 @@ export async function GET(req: Request) {
   const endDate = to ? new Date(to + 'T23:59:59') : new Date()
   const startDate = from ? new Date(from + 'T00:00:00') : null
 
-  const [ingredients, purchases, layerSnapshot, dishSaleUsage, wasteLogsToEnd, restaurant] = await Promise.all([
+  const [ingredients, purchases, layerSnapshot, dishSaleUsage, wasteLogsToEnd, restaurant, fifoEnabled] = await Promise.all([
     // All ingredients
     prisma.inventoryItem.findMany({
       where: {
@@ -111,6 +112,11 @@ export async function GET(req: Request) {
           select: { fifoEnabled: true, fifoCutoverAt: true },
         })
       : Promise.resolve(null),
+
+    getRestaurantFifoEnabled(prisma, {
+      billingUserId,
+      restaurantId,
+    }),
   ])
 
   // Build lookup maps
@@ -142,14 +148,15 @@ export async function GET(req: Request) {
     const periodWasteQty = roundQty(periodWasteMap.get(ing.id) ?? 0)
     const hasBatchHistory = layerSnapshot.hasPurchaseHistory.has(ing.id)
     const layerTotals = layerSnapshot.ingredientTotals.get(ing.id)
-    const remainingQty = hasBatchHistory
+    const usesBatchRemaining = fifoEnabled && hasBatchHistory
+    const remainingQty = usesBatchRemaining
       ? roundQty(Number(layerTotals?.quantity ?? 0))
       : roundQty(Number(ing.quantity ?? 0))
-    const stockValue = hasBatchHistory
+    const stockValue = usesBatchRemaining
       ? roundQty(Number(layerTotals?.value ?? 0))
       : roundQty(remainingQty * Number(ing.unitCost ?? 0))
 
-    if (!hasBatchHistory && (ing.unitCost ?? 0) > 0) {
+    if (!usesBatchRemaining && (ing.unitCost ?? 0) > 0) {
       const inferredOpeningQty = ing.quantity + (dishSaleUsage.totalUsageToEndMap.get(ing.id)?.qty ?? 0) + (totalWasteToEndMap.get(ing.id) ?? 0)
       const baselineDate = ing.lastRestockedAt ?? ing.createdAt
       const fallsInRange = !startDate || baselineDate >= startDate
@@ -202,7 +209,7 @@ export async function GET(req: Request) {
       totalStockValue: totals.stockValue,
     },
     meta: {
-      fifoEnabled: restaurant?.fifoEnabled ?? false,
+      fifoEnabled,
       fifoCutoverAt: restaurant?.fifoCutoverAt?.toISOString() ?? null,
     },
   })

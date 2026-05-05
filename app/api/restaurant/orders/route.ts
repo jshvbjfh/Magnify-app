@@ -7,27 +7,25 @@ import { buildRestaurantOrderTimeline, getRestaurantOrderDisplayStatus } from '@
 
 function parseDateParam(value: string | null) {
   if (!value) return null
-  const parsed = new Date(`${value}T00:00:00`)
+  const parsed = new Date(`${value}T00:00:00+02:00`) // midnight Kigali time
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
 function endOfDate(date: Date) {
-  const end = new Date(date)
-  end.setHours(23, 59, 59, 999)
-  return end
+  return new Date(date.getTime() + 86400000 - 1)
 }
 
 function startOf(period: 'today' | 'week' | 'month' | 'all') {
-  const now = new Date()
   if (period === 'all') return null
-  if (period === 'today') return new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const todayKigali = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(new Date())
+  const [year, month] = todayKigali.split('-')
+  if (period === 'today') return new Date(`${todayKigali}T00:00:00+02:00`)
   if (period === 'week') {
-    const date = new Date(now)
-    date.setDate(now.getDate() - 6)
-    date.setHours(0, 0, 0, 0)
-    return date
+    const d = new Date(`${todayKigali}T00:00:00+02:00`)
+    d.setUTCDate(d.getUTCDate() - 6)
+    return d
   }
-  return new Date(now.getFullYear(), now.getMonth(), 1)
+  return new Date(`${year}-${month}-01T00:00:00+02:00`)
 }
 
 export async function GET(req: Request) {

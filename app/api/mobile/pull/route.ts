@@ -1,10 +1,26 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
+
+export const dynamic = 'force-dynamic'
 
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET ?? 'fallback-secret-change-me'
 )
+
+const NO_STORE_HEADERS = {
+  'Cache-Control': 'no-store, max-age=0, must-revalidate',
+}
+
+function jsonNoStore(body: unknown, init?: ResponseInit) {
+  return NextResponse.json(body, {
+    ...init,
+    headers: {
+      ...NO_STORE_HEADERS,
+      ...(init?.headers ?? {}),
+    },
+  })
+}
 
 async function verifyToken(req: Request) {
   const auth = req.headers.get('authorization') ?? ''
@@ -24,41 +40,15 @@ export async function GET(req: Request) {
     // Return 403 so the app shows a clear "account not configured" message rather
     // than silently returning the entire restaurant's menu.
     if (!branchId) {
-      return NextResponse.json(
+      return jsonNoStore(
         { error: 'Your account has no branch assigned. Ask your manager to assign a branch before using the waiter app.' },
         { status: 403 }
       )
     }
 
-    // Check whether the waiter's assigned branch is the restaurant's main branch.
-    // If so, apply the main-branch compatibility rule: include records with
-    // branchId = NULL alongside the explicit branchId match. This covers dishes
-    // and tables that were created before the branch feature was introduced and
-    // therefore have no branchId set in the database.
-    //
-    // ── TEMPORARY COMPATIBILITY LAYER ────────────────────────────────────────
-    // This OR-NULL arm exists solely to recover from historical data where
-    // dishes/tables were written with branchId = NULL before the NOT NULL
-    // constraint was enforced (migration 20260429000002).
-    //
-    // After running prisma/backfill-null-branch-ids.sql against Neon and
-    // applying migration 20260429000002, every dish/table will have a real
-    // branchId and this OR-NULL arm will match zero extra rows (i.e., it
-    // becomes a no-op).  It may be removed once the Neon migration has been
-    // confirmed as 0 remaining null-branchId rows.
-    // ─────────────────────────────────────────────────────────────────────────
-    const isMainBranch = !!(await prisma.restaurantBranch.findFirst({
-      where: { id: branchId, restaurantId, isMain: true },
-      select: { id: true },
-    }))
+    const dishWhere = { restaurantId, branchId, isActive: true }
 
-    const dishWhere = isMainBranch
-      ? { restaurantId, isActive: true, OR: [{ branchId }, { branchId: null }] }
-      : { restaurantId, branchId, isActive: true }
-
-    const tableWhere = isMainBranch
-      ? { restaurantId, OR: [{ branchId }, { branchId: null }] }
-      : { restaurantId, branchId }
+    const tableWhere = { restaurantId, branchId }
 
     const [dishes, tables, restaurant] = await Promise.all([
       prisma.dish.findMany({
@@ -107,25 +97,24 @@ export async function GET(req: Request) {
 
     if (normalisedDishes.length === 0) {
       // Diagnostic: log when pull returns an empty menu so server logs capture
-      // the branchId/isMainBranch context without requiring a debugger.
+      // the branchId context without requiring a debugger.
       console.warn('[mobile/pull] zero dishes returned', {
         restaurantId,
         branchId,
-        isMainBranch,
         tablesCount: normalisedTables.length,
       })
     }
 
-    return NextResponse.json({
+    return jsonNoStore({
       dishes: normalisedDishes,
       tables: normalisedTables,
       restaurant: restaurant ?? { id: restaurantId, name: 'Restaurant' },
     })
   } catch (err: any) {
     if (err.message === 'Unauthorized') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
     console.error('[mobile/pull]', err)
-    return NextResponse.json({ error: 'Server error' }, { status: 500 })
+    return jsonNoStore({ error: 'Server error' }, { status: 500 })
   }
 }

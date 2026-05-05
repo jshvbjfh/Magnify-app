@@ -48,11 +48,35 @@ export async function finalizeRestaurantOrderPayment(
     include: { items: { where: { status: 'ACTIVE' } } },
   })
 
+  console.log('[finalize] order lookup', params.orderId, 'status:', currentOrder?.status ?? 'NOT_FOUND', 'items:', currentOrder?.items?.length ?? 0)
+
   if (!currentOrder) {
     throw new Error('Order not found')
   }
 
   if (currentOrder.status === 'PAID') {
+    // Order is already PAID — but dish sales may have been missed (e.g. a prior
+    // transaction timed out after committing the status update).  Run the
+    // recording step; it has per-dish idempotency guards so double-recording
+    // is safe.
+    console.log('[finalize] order already PAID — backfilling any missing dish sales, items:', currentOrder.items.length)
+    if (currentOrder.items.length > 0) {
+      await recordDishSalesForPaidOrder(db, {
+        billingUserId: params.billingUserId,
+        restaurantId: params.restaurantId,
+        branchId: params.branchId,
+        includeBranchlessRows: params.includeBranchlessRows,
+        sourceDeviceId: params.sourceDeviceId,
+        orderId: params.orderId,
+        paymentMethod: params.paymentMethod || currentOrder.paymentMethod || 'Cash',
+        saleDate: currentOrder.paidAt ?? params.paidAt ?? new Date(),
+        items: currentOrder.items.map((item) => ({
+          dishId: item.dishId,
+          dishPrice: item.dishPrice,
+          qty: item.qty,
+        })),
+      })
+    }
     return currentOrder
   }
 
@@ -118,6 +142,7 @@ export async function finalizeRestaurantOrderPayment(
     throw new Error('Order not found after payment update')
   }
 
+  console.log('[finalize] calling recordDishSales billingUser:', params.billingUserId, 'items:', currentOrder.items.length)
   await recordDishSalesForPaidOrder(db, {
     billingUserId: params.billingUserId,
     restaurantId: params.restaurantId,
@@ -152,6 +177,8 @@ export async function finalizeRestaurantOrderPayment(
     isManual: false,
     sourceKind: 'dish_sale_mirror',
     authoritativeForRevenue: false,
+    synced: true,
+    sourceDeviceId: params.sourceDeviceId,
   })
 
   if (currentOrder.tableId) {

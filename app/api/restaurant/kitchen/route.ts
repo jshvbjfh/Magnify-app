@@ -61,7 +61,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
     }
 
-    const { name, email, password } = await req.json()
+    const { name, email, password, syncTargetUrl, syncEmail, syncPassword } = await req.json()
     if (!name?.trim() || !email?.trim() || !password?.trim()) {
       return NextResponse.json({ error: 'name, email, and password are required' }, { status: 400 })
     }
@@ -78,6 +78,9 @@ export async function POST(req: Request) {
         name: name.trim(),
         email: email.trim().toLowerCase(),
         password,
+        syncTargetUrl,
+        syncEmail,
+        syncPassword,
         adminEmail: admin.email,
       })
 

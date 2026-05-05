@@ -55,9 +55,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
     where: {
       userId: restaurant.ownerId,
       restaurantId: restaurant.id,
-      ...(resolvedBranchId
-        ? { OR: [{ branchId: resolvedBranchId }, { branchId: null }] }
-        : {}),
+      ...(resolvedBranchId ? { branchId: resolvedBranchId } : {}),
       isActive: true,
     },
     select: { id: true, name: true, sellingPrice: true, category: true },

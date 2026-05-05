@@ -25,7 +25,16 @@ export async function GET() {
   const userId = session.user.id
 
   const context = await getRestaurantContextForUser(userId)
-  const targetRestaurantId = context?.restaurantId ?? (await ensureRestaurantForOwner(userId)).id
+  let targetRestaurantId = context?.restaurantId
+  if (!targetRestaurantId) {
+    let created: Awaited<ReturnType<typeof ensureRestaurantForOwner>>
+    try { created = await ensureRestaurantForOwner(userId) } catch (e: any) {
+      if (e?.code === 'USER_NOT_FOUND') return NextResponse.json({ error: 'Session expired; please sign in again' }, { status: 409 })
+      throw e
+    }
+    targetRestaurantId = created?.id
+  }
+  if (!targetRestaurantId) return NextResponse.json({ error: 'No restaurant found' }, { status: 404 })
   const restaurant = await prisma.restaurant.findUnique({
     where: { id: targetRestaurantId },
     select: settingsRestaurantSelect,
@@ -48,7 +57,16 @@ export async function POST(req: Request) {
   const { name, billHeader, qrOrderingMode, fifoEnabled } = await req.json()
 
   const context = await getRestaurantContextForUser(userId)
-  const targetRestaurantId = context?.restaurantId ?? (await ensureRestaurantForOwner(userId)).id
+  let targetRestaurantId = context?.restaurantId
+  if (!targetRestaurantId) {
+    let created: Awaited<ReturnType<typeof ensureRestaurantForOwner>>
+    try { created = await ensureRestaurantForOwner(userId) } catch (e: any) {
+      if (e?.code === 'USER_NOT_FOUND') return NextResponse.json({ error: 'Session expired; please sign in again' }, { status: 409 })
+      throw e
+    }
+    targetRestaurantId = created?.id
+  }
+  if (!targetRestaurantId) return NextResponse.json({ error: 'No restaurant found' }, { status: 404 })
   const currentRestaurant = context?.restaurant ?? await prisma.restaurant.findUnique({
     where: { id: targetRestaurantId },
     select: {

@@ -1,19 +1,35 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import bcrypt from 'bcryptjs'
 import { SignJWT } from 'jose'
 import { ensureMainBranchForRestaurant } from '@/lib/restaurantAccess'
 
+export const dynamic = 'force-dynamic'
+
 const SECRET = new TextEncoder().encode(
   process.env.NEXTAUTH_SECRET ?? 'fallback-secret-change-me'
 )
+
+const NO_STORE_HEADERS = {
+  'Cache-Control': 'no-store, max-age=0, must-revalidate',
+}
+
+function jsonNoStore(body: unknown, init?: ResponseInit) {
+  return NextResponse.json(body, {
+    ...init,
+    headers: {
+      ...NO_STORE_HEADERS,
+      ...(init?.headers ?? {}),
+    },
+  })
+}
 
 export async function POST(req: Request) {
   try {
     const { email, password } = await req.json()
 
     if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password required' }, { status: 400 })
+      return jsonNoStore({ error: 'Email and password required' }, { status: 400 })
     }
 
     const user = await prisma.user.findUnique({
@@ -26,20 +42,20 @@ export async function POST(req: Request) {
     })
 
     if (!user || !user.password) {
-      return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 })
+      return jsonNoStore({ error: 'Invalid email or password' }, { status: 401 })
     }
 
     if (user.isActive === false) {
-      return NextResponse.json({ error: 'Account is inactive' }, { status: 403 })
+      return jsonNoStore({ error: 'Account is inactive' }, { status: 403 })
     }
 
     const valid = await bcrypt.compare(String(password), user.password)
     if (!valid) {
-      return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 })
+      return jsonNoStore({ error: 'Invalid email or password' }, { status: 401 })
     }
 
     if (!['waiter', 'admin', 'kitchen'].includes(user.role)) {
-      return NextResponse.json({ error: 'This app is for waiter accounts only' }, { status: 403 })
+      return jsonNoStore({ error: 'This app is for waiter accounts only' }, { status: 403 })
     }
 
     // Resolve branchId — the user.branchId column may be null for newly created
@@ -71,7 +87,7 @@ export async function POST(req: Request) {
       .setExpirationTime('30d')
       .sign(SECRET)
 
-    return NextResponse.json({
+    return jsonNoStore({
       token,
       user: {
         id: user.id,
@@ -84,6 +100,6 @@ export async function POST(req: Request) {
     })
   } catch (err) {
     console.error('[mobile/auth]', err)
-    return NextResponse.json({ error: 'Server error' }, { status: 500 })
+    return jsonNoStore({ error: 'Server error' }, { status: 500 })
   }
 }

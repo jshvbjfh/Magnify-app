@@ -1,5 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 
+import { enqueueSyncChange } from '@/lib/syncOutbox'
+
 type PrismaDb = PrismaClient | Prisma.TransactionClient
 
 type CategoryRecord = { id: string; type: string; name: string }
@@ -142,6 +144,8 @@ export async function recordJournalEntry(db: PrismaDb, params: {
 	isManual?: boolean
 	sourceKind?: string
 	authoritativeForRevenue?: boolean
+	synced?: boolean
+	sourceDeviceId?: string | null
 }) {
 	const restaurantId = params.restaurantId ?? null
 	const direction = params.direction
@@ -188,6 +192,45 @@ export async function recordJournalEntry(db: PrismaDb, params: {
 	const sourceKind = params.sourceKind || (params.isManual === false ? 'system' : 'manual')
 	const authoritativeForRevenue = params.authoritativeForRevenue ?? true
 
+	async function enqueueTransactionPullChange(entry: {
+		id: string
+		userId: string
+		restaurantId: string | null
+		branchId: string | null
+		accountId: string
+		categoryId: string
+		date: Date
+		description: string
+		amount: number
+		type: string
+		isManual: boolean
+		paymentMethod: string
+		pairId: string | null
+		accountName: string | null
+		profitAmount: number | null
+		costAmount: number | null
+		synced: boolean
+		sourceKind: string
+		authoritativeForRevenue: boolean
+		createdAt: Date
+		updatedAt: Date
+	}, categoryType: string) {
+		if (!params.sourceDeviceId) return
+
+		await enqueueSyncChange(db, {
+			restaurantId,
+			branchId: params.branchId ?? null,
+			entityType: 'transaction',
+			entityId: entry.id,
+			operation: 'upsert',
+			sourceDeviceId: params.sourceDeviceId,
+			payload: {
+				...entry,
+				categoryType,
+			},
+		})
+	}
+
 	if (sourceKind === 'inventory_waste') {
 		if (!explicitCounterAccountName) {
 			throw new Error('Inventory waste journal entries must use an internal counter account')
@@ -197,6 +240,8 @@ export async function recordJournalEntry(db: PrismaDb, params: {
 			throw new Error('Inventory waste journal entries cannot credit a cash-equivalent account')
 		}
 	}
+
+	const synced = params.synced ?? false
 
 	if (direction === 'out') {
 		const mainEntry = await db.transaction.create({
@@ -216,6 +261,7 @@ export async function recordJournalEntry(db: PrismaDb, params: {
 				accountName: mainAccount.name,
 				sourceKind,
 				authoritativeForRevenue,
+				synced,
 			},
 		})
 
@@ -236,8 +282,12 @@ export async function recordJournalEntry(db: PrismaDb, params: {
 				accountName: counterAccount.name,
 				sourceKind,
 				authoritativeForRevenue,
+				synced,
 			},
 		})
+
+		await enqueueTransactionPullChange(mainEntry, mainCategory.type)
+		await enqueueTransactionPullChange(settlementEntry, counterCategory?.type || counterCategoryType)
 
 		return { pairId, entries: [mainEntry, settlementEntry] }
 	} else {
@@ -258,6 +308,7 @@ export async function recordJournalEntry(db: PrismaDb, params: {
 				accountName: counterAccount.name,
 				sourceKind,
 				authoritativeForRevenue,
+				synced,
 			},
 		})
 
@@ -278,8 +329,12 @@ export async function recordJournalEntry(db: PrismaDb, params: {
 				accountName: mainAccount.name,
 				sourceKind,
 				authoritativeForRevenue,
+				synced,
 			},
 		})
+
+		await enqueueTransactionPullChange(settlementEntry, counterCategory?.type || counterCategoryType)
+		await enqueueTransactionPullChange(mainEntry, mainCategory.type)
 
 		return { pairId, entries: [settlementEntry, mainEntry] }
 	}

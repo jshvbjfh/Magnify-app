@@ -72,6 +72,8 @@ export async function GET(req: Request) {
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
 
+  if (!restaurantId || !branchId) return NextResponse.json([], { status: 200 })
+
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
   const to = searchParams.get('to')
@@ -79,8 +81,8 @@ export async function GET(req: Request) {
   const sales = await prisma.dishSale.findMany({
     where: {
       userId: billingUserId,
-      ...(restaurantId ? { restaurantId } : {}),
-      ...(branchId ? { branchId } : {}),
+      restaurantId,
+      branchId,
       ...(from && to && { saleDate: { gte: new Date(from), lte: new Date(to) } }),
     },
     include: { dish: true },
@@ -97,8 +99,8 @@ export async function GET(req: Request) {
     ? await prisma.restaurantOrder.findMany({
         where: {
           id: { in: orderIds },
-          ...(restaurantId ? { restaurantId } : {}),
-          ...(branchId ? { branchId } : {}),
+          restaurantId,
+          branchId,
         },
         select: {
           id: true,

@@ -1,5 +1,6 @@
 ﻿'use client'
 import { Fragment, useEffect, useState } from 'react'
+import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
 import { AlertTriangle, X, Sparkles, ShoppingCart, Search, Trash2 } from 'lucide-react'
 import { createInventoryBatchSuffix, formatInventoryBatchId } from '@/lib/inventoryBatch'
 import {
@@ -215,6 +216,7 @@ function groupPurchasesByBatch(purchases: Purchase[]) {
 }
 
 export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () => void }) {
+  const restaurantBranch = useRestaurantBranch()
   const [items, setItems] = useState<Ingredient[]>([])
   const [purchases, setPurchases] = useState<Purchase[]>([])
   const [itemsLoading, setItemsLoading] = useState(true)
@@ -245,9 +247,20 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   }
 
   useEffect(() => {
-    void load()
-    void loadPurchases()
-  }, [])
+    const refreshInventoryData = () => {
+      void load()
+      void loadPurchases()
+    }
+
+    refreshInventoryData()
+    window.addEventListener('refreshInventory', refreshInventoryData)
+    window.addEventListener('online', refreshInventoryData)
+
+    return () => {
+      window.removeEventListener('refreshInventory', refreshInventoryData)
+      window.removeEventListener('online', refreshInventoryData)
+    }
+  }, [restaurantBranch?.branchId])
 
   function resolvePurchaseFormUnits() {
     const purchaseUnit = pForm.purchaseUnit.trim()
@@ -482,6 +495,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         return
       }
       await Promise.all([load(), loadPurchases()])
+      window.dispatchEvent(new CustomEvent('refreshTransactions'))
       setShowPurchaseRecorder(false)
       setPurchaseAutofillNotice(null)
       setPurchaseAutofillMatchKey('')
@@ -524,6 +538,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       }
       cancelPurchaseEdit()
       await Promise.all([load(), loadPurchases()])
+      window.dispatchEvent(new CustomEvent('refreshTransactions'))
     } finally {
       setPSaving(false)
     }
@@ -546,6 +561,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       }
       if (editingPurchaseId === purchase.id) closePurchaseForm()
       await Promise.all([load(), loadPurchases()])
+      window.dispatchEvent(new CustomEvent('refreshTransactions'))
     } finally {
       setPSaving(false)
     }
@@ -657,9 +673,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   function renderPurchaseRow(purchase: Purchase) {
     const purchaseLocked = !canMutatePurchase(purchase)
     const hasLayerDrift = ingredientsWithLayerDrift.has(purchase.ingredientId)
+    const ingredient = items.find(item => item.id === purchase.ingredientId) ?? null
     const purchaseMeta = getPurchaseDisplayMeta(purchase)
     const displayedStockQuantity = purchase.remainingQuantity
     const displayedStockValue = displayedStockQuantity * purchase.unitCost
+    const trackedStockDisplay = ingredient ? getIngredientStockDisplay(ingredient) : null
     const purchaseLockReason = hasLayerDrift
       ? 'This stock row is locked because stock has already moved on this ingredient.'
       : 'This stock entry has already been used by orders and cannot be edited.'
@@ -750,8 +768,13 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           <p className="text-xs text-gray-400">per {purchaseMeta.purchaseUnit}</p>
         </td>
         <td className="px-4 py-3">
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${displayedStockQuantity<=0?'bg-gray-100 text-gray-400':'bg-green-100 text-green-700'}`}>
-            {formatStockOnHand(displayedStockQuantity, purchaseMeta.usageUnit, purchaseMeta.purchaseUnit, purchaseMeta.unitsPerPurchaseUnit)}
+          <span
+            title={hasLayerDrift ? 'Current stock is tracked at the ingredient level while FIFO batch layers are out of sync.' : undefined}
+            className={`text-xs px-2 py-0.5 rounded-full font-medium ${hasLayerDrift ? 'bg-amber-100 text-amber-800' : displayedStockQuantity<=0 ? 'bg-gray-100 text-gray-400' : 'bg-green-100 text-green-700'}`}
+          >
+            {hasLayerDrift && trackedStockDisplay
+              ? `Current: ${trackedStockDisplay}`
+              : formatStockOnHand(displayedStockQuantity, purchaseMeta.usageUnit, purchaseMeta.purchaseUnit, purchaseMeta.unitsPerPurchaseUnit)}
           </span>
         </td>
         <td className="px-4 py-3 font-semibold text-gray-900">{fmt(displayedStockValue)} RWF</td>

@@ -1,13 +1,17 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { getCanonicalCloudAppUrl } from '@/lib/cloudAuthBridge'
+import { getCanonicalCloudAppUrl, isLocalFirstDesktopAuthBridgeEnabled } from '@/lib/cloudAuthBridge'
 import { prisma } from '@/lib/prisma'
 import { buildHybridSyncBatchSignature, buildSyncTransactions, mapSummaryPayload, normalizeTargetUrl, refreshDailySummaries } from '@/lib/minimalSync'
 import { ensureRestaurantForOwner, getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { applyIncomingSyncChanges } from '@/lib/syncEngine'
 import { logSyncActivity } from '@/lib/syncLogging'
-import { enqueueSyncChange, GLOBAL_SYNC_SCOPE_ID, getSyncCursor, getSyncDeviceId, isRestaurantWideSyncEntity, listPendingSyncOutboxChanges, mapSyncOutboxRows, markSyncOutboxChangesFailed, markSyncOutboxChangesSynced, resetSyncOutboxRowsForRetry, SYNC_OUTBOX_MAX_ATTEMPTS, updateSyncCursor } from '@/lib/syncOutbox'
+import { enqueueSyncChange, GLOBAL_SYNC_SCOPE_ID, getSyncCursor, getSyncDeviceId, isRestaurantWideSyncEntity, latestSyncChangeTimestamp, latestSyncMutationId, listPendingSyncOutboxChanges, mapSyncOutboxRows, markSyncOutboxChangesFailed, markSyncOutboxChangesSynced, resetSyncOutboxRowsForRetry, SYNC_OUTBOX_MAX_ATTEMPTS, type SyncChangeEnvelope, updateSyncCursor } from '@/lib/syncOutbox'
+
+function canAutoCreateRestaurantContext() {
+  return !isLocalFirstDesktopAuthBridgeEnabled()
+}
 
 async function recordSyncEvent(restaurantId: string, event: { status: 'success' | 'failure'; message: string; syncedTransactions: number; syncedSummaries: number; consecutiveFailures: number }) {
   await prisma.restaurantSyncEvent.create({
@@ -92,6 +96,46 @@ async function markSyncSuccess(restaurantId: string, counts: { transactions: num
   return state
 }
 
+async function upsertLocalSyncBatch(
+  restaurantId: string,
+  batchId: string,
+  payloadHash: string,
+  params: {
+    status: 'processing' | 'success' | 'failed'
+    errorMessage?: string | null
+    syncedTransactions?: number
+    syncedSummaries?: number
+    appliedAt?: Date | null
+  },
+) {
+  await prisma.restaurantSyncBatch.upsert({
+    where: {
+      restaurantId_batchId: {
+        restaurantId,
+        batchId,
+      },
+    },
+    create: {
+      restaurantId,
+      batchId,
+      payloadHash,
+      status: params.status,
+      errorMessage: params.errorMessage ?? null,
+      syncedTransactions: params.syncedTransactions ?? 0,
+      syncedSummaries: params.syncedSummaries ?? 0,
+      ...(params.appliedAt ? { appliedAt: params.appliedAt } : {}),
+    },
+    update: {
+      payloadHash,
+      status: params.status,
+      errorMessage: params.errorMessage ?? null,
+      syncedTransactions: params.syncedTransactions ?? 0,
+      syncedSummaries: params.syncedSummaries ?? 0,
+      appliedAt: params.appliedAt ?? null,
+    },
+  })
+}
+
 function pickFirstNonEmpty(...values: Array<string | null | undefined>) {
   for (const value of values) {
     const normalized = String(value ?? '').trim()
@@ -134,6 +178,88 @@ function remapPulledRestaurantScopeChanges(
   }
 }
 
+function normalizeSyncBranchValue(value: unknown) {
+  return String(value ?? '').trim()
+}
+
+async function remapPulledBranchIds(
+  changes: Array<{ branchId?: string | null; entityType?: string; entityId?: string; operation?: string; payload?: unknown }>,
+  localRestaurantId: string,
+  localBranchId: string | null,
+) {
+  const localBranches = await prisma.restaurantBranch.findMany({
+    where: { restaurantId: localRestaurantId },
+    select: { id: true, name: true, code: true, isMain: true, isActive: true },
+    orderBy: [{ isMain: 'desc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }],
+  })
+
+  if (localBranches.length === 0) return
+
+  const localBranchIds = new Set(localBranches.map((branch) => branch.id))
+  const cloudToLocalBranchId = new Map<string, string>()
+  const activeLocalBranches = localBranches.filter((branch) => branch.isActive)
+  const fallbackLocalBranchId = localBranchId && localBranchIds.has(localBranchId)
+    ? localBranchId
+    : activeLocalBranches.length === 1
+      ? activeLocalBranches[0].id
+      : null
+
+  for (const change of changes) {
+    if (change.entityType !== 'restaurantBranch' || change.operation === 'delete') continue
+
+    const payload = change.payload && typeof change.payload === 'object'
+      ? change.payload as Record<string, unknown>
+      : null
+
+    const incomingCloudBranchId = normalizeSyncBranchValue(payload?.id ?? change.entityId)
+    if (!incomingCloudBranchId) continue
+
+    if (localBranchIds.has(incomingCloudBranchId)) {
+      cloudToLocalBranchId.set(incomingCloudBranchId, incomingCloudBranchId)
+      continue
+    }
+
+    const incomingCode = normalizeSyncBranchValue(payload?.code)
+    const incomingName = normalizeSyncBranchValue(payload?.name)
+    const incomingIsMain = Boolean(payload?.isMain)
+
+    const localBranch = localBranches.find((branch) => incomingCode && branch.code === incomingCode)
+      ?? localBranches.find((branch) => incomingName && branch.name === incomingName)
+      ?? (incomingIsMain ? activeLocalBranches.find((branch) => branch.isMain) : undefined)
+      ?? (fallbackLocalBranchId ? localBranches.find((branch) => branch.id === fallbackLocalBranchId) : undefined)
+
+    if (!localBranch) continue
+    cloudToLocalBranchId.set(incomingCloudBranchId, localBranch.id)
+
+    change.entityId = localBranch.id
+    if (payload) {
+      payload.id = localBranch.id
+      payload.restaurantId = localRestaurantId
+    }
+  }
+
+  for (const change of changes) {
+    if (isRestaurantWideSyncEntity(change.entityType)) continue
+
+    const payload = change.payload && typeof change.payload === 'object'
+      ? change.payload as Record<string, unknown>
+      : null
+
+    const incomingBranchId = normalizeSyncBranchValue(change.branchId ?? payload?.branchId)
+    if (!incomingBranchId) continue
+
+    const resolvedBranchId = cloudToLocalBranchId.get(incomingBranchId)
+      ?? (localBranchIds.has(incomingBranchId) ? incomingBranchId : fallbackLocalBranchId)
+
+    if (!resolvedBranchId) continue
+
+    change.branchId = resolvedBranchId
+    if (payload && (payload.branchId != null || resolvedBranchId != null)) {
+      payload.branchId = resolvedBranchId
+    }
+  }
+}
+
 function isBranchVisibleChange(
   change: { scopeId?: string; branchId?: string | null; entityType?: string },
   branchId: string | null,
@@ -161,32 +287,39 @@ async function requireRestaurantSyncUser() {
  * (first-ever sync). This ensures a new device pulling from cloud gets all data.
  */
 async function seedFullSnapshotIfNeeded(restaurantId: string, billingUserId: string, branchId: string | null) {
+  // Guard: check ANY outbox row for this restaurant scope (not just branch-scoped).
+  // Previously queried branchId: branchId ?? null which meant null-branch devices skipped
+  // the seed because ensureEssentialSyncIdentityRows already created restaurant-level rows.
   const existingOutbox = await prisma.syncOutbox.count({
-    where: {
-      scopeId: restaurantId,
-      branchId: branchId ?? null,
-    },
+    where: { scopeId: restaurantId },
   })
   if (existingOutbox > 0) return false // already has outbox history
 
-  const [restaurant, branches, dishes, inventoryItems, employees, tables, orders, wasteLogs, inventoryPurchases, inventoryBatchUsageLedgers, inventoryAdjustmentLogs, shifts, dishSales] = await Promise.all([
+  const branchScopedWhere = branchId ? { branchId } : {}
+  const resolveEntityBranchId = (row: { branchId?: string | null }) => row.branchId ?? branchId ?? null
+
+  const [restaurant, branches, dishes, inventoryItems, employees, tables, orders, wasteLogs, inventoryPurchases, inventoryBatchUsageLedgers, inventoryAdjustmentLogs, shifts, dishSales, transactions] = await Promise.all([
     prisma.restaurant.findUnique({ where: { id: restaurantId } }),
     prisma.restaurantBranch.findMany({ where: { restaurantId, isActive: true } }),
-    prisma.dish.findMany({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) } }),
-    prisma.inventoryItem.findMany({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) } }),
-    prisma.employee.findMany({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) } }),
-    prisma.restaurantTable.findMany({ where: { restaurantId, ...(branchId ? { branchId } : {}) } }),
-    prisma.restaurantOrder.findMany({ where: { restaurantId, ...(branchId ? { branchId } : {}) }, include: { items: true } }),
-    prisma.wasteLog.findMany({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) } }),
-    prisma.inventoryPurchase.findMany({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) } }),
-    prisma.inventoryBatchUsageLedger.findMany({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) } }),
-    prisma.inventoryAdjustmentLog.findMany({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) } }),
-    prisma.shift.findMany({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) } }),
-    prisma.dishSale.findMany({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) }, include: { saleIngredients: true } }),
+    prisma.dish.findMany({ where: { userId: billingUserId, restaurantId, ...branchScopedWhere } }),
+    prisma.inventoryItem.findMany({ where: { userId: billingUserId, restaurantId, ...branchScopedWhere } }),
+    prisma.employee.findMany({ where: { userId: billingUserId, restaurantId, ...branchScopedWhere } }),
+    prisma.restaurantTable.findMany({ where: { restaurantId, ...branchScopedWhere } }),
+    prisma.restaurantOrder.findMany({ where: { restaurantId, ...branchScopedWhere }, include: { items: true } }),
+    prisma.wasteLog.findMany({ where: { userId: billingUserId, restaurantId, ...branchScopedWhere } }),
+    prisma.inventoryPurchase.findMany({ where: { userId: billingUserId, restaurantId, ...branchScopedWhere } }),
+    prisma.inventoryBatchUsageLedger.findMany({ where: { userId: billingUserId, restaurantId, ...branchScopedWhere } }),
+    prisma.inventoryAdjustmentLog.findMany({ where: { userId: billingUserId, restaurantId, ...branchScopedWhere } }),
+    prisma.shift.findMany({ where: { userId: billingUserId, restaurantId, ...branchScopedWhere } }),
+    prisma.dishSale.findMany({ where: { userId: billingUserId, restaurantId, ...branchScopedWhere }, include: { saleIngredients: true } }),
+    prisma.transaction.findMany({
+      where: { userId: billingUserId, restaurantId, ...branchScopedWhere },
+      include: { category: { select: { type: true } } },
+    }),
   ])
 
   const branchScopedEntityCount = dishes.length + inventoryItems.length + employees.length + tables.length +
-    orders.length + wasteLogs.length + inventoryPurchases.length + dishSales.length +
+    orders.length + wasteLogs.length + inventoryPurchases.length + dishSales.length + transactions.length +
     inventoryBatchUsageLedgers.length + inventoryAdjustmentLogs.length + shifts.length
 
   if (branchScopedEntityCount === 0) return false
@@ -196,30 +329,46 @@ async function seedFullSnapshotIfNeeded(restaurantId: string, billingUserId: str
 
   if (restaurant) await enqueue('restaurant', restaurant.id, restaurant)
   for (const row of branches) await enqueue('restaurantBranch', row.id, row, null)
-  for (const row of dishes) await enqueue('dish', row.id, row)
-  for (const row of inventoryItems) await enqueue('inventoryItem', row.id, row)
-  for (const row of employees) await enqueue('employee', row.id, row)
-  for (const row of tables) await enqueue('restaurantTable', row.id, row)
-  for (const row of wasteLogs) await enqueue('wasteLog', row.id, row)
-  for (const row of inventoryPurchases) await enqueue('inventoryPurchase', row.id, row)
-  for (const row of inventoryBatchUsageLedgers) await enqueue('inventoryBatchUsageLedger', row.id, row)
-  for (const row of inventoryAdjustmentLogs) await enqueue('inventoryAdjustmentLog', row.id, row)
-  for (const row of shifts) await enqueue('shift', row.id, row)
-  for (const row of dishSales) await enqueue('dishSale', row.id, { ...row, saleIngredients: row.saleIngredients })
-  for (const row of orders) await enqueue('restaurantOrder', row.id, row)
+  for (const row of dishes) await enqueue('dish', row.id, row, resolveEntityBranchId(row))
+  for (const row of inventoryItems) await enqueue('inventoryItem', row.id, row, resolveEntityBranchId(row))
+  for (const row of employees) await enqueue('employee', row.id, row, resolveEntityBranchId(row))
+  for (const row of tables) await enqueue('restaurantTable', row.id, row, resolveEntityBranchId(row))
+  for (const row of wasteLogs) await enqueue('wasteLog', row.id, row, resolveEntityBranchId(row))
+  for (const row of inventoryPurchases) await enqueue('inventoryPurchase', row.id, row, resolveEntityBranchId(row))
+  for (const row of inventoryBatchUsageLedgers) await enqueue('inventoryBatchUsageLedger', row.id, row, resolveEntityBranchId(row))
+  for (const row of inventoryAdjustmentLogs) await enqueue('inventoryAdjustmentLog', row.id, row, resolveEntityBranchId(row))
+  for (const row of shifts) await enqueue('shift', row.id, row, resolveEntityBranchId(row))
+  for (const row of dishSales) await enqueue('dishSale', row.id, { ...row, saleIngredients: row.saleIngredients }, resolveEntityBranchId(row))
+  for (const row of transactions) {
+    await enqueue('transaction', row.id, {
+      ...row,
+      categoryType: row.category?.type ?? null,
+    }, resolveEntityBranchId(row))
+  }
+  // Orders are enqueued with their items embedded so the sync engine can recreate
+  // RestaurantOrderItem rows on the cloud side (they have no standalone sync entity).
+  for (const row of orders) await enqueue('restaurantOrder', row.id, { ...row, items: row.items }, resolveEntityBranchId(row))
 
   // Also enqueue dishIngredients
   const dishIngredients = await prisma.dishIngredient.findMany({
-    where: { dish: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) } },
+    where: { dish: { userId: billingUserId, restaurantId, ...branchScopedWhere } },
+    include: {
+      dish: {
+        select: {
+          branchId: true,
+        },
+      },
+    },
   })
   for (const row of dishIngredients) {
+    const { dish, ...payload } = row
     await enqueueSyncChange(prisma, {
       restaurantId,
-      branchId,
+      branchId: dish.branchId ?? branchId ?? null,
       entityType: 'dishIngredient',
       entityId: `${row.dishId}_${row.ingredientId}`,
       operation: 'upsert',
-      payload: row,
+      payload,
     })
   }
 
@@ -321,19 +470,29 @@ async function hasInternet(targetUrl: string) {
 }
 
 export async function POST(req: Request) {
+  let activeBatch: { restaurantId: string; batchId: string; payloadHash: string } | null = null
+
   try {
     const syncUser = await requireRestaurantSyncUser()
     const userId = syncUser.id
     const context = await getRestaurantContextForUser(userId)
-    const restaurant = context?.restaurantId
-      ? context.restaurant
-      : syncUser.role === 'admin'
-        ? await ensureRestaurantForOwner(userId)
-        : null
+
+    // Guard: if context is null, verify the user actually exists in DB before
+    // attempting auto-create. A deleted user's JWT can remain valid; calling
+    // ensureRestaurantForOwner with a non-existent userId causes a FK violation.
+    const restaurant = context?.restaurant ?? await (async () => {
+      if (syncUser.role !== 'admin' || !canAutoCreateRestaurantContext()) return null
+      const userExists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })
+      if (!userExists) return null
+      return ensureRestaurantForOwner(userId)
+    })()
     const deviceId = getSyncDeviceId()
+    const missingRestaurantMessage = canAutoCreateRestaurantContext()
+      ? 'No restaurant is linked to this account yet'
+      : 'No restaurant is linked to this device yet. Retry bootstrap sync before continuing.'
 
     if (!restaurant || !context?.billingUserId && syncUser.role !== 'admin') {
-      return NextResponse.json({ error: 'No restaurant is linked to this account yet' }, { status: 409 })
+      return NextResponse.json({ ok: false, error: missingRestaurantMessage, message: missingRestaurantMessage }, { status: 409 })
     }
 
     const billingUserId = context?.billingUserId ?? userId
@@ -355,9 +514,6 @@ export async function POST(req: Request) {
     const password = pickFirstSecret(body.password, process.env.OWNER_SYNC_PASSWORD)
     const sharedSecret = String(process.env.OWNER_SYNC_SHARED_SECRET ?? '').trim()
     const configuredOwnerEmail = String(process.env.OWNER_SYNC_EMAIL ?? '').trim().toLowerCase()
-    if (sharedSecret && !configuredOwnerEmail) {
-      return NextResponse.json({ error: 'OWNER_SYNC_EMAIL must be configured for shared-secret owner sync' }, { status: 400 })
-    }
     const email = sharedSecret
       ? pickFirstNonEmpty(configuredOwnerEmail, body.email, syncUser.email).toLowerCase()
       : pickFirstNonEmpty(body.email, configuredOwnerEmail, syncUser.email).toLowerCase()
@@ -419,7 +575,8 @@ export async function POST(req: Request) {
     const [restaurantCursor, globalCursor, pendingOutboxRows] = await Promise.all([
       getSyncCursor(prisma, { scopeId: restaurant.id, restaurantId: restaurant.id }),
       getSyncCursor(prisma, { scopeId: GLOBAL_SYNC_SCOPE_ID, restaurantId: restaurant.id }),
-      listPrioritizedPendingSyncOutboxChanges(restaurant.id, branchId, 30),
+      // 100 entries per cycle — was 30, which caused multi-cycle backlogs on first sync
+    listPrioritizedPendingSyncOutboxChanges(restaurant.id, branchId, 100),
     ])
 
     const { transactions, syncedIds } = buildSyncTransactions(unsyncedTransactions)
@@ -440,6 +597,15 @@ export async function POST(req: Request) {
       transactions: transactions.length,
       summaries: summaries.length,
       changes: changes.length,
+    })
+
+    activeBatch = {
+      restaurantId: restaurant.id,
+      batchId,
+      payloadHash,
+    }
+    await upsertLocalSyncBatch(restaurant.id, batchId, payloadHash, {
+      status: 'processing',
     })
 
     // Fetch local user's name and password hash so cloud can auto-provision if needed
@@ -507,6 +673,10 @@ export async function POST(req: Request) {
           onlyExhausted: true,
         })
 
+        await upsertLocalSyncBatch(restaurant.id, batchId, payloadHash, {
+          status: 'failed',
+          errorMessage: 'Branch identity refreshed from cloud. Retry sync to continue.',
+        })
         const message = 'Branch identity refreshed from cloud. Retry sync to continue.'
         const state = await markSyncFailure(restaurant.id, message)
         logSyncActivity('warn', 'sync.local.relinked', {
@@ -522,6 +692,10 @@ export async function POST(req: Request) {
       if (pendingOutboxRows.length > 0) {
         await markSyncOutboxChangesFailed(prisma, pendingOutboxRows, payload?.error || 'Sync failed')
       }
+      await upsertLocalSyncBatch(restaurant.id, batchId, payloadHash, {
+        status: 'failed',
+        errorMessage: payload?.error || 'Sync failed',
+      })
       const state = await markSyncFailure(restaurant.id, payload?.error || 'Sync failed')
       logSyncActivity('warn', 'sync.local.failed', {
         restaurantId: restaurant.id,
@@ -540,6 +714,10 @@ export async function POST(req: Request) {
       if (pendingOutboxRows.length > 0) {
         await markSyncOutboxChangesFailed(prisma, pendingOutboxRows, 'Cloud sync batch acknowledgement mismatch')
       }
+      await upsertLocalSyncBatch(restaurant.id, batchId, payloadHash, {
+        status: 'failed',
+        errorMessage: 'Cloud sync batch acknowledgement mismatch',
+      })
       const state = await markSyncFailure(restaurant.id, 'Cloud sync batch acknowledgement mismatch')
       logSyncActivity('warn', 'sync.local.failed', {
         restaurantId: restaurant.id,
@@ -552,23 +730,30 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, message: 'Sync failed', consecutiveFailures: state.consecutiveFailures }, { status: 502 })
     }
 
-    if (syncedIds.length > 0) {
-      await prisma.transaction.updateMany({
-        where: { id: { in: syncedIds } },
-        data: { synced: true },
-      })
-    }
-
-    if (unsyncedSummaries.length > 0) {
-      await prisma.dailySummary.updateMany({
-        where: { id: { in: unsyncedSummaries.map((row) => row.id) } },
-        data: { synced: true },
-      })
-    }
-
-    if (pendingOutboxRows.length > 0) {
-      await markSyncOutboxChangesSynced(prisma, pendingOutboxRows.map((row) => row.id))
-    }
+    // ATOMIC: all three acknowledgment writes must succeed or all must fail.
+    // A crash between any two previously separate calls left the DB in a split state
+    // where some records were marked synced but outbox rows were not (or vice versa),
+    // causing infinite re-sends that the cloud rejected as duplicate batchIds.
+    await prisma.$transaction(async (ackTx) => {
+      if (syncedIds.length > 0) {
+        await ackTx.transaction.updateMany({
+          where: { id: { in: syncedIds } },
+          data: { synced: true },
+        })
+      }
+      if (unsyncedSummaries.length > 0) {
+        await ackTx.dailySummary.updateMany({
+          where: { id: { in: unsyncedSummaries.map((row) => row.id) } },
+          data: { synced: true },
+        })
+      }
+      if (pendingOutboxRows.length > 0) {
+        await ackTx.syncOutbox.updateMany({
+          where: { id: { in: pendingOutboxRows.map((row) => row.id) } },
+          data: { syncedAt: new Date(), claimedAt: null, lastError: null },
+        })
+      }
+    })
 
     // Reset any exhausted outbox entries so they get retried on the next sync cycle
     await resetSyncOutboxRowsForRetry(prisma, {
@@ -577,15 +762,30 @@ export async function POST(req: Request) {
       onlyExhausted: true,
     })
 
-    const pulledChanges = Array.isArray(payload?.pullChanges)
-      ? payload.pullChanges.filter((change: any) => isBranchVisibleChange(change, branchId))
+    const rawPullChanges = Array.isArray(payload?.pullChanges)
+      ? payload.pullChanges
       : []
     const pullCursors = Array.isArray(payload?.pullCursors) ? payload.pullCursors : []
     let appliedChanges = 0
     let conflictCount = 0
+    let appliedPulledChanges: SyncChangeEnvelope[] = []
 
-    if (pulledChanges.length > 0) {
-      remapPulledRestaurantScopeChanges(pulledChanges, restaurant.id)
+    if (rawPullChanges.length > 0) {
+      remapPulledRestaurantScopeChanges(rawPullChanges, restaurant.id)
+      await remapPulledBranchIds(rawPullChanges, restaurant.id, branchId)
+    }
+
+    const pulledChanges = rawPullChanges.filter((change: any) => isBranchVisibleChange(change, branchId))
+
+    if (rawPullChanges.length > 0 && pulledChanges.length === 0) {
+      logSyncActivity('warn', 'sync.local.pull_changes_filtered_all', {
+        restaurantId: restaurant.id,
+        restaurantSyncId: restaurant.syncRestaurantId,
+        deviceId,
+        batchId,
+        rawPullChanges: rawPullChanges.length,
+        branchId,
+      })
     }
 
     await prisma.$transaction(async (tx) => {
@@ -596,14 +796,26 @@ export async function POST(req: Request) {
         })
         appliedChanges = appliedResult.applied
         conflictCount = appliedResult.conflicts
+        appliedPulledChanges = appliedResult.appliedChanges
       }
 
       for (const cursor of pullCursors) {
+        const scopeId = String(cursor.scopeId)
+        const scopedAppliedChanges = appliedPulledChanges.filter((change) => {
+          const changeScopeId = String(change.scopeId ?? '').trim()
+          if (scopeId === GLOBAL_SYNC_SCOPE_ID) return changeScopeId === GLOBAL_SYNC_SCOPE_ID
+          return changeScopeId !== GLOBAL_SYNC_SCOPE_ID
+        })
+
         await updateSyncCursor(tx, {
-          scopeId: String(cursor.scopeId),
+          scopeId,
           restaurantId: restaurant.id,
-          lastPulledAt: cursor.lastPulledAt ? new Date(String(cursor.lastPulledAt)) : null,
-          lastMutationId: cursor.lastMutationId ? String(cursor.lastMutationId) : null,
+          ...(scopedAppliedChanges.length > 0
+            ? {
+                lastPulledAt: latestSyncChangeTimestamp(scopedAppliedChanges),
+                lastMutationId: latestSyncMutationId(scopedAppliedChanges),
+              }
+            : {}),
         })
       }
     })
@@ -630,6 +842,14 @@ export async function POST(req: Request) {
     const syncMessage = payload?.message || (noOutboundChanges && noPulledChanges
       ? 'No local or remote changes to sync'
       : 'Owner cloud sync completed successfully')
+
+    await upsertLocalSyncBatch(restaurant.id, batchId, payloadHash, {
+      status: 'success',
+      errorMessage: null,
+      syncedTransactions: Number(payload?.transactions ?? transactions.length),
+      syncedSummaries: Number(payload?.summaries ?? summaries.length),
+      appliedAt: new Date(),
+    })
 
     await markSyncSuccess(restaurant.id, {
       transactions: Number(payload?.transactions ?? transactions.length),
@@ -662,12 +882,24 @@ export async function POST(req: Request) {
       conflictCount,
     })
   } catch (error) {
+    if (activeBatch) {
+      await upsertLocalSyncBatch(activeBatch.restaurantId, activeBatch.batchId, activeBatch.payloadHash, {
+        status: 'failed',
+        errorMessage: error instanceof Error ? error.message : 'Sync failed',
+      }).catch(() => null)
+    }
     const message = error instanceof Error ? error.message : 'Sync failed'
     const userId = await getServerSession(authOptions).then((session) => session?.user?.id).catch(() => null)
     let restaurantId: string | null = null
     if (userId) {
       const context = await getRestaurantContextForUser(userId).catch(() => null)
-      const restaurant = context?.restaurant ?? await ensureRestaurantForOwner(userId).catch(() => null)
+      let restaurant = context?.restaurant ?? null
+      if (!restaurant && canAutoCreateRestaurantContext()) {
+        const userExists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } }).catch(() => null)
+        if (userExists) {
+          restaurant = await ensureRestaurantForOwner(userId).catch(() => null)
+        }
+      }
       if (restaurant) {
         restaurantId = restaurant.id
         await markSyncFailure(restaurant.id, message)

@@ -14,11 +14,15 @@ export async function GET() {
 
 		const context = await getRestaurantContextForUser(session.user.id)
 		const billingUserId = context?.billingUserId ?? session.user.id
+		const restaurantId = context?.restaurantId ?? null
+		const branchId = context?.branchId ?? null
 
 		// Fetch all sales transactions
 		const salesTxns = await prisma.transaction.findMany({
 			where: {
 				userId: billingUserId,
+				...(restaurantId ? { restaurantId } : {}),
+				...(branchId ? { branchId } : {}),
 				type: 'credit',
 				account: { name: { in: ['Sales Revenue', 'Restaurant Sales'] } }
 			},
@@ -28,7 +32,7 @@ export async function GET() {
 
 		// Fetch all inventory items
 		const inventoryItems = await prisma.inventoryItem.findMany({
-			where: { userId: billingUserId }
+			where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) }
 		})
 
 		// ── 1. TOP SELLING PRODUCTS ──────────────────────────────────────────
