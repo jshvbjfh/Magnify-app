@@ -1,0 +1,24 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' fill='none'>
+  <defs>
+    <linearGradient id='bg' x1='0%' y1='0%' x2='100%' y2='100%'>
+      <stop offset='0%' stop-color='#f97316'/>
+      <stop offset='100%' stop-color='#b91c1c'/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect width='256' height='256' rx='56' fill='url(#bg)'/>
+  <!-- Fork (left) -->
+  <g stroke='#fff' stroke-width='13' stroke-linecap='round' stroke-linejoin='round'>
+    <line x1='88' y1='60' x2='88' y2='120'/>
+    <line x1='72' y1='60' x2='72' y2='95' stroke-width='11'/>
+    <line x1='88' y1='60' x2='88' y2='95' stroke-width='11'/>
+    <line x1='104' y1='60' x2='104' y2='95' stroke-width='11'/>
+    <path d='M72 95 Q88 115 104 95' stroke-width='11' fill='none'/>
+    <line x1='88' y1='115' x2='88' y2='196'/>
+  </g>
+  <!-- Knife (right) -->
+  <g stroke='#fff' stroke-width='13' stroke-linecap='round' stroke-linejoin='round'>
+    <line x1='168' y1='120' x2='168' y2='196'/>
+    <path d='M168 60 Q200 80 168 120' fill='rgba(255,255,255,0.15)' stroke='#fff' stroke-width='13'/>
+  </g>
+</svg>
