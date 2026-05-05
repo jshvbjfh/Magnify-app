@@ -63,6 +63,8 @@ export async function GET(req: NextRequest) {
 		const restaurantId = context?.restaurantId ?? null
 		const branchId = context?.branchId ?? null
 
+		if (restaurantId && !branchId) return NextResponse.json({ items: [] })
+
 		const items = await prisma.inventoryItem.findMany({
 			where: {
 				userId: billingUserId,
@@ -97,6 +99,10 @@ export async function POST(req: NextRequest) {
 		const restaurantId = context?.restaurantId ?? null
 		const branchId = context?.branchId ?? null
 		const { name, description, unit, unitCost, unitPrice, quantity, category, reorderLevel, inventoryType, skipOpeningPurchase } = body
+
+		if (restaurantId && !branchId) {
+			return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+		}
 
 		// Validate required fields with specific messages
 		const missingFields = []
@@ -281,6 +287,15 @@ export async function PUT(req: NextRequest) {
 			)
 		}
 
+		const PURCHASE_CONSUME_EPSILON = 0.000001
+		const nameActuallyChanged = name !== undefined && name !== existingItem.name
+		const newUnitCostValue = unitCost !== undefined && unitCost !== null && unitCost !== ''
+			? parseFloat(String(unitCost))
+			: null
+		const unitCostActuallyChanged =
+			newUnitCostValue !== null &&
+			Math.abs((existingItem.unitCost ?? 0) - newUnitCostValue) > PURCHASE_CONSUME_EPSILON
+
 		const item = await prisma.$transaction(async (tx) => {
 			const updatedItem = await tx.inventoryItem.update({
 				where: { id },
@@ -296,6 +311,79 @@ export async function PUT(req: NextRequest) {
 					...(inventoryType !== undefined && { inventoryType })
 				} as any
 			})
+
+			// Cascade name / unit-cost changes to linked purchase batches and their transaction pairs
+			if (nameActuallyChanged || unitCostActuallyChanged) {
+				const batches = await tx.inventoryPurchase.findMany({
+					where: {
+						ingredientId: id,
+						userId: billingUserId,
+						...(restaurantId ? { restaurantId } : {}),
+						...(branchId ? { branchId } : {}),
+					},
+					select: {
+						id: true,
+						journalPairId: true,
+						quantityPurchased: true,
+						remainingQuantity: true,
+						unitCost: true,
+						totalCost: true,
+						purchaseQuantity: true,
+						purchaseUnit: true,
+						supplier: true,
+					},
+				})
+
+				for (const batch of batches) {
+					const isUnconsumed =
+						batch.quantityPurchased - batch.remainingQuantity <= PURCHASE_CONSUME_EPSILON
+
+					// Recost unconsumed batches when unit cost changed
+					let newBatchTotalCost: number | null = null
+					if (unitCostActuallyChanged && isUnconsumed && newUnitCostValue !== null) {
+						newBatchTotalCost = batch.quantityPurchased * newUnitCostValue
+						const newPurchaseUnitCost =
+							batch.purchaseQuantity && batch.purchaseQuantity > 0
+								? newBatchTotalCost / batch.purchaseQuantity
+								: null
+						await tx.inventoryPurchase.update({
+							where: { id: batch.id },
+							data: {
+								unitCost: newUnitCostValue,
+								totalCost: newBatchTotalCost,
+								...(newPurchaseUnitCost !== null ? { purchaseUnitCost: newPurchaseUnitCost } : {}),
+							},
+						})
+					}
+
+					// Update linked accounting transaction pair
+					if (batch.journalPairId) {
+						const txPatch: Record<string, unknown> = {}
+
+						if (nameActuallyChanged) {
+							const descQty = Number(batch.purchaseQuantity ?? batch.quantityPurchased)
+							const descUnit = String(batch.purchaseUnit ?? '').trim() || updatedItem.unit
+							const descSupplier = batch.supplier
+							txPatch.description = `Purchase: ${updatedItem.name} (${descQty.toLocaleString('en-RW', { maximumFractionDigits: 3 })} ${descUnit}${descSupplier ? ` from ${descSupplier}` : ''})`
+						}
+
+						if (unitCostActuallyChanged && isUnconsumed && newBatchTotalCost !== null) {
+							txPatch.amount = newBatchTotalCost
+						}
+
+						if (Object.keys(txPatch).length > 0) {
+							await tx.transaction.updateMany({
+								where: {
+									userId: billingUserId,
+									pairId: batch.journalPairId,
+									sourceKind: { in: ['inventory_purchase', 'ai_inventory_purchase'] },
+								},
+								data: txPatch,
+							})
+						}
+					}
+				}
+			}
 
 			return updatedItem
 		})

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+﻿import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { GoogleGenerativeAI } from '@google/generative-ai'
@@ -580,6 +580,7 @@ async function resolveSettlementAccount(paymentMethod: string | undefined, resta
 async function createInventoryPurchaseBatch(params: {
 	userId: string
 	restaurantId?: string | null
+	branchId?: string | null
 	ingredientId: string
 	quantity: number
 	unitCost?: number | null
@@ -605,8 +606,7 @@ async function createInventoryPurchaseBatch(params: {
 		data: {
 			userId: params.userId,
 			restaurantId: params.restaurantId ?? null,
-			batchId: generateInventoryBatchId(params.purchasedAt || new Date()),
-			journalPairId: params.journalPairId ?? null,
+			branchId: params.branchId ?? null,
 			ingredientId: params.ingredientId,
 			supplier: params.supplier || 'AI Purchase',
 			quantityPurchased: quantity,
@@ -692,6 +692,7 @@ export async function POST(req: NextRequest) {
 		}
 		const restaurantId = restaurantContext.restaurantId
 		const billingUserId = restaurantContext.billingUserId
+		const branchId = restaurantContext.branchId ?? null
 		const restaurantReadScope = buildRestaurantReadScope(restaurantId)
 
 		if (!message || typeof message !== 'string') {
@@ -2503,6 +2504,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 									userId,
 									restaurantId,
 									ingredientId: updatedItem.id,
+									branchId,
 									quantity: requestedQuantity,
 									unitCost: resolvedUnitPrice,
 									totalCost: requestedQuantity * Number(resolvedUnitPrice),
@@ -2523,6 +2525,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 								data: {
 									userId,
 									restaurantId,
+									branchId,
 									name: item.name,
 									unit: item.unit,
 									unitCost: item.unitPrice || null,
@@ -2537,6 +2540,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 									userId,
 									restaurantId,
 									ingredientId: newItem.id,
+									branchId,
 									quantity: openingQuantity,
 									unitCost: resolvedUnitPrice,
 									totalCost: openingQuantity * Number(resolvedUnitPrice),
@@ -2692,6 +2696,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 									data: {
 										userId,
 										restaurantId,
+										branchId,
 										name: item.name,
 										unit,
 										unitCost: unitPrice,
@@ -2739,6 +2744,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 							userId,
 							restaurantId,
 							ingredientId: inventoryItem.id,
+									branchId,
 							quantity,
 							unitCost: item.unitPrice ?? inventoryItem.unitCost ?? (quantity > 0 ? totalCost / quantity : null),
 							totalCost,
@@ -2809,7 +2815,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						})
 					} else {
 						invItem = await prisma.inventoryItem.create({
-								data: { userId, restaurantId, name: item.name, unit, unitCost, quantity: qty, inventoryType: 'ingredient', ...(qty > 0 ? { lastRestockedAt: aapDate } : {}) } as any
+								data: { userId, restaurantId, branchId, name: item.name, unit, unitCost, quantity: qty, inventoryType: 'ingredient', ...(qty > 0 ? { lastRestockedAt: aapDate } : {}) } as any
 							})
 						}
 
@@ -2841,6 +2847,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 							userId,
 							restaurantId,
 							ingredientId: invItem.id,
+									branchId,
 							quantity: qty,
 							unitCost: unitCost ?? (qty > 0 ? totalCost / qty : null),
 							totalCost,
