@@ -1,0 +1,293 @@
+// Desktop IPC bridge for SQLite (better-sqlite3 in main process).
+// Mirrors the Capacitor SQLite API surface used by the waiter-app but
+// communicates via window.electronDB which is exposed by preload.js.
+//
+// Schema is identical to the Android waiter-app SQLite schema so that the
+// same sync endpoints and page components work unchanged.
+
+// ---- type helpers ----------------------------------------------------------
+
+interface DBRow {
+  [key: string]: unknown
+}
+
+type StatementSet = { statement: string; values: unknown[] }[]
+
+// ---- bridge access ---------------------------------------------------------
+
+function getDB() {
+  const w = window as unknown as {
+    electronDB?: {
+      run: (sql: string, params?: unknown[]) => Promise<{ changes: number; lastInsertRowid: number | bigint }>
+      query: (sql: string, params?: unknown[]) => Promise<DBRow[]>
+      executeSet: (statements: StatementSet) => Promise<{ changes: number }>
+    }
+  }
+  if (!w.electronDB) throw new Error('electronDB bridge not available')
+  return w.electronDB
+}
+
+// ---- db init ---------------------------------------------------------------
+
+export async function initDB(): Promise<void> {
+  // Schema is created by main.js on startup. Health-check only.
+  const db = getDB()
+  await db.query('SELECT 1', [])
+}
+
+// ---- session (key-value store) ---------------------------------------------
+// Matches the Android waiter-app: session table has (key TEXT PK, value TEXT).
+
+export async function setSession(key: string, value: string): Promise<void> {
+  const db = getDB()
+  await db.run(
+    'INSERT OR REPLACE INTO session (key, value) VALUES (?, ?)',
+    [key, value],
+  )
+}
+
+export async function getSession(key: string): Promise<string | null> {
+  const db = getDB()
+  const rows = await db.query('SELECT value FROM session WHERE key = ?', [key])
+  if (!rows || rows.length === 0) return null
+  return (rows[0] as DBRow).value as string
+}
+
+export async function clearSession(): Promise<void> {
+  const db = getDB()
+  await db.run('DELETE FROM session', [])
+}
+
+// ---- app_logs --------------------------------------------------------------
+
+export interface AppLogEntry {
+  id: string
+  level: 'info' | 'warn' | 'error'
+  scope: string
+  message: string
+  details: string | null
+  created_at: string
+}
+
+export async function createLogEntry(entry: AppLogEntry): Promise<void> {
+  const db = getDB()
+  await db.run(
+    'INSERT OR REPLACE INTO app_logs (id, level, scope, message, details, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [entry.id, entry.level, entry.scope, entry.message, entry.details, entry.created_at],
+  )
+}
+
+export async function getLogEntries(limit = 200): Promise<AppLogEntry[]> {
+  const safeLimit = Math.max(1, Math.floor(limit))
+  const db = getDB()
+  const rows = await db.query(
+    `SELECT * FROM app_logs ORDER BY created_at DESC LIMIT ${safeLimit}`,
+    [],
+  )
+  return (rows ?? []) as unknown as AppLogEntry[]
+}
+
+export async function clearLogEntries(): Promise<void> {
+  const db = getDB()
+  await db.run('DELETE FROM app_logs', [])
+}
+
+// ---- restaurant_config -----------------------------------------------------
+
+export async function setConfig(key: string, value: string): Promise<void> {
+  const db = getDB()
+  await db.run(
+    'INSERT OR REPLACE INTO restaurant_config (key, value) VALUES (?, ?)',
+    [key, value],
+  )
+}
+
+export async function getConfig(key: string): Promise<string | null> {
+  const db = getDB()
+  const rows = await db.query('SELECT value FROM restaurant_config WHERE key = ?', [key])
+  if (!rows || rows.length === 0) return null
+  return (rows[0] as DBRow).value as string
+}
+
+// ---- dishes ----------------------------------------------------------------
+
+export interface Dish {
+  id: string
+  name: string
+  selling_price: number
+  category: string | null
+  is_active: number
+  branch_id: string | null
+  restaurant_id: string | null
+}
+
+export async function replaceDishes(dishes: Dish[]): Promise<void> {
+  if (!dishes.length) {
+    console.warn('[replaceDishes] received empty dishes array — skipping replace to preserve local data')
+    return
+  }
+  const db = getDB()
+  const statements: StatementSet = [
+    { statement: 'DELETE FROM dishes', values: [] },
+    ...dishes.map((d) => ({
+      statement:
+        'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      values: [d.id, d.name, d.selling_price, d.category, d.is_active ? 1 : 0, d.branch_id, d.restaurant_id],
+    })),
+  ]
+  await db.executeSet(statements)
+}
+
+export async function getDishes(): Promise<Dish[]> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM dishes WHERE is_active = 1 ORDER BY name', [])
+  return (rows ?? []) as unknown as Dish[]
+}
+
+// ---- restaurant_tables -----------------------------------------------------
+
+export interface RestaurantTable {
+  id: string
+  name: string
+  seats: number | null
+  status: string
+  branch_id: string | null
+  restaurant_id: string | null
+}
+
+export async function replaceTables(tables: RestaurantTable[]): Promise<void> {
+  if (!tables.length) {
+    console.warn('[replaceTables] received empty tables array — skipping replace to preserve local data')
+    return
+  }
+  const db = getDB()
+  const statements: StatementSet = [
+    { statement: 'DELETE FROM restaurant_tables', values: [] },
+    ...tables.map((t) => ({
+      statement:
+        'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
+      values: [t.id, t.name, t.seats, t.status ?? 'available', t.branch_id, t.restaurant_id],
+    })),
+  ]
+  await db.executeSet(statements)
+}
+
+export async function getTables(): Promise<RestaurantTable[]> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM restaurant_tables ORDER BY name', [])
+  return (rows ?? []) as unknown as RestaurantTable[]
+}
+
+export async function updateTableStatus(tableId: string, status: string): Promise<void> {
+  const db = getDB()
+  await db.run('UPDATE restaurant_tables SET status = ? WHERE id = ?', [status, tableId])
+}
+
+// ---- orders ----------------------------------------------------------------
+
+export interface Order {
+  id: string
+  restaurant_id: string
+  branch_id: string | null
+  table_id: string | null
+  table_name: string | null
+  order_number: string | null
+  status: string
+  payment_method: string | null
+  subtotal_amount: number
+  vat_amount: number
+  total_amount: number
+  created_by_name: string | null
+  served_at: string | null
+  paid_at: string | null
+  canceled_at: string | null
+  cancel_reason: string | null
+  synced: number
+  created_at: string
+  updated_at: string
+}
+
+export interface OrderItem {
+  id: string
+  order_id: string
+  dish_id: string
+  dish_name: string
+  dish_price: number
+  qty: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export async function createOrder(order: Order, items: OrderItem[]): Promise<void> {
+  const db = getDB()
+  const statements: StatementSet = [
+    {
+      statement: `INSERT INTO orders
+        (id, restaurant_id, branch_id, table_id, table_name, order_number, status,
+         payment_method, subtotal_amount, vat_amount, total_amount, created_by_name,
+         served_at, paid_at, canceled_at, cancel_reason, synced, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+      values: [
+        order.id, order.restaurant_id, order.branch_id, order.table_id, order.table_name,
+        order.order_number, order.status, order.payment_method, order.subtotal_amount,
+        order.vat_amount, order.total_amount, order.created_by_name,
+        order.served_at, order.paid_at, order.canceled_at, order.cancel_reason,
+        order.created_at, order.updated_at,
+      ],
+    },
+    ...items.map((item) => ({
+      statement:
+        'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.created_at, item.updated_at],
+    })),
+  ]
+  await db.executeSet(statements)
+}
+
+export async function updateOrder(
+  orderId: string,
+  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount'>>,
+): Promise<void> {
+  const now = new Date().toISOString()
+  const entries = Object.entries({ ...fields, updated_at: now, synced: 0 })
+  const setClauses = entries.map(([k]) => `${k} = ?`).join(', ')
+  const values = entries.map(([, v]) => v)
+  const db = getDB()
+  await db.run(`UPDATE orders SET ${setClauses} WHERE id = ?`, [...values, orderId])
+}
+
+export async function getOrders(filter?: { status?: string }): Promise<Order[]> {
+  const db = getDB()
+  const where = filter?.status ? `WHERE status = '${filter.status.replace(/'/g, "''")}'` : ''
+  const rows = await db.query(`SELECT * FROM orders ${where} ORDER BY created_at DESC`, [])
+  return (rows ?? []) as unknown as Order[]
+}
+
+export async function getOrderItems(orderId: string): Promise<OrderItem[]> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM order_items WHERE order_id = ?', [orderId])
+  return (rows ?? []) as unknown as OrderItem[]
+}
+
+export async function getUnsyncedOrders(): Promise<{ orders: Order[]; items: OrderItem[] }> {
+  const db = getDB()
+  const orders = (await db.query('SELECT * FROM orders WHERE synced = 0', [])) as unknown as Order[]
+  const items: OrderItem[] = []
+  for (const order of orders) {
+    const orderItems = (await db.query('SELECT * FROM order_items WHERE order_id = ?', [order.id])) as unknown as OrderItem[]
+    items.push(...orderItems)
+  }
+  return { orders, items }
+}
+
+export async function markOrdersSynced(orders: Array<{ id: string; updated_at: string }>): Promise<void> {
+  if (!orders.length) return
+  const db = getDB()
+  for (const order of orders) {
+    await db.run(
+      'UPDATE orders SET synced = 1 WHERE id = ? AND updated_at = ?',
+      [order.id, order.updated_at],
+    )
+  }
+}

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Image from 'next/image'
 import { LayoutDashboard, UtensilsCrossed, Layout, ClipboardList, ChefHat, Package, BarChart3, Users, LogOut, Sparkles, Bell, X, ArrowLeftRight, BrainCircuit, Settings, Radio, Menu, RefreshCw, Plus } from 'lucide-react'
-import { signOut, useSession } from 'next-auth/react'
+import { signOut, useSession, signIn } from 'next-auth/react'
 import AIChat from '@/components/AIChat'
 import RestaurantDashboard from '@/components/restaurant/RestaurantDashboard'
 import RestaurantMenu from '@/components/restaurant/RestaurantMenu'
@@ -110,7 +110,7 @@ export default function RestaurantShell() {
   const canQueryServer = () => typeof navigator === 'undefined' || navigator.onLine !== false
 
   useEffect(() => {
-    if (status !== 'authenticated' || userRole !== 'admin') {
+    if (status !== 'authenticated' || !['admin', 'owner'].includes(userRole)) {
       setBranches([])
       setActiveBranchId(null)
       setBranchesLoaded(false)
@@ -267,7 +267,7 @@ export default function RestaurantShell() {
   }, [])
 
   useEffect(() => {
-    if (userRole !== 'admin') return
+    if (!['admin', 'owner'].includes(userRole)) return
 
     let cancelled = false
     const loadWastePending = async () => {
@@ -299,20 +299,33 @@ export default function RestaurantShell() {
     }
   }, [activeBranchId, userRole])
 
-  // Block rendering until session is resolved â€” prevents flashing manager UI for kitchen/waiter accounts
+  // Block rendering until session is resolved — prevents flashing manager UI for non-admin accounts
   if (status === 'loading') return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="flex flex-col items-center gap-3 text-gray-400">
         <div className="h-8 w-8 rounded-full border-4 border-orange-200 border-t-orange-500 animate-spin"/>
-        <span className="text-sm">Loadingâ€¦</span>
+        <span className="text-sm">Loading…</span>
       </div>
     </div>
   )
 
-  // Route non-admin accounts to their own views â€” MUST be after all hooks
+  // If session was cleared (e.g. network failure on app resume), redirect to login
+  // instead of falling through to the admin dashboard with no valid session.
+  if (status === 'unauthenticated' || !userRole) {
+    void signIn()
+    return null
+  }
+
+  // Route non-admin accounts to their own views — MUST be after all hooks
   if (userRole === 'waiter') return <WaiterShell />
   if (userRole === 'kitchen') return <KitchenShell />
-  if (userRole === 'owner') return <OwnerShell />
+  if (userRole === 'owner') return <OwnerShell key={String((session?.user as any)?.id ?? 'owner')} />
+
+  // Only admin accounts reach this point — block anything else
+  if (userRole !== 'admin') {
+    void signIn()
+    return null
+  }
 
   const isDishTracking = trackingMode === 'dish_tracking'
 
@@ -431,11 +444,12 @@ export default function RestaurantShell() {
         {/* Footer */}
         <div className="p-3 border-t border-gray-700 space-y-1">
           <button
-            onClick={() => setShowJesse(true)}
-            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium bg-gradient-to-r from-orange-500 to-red-600 text-white hover:from-orange-600 hover:to-red-700 transition-all shadow-md"
+            disabled
+            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium bg-gradient-to-r from-orange-500 to-red-600 text-white opacity-60 cursor-not-allowed"
           >
             <Sparkles className="h-4 w-4" />
             Ask Jesse AI
+            <span className="ml-auto text-[10px] font-bold bg-white/25 rounded px-1.5 py-0.5 leading-none">Soon</span>
           </button>
           <button
             onClick={() => signOut({ callbackUrl: '/login' })}
@@ -548,11 +562,12 @@ export default function RestaurantShell() {
                 )}
               </div>
               <button
-                onClick={() => setShowJesse(true)}
-                className="flex-shrink-0 inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
+                disabled
+                className="flex-shrink-0 inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white opacity-60 cursor-not-allowed"
               >
                 <Sparkles className="h-4 w-4" />
                 Ask Jesse AI
+                <span className="text-[10px] font-bold bg-white/25 rounded px-1.5 py-0.5 leading-none">Soon</span>
               </button>
             </div>
           </div>
