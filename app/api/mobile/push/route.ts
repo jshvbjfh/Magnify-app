@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
-import { getRestaurantContextForUser, isMainRestaurantBranch } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { enqueueOrderSync } from '@/lib/restaurantOrders'
 import { finalizeRestaurantOrderPayment } from '@/lib/restaurantOrderPayment'
 
@@ -78,9 +78,7 @@ export async function POST(req: Request) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const includeBranchlessRows = branchId
-      ? await isMainRestaurantBranch(restaurantId, branchId)
-      : false
+    const includeBranchlessRows = Boolean(branchId)
 
     const { orders, orderItems } = (await req.json()) as {
       orders: MobileOrder[]
@@ -113,7 +111,18 @@ export async function POST(req: Request) {
           select: { status: true },
         })
 
-        const shouldFinalizePaidOrder = order.status === 'PAID' && existingOrder?.status !== 'PAID'
+        // If the existing order is already PAID but has no dish sales (e.g. a
+        // previous transaction timed out after committing the status update but
+        // before recording sales), we still need to finalize so dish sales and
+        // inventory deductions are created.  recordDishSalesForPaidOrder is
+        // idempotent, so calling it again for a fully-processed order is safe.
+        const existingMissingDishSales =
+          order.status === 'PAID' && existingOrder?.status === 'PAID'
+            ? (await tx.dishSale.count({ where: { orderId: order.id } })) === 0
+            : false
+        const shouldFinalizePaidOrder =
+          order.status === 'PAID' && (existingOrder?.status !== 'PAID' || existingMissingDishSales)
+        console.log('[push] order', order.id, 'existing:', existingOrder?.status ?? 'null', 'shouldFinalize:', shouldFinalizePaidOrder, 'missingDishSales:', existingMissingDishSales, 'billingUser:', context.billingUserId)
         const persistedStatus = shouldFinalizePaidOrder ? 'PENDING' : order.status
 
         await tx.restaurantOrder.upsert({
@@ -201,7 +210,7 @@ export async function POST(req: Request) {
         } catch {
           // Non-fatal — order is already in Neon, sync queue failure doesn't block the response
         }
-      })
+      }, { timeout: 30000 })
 
       syncedOrderIds.push(order.id)
     }
