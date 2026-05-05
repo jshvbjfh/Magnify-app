@@ -28,6 +28,7 @@ export async function provisionRestaurantAccountInCloud(params: {
   name: string
   email: string
   password: string
+  branchId?: string | null
   syncTargetUrl?: string | null
   syncEmail?: string | null
   syncPassword?: string | null
@@ -71,6 +72,7 @@ export async function provisionRestaurantAccountInCloud(params: {
         name: params.name,
         email: params.email,
         password: params.password,
+        branchId: params.branchId ?? null,
       }),
       cache: 'no-store',
     })
