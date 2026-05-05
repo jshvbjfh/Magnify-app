@@ -209,12 +209,17 @@ export async function POST(request: Request) {
     // into a restaurant they don't own.
     if (requestedRole === 'owner') {
       if (auth.user) {
-        // Password-auth path: the requesting user must be the restaurant owner.
+        // Password-auth path: the requesting user must be either an admin role
+        // (site-wide admin, authorized by holding the correct syncToken) or the
+        // direct DB-level owner of this restaurant. This lets a desktop configured
+        // with an admin OWNER_SYNC_EMAIL provision owner accounts even when that
+        // admin is not the ownerId row on the restaurant record.
         const adminOwnsRestaurant = await prisma.restaurant.findFirst({
           where: { id: restaurant.id, ownerId: auth.user.id },
           select: { id: true },
         })
-        if (!adminOwnsRestaurant) {
+        const userIsAdmin = auth.user.role === 'admin'
+        if (!adminOwnsRestaurant && !userIsAdmin) {
           return NextResponse.json(
             { error: 'You can only provision owner accounts for a restaurant you own' },
             { status: 403 }
