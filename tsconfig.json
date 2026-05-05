@@ -37,6 +37,7 @@
   ],
   "exclude": [
     "node_modules",
-    "waiter-app"
+    "waiter-app",
+    "waiter-app-desktop"
   ]
 }
