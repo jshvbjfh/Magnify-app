@@ -608,6 +608,12 @@ export async function POST(req: Request) {
       }
     }, { timeout: 55000 })
 
+    if (result.transactions === 0 && result.summaries === 0) {
+      console.warn('[SYNC] WARNING: batch processed but 0 financial records written', { batchId, restaurantId: restaurant.id, changes: result.changes })
+    } else {
+      console.log('[SYNC] batchId:', batchId, 'transactions:', result.transactions, 'summaries:', result.summaries)
+    }
+
     logSyncActivity(result.conflicts > 0 ? 'warn' : 'info', 'sync.cloud.completed', {
       restaurantId: restaurant.id,
       restaurantSyncId,
