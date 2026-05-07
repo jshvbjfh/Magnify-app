@@ -36,7 +36,13 @@ function buildRestaurantScopedDishWhere(params: {
     ...(params.restaurantId
       ? { restaurantId: params.restaurantId }
       : { userId: params.billingUserId }),
-    ...(params.branchId ? { branchId: params.branchId } : {}),
+    // When a specific branchId is given, also include restaurant-wide dishes (branchId: null)
+    // so that menu items not assigned to a branch are still found during sale recording.
+    ...(params.branchId
+      ? (params.includeBranchlessRows
+          ? { OR: [{ branchId: params.branchId }, { branchId: null }] }
+          : { branchId: params.branchId })
+      : {}),
   }
 }
 
@@ -85,7 +91,12 @@ export async function recordDishSalesForPaidOrder(
   for (const item of params.items) {
     const dish = dishMap.get(item.dishId)
     if (!dish) {
-      throw new Error(`Dish ${item.dishId} is missing and cannot be recorded as a sale.`)
+      // Dish missing on cloud (not yet synced from local device). Skip COGS/inventory
+      // recording for this item — revenue is still captured via the journal entry in
+      // finalizeRestaurantOrderPayment. Throwing here rolls back the entire push
+      // transaction and traps the order in an infinite retry loop.
+      console.warn(`[dishSale] dish ${item.dishId} not found on cloud — skipping COGS for this item (order: ${params.orderId ?? 'unknown'})`)
+      continue
     }
 
     const quantitySold = Number(item.qty) || 0

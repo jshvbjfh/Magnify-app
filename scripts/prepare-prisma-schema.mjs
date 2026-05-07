@@ -60,9 +60,24 @@ function rewriteProvider(schemaSource, provider) {
 )
 }
 
+// Inject directUrl = env("DIRECT_URL") for PostgreSQL builds when DIRECT_URL is set.
+// This tells Prisma to use the Neon connection pooler URL for queries (DATABASE_URL)
+// and the direct (non-pooled) URL only for migrations (DIRECT_URL).
+// Without this, every Vercel serverless invocation opens a raw Neon connection,
+// exhausting the connection limit under load and causing P2024 timeouts.
+function injectDirectUrl(schemaSource, provider) {
+	if (provider !== 'postgresql') return schemaSource
+	if (schemaSource.includes('directUrl')) return schemaSource
+	if (!process.env.DIRECT_URL) return schemaSource
+	return schemaSource.replace(
+		/(url\s*=\s*env\("DATABASE_URL"\))/,
+		'$1\n  directUrl = env("DIRECT_URL")'
+	)
+}
+
 const provider = resolveProvider()
-const rewritten = rewriteProvider(source, provider)
-const postgresSchema = rewriteProvider(source, 'postgresql')
+const rewritten = injectDirectUrl(rewriteProvider(source, provider), provider)
+const postgresSchema = injectDirectUrl(rewriteProvider(source, 'postgresql'), 'postgresql')
 
 writeFileSync(outputPath, rewritten)
 mkdirSync(postgresDir, { recursive: true })

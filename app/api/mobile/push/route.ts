@@ -78,7 +78,23 @@ export async function POST(req: Request) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const includeBranchlessRows = Boolean(branchId)
+    // Auto-resolve branchId for single-branch restaurants where the waiter JWT has no
+    // branch assignment. Without this, PAID orders for unassigned waiters fail with
+    // 'Paid order sync requires branch assignment' and roll back the entire transaction,
+    // causing an infinite retry loop (order never saved to Neon).
+    let effectiveBranchId: string | null = branchId ?? null
+    if (!effectiveBranchId) {
+      const activeBranches = await prisma.restaurantBranch.findMany({
+        where: { restaurantId, isActive: true },
+        select: { id: true },
+        take: 2, // only need to know if there is exactly one
+      })
+      if (activeBranches.length === 1) {
+        effectiveBranchId = activeBranches[0].id
+      }
+    }
+
+    const includeBranchlessRows = Boolean(effectiveBranchId)
 
     const { orders, orderItems } = (await req.json()) as {
       orders: MobileOrder[]
@@ -103,7 +119,7 @@ export async function POST(req: Request) {
 
       // Always stamp with the JWT-verified branchId and createdById.
       // createdById is a non-nullable column; the waiter's user ID is in claims.sub.
-      const resolvedBranchId = branchId ?? null
+      const resolvedBranchId = effectiveBranchId
 
       // Track whether enqueueOrderSync should run after the transaction commits.
       // It is intentionally moved OUTSIDE the transaction so it uses the main
@@ -118,13 +134,11 @@ export async function POST(req: Request) {
           select: { status: true },
         })
 
-        // If the existing order is already PAID but has no dish sales (e.g. a
-        // previous transaction timed out after committing the status update but
-        // before recording sales), we still need to finalize so dish sales and
-        // inventory deductions are created.  recordDishSalesForPaidOrder is
-        // idempotent, so calling it again for a fully-processed order is safe.
+        // Guard: only count missing dish sales when we have a resolvable branchId.
+        // Without this guard, PAID orders with no branch would trigger existingMissingDishSales=true
+        // on every subsequent push, creating an infinite re-finalization retry loop.
         const existingMissingDishSales =
-          order.status === 'PAID' && existingOrder?.status === 'PAID'
+          order.status === 'PAID' && existingOrder?.status === 'PAID' && Boolean(resolvedBranchId)
             ? (await tx.dishSale.count({ where: { orderId: order.id } })) === 0
             : false
         const shouldFinalizePaidOrder =
@@ -193,7 +207,23 @@ export async function POST(req: Request) {
 
         if (shouldFinalizePaidOrder) {
           if (!resolvedBranchId) {
-            throw new Error('Paid order sync requires branch assignment')
+            // No resolvable branch (multi-branch restaurant, waiter not assigned).
+            // Save the order as PAID without DishSale finalization so the order is
+            // preserved in Neon and the retry loop is broken (existingMissingDishSales
+            // is gated on resolvedBranchId above, so this path is only hit once).
+            console.warn('[push] PAID order', order.id, 'restaurant', restaurantId, '— no resolvable branchId, saving without finalization')
+            await tx.restaurantOrder.updateMany({
+              where: { id: order.id },
+              data: {
+                status: 'PAID',
+                paymentMethod: order.payment_method,
+                paidAt: order.paid_at ? new Date(order.paid_at) : new Date(),
+                paidById: claims.sub,
+                paidByName: context.currentUser.name ?? order.created_by_name ?? null,
+              },
+            })
+            needsPostTxEnqueue = true
+            return
           }
 
           await finalizeRestaurantOrderPayment(tx, {
