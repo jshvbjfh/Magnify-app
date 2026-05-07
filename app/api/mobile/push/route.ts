@@ -105,6 +105,13 @@ export async function POST(req: Request) {
       // createdById is a non-nullable column; the waiter's user ID is in claims.sub.
       const resolvedBranchId = branchId ?? null
 
+      // Track whether enqueueOrderSync should run after the transaction commits.
+      // It is intentionally moved OUTSIDE the transaction so it uses the main
+      // prisma client and is guaranteed to find the committed order via findUnique.
+      // Running it inside $transaction with the tx client caused silent failures on
+      // some Prisma/PG versions where read-your-own-writes is not visible until commit.
+      let needsPostTxEnqueue = false
+
       await prisma.$transaction(async (tx) => {
         const existingOrder = await tx.restaurantOrder.findFirst({
           where: { id: order.id, restaurantId: order.restaurant_id },
@@ -202,15 +209,25 @@ export async function POST(req: Request) {
             paidAt: order.paid_at ? new Date(order.paid_at) : undefined,
           })
 
+          // finalizeRestaurantOrderPayment calls enqueueOrderSync internally
           return
         }
 
-        try {
-          await enqueueOrderSync(tx, order.id, order.restaurant_id, resolvedBranchId, mobileSourceDeviceId)
-        } catch {
-          // Non-fatal — order is already in Neon, sync queue failure doesn't block the response
-        }
+        // Flag for post-transaction enqueue (see comment above needsPostTxEnqueue)
+        needsPostTxEnqueue = true
       }, { timeout: 30000 })
+
+      // Enqueue AFTER the transaction commits so prisma (main client) can
+      // reliably find the committed order row via findUnique.
+      if (needsPostTxEnqueue) {
+        try {
+          await enqueueOrderSync(prisma, order.id, order.restaurant_id, resolvedBranchId, mobileSourceDeviceId)
+        } catch (enqueueErr) {
+          // Non-fatal — order is in Neon but won't appear in next sync batch.
+          // Log so the failure is visible in server logs / Vercel function logs.
+          console.error('[mobile/push] enqueueOrderSync failed for order', order.id, enqueueErr)
+        }
+      }
 
       syncedOrderIds.push(order.id)
     }

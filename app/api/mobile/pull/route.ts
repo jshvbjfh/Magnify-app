@@ -50,7 +50,7 @@ export async function GET(req: Request) {
 
     const tableWhere = { restaurantId, branchId }
 
-    const [dishes, tables, restaurant] = await Promise.all([
+    const [dishes, tables, restaurant, approverEmployees] = await Promise.all([
       prisma.dish.findMany({
         where: dishWhere,
         select: {
@@ -72,6 +72,20 @@ export async function GET(req: Request) {
       prisma.restaurant.findUnique({
         where: { id: restaurantId },
         select: { id: true, name: true },
+      }),
+
+      // Only employees with cancellation permission AND a stored PIN hash.
+      // We send the hash so the waiter app can validate offline with bcrypt.
+      // PINs themselves are never sent — only the stored bcrypt hash.
+      prisma.employee.findMany({
+        where: {
+          restaurantId,
+          branchId,
+          isActive: true,
+          canApproveOrderCancellation: true,
+          cancellationPinHash: { not: null },
+        },
+        select: { id: true, name: true, cancellationPinHash: true },
       }),
     ])
 
@@ -109,6 +123,11 @@ export async function GET(req: Request) {
       dishes: normalisedDishes,
       tables: normalisedTables,
       restaurant: restaurant ?? { id: restaurantId, name: 'Restaurant' },
+      cancellationApprovers: approverEmployees.map(e => ({
+        id: e.id,
+        name: e.name,
+        pin_hash: e.cancellationPinHash as string,
+      })),
     })
   } catch (err: any) {
     if (err.message === 'Unauthorized') {
