@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 
 import { isCashEquivalentAccountName } from '@/lib/restaurantReporting'
 import type { SyncChangeEnvelope } from '@/lib/syncOutbox'
@@ -330,8 +330,15 @@ export function buildHybridSyncBatchSignature(payload: {
   })
 
   const payloadHash = createHash('sha256').update(normalized).digest('hex')
+  // Add a random nonce so each sync attempt generates a unique batchId.
+  // Without a nonce, an empty payload (no transactions/summaries/changes) always
+  // hashes to the same value — the first successful empty sync permanently stores
+  // that batchId as 'success', causing every subsequent sync to hit the dedup guard
+  // and return "already applied" forever (0 records visible in manager portal).
+  // All cloud upserts are idempotent by entity id, so re-processing is safe.
+  const nonce = randomBytes(4).toString('hex')
   return {
-    batchId: `sync-${payloadHash.slice(0, 24)}`,
+    batchId: `sync-${payloadHash.slice(0, 16)}-${nonce}`,
     payloadHash,
   }
 }

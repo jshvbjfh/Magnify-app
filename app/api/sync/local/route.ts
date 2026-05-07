@@ -582,26 +582,6 @@ export async function POST(req: Request) {
     const { transactions, syncedIds } = buildSyncTransactions(unsyncedTransactions)
     const summaries = mapSummaryPayload(unsyncedSummaries)
     const changes = mapSyncOutboxRows(pendingOutboxRows)
-
-    // Early-return: nothing to push to cloud. Skipping the cloud call prevents a permanent
-    // batchId collision — the SHA256 hash of an empty payload is fixed per restaurantSyncId,
-    // so the first empty sync stores it as 'success' and every subsequent empty sync hits
-    // the dedup guard and returns "already applied" forever.
-    if (transactions.length === 0 && summaries.length === 0 && changes.length === 0) {
-      // Reset any exhausted outbox rows so they get picked up on the next non-empty sync.
-      await resetSyncOutboxRowsForRetry(prisma, {
-        scopeIds: [restaurant.id, GLOBAL_SYNC_SCOPE_ID],
-        branchId,
-        onlyExhausted: true,
-      })
-      logSyncActivity('info', 'sync.local.nothing_to_sync', {
-        restaurantId: restaurant.id,
-        restaurantSyncId: restaurant.syncRestaurantId,
-        deviceId,
-      })
-      return NextResponse.json({ ok: true, message: 'Nothing to sync', transactions: 0, summaries: 0, changes: 0 })
-    }
-
     const { batchId, payloadHash } = buildHybridSyncBatchSignature({
       restaurantSyncId: restaurant.syncRestaurantId,
       transactions,
