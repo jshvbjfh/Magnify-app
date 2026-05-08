@@ -132,7 +132,13 @@ export async function recordDishSalesForPaidOrder(
     const ingredientLines: Array<{ ingredientId: string; quantityUsed: number; actualCost: number }> = []
 
     for (const row of dish.ingredients) {
-      const totalNeeded = roundQuantity(row.quantityRequired * quantitySold)
+      const quantityRequired = Number(row.quantityRequired || 0)
+      if (!Number.isFinite(quantityRequired) || quantityRequired <= 0) {
+        console.warn(`[dishSale] ingredient ${row.ingredientId} has invalid quantityRequired=${row.quantityRequired} for dish ${dish.id} — skipping COGS for this ingredient (order: ${params.orderId ?? 'unknown'})`)
+        continue
+      }
+
+      const totalNeeded = roundQuantity(quantityRequired * quantitySold)
       try {
         const consumption = await consumeIngredientStock(db, {
           billingUserId: params.billingUserId,
@@ -168,6 +174,13 @@ export async function recordDishSalesForPaidOrder(
           console.warn(`[dishSale] ingredient not found on cloud — skipping COGS for ingredient ${row.ingredientId} (order: ${params.orderId ?? 'unknown'})`)
           continue
         }
+
+        const isInvalidIngredientQuantity = stockError instanceof Error && stockError.message === 'Ingredient consumption quantity must be greater than 0.'
+        if (isInvalidIngredientQuantity) {
+          console.warn(`[dishSale] ingredient ${row.ingredientId} resolved to non-positive consumption — skipping COGS for this ingredient (order: ${params.orderId ?? 'unknown'})`)
+          continue
+        }
+
         throw stockError
       }
     }

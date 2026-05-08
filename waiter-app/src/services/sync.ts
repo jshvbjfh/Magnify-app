@@ -38,7 +38,6 @@ async function requireValidToken(): Promise<string> {
 }
 
 export async function pullSync(): Promise<PullResult> {
-  if (!API.pull) throw new Error('API base URL is not configured. Set WAITER_API_BASE_URL in runtime.env.')
   const token = await requireValidToken()
   const method = 'GET'
 
@@ -168,7 +167,6 @@ export async function pullSync(): Promise<PullResult> {
 // ─── Push (SQLite → Neon) ────────────────────────────────────────────────────
 
 export async function pushSync(): Promise<number> {
-  if (!API.push) throw new Error('API base URL is not configured. Set WAITER_API_BASE_URL in runtime.env.')
   const token = await requireValidToken()
   const method = 'POST'
 

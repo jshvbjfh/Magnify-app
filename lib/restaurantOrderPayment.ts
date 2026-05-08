@@ -24,6 +24,17 @@ function buildDishSaleTransactionDescription(order: {
   return `DishSale: ${dishSummary} · ${formatOrderLocation(order.tableId, order.tableName)}`
 }
 
+function buildRestaurantOrderLookupWhere(params: { orderId: string; restaurantId: string; branchId: string }) {
+  return {
+    id: params.orderId,
+    restaurantId: params.restaurantId,
+    OR: [
+      { branchId: params.branchId },
+      { branchId: null },
+    ],
+  }
+}
+
 export async function finalizeRestaurantOrderPayment(
   db: PrismaDb,
   params: {
@@ -40,11 +51,7 @@ export async function finalizeRestaurantOrderPayment(
   },
 ) {
   const currentOrder = await db.restaurantOrder.findFirst({
-    where: {
-      id: params.orderId,
-      restaurantId: params.restaurantId,
-      branchId: params.branchId,
-    },
+    where: buildRestaurantOrderLookupWhere(params),
     include: { items: { where: { status: 'ACTIVE' } } },
   })
 
@@ -55,6 +62,13 @@ export async function finalizeRestaurantOrderPayment(
   }
 
   if (currentOrder.status === 'PAID') {
+    if (!currentOrder.branchId) {
+      await db.restaurantOrder.update({
+        where: { id: params.orderId },
+        data: { branchId: params.branchId },
+      })
+    }
+
     // Order is already PAID — but dish sales may have been missed (e.g. a prior
     // transaction timed out after committing the status update).  Run the
     // recording step; it has per-dish idempotency guards so double-recording
@@ -97,12 +111,11 @@ export async function finalizeRestaurantOrderPayment(
 
   const paymentUpdate = await db.restaurantOrder.updateMany({
     where: {
-      id: params.orderId,
-      restaurantId: params.restaurantId,
-      branchId: params.branchId,
+      ...buildRestaurantOrderLookupWhere(params),
       status: 'PENDING',
     },
     data: {
+      branchId: params.branchId,
       status: 'PAID',
       paymentMethod: normalizedPaymentMethod,
       paidAt,
@@ -120,11 +133,7 @@ export async function finalizeRestaurantOrderPayment(
 
   if (paymentUpdate.count === 0) {
     return (await db.restaurantOrder.findFirst({
-      where: {
-        id: params.orderId,
-        restaurantId: params.restaurantId,
-        branchId: params.branchId,
-      },
+      where: buildRestaurantOrderLookupWhere(params),
       include: { items: { where: { status: 'ACTIVE' } } },
     })) ?? currentOrder
   }
