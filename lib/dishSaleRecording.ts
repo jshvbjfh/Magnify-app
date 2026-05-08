@@ -161,6 +161,13 @@ export async function recordDishSalesForPaidOrder(
           // Skip this ingredient — insufficient stock should not block the sale
           continue
         }
+        // Ingredient not found on cloud (not yet synced from local device) — skip COGS
+        // for this ingredient rather than crashing the entire push transaction.
+        const isIngredientNotFound = stockError instanceof Error && stockError.message.startsWith('Ingredient ')
+        if (isIngredientNotFound) {
+          console.warn(`[dishSale] ingredient not found on cloud — skipping COGS for ingredient ${row.ingredientId} (order: ${params.orderId ?? 'unknown'})`)
+          continue
+        }
         throw stockError
       }
     }
