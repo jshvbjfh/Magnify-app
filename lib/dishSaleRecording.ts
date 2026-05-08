@@ -36,13 +36,9 @@ function buildRestaurantScopedDishWhere(params: {
     ...(params.restaurantId
       ? { restaurantId: params.restaurantId }
       : { userId: params.billingUserId }),
-    // When a specific branchId is given, also include restaurant-wide dishes (branchId: null)
-    // so that menu items not assigned to a branch are still found during sale recording.
-    ...(params.branchId
-      ? (params.includeBranchlessRows
-          ? { OR: [{ branchId: params.branchId }, { branchId: null }] }
-          : { branchId: params.branchId })
-      : {}),
+    // Dish.branchId is non-null in the schema, so dish lookups must always use a
+    // concrete branchId instead of OR-ing in branchless rows.
+    ...(params.branchId ? { branchId: params.branchId } : {}),
   }
 }
 
