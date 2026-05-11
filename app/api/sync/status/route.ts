@@ -100,7 +100,7 @@ export async function GET() {
         deviceId: device.deviceId,
         appVersion: device.appVersion,
         status: device.status,
-        lastSeenAt: device.lastSeenAt.toISOString(),
+        lastSeenAt: device.lastSeenAt.toISOString() as string | null,
         pendingOutboxChanges: 0,
         readyOutboxChanges: 0,
         stalledOutboxChanges: 0,

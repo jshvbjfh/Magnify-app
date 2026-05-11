@@ -55,13 +55,12 @@ export async function GET(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = await getRestaurantContextForUser(session.user.id)
-  const billingUserId = context?.billingUserId ?? session.user.id
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
   if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const user = await prisma.user.findUnique({
-    where: { id: billingUserId },
+    where: { id: session.user.id },
     select: { createdAt: true },
   })
 
@@ -83,24 +82,43 @@ export async function GET(req: Request) {
   const rangeLabel = hasCustomRange ? formatRangeLabel(from, to) : formatPresetRangeLabel(period)
 
   // Revenue & Food Cost from dish sales
-  const sales = await prisma.dishSale.findMany({
-    where: {
-      userId: billingUserId,
-      restaurantId,
-      branchId,
-      saleDate: { gte: from, lte: to }
-    },
-    include: { dish: true }
-  })
+  const [sales, incomeTransactions] = await Promise.all([
+    prisma.dishSale.findMany({
+      where: {
+        restaurantId,
+        branchId,
+        saleDate: { gte: from, lte: to }
+      },
+      include: { dish: true }
+    }),
+    prisma.transaction.findMany({
+      where: {
+        restaurantId,
+        branchId,
+        date: { gte: from, lte: to },
+        category: { is: { type: 'income' } },
+        NOT: [
+          {
+            sourceKind: 'dish_sale_mirror',
+          },
+        ],
+      },
+      select: {
+        date: true,
+        amount: true,
+        type: true,
+      },
+    }),
+  ])
 
   const revenue = sales.reduce((s: number, x) => s + (x.totalSaleAmount ?? 0), 0)
+    + incomeTransactions.reduce((sum, txn) => sum + (txn.type === 'credit' ? txn.amount : -txn.amount), 0)
   const cogs = sales.reduce((s: number, x) => s + (x.calculatedFoodCost ?? 0), 0)
   const foodCostPct = revenue > 0 ? (cogs / revenue) * 100 : 0
 
   // Labor cost from shifts
   const shifts = await prisma.shift.findMany({
     where: {
-      userId: billingUserId,
       restaurantId,
       branchId,
       date: { gte: from, lte: to }
@@ -112,7 +130,6 @@ export async function GET(req: Request) {
   // Waste cost
   const wasteLogs = await prisma.wasteLog.findMany({
     where: {
-      userId: billingUserId,
       restaurantId,
       branchId,
       date: { gte: from, lte: to }
@@ -150,6 +167,13 @@ export async function GET(req: Request) {
     current.revenue += sale.totalSaleAmount ?? 0
     current.salesCount += 1
     current.cogs += sale.calculatedFoodCost ?? 0
+    dayMap.set(key, current)
+  }
+
+  for (const txn of incomeTransactions) {
+    const key = toDateKey(new Date(txn.date))
+    const current = dayMap.get(key) ?? { revenue: 0, salesCount: 0, cogs: 0, laborCost: 0, wasteCost: 0 }
+    current.revenue += txn.type === 'credit' ? txn.amount : -txn.amount
     dayMap.set(key, current)
   }
 
@@ -211,7 +235,6 @@ export async function GET(req: Request) {
   // Low stock count
   const allIngredients = await prisma.inventoryItem.findMany({
     where: {
-      userId: billingUserId,
       inventoryType: 'ingredient',
       ...(restaurantId ? { restaurantId } : {}),
       ...(branchId ? { branchId } : {}),

@@ -5,7 +5,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { hash } from 'bcryptjs'
 import { provisionRestaurantAccountInCloud } from '@/lib/cloudRestaurantAccountProvision'
-import { ensureRestaurantForOwner, getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions)
@@ -18,10 +18,6 @@ async function requireAdmin() {
   }
 }
 
-async function getOrCreateRestaurant(ownerId: string) {
-  return ensureRestaurantForOwner(ownerId)
-}
-
 function isLocalFirstDesktopMode() {
   return String(process.env.ELECTRON_DATA_MODE ?? '').trim().toLowerCase() === 'local-first'
 }
@@ -32,39 +28,51 @@ function canProvisionToCloud() {
   return isLocalFirstDesktopMode() || Boolean(getCanonicalCloudAppUrl())
 }
 
-/** GET /api/restaurant/waiters — list all waiters for this restaurant */
+/** GET /api/restaurant/waiters — list branch waiters and restaurant-wide owners */
 export async function GET() {
   try {
     const admin = await requireAdmin()
-    const restaurant = await getOrCreateRestaurant(admin.id)
+    // S1: Use getRestaurantContextForUser instead of ensureRestaurantForOwner to avoid
+    // creating a phantom restaurant when an admin (not owner) user hits this endpoint.
     const adminContext = await getRestaurantContextForUser(admin.id)
-    if (!adminContext?.branchId || adminContext.restaurantId !== restaurant.id) {
+    const restaurant = adminContext?.restaurant
+    if (!restaurant) return NextResponse.json({ error: 'No restaurant is linked to this account' }, { status: 409 })
+    if (!adminContext.branchId) {
       return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
     }
 
     const waiters = await prisma.user.findMany({
-      where: { restaurantId: restaurant.id, branchId: adminContext.branchId, role: { in: ['waiter', 'kitchen'] } },
+      where: { restaurantId: restaurant.id, branchId: adminContext.branchId, role: 'waiter' },
       select: { id: true, name: true, email: true, role: true, createdAt: true }
     })
 
-    return NextResponse.json({ waiters, restaurant })
+    const ownerAccounts = await prisma.user.findMany({
+      where: { restaurantId: restaurant.id, role: 'owner' },
+      select: { id: true, name: true, email: true, role: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    })
+
+    return NextResponse.json({ waiters, ownerAccounts, restaurant })
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: e.message === 'Unauthorized' ? 401 : 403 })
   }
 }
 
-/** POST /api/restaurant/waiters — create a waiter account */
+/** POST /api/restaurant/waiters — create a waiter or owner account */
 export async function POST(req: Request) {
   try {
     const admin = await requireAdmin()
-    const restaurant = await getOrCreateRestaurant(admin.id)
+    // S1: Use getRestaurantContextForUser instead of ensureRestaurantForOwner to avoid
+    // creating a phantom restaurant when an admin (not owner) user hits this endpoint.
     const adminContext = await getRestaurantContextForUser(admin.id)
-    if (!adminContext?.branchId || adminContext.restaurantId !== restaurant.id) {
+    const restaurant = adminContext?.restaurant
+    if (!restaurant) return NextResponse.json({ error: 'No restaurant is linked to this account' }, { status: 409 })
+    if (!adminContext.branchId) {
       return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
     }
 
     // Verify the resolved restaurant is actually owned by this admin.
-    // getOrCreateRestaurant uses ownerId-based resolution but this guard
+    // getRestaurantContextForUser uses the user's restaurantId link; this guard
     // catches any edge case where the restaurant row has a different ownerId.
     const ownerCheck = await prisma.restaurant.findFirst({
       where: { id: restaurant.id, ownerId: admin.id },
@@ -89,6 +97,9 @@ export async function POST(req: Request) {
       && existing.role === 'owner'
       && existing.restaurantId === restaurant.id
     )
+    const accountBranchId = accountRole === 'owner'
+      ? (canUpdateExistingOwner ? existing?.branchId ?? null : null)
+      : adminContext.branchId
 
     if (existing && !canUpdateExistingOwner) {
       return NextResponse.json({ error: 'Email already in use' }, { status: 409 })
@@ -130,7 +141,7 @@ export async function POST(req: Request) {
               role: accountRole,
               businessType: 'restaurant',
               restaurantId: restaurant.id,
-              branchId: adminContext.branchId,
+              branchId: accountBranchId,
             },
             select: { id: true, name: true, email: true, role: true, createdAt: true },
           })
@@ -142,7 +153,7 @@ export async function POST(req: Request) {
               role: accountRole,
               businessType: 'restaurant',
               restaurantId: restaurant.id,
-              branchId: adminContext.branchId,
+              branchId: accountBranchId,
             },
             select: { id: true, name: true, email: true, role: true, createdAt: true },
           })
@@ -153,7 +164,7 @@ export async function POST(req: Request) {
 
       const existingAfterConflict = await prisma.user.findUnique({
         where: { email: normalizedEmail },
-        select: { id: true, role: true, restaurantId: true },
+        select: { id: true, role: true, restaurantId: true, branchId: true },
       })
 
       if (!existingAfterConflict || existingAfterConflict.role !== accountRole || existingAfterConflict.restaurantId !== restaurant.id) {
@@ -168,7 +179,7 @@ export async function POST(req: Request) {
           role: accountRole,
           businessType: 'restaurant',
           restaurantId: restaurant.id,
-          branchId: adminContext.branchId,
+          branchId: accountRole === 'owner' ? existingAfterConflict.branchId ?? null : adminContext.branchId,
         },
         select: { id: true, name: true, email: true, role: true, createdAt: true },
       })

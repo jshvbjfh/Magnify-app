@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   Users, CheckCircle, XCircle, Clock, RefreshCw, Plus,
   Trash2, Edit2, Save, X, ChevronDown, ChevronUp, Search,
-  ShieldCheck, BadgeCheck, AlertTriangle
+  ShieldCheck, BadgeCheck, AlertTriangle, Activity, RotateCcw
 } from 'lucide-react'
 import AdminNav from '@/components/admin/AdminNav'
 import { getDaysRemaining, isSubscriptionExpired } from '@/lib/subscriptions'
@@ -31,6 +31,32 @@ type Plan = {
   isActive: boolean
 }
 
+type OutboxRow = {
+  id: string
+  entityType: string
+  entityId: string
+  operation: string
+  attempts: number
+  lastError: string | null
+  restaurantId: string | null
+  updatedAt: string
+  restaurant: { name: string } | null
+}
+
+type FailureEvent = {
+  id: string
+  restaurantId: string
+  message: string
+  createdAt: string
+  restaurant: { name: string } | null
+}
+
+type SyncHealth = {
+  stalledRows: OutboxRow[]
+  abandonedRows: OutboxRow[]
+  recentFailures: FailureEvent[]
+}
+
 function formatDate(d: string | null) {
   if (!d) return '—'
   return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -51,7 +77,10 @@ export default function AdminDashboard() {
   const [loadingUsers, setLoadingUsers] = useState(true)
   const [loadingPlans, setLoadingPlans] = useState(true)
   const [search, setSearch] = useState('')
-  const [tab, setTab] = useState<'users' | 'pricing'>('users')
+  const [tab, setTab] = useState<'users' | 'pricing' | 'sync'>('users')
+  const [syncHealth, setSyncHealth] = useState<SyncHealth | null>(null)
+  const [loadingSyncHealth, setLoadingSyncHealth] = useState(false)
+  const [retryingId, setRetryingId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [editingUser, setEditingUser] = useState<string | null>(null)
   const [editPlan, setEditPlan] = useState('')
@@ -83,6 +112,30 @@ export default function AdminDashboard() {
       setLoadingPlans(false)
     }
   }, [])
+
+  const loadSyncHealth = useCallback(async () => {
+    setLoadingSyncHealth(true)
+    try {
+      const res = await fetch('/api/admin/sync-health')
+      if (res.ok) setSyncHealth(await res.json())
+    } finally {
+      setLoadingSyncHealth(false)
+    }
+  }, [])
+
+  async function forceRetry(outboxId: string) {
+    setRetryingId(outboxId)
+    try {
+      await fetch('/api/admin/sync-health', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outboxId }),
+      })
+      await loadSyncHealth()
+    } finally {
+      setRetryingId(null)
+    }
+  }
 
   useEffect(() => { loadUsers(); loadPlans() }, [loadUsers, loadPlans])
 
@@ -223,7 +276,21 @@ export default function AdminDashboard() {
         >
           <BadgeCheck className="inline h-4 w-4 mr-1.5" />Pricing Plans
         </button>
-        <button onClick={() => { loadUsers(); loadPlans() }} className="ml-auto p-2 rounded-xl text-gray-400 hover:text-white hover:bg-gray-800 transition-colors">
+        <button
+          onClick={() => { setTab('sync'); loadSyncHealth() }}
+          className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors flex items-center gap-1.5 ${tab === 'sync' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+        >
+          <Activity className="h-4 w-4" />Sync Health
+          {syncHealth && (syncHealth.stalledRows.length + syncHealth.abandonedRows.length) > 0 && (
+            <span className="ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold bg-red-600 text-white">
+              {syncHealth.stalledRows.length + syncHealth.abandonedRows.length}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => { loadUsers(); loadPlans(); if (tab === 'sync') loadSyncHealth() }}
+          className="ml-auto p-2 rounded-xl text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+        >
           <RefreshCw className="h-4 w-4" />
         </button>
       </div>
@@ -441,6 +508,146 @@ export default function AdminDashboard() {
                 <div className="text-center py-12 text-gray-500">No pricing plans yet. Create one above.</div>
               )}
             </div>
+          )}
+        </div>
+      )}
+      {/* SYNC HEALTH TAB */}
+      {tab === 'sync' && (
+        <div className="px-6 pb-10 space-y-6">
+          {loadingSyncHealth ? (
+            <div className="flex justify-center py-16"><RefreshCw className="h-6 w-6 animate-spin text-orange-500" /></div>
+          ) : !syncHealth ? (
+            <div className="text-center py-12 text-gray-500">
+              <button onClick={loadSyncHealth} className="px-4 py-2 bg-orange-600 hover:bg-orange-700 rounded-xl text-sm font-semibold text-white">Load Sync Health</button>
+            </div>
+          ) : (
+            <>
+              {/* Stalled rows (retries remaining) */}
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertTriangle className="h-4 w-4 text-amber-500" />
+                  <p className="text-sm font-semibold text-amber-400">Stalled — retries remaining ({syncHealth.stalledRows.length})</p>
+                </div>
+                {syncHealth.stalledRows.length === 0 ? (
+                  <p className="text-sm text-gray-500">No stalled rows. All outbox rows are clear.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-gray-500 border-b border-gray-800">
+                          <th className="pb-2 pr-4">Restaurant</th>
+                          <th className="pb-2 pr-4">Entity</th>
+                          <th className="pb-2 pr-4">ID</th>
+                          <th className="pb-2 pr-4">Op</th>
+                          <th className="pb-2 pr-4">Attempts</th>
+                          <th className="pb-2 pr-4">Last Error</th>
+                          <th className="pb-2">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-800">
+                        {syncHealth.stalledRows.map(row => (
+                          <tr key={row.id} className="py-2">
+                            <td className="py-2 pr-4 text-gray-300">{row.restaurant?.name ?? row.restaurantId ?? '—'}</td>
+                            <td className="py-2 pr-4 font-mono text-amber-400">{row.entityType}</td>
+                            <td className="py-2 pr-4 font-mono text-gray-400 max-w-[140px] truncate">{row.entityId}</td>
+                            <td className="py-2 pr-4 text-gray-400">{row.operation}</td>
+                            <td className="py-2 pr-4 text-amber-400 font-bold">{row.attempts}</td>
+                            <td className="py-2 pr-4 text-red-400 max-w-[200px] truncate" title={row.lastError ?? ''}>{row.lastError ?? '—'}</td>
+                            <td className="py-2">
+                              <button
+                                onClick={() => forceRetry(row.id)}
+                                disabled={retryingId === row.id}
+                                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-colors disabled:opacity-50"
+                              >
+                                {retryingId === row.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+                                Retry
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Abandoned rows (exhausted retries) */}
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <XCircle className="h-4 w-4 text-red-500" />
+                  <p className="text-sm font-semibold text-red-400">Abandoned — all retries exhausted ({syncHealth.abandonedRows.length})</p>
+                </div>
+                {syncHealth.abandonedRows.length === 0 ? (
+                  <p className="text-sm text-gray-500">No abandoned rows.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-gray-500 border-b border-gray-800">
+                          <th className="pb-2 pr-4">Restaurant</th>
+                          <th className="pb-2 pr-4">Entity</th>
+                          <th className="pb-2 pr-4">ID</th>
+                          <th className="pb-2 pr-4">Last Error</th>
+                          <th className="pb-2">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-800">
+                        {syncHealth.abandonedRows.map(row => (
+                          <tr key={row.id}>
+                            <td className="py-2 pr-4 text-gray-300">{row.restaurant?.name ?? row.restaurantId ?? '—'}</td>
+                            <td className="py-2 pr-4 font-mono text-red-400">{row.entityType}</td>
+                            <td className="py-2 pr-4 font-mono text-gray-400 max-w-[140px] truncate">{row.entityId}</td>
+                            <td className="py-2 pr-4 text-red-400 max-w-[240px] truncate" title={row.lastError ?? ''}>{row.lastError ?? '—'}</td>
+                            <td className="py-2">
+                              <button
+                                onClick={() => forceRetry(row.id)}
+                                disabled={retryingId === row.id}
+                                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-950 hover:bg-red-900 text-red-400 hover:text-red-200 transition-colors disabled:opacity-50"
+                              >
+                                {retryingId === row.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+                                Force Retry
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Recent entity apply failures */}
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <Clock className="h-4 w-4 text-gray-500" />
+                  <p className="text-sm font-semibold text-gray-400">Recent entity apply failures (last 50)</p>
+                </div>
+                {syncHealth.recentFailures.length === 0 ? (
+                  <p className="text-sm text-gray-500">No recorded entity failures.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-left text-gray-500 border-b border-gray-800">
+                          <th className="pb-2 pr-4">Restaurant</th>
+                          <th className="pb-2 pr-4">Message</th>
+                          <th className="pb-2">Time</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-800">
+                        {syncHealth.recentFailures.map(f => (
+                          <tr key={f.id}>
+                            <td className="py-2 pr-4 text-gray-300 whitespace-nowrap">{f.restaurant?.name ?? f.restaurantId}</td>
+                            <td className="py-2 pr-4 text-red-400 max-w-[360px] truncate" title={f.message}>{f.message}</td>
+                            <td className="py-2 text-gray-500 whitespace-nowrap">{new Date(f.createdAt).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       )}

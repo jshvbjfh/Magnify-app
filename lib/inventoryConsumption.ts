@@ -139,6 +139,10 @@ export async function consumeIngredientStock(
 	db: PrismaDb,
 	params: ConsumeIngredientStockParams,
 ) {
+	if (params.restaurantId && !params.branchId) {
+		throw new Error('consumeIngredientStock requires restaurantId and branchId')
+	}
+
 	const quantityRequested = roundQuantity(Number(params.quantity))
 	if (!Number.isFinite(quantityRequested) || quantityRequested <= 0) {
 		throw new Error('Ingredient consumption quantity must be greater than 0.')

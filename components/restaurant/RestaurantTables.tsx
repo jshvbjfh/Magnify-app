@@ -141,13 +141,18 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
     return () => clearInterval(interval)
   }, [])
 
+  function notifyTableWrite() {
+    window.dispatchEvent(new CustomEvent('refreshTables', { detail: { source: 'restaurant_tables' } }))
+  }
+
   async function addTable() {
     if (!form.name.trim()) return
     setSaving(true)
-    await fetch('/api/restaurant/tables-db', {
+    const res = await fetch('/api/restaurant/tables-db', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
       body: JSON.stringify({ name: form.name.trim(), seats: parseInt(form.seats) || 4, status: form.status })
     })
+    if (res.ok) notifyTableWrite()
     setForm({ name: '', seats: '4', status: 'available' })
     setShowForm(false); setSaving(false); load()
   }
@@ -156,15 +161,17 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
     const order: TableStatus[] = ['available', 'occupied', 'reserved', 'cleaning']
     const next = order[(order.indexOf(table.status) + 1) % order.length]
     setTables(prev => prev.map(t => t.id === table.id ? { ...t, status: next } : t))
-    await fetch(`/api/restaurant/tables-db/${table.id}`, {
+    const res = await fetch(`/api/restaurant/tables-db/${table.id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
       body: JSON.stringify({ status: next })
     })
+    if (res.ok) notifyTableWrite()
   }
 
   async function deleteTable(id: string) {
     setTables(prev => prev.filter(t => t.id !== id)); setDeleteId(null)
-    await fetch(`/api/restaurant/tables-db/${id}`, { method: 'DELETE', credentials: 'include' })
+    const res = await fetch(`/api/restaurant/tables-db/${id}`, { method: 'DELETE', credentials: 'include' })
+    if (res.ok) notifyTableWrite()
   }
 
   const counts = {

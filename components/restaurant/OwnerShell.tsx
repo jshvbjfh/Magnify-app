@@ -22,7 +22,7 @@ import {
   TrendingUp,
   Wallet,
 } from 'lucide-react'
-import { signOut } from 'next-auth/react'
+import { signIn, signOut, useSession } from 'next-auth/react'
 
 type OwnerView = 'home' | 'details' | 'history' | 'reports' | 'inventory'
 type Period = 'today' | 'week' | 'month'
@@ -436,6 +436,7 @@ function SectionCard({ title, sub, children }: { title: string; sub?: string; ch
 }
 
 export default function OwnerShell() {
+  const { data: session, status: sessionStatus } = useSession()
   const today = new Date().toISOString().slice(0, 10)
   const homeHistoryStart = new Date(new Date(`${today}T12:00:00`).getTime() - (27 * 86400000)).toISOString().slice(0, 10)
   const detailHistoryStart = '2000-01-01'
@@ -449,6 +450,18 @@ export default function OwnerShell() {
   const [branchSwitchingId, setBranchSwitchingId] = useState<string | null>(null)
   const [selectedHomeDate, setSelectedHomeDate] = useState<string>(today)
   const [selectedDetailsDate, setSelectedDetailsDate] = useState<string>(today)
+  const userRole = (session?.user as any)?.role
+
+  useEffect(() => {
+    if (sessionStatus === 'unauthenticated') {
+      void signIn()
+      return
+    }
+
+    if (sessionStatus === 'authenticated' && userRole !== 'owner') {
+      window.location.replace('/restaurant')
+    }
+  }, [sessionStatus, userRole])
 
   const load = useCallback(async (currentFilters: FilterState, currentBranchId?: string, currentView?: OwnerView) => {
     setLoading(true)
@@ -619,6 +632,17 @@ export default function OwnerShell() {
   const ownerBranches = data?.branches ?? []
   const isFinancialOnly = data?.sync.detailLevel === 'financial'
   const syncNotice = data?.sync.note ?? null
+
+  if (sessionStatus === 'loading' || sessionStatus !== 'authenticated' || userRole !== 'owner') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#f6f3ee]">
+        <div className="flex flex-col items-center gap-3 text-slate-400">
+          <div className="h-8 w-8 rounded-full border-4 border-orange-200 border-t-orange-500 animate-spin" />
+          <span className="text-sm">Loading owner workspace…</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">

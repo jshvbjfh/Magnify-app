@@ -5,6 +5,10 @@ import { Prisma } from '@prisma/client'
 import { isLocalFirstDesktopAuthBridgeEnabled, mirrorSignupToCloud, verifyCloudCredentials } from '@/lib/cloudAuthBridge'
 import { prisma } from '@/lib/prisma'
 import { ensureRestaurantForOwner } from '@/lib/restaurantAccess'
+import { createRateLimiter, getRateLimitKey } from '@/lib/rateLimit'
+
+// 5 signup attempts per IP per 15 minutes
+const signupLimiter = createRateLimiter({ windowMs: 15 * 60_000, max: 5 })
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -74,6 +78,14 @@ function generateRecoveryKey(): string {
 }
 
 export async function POST(request: NextRequest) {
+	const rlResult = signupLimiter.check(getRateLimitKey(request, 'signup'))
+	if (!rlResult.allowed) {
+		return NextResponse.json({ error: 'Too many requests' }, {
+			status: 429,
+			headers: { 'Retry-After': String(Math.ceil((rlResult.resetAt - Date.now()) / 1000)) },
+		})
+	}
+
 	try {
 		const body = await request.json()
 		const name = String(body?.name ?? '').trim()

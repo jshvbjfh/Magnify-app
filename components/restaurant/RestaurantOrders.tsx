@@ -83,6 +83,19 @@ const COLOR_POOL   = [
 ] as const
 
 function fmtRWF(n: number) { return n.toLocaleString('en-RW', { maximumFractionDigits: 0 }) }
+function formatKigaliTimestamp(value: string | null | undefined) {
+  if (!value) return '--'
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return '--'
+  return new Intl.DateTimeFormat('en-RW', {
+    timeZone: 'Africa/Kigali',
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
 function createActionId(prefix: string) {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return `${prefix}-${crypto.randomUUID()}`
@@ -1042,8 +1055,13 @@ ${headerLines}
                     <span className="text-xs text-gray-400">{orderNumber ?? `${items.length} item${items.length > 1 ? 's' : ''}`}</span>
                   </div>
                   <div className="px-4 py-3 space-y-2">
-                    <div className="rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                      Waiter: <span className="font-semibold text-gray-900">{items[0].waiter?.name ?? 'Unassigned'}</span>
+                    <div className="rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-600 space-y-1">
+                      <p>
+                        Waiter: <span className="font-semibold text-gray-900">{items[0].waiter?.name ?? 'Unassigned'}</span>
+                      </p>
+                      <p>
+                        Pushed: <span className="font-semibold text-gray-900">{formatKigaliTimestamp(items[0].addedAt)}</span>
+                      </p>
                     </div>
                     {items.map(item => (
                       <div key={item.id} className="flex items-center justify-between group">

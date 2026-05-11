@@ -111,7 +111,7 @@ async function hasPendingLocalConflict(db: PrismaDb, change: SyncChangeEnvelope,
   return pending
 }
 
-export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEnvelope, options?: { remapUserId?: string }) {
+export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEnvelope, options?: { remapUserId?: string; idRemap?: Map<string, string> }) {
   const payload = (change.payload ?? {}) as Record<string, any>
 
   // When syncing to cloud, local user IDs don't exist in the cloud users table.
@@ -121,8 +121,27 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
 
   switch (change.entityType) {
     case 'restaurant': {
+      const incomingRestaurantId = String(payload.id || change.entityId)
+
+      // Pre-upsert conflict resolution for joinCode @unique (same pattern as C1 for dish/inventoryItem).
+      // If a different restaurant row on the cloud already owns payload.joinCode, displace its joinCode
+      // so our upsert can claim it. The conflicting row is a ghost/phantom (S1 class) — a real active
+      // restaurant would have been the one sending the sync payload, not the one blocking it.
+      if (payload.joinCode) {
+        const joinCodeConflict = await db.restaurant.findFirst({
+          where: { joinCode: payload.joinCode, NOT: { id: incomingRestaurantId } },
+          select: { id: true },
+        })
+        if (joinCodeConflict) {
+          await db.restaurant.update({
+            where: { id: joinCodeConflict.id },
+            data: { joinCode: `DISPLACED-${joinCodeConflict.id.slice(-8)}` },
+          })
+        }
+      }
+
       await db.restaurant.upsert({
-        where: { id: String(payload.id || change.entityId) },
+        where: { id: incomingRestaurantId },
         update: {
           name: payload.name,
           ownerId: ownerId,
@@ -230,7 +249,9 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       const tableBranchId = await resolveSyncBranchId(
         db, payload.branchId, payload.restaurantId, 'restaurantTable', change.entityId,
       )
-      if (!tableBranchId) break  // restaurant has no branches — skip, already logged
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges instead
+      // of silently counting this as applied while data was never written.
+      if (!tableBranchId) throw new Error(`[syncEngine] restaurantTable:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
 
       await db.restaurantTable.upsert({
         where: { id: String(payload.id || change.entityId) },
@@ -302,10 +323,33 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       const dishBranchId = await resolveSyncBranchId(
         db, payload.branchId, payload.restaurantId, 'dish', change.entityId,
       )
-      if (!dishBranchId) break  // restaurant has no branches — skip, already logged
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (!dishBranchId) throw new Error(`[syncEngine] dish:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
+      // C1: If a dish with the same (userId, restaurantId, branchId, name) exists under a different
+      // id, update that row instead of upsert-by-id, avoiding
+      // @@unique([userId,restaurantId,branchId,name]) violation.
+      const incomingDishId = String(payload.id || change.entityId)
+      const dishConflict = userId
+        ? await db.dish.findFirst({
+            where: {
+              userId,
+              restaurantId: String(payload.restaurantId ?? '') || null,
+              branchId: dishBranchId,
+              name: payload.name,
+              NOT: { id: incomingDishId },
+            },
+            select: { id: true },
+          })
+        : null
+      const dishTargetId = dishConflict?.id ?? incomingDishId
+      // FK-remap: if C1 displaces the incoming id, record so dishIngredient/dishSale can resolve dishId.
+      if (options?.idRemap && dishTargetId !== incomingDishId) {
+        options.idRemap.set(incomingDishId, dishTargetId)
+      }
 
       await db.dish.upsert({
-        where: { id: String(payload.id || change.entityId) },
+        where: { id: dishTargetId },
         update: {
           userId: userId,
           restaurantId: payload.restaurantId ?? null,
@@ -318,7 +362,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
         create: {
-          id: String(payload.id || change.entityId),
+          id: dishTargetId,
           userId: userId,
           restaurantId: payload.restaurantId ?? null,
           branchId: dishBranchId,
@@ -334,26 +378,40 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
     }
     case 'dishIngredient': {
       if (change.operation === 'delete') {
+        // M2: Derive dishId/ingredientId from entityId (dishId:ingredientId) as fallback.
+        // If payload is empty or null, String(null) = "null" which deletes nothing silently.
+        const [parsedDishId, parsedIngredientId] = change.entityId.split(':')
+        const rawDishId = String(payload.dishId || parsedDishId || '')
+        const rawIngredientId = String(payload.ingredientId || parsedIngredientId || '')
+        // Resolve via remap in case a parent dish or inventoryItem was C1-displaced this batch.
+        const dishId = options?.idRemap?.get(rawDishId) ?? rawDishId
+        const ingredientId = options?.idRemap?.get(rawIngredientId) ?? rawIngredientId
+        if (!dishId || !ingredientId) {
+          throw new Error(
+            `[syncEngine] dishIngredient delete ${change.entityId} — cannot resolve dishId/ingredientId from payload or entityId`,
+          )
+        }
         await db.dishIngredient.deleteMany({
-          where: {
-            dishId: String(payload.dishId),
-            ingredientId: String(payload.ingredientId),
-          },
+          where: { dishId, ingredientId },
         })
         break
       }
 
+      // Resolve dishId and ingredientId via the batch remap in case their parents were C1-displaced.
+      const resolvedDishIngredientDishId = options?.idRemap?.get(String(payload.dishId)) ?? String(payload.dishId)
+      const resolvedDishIngredientIngredientId = options?.idRemap?.get(String(payload.ingredientId)) ?? String(payload.ingredientId)
+
       await db.dishIngredient.upsert({
         where: {
           dishId_ingredientId: {
-            dishId: String(payload.dishId),
-            ingredientId: String(payload.ingredientId),
+            dishId: resolvedDishIngredientDishId,
+            ingredientId: resolvedDishIngredientIngredientId,
           },
         },
         update: { quantityRequired: Number(payload.quantityRequired) },
         create: {
-          dishId: String(payload.dishId),
-          ingredientId: String(payload.ingredientId),
+          dishId: resolvedDishIngredientDishId,
+          ingredientId: resolvedDishIngredientIngredientId,
           quantityRequired: Number(payload.quantityRequired),
         },
       })
@@ -365,12 +423,19 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      const employeeRestaurantId = String(payload.restaurantId ?? '').trim()
+      const employeeBranchId = await resolveSyncBranchId(
+        db, payload.branchId, employeeRestaurantId, 'employee', change.entityId,
+      )
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (!employeeBranchId) throw new Error(`[syncEngine] employee:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
       await db.employee.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: employeeRestaurantId,
+          branchId: employeeBranchId,
           name: payload.name,
           role: payload.role,
           payType: payload.payType,
@@ -385,8 +450,8 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         create: {
           id: String(payload.id || change.entityId),
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: employeeRestaurantId,
+          branchId: employeeBranchId,
           name: payload.name,
           role: payload.role,
           payType: payload.payType,
@@ -407,7 +472,12 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
-      const transactionRestaurantId = payload.restaurantId ?? null
+      const transactionRestaurantId = String(payload.restaurantId ?? '').trim() || null
+      const transactionBranchId = transactionRestaurantId
+        ? await resolveSyncBranchId(db, payload.branchId, transactionRestaurantId, 'transaction', change.entityId)
+        : null
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (transactionRestaurantId && !transactionBranchId) throw new Error(`[syncEngine] transaction:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
       const categoryType = inferSyncedTransactionCategoryType(payload)
       const categories = await ensureCoreCategories(db, transactionRestaurantId)
       const category = categories[categoryType] || categories.expense
@@ -424,7 +494,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         update: {
           userId: userId,
           restaurantId: transactionRestaurantId,
-          branchId: payload.branchId ?? null,
+          branchId: transactionBranchId,
           uploadId: payload.uploadId ?? null,
           accountId: account.id,
           categoryId: category.id,
@@ -448,7 +518,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           id: String(payload.id || change.entityId),
           userId: userId,
           restaurantId: transactionRestaurantId,
-          branchId: payload.branchId ?? null,
+          branchId: transactionBranchId,
           uploadId: payload.uploadId ?? null,
           accountId: account.id,
           categoryId: category.id,
@@ -477,12 +547,45 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      const inventoryItemRestaurantId = String(payload.restaurantId ?? '').trim()
+      const inventoryItemBranchId = await resolveSyncBranchId(
+        db, payload.branchId, inventoryItemRestaurantId, 'inventoryItem', change.entityId,
+      )
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (!inventoryItemBranchId) throw new Error(`[syncEngine] inventoryItem:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
+      // C1: If an inventoryItem with the same (userId, restaurantId, branchId, name) exists under a
+      // different id, update that row instead of upsert-by-id, avoiding the
+      // @@unique([userId,restaurantId,branchId,name]) violation.
+      // restaurantId + branchId are both in scope so items with the same name in different
+      // branches or different restaurants under the same user are NOT merged.
+      const incomingInventoryItemId = String(payload.id || change.entityId)
+      const inventoryItemConflict = userId
+        ? await db.inventoryItem.findFirst({
+            where: {
+              userId,
+              restaurantId: inventoryItemRestaurantId || null,
+              branchId: inventoryItemBranchId,
+              name: payload.name,
+              NOT: { id: incomingInventoryItemId },
+            },
+            select: { id: true },
+          })
+        : null
+      const inventoryItemTargetId = inventoryItemConflict?.id ?? incomingInventoryItemId
+      // FK-remap: if C1 displaces the incoming id, record the remap so FK-dependent entities
+      // (inventoryPurchase, inventoryAdjustmentLog, wasteLog, dishIngredient, etc.) can resolve
+      // their ingredientId to the actual stored id in the same batch.
+      if (options?.idRemap && inventoryItemTargetId !== incomingInventoryItemId) {
+        options.idRemap.set(incomingInventoryItemId, inventoryItemTargetId)
+      }
+
       await db.inventoryItem.upsert({
-        where: { id: String(payload.id || change.entityId) },
+        where: { id: inventoryItemTargetId },
         update: {
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: inventoryItemRestaurantId,
+          branchId: inventoryItemBranchId,
           name: payload.name,
           description: payload.description ?? null,
           unit: payload.unit,
@@ -500,10 +603,10 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
         create: {
-          id: String(payload.id || change.entityId),
+          id: inventoryItemTargetId,
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: inventoryItemRestaurantId,
+          branchId: inventoryItemBranchId,
           name: payload.name,
           description: payload.description ?? null,
           unit: payload.unit,
@@ -529,14 +632,24 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      const inventoryPurchaseRestaurantId = String(payload.restaurantId ?? '').trim()
+      const inventoryPurchaseBranchId = await resolveSyncBranchId(
+        db, payload.branchId, inventoryPurchaseRestaurantId, 'inventoryPurchase', change.entityId,
+      )
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (!inventoryPurchaseBranchId) throw new Error(`[syncEngine] inventoryPurchase:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
+      // Resolve ingredientId via batch remap in case the parent inventoryItem was C1-displaced.
+      const resolvedIngredientIdForPurchase = options?.idRemap?.get(String(payload.ingredientId)) ?? String(payload.ingredientId)
+
       await db.inventoryPurchase.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: inventoryPurchaseRestaurantId,
+          branchId: inventoryPurchaseBranchId,
           batchId: payload.batchId ?? null,
-          ingredientId: payload.ingredientId,
+          ingredientId: resolvedIngredientIdForPurchase,
           supplier: payload.supplier ?? null,
           purchaseQuantity: payload.purchaseQuantity == null ? null : Number(payload.purchaseQuantity),
           purchaseUnit: payload.purchaseUnit ?? null,
@@ -553,10 +666,10 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         create: {
           id: String(payload.id || change.entityId),
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: inventoryPurchaseRestaurantId,
+          branchId: inventoryPurchaseBranchId,
           batchId: payload.batchId ?? null,
-          ingredientId: payload.ingredientId,
+          ingredientId: resolvedIngredientIdForPurchase,
           supplier: payload.supplier ?? null,
           purchaseQuantity: payload.purchaseQuantity == null ? null : Number(payload.purchaseQuantity),
           purchaseUnit: payload.purchaseUnit ?? null,
@@ -579,13 +692,23 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      const adjustmentRestaurantId = String(payload.restaurantId ?? '').trim()
+      const adjustmentBranchId = await resolveSyncBranchId(
+        db, payload.branchId, adjustmentRestaurantId, 'inventoryAdjustmentLog', change.entityId,
+      )
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (!adjustmentBranchId) throw new Error(`[syncEngine] inventoryAdjustmentLog:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
+      // Resolve ingredientId via batch remap in case the parent inventoryItem was C1-displaced.
+      const resolvedIngredientIdForAdjustment = options?.idRemap?.get(String(payload.ingredientId)) ?? String(payload.ingredientId)
+
       await db.inventoryAdjustmentLog.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
-          ingredientId: payload.ingredientId,
+          restaurantId: adjustmentRestaurantId,
+          branchId: adjustmentBranchId,
+          ingredientId: resolvedIngredientIdForAdjustment,
           adjustmentType: payload.adjustmentType,
           quantityDelta: Number(payload.quantityDelta),
           itemQuantityBefore: Number(payload.itemQuantityBefore),
@@ -598,9 +721,9 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         create: {
           id: String(payload.id || change.entityId),
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
-          ingredientId: payload.ingredientId,
+          restaurantId: adjustmentRestaurantId,
+          branchId: adjustmentBranchId,
+          ingredientId: resolvedIngredientIdForAdjustment,
           adjustmentType: payload.adjustmentType,
           quantityDelta: Number(payload.quantityDelta),
           itemQuantityBefore: Number(payload.itemQuantityBefore),
@@ -619,14 +742,24 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      const batchUsageRestaurantId = String(payload.restaurantId ?? '').trim()
+      const batchUsageBranchId = await resolveSyncBranchId(
+        db, payload.branchId, batchUsageRestaurantId, 'inventoryBatchUsageLedger', change.entityId,
+      )
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (!batchUsageBranchId) throw new Error(`[syncEngine] inventoryBatchUsageLedger:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
+      // Resolve ingredientId via batch remap in case the parent inventoryItem was C1-displaced.
+      const resolvedIngredientIdForBatchLedger = options?.idRemap?.get(String(payload.ingredientId)) ?? String(payload.ingredientId)
+
       await db.inventoryBatchUsageLedger.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: batchUsageRestaurantId,
+          branchId: batchUsageBranchId,
           purchaseId: payload.purchaseId,
-          ingredientId: payload.ingredientId,
+          ingredientId: resolvedIngredientIdForBatchLedger,
           sourceType: payload.sourceType,
           sourceId: payload.sourceId,
           batchId: payload.batchId,
@@ -641,10 +774,10 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         create: {
           id: String(payload.id || change.entityId),
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: batchUsageRestaurantId,
+          branchId: batchUsageBranchId,
           purchaseId: payload.purchaseId,
-          ingredientId: payload.ingredientId,
+          ingredientId: resolvedIngredientIdForBatchLedger,
           sourceType: payload.sourceType,
           sourceId: payload.sourceId,
           batchId: payload.batchId,
@@ -665,13 +798,23 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      const wasteRestaurantId = String(payload.restaurantId ?? '').trim()
+      const wasteBranchId = await resolveSyncBranchId(
+        db, payload.branchId, wasteRestaurantId, 'wasteLog', change.entityId,
+      )
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (!wasteBranchId) throw new Error(`[syncEngine] wasteLog:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
+      // Resolve ingredientId via batch remap in case the parent inventoryItem was C1-displaced.
+      const resolvedIngredientIdForWasteLog = options?.idRemap?.get(String(payload.ingredientId)) ?? String(payload.ingredientId)
+
       await db.wasteLog.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
-          ingredientId: payload.ingredientId,
+          restaurantId: wasteRestaurantId,
+          branchId: wasteBranchId,
+          ingredientId: resolvedIngredientIdForWasteLog,
           quantityWasted: Number(payload.quantityWasted),
           reason: payload.reason,
           date: asDate(payload.date) ?? new Date(),
@@ -683,9 +826,9 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         create: {
           id: String(payload.id || change.entityId),
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
-          ingredientId: payload.ingredientId,
+          restaurantId: wasteRestaurantId,
+          branchId: wasteBranchId,
+          ingredientId: resolvedIngredientIdForWasteLog,
           quantityWasted: Number(payload.quantityWasted),
           reason: payload.reason,
           date: asDate(payload.date) ?? new Date(),
@@ -703,13 +846,20 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      const shiftRestaurantId = String(payload.restaurantId ?? '').trim()
+      const shiftBranchId = await resolveSyncBranchId(
+        db, payload.branchId, shiftRestaurantId, 'shift', change.entityId,
+      )
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (!shiftBranchId) throw new Error(`[syncEngine] shift:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
       await db.shift.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
           employeeId: payload.employeeId,
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: shiftRestaurantId,
+          branchId: shiftBranchId,
           date: asDate(payload.date) ?? new Date(),
           hoursWorked: Number(payload.hoursWorked),
           calculatedWage: Number(payload.calculatedWage),
@@ -720,8 +870,8 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           id: String(payload.id || change.entityId),
           employeeId: payload.employeeId,
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: shiftRestaurantId,
+          branchId: shiftBranchId,
           date: asDate(payload.date) ?? new Date(),
           hoursWorked: Number(payload.hoursWorked),
           calculatedWage: Number(payload.calculatedWage),
@@ -737,12 +887,19 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      const dishSaleRestaurantId = String(payload.restaurantId ?? '').trim()
+      const dishSaleBranchId = await resolveSyncBranchId(
+        db, payload.branchId, dishSaleRestaurantId, 'dishSale', change.entityId,
+      )
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (!dishSaleBranchId) throw new Error(`[syncEngine] dishSale:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
       await db.dishSale.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: dishSaleRestaurantId,
+          branchId: dishSaleBranchId,
           orderId: payload.orderId ?? null,
           dishId: payload.dishId,
           quantitySold: Number(payload.quantitySold),
@@ -756,8 +913,8 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         create: {
           id: String(payload.id || change.entityId),
           userId: userId,
-          restaurantId: payload.restaurantId ?? null,
-          branchId: payload.branchId ?? null,
+          restaurantId: dishSaleRestaurantId,
+          branchId: dishSaleBranchId,
           orderId: payload.orderId ?? null,
           dishId: payload.dishId,
           quantitySold: Number(payload.quantitySold),
@@ -792,11 +949,18 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
+      const orderRestaurantId = String(payload.restaurantId ?? '').trim()
+      const orderBranchId = await resolveSyncBranchId(
+        db, payload.branchId, orderRestaurantId, 'restaurantOrder', change.entityId,
+      )
+      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
+      if (!orderBranchId) throw new Error(`[syncEngine] restaurantOrder:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
       await db.restaurantOrder.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
-          restaurantId: payload.restaurantId,
-          branchId: payload.branchId ?? null,
+          restaurantId: orderRestaurantId,
+          branchId: orderBranchId,
           // tableId intentionally omitted — RestaurantTable may not exist on the cloud
           tableName: payload.tableName,
           orderNumber: payload.orderNumber,
@@ -825,8 +989,8 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         },
         create: {
           id: String(payload.id || change.entityId),
-          restaurantId: payload.restaurantId,
-          branchId: payload.branchId ?? null,
+          restaurantId: orderRestaurantId,
+          branchId: orderBranchId,
           tableId: null,
           tableName: payload.tableName,
           orderNumber: payload.orderNumber,
@@ -860,33 +1024,47 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       // so FK constraint on RestaurantOrderItem.orderId is already satisfied.
       if (Array.isArray(payload.items) && payload.items.length > 0) {
         const orderId = String(payload.id || change.entityId)
-        await db.restaurantOrderItem.deleteMany({ where: { orderId } })
-        await db.restaurantOrderItem.createMany({
-          data: payload.items.map((item: any) => ({
-            id: String(item.id || ''),
+        // M3: Validate all item ids BEFORE deleteMany. If any item is missing an id,
+        // createMany would throw a unique-constraint error after deleteMany has already run,
+        // leaving the order on cloud with 0 items — corrupts FIFO cost and revenue reports.
+        const validItems = payload.items.filter((item: any) => Boolean(item.id))
+        if (validItems.length < payload.items.length) {
+          console.warn(
+            '[syncEngine] restaurantOrder %s: %d of %d items missing id — those items will not be synced',
             orderId,
-            dishId: String(item.dishId),
-            dishName: String(item.dishName ?? ''),
-            dishPrice: Number(item.dishPrice ?? 0),
-            qty: Number(item.qty ?? 1),
-            kitchenStatus: String(item.kitchenStatus ?? 'new'),
-            status: String(item.status ?? 'ACTIVE'),
-            canceledById: item.canceledById ?? null,
-            canceledByName: item.canceledByName ?? null,
-            cancellationApprovedByEmployeeId: item.cancellationApprovedByEmployeeId ?? null,
-            cancellationApprovedByEmployeeName: item.cancellationApprovedByEmployeeName ?? null,
-            cancelReason: item.cancelReason ?? null,
-            wastedById: item.wastedById ?? null,
-            wastedByName: item.wastedByName ?? null,
-            wasteReason: item.wasteReason ?? null,
-            wasteAcknowledged: Boolean(item.wasteAcknowledged ?? false),
-            readyAt: asDate(item.readyAt),
-            canceledAt: asDate(item.canceledAt),
-            wastedAt: asDate(item.wastedAt),
-            createdAt: asDate(item.createdAt) ?? new Date(),
-            updatedAt: asDate(item.updatedAt) ?? new Date(),
-          })),
-        })
+            payload.items.length - validItems.length,
+            payload.items.length,
+          )
+        }
+        if (validItems.length > 0) {
+          await db.restaurantOrderItem.deleteMany({ where: { orderId } })
+          await db.restaurantOrderItem.createMany({
+            data: validItems.map((item: any) => ({
+              id: String(item.id),
+              orderId,
+              dishId: String(item.dishId),
+              dishName: String(item.dishName ?? ''),
+              dishPrice: Number(item.dishPrice ?? 0),
+              qty: Number(item.qty ?? 1),
+              kitchenStatus: String(item.kitchenStatus ?? 'new'),
+              status: String(item.status ?? 'ACTIVE'),
+              canceledById: item.canceledById ?? null,
+              canceledByName: item.canceledByName ?? null,
+              cancellationApprovedByEmployeeId: item.cancellationApprovedByEmployeeId ?? null,
+              cancellationApprovedByEmployeeName: item.cancellationApprovedByEmployeeName ?? null,
+              cancelReason: item.cancelReason ?? null,
+              wastedById: item.wastedById ?? null,
+              wastedByName: item.wastedByName ?? null,
+              wasteReason: item.wasteReason ?? null,
+              wasteAcknowledged: Boolean(item.wasteAcknowledged ?? false),
+              readyAt: asDate(item.readyAt),
+              canceledAt: asDate(item.canceledAt),
+              wastedAt: asDate(item.wastedAt),
+              createdAt: asDate(item.createdAt) ?? new Date(),
+              updatedAt: asDate(item.updatedAt) ?? new Date(),
+            })),
+          })
+        }
       } else if (Array.isArray(payload.items) && payload.items.length === 0 && payload.status !== 'CANCELED') {
         // Guard: warn if order arrived with 0 items and is not canceled — likely a serialization issue
         console.warn(`[syncEngine] restaurantOrder ${String(payload.id || change.entityId)} arrived with 0 items (status=${payload.status})`)
@@ -895,7 +1073,10 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       break
     }
     default:
-      break
+      // M1: Throw instead of silently breaking. Unknown entity types were previously
+      // counted as applied and recorded for pull even though nothing was written.
+      // Now the error propagates to applyIncomingSyncChanges' try/catch → failedChanges.
+      throw new Error(`[syncEngine] Unhandled entityType '${change.entityType}' (entityId: ${change.entityId}) — change was not applied`)
   }
 }
 
@@ -908,6 +1089,14 @@ export async function applyIncomingSyncChanges(
   let applied = 0
   let conflicts = 0
   const appliedChanges: SyncChangeEnvelope[] = []
+
+  const failedChanges: Array<{ change: SyncChangeEnvelope; error: string }> = []
+
+  // Batch-level id remap: tracks originalId → resolvedId for any entity where
+  // C1 conflict resolution displaced the incoming id (e.g. inventoryItem, dish).
+  // FK-dependent child entities (inventoryPurchase, dishIngredient, wasteLog, etc.)
+  // check this map before writing to ensure they reference the actual stored parent id.
+  const idRemap = new Map<string, string>()
 
   for (const change of changes) {
     const pendingConflict = await hasPendingLocalConflict(db, change, localDeviceId)
@@ -934,12 +1123,22 @@ export async function applyIncomingSyncChanges(
       continue
     }
 
-    await applyResolvedSyncChange(db, change, { remapUserId: options.remapUserId })
-    applied += 1
-    appliedChanges.push(change)
+    // C2: Isolate per-entity failures — one bad row must not abort the entire batch.
+    try {
+      await applyResolvedSyncChange(db, change, { remapUserId: options.remapUserId, idRemap })
+      applied += 1
+      appliedChanges.push(change)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(
+        '[syncEngine] Failed to apply %s:%s — %s',
+        change.entityType, change.entityId, message,
+      )
+      failedChanges.push({ change, error: message })
+    }
   }
 
-  return { applied, conflicts, appliedChanges }
+  return { applied, conflicts, failedChanges, appliedChanges }
 }
 
 export async function recordRemoteChangeForPull(db: PrismaDb, change: SyncChangeEnvelope): Promise<SyncOutbox> {

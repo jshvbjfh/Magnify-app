@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { ensureRestaurantForOwner } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { buildSyncChangeFromConflict } from '@/lib/syncConflict'
 import { applyResolvedSyncChange } from '@/lib/syncEngine'
 import { logSyncActivity } from '@/lib/syncLogging'
@@ -16,7 +16,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const user = session.user as any
   if (user.role !== 'admin') return NextResponse.json({ error: 'Admin only' }, { status: 403 })
 
-  const restaurant = await ensureRestaurantForOwner(session.user.id)
+  const context = await getRestaurantContextForUser(session.user.id)
+  if (!context?.restaurantId) {
+    return NextResponse.json({ error: 'No restaurant linked' }, { status: 404 })
+  }
+
   const body = await req.json().catch(() => null)
   const resolution = body?.resolution === 'accept_remote' ? 'accept_remote' : body?.resolution === 'accept_local' ? 'accept_local' : null
 
@@ -24,12 +28,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     return NextResponse.json({ error: 'resolution must be accept_local or accept_remote' }, { status: 400 })
   }
 
+  const branchFilter = context.branchId ? { branchId: context.branchId } : { branchId: null }
   const conflict = await prisma.syncConflictLog.findFirst({
     where: {
       id: params.id,
       OR: [
-        { restaurantId: restaurant.id },
         { scopeId: GLOBAL_SYNC_SCOPE_ID },
+        { restaurantId: context.restaurantId, ...branchFilter },
       ],
     },
   })
@@ -74,7 +79,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
   logSyncActivity('info', 'sync.conflict.resolved', {
     conflictId: conflict.id,
-    restaurantId: restaurant.id,
+    restaurantId: context.restaurantId,
     scopeId: conflict.scopeId,
     entityType: conflict.entityType,
     entityId: conflict.entityId,

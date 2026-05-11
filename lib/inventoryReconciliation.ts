@@ -95,6 +95,10 @@ export async function applyRestaurantInventoryReconciliation(
 	db: PrismaDb,
 	params: ReconciliationParams,
 ) {
+	if (!params.branchId) {
+		throw new Error('applyRestaurantInventoryReconciliation requires branchId')
+	}
+
 	const preview = await previewRestaurantInventoryReconciliation(db, params)
 	const effectiveAt = new Date(preview.effectiveAt)
 	const restaurant = await db.restaurant.findFirst({

@@ -1,13 +1,11 @@
 'use client'
 
 import { signIn, getSession } from 'next-auth/react'
-import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { Loader2, Lock, Mail, Eye, EyeOff } from 'lucide-react'
 import { loadServerOwnerSyncConfig, seedOwnerSyncConfigFromLogin } from '@/lib/ownerSyncBrowser'
 
 export default function LoginForm() {
-	const router = useRouter()
 	const [email, setEmail] = useState('')
 	const [password, setPassword] = useState('')
 	const [loading, setLoading] = useState(false)
@@ -138,7 +136,7 @@ export default function LoginForm() {
 		}
 		setStage({ label: 'Done!', progress: 100 })
 		await new Promise((r) => setTimeout(r, 400))
-		router.push('/restaurant')
+		window.location.replace('/restaurant')
 	}
 
 	return (

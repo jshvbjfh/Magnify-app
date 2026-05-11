@@ -414,26 +414,9 @@ async function resolveRestaurantForUser(user: { id: string; role: string; restau
 }
 
 async function resolveRestaurantBillingUserId(restaurant: { id: string; ownerId: string }) {
-  // Restaurant-scoped rows can retain a legacy owner userId after ownership changes.
-  // Prefer the existing menu/inventory owner so downstream operational lookups stay consistent.
-  const dishOwner = await prisma.dish.findFirst({
-    where: { restaurantId: restaurant.id },
-    select: { userId: true },
-  })
-  if (dishOwner?.userId) return dishOwner.userId
-
-  const inventoryOwner = await prisma.inventoryItem.findFirst({
-    where: { restaurantId: restaurant.id },
-    select: { userId: true },
-  })
-  if (inventoryOwner?.userId) return inventoryOwner.userId
-
-  const purchaseOwner = await prisma.inventoryPurchase.findFirst({
-    where: { restaurantId: restaurant.id },
-    select: { userId: true },
-  })
-  if (purchaseOwner?.userId) return purchaseOwner.userId
-
+  // C3: Use restaurant.ownerId as the authoritative billing user.
+  // The previous row-scan (dish → inventoryItem → inventoryPurchase) was nondeterministic
+  // after ownership changes and added 3 extra queries per getRestaurantContextForUser call.
   return restaurant.ownerId
 }
 
@@ -465,10 +448,7 @@ export async function ensureRestaurantForOwner(ownerId: string) {
     const restaurant = await ensureSyncIdentity(existing.id)
     if (restaurant) {
       await syncOwnerRestaurantLink(prisma, ownerId, restaurant.id)
-      const mainBranch = await ensureMainBranchForRestaurant(restaurant.id)
-      if (mainBranch) {
-        await syncUserBranchLink(prisma, ownerId, mainBranch.id)
-      }
+      await ensureMainBranchForRestaurant(restaurant.id)
     }
     return restaurant
   }

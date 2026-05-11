@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { recordJournalEntry } from '@/lib/accounting'
 import { prisma } from '@/lib/prisma'
-import { ensureRestaurantForOwner } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 export async function GET(req: NextRequest) {
 	try {
@@ -12,7 +12,10 @@ export async function GET(req: NextRequest) {
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
-		const restaurant = await ensureRestaurantForOwner(session.user.id)
+		// S2: No auto-create — prevents phantom restaurant for non-owner sessions.
+		const context = await getRestaurantContextForUser(session.user.id)
+		const restaurant = context?.restaurant
+		if (!restaurant) return NextResponse.json({ payables: [], totalUnpaid: 0 }, { status: 200 })
 
 		// Get Accounts Payable account - specifically the main one
 		const apAccount = await prisma.account.findFirst({
@@ -136,7 +139,12 @@ export async function POST(req: NextRequest) {
 			return NextResponse.json({ error: `Missing required fields: ${missingFields.join(', ')}` }, { status: 400 })
 		}
 
-		const restaurant = await ensureRestaurantForOwner(session.user.id)
+		const restaurant = await (async () => {
+			// S2: No auto-create — prevents phantom restaurant for non-owner sessions.
+			const ctx = await getRestaurantContextForUser(session.user.id)
+			return ctx?.restaurant ?? null
+		})()
+		if (!restaurant) return NextResponse.json({ error: 'No restaurant linked to this account' }, { status: 409 })
 		const txDate = date ? new Date(date) : new Date()
 		const fullDescription = `${description || 'Goods/services received'} - ${vendorName}`
 

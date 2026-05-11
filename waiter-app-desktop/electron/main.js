@@ -113,6 +113,12 @@ CREATE TABLE IF NOT EXISTS app_logs (
   details TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS cancellation_approvers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  pin_hash TEXT NOT NULL
+);
 `
 
 function initDatabase() {
@@ -296,9 +302,36 @@ app.on('before-quit', async (event) => {
 function setupAutoUpdater() {
   try {
     const { autoUpdater } = require('electron-updater')
-    autoUpdater.checkForUpdatesAndNotify().catch(() => {
-      // Not configured or no network — silent failure
+
+    autoUpdater.autoDownload = true
+    autoUpdater.autoInstallOnAppQuit = true
+
+    autoUpdater.on('update-available', (info) => {
+      const win = BrowserWindow.getAllWindows()[0]
+      if (win) {
+        win.webContents.send('update-status', `Downloading update v${info.version}…`)
+      }
     })
+
+    autoUpdater.on('update-downloaded', (info) => {
+      const win = BrowserWindow.getAllWindows()[0]
+      dialog.showMessageBox(win ?? undefined, {
+        type: 'info',
+        title: 'Update Ready',
+        message: `Magnify POS v${info.version} is ready to install.`,
+        detail: 'The app will restart to apply the update.',
+        buttons: ['Restart Now', 'Later'],
+        defaultId: 0,
+      }).then(({ response }) => {
+        if (response === 0) autoUpdater.quitAndInstall()
+      })
+    })
+
+    autoUpdater.on('error', () => {
+      // Network or GitHub error — silent, do not crash the app
+    })
+
+    autoUpdater.checkForUpdates().catch(() => {})
   } catch {
     // electron-updater not available in dev
   }

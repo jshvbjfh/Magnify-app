@@ -1,8 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { compare, hash } from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
+import { createRateLimiter, getRateLimitKey } from '@/lib/rateLimit'
+
+// 5 password-reset attempts per IP per 15 minutes
+const forgotLimiter = createRateLimiter({ windowMs: 15 * 60_000, max: 5 })
 
 export async function POST(request: NextRequest) {
+  const rlResult = forgotLimiter.check(getRateLimitKey(request, 'forgot'))
+  if (!rlResult.allowed) {
+    return NextResponse.json({ error: 'Too many requests' }, {
+      status: 429,
+      headers: { 'Retry-After': String(Math.ceil((rlResult.resetAt - Date.now()) / 1000)) },
+    })
+  }
+
   try {
     const body = await request.json()
     const { email, recoveryKey, newPassword } = body

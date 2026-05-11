@@ -47,7 +47,7 @@ export default function LoginPage({ onLogin, onOpenLogs }: LoginPageProps) {
       {/* Background photo */}
       <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-        style={{ backgroundImage: "url('/pic/restaurant-bg.jpg')" }}
+        style={{ backgroundImage: "url('./pic/restaurant-bg.jpg')" }}
       >
         <div className="absolute inset-0 bg-gradient-to-br from-black/50 via-black/40 to-black/50" />
       </div>
@@ -56,7 +56,7 @@ export default function LoginPage({ onLogin, onOpenLogs }: LoginPageProps) {
         <div className="bg-white backdrop-blur-md border border-white/20 rounded-2xl shadow-2xl p-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
           <div className="text-center mb-10">
             <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl mb-5 shadow-lg shadow-orange-500/30 overflow-hidden">
-              <img src="/icon.png" alt="Magnify" className="h-20 w-20 rounded-2xl object-cover" />
+              <img src="./icon.png" alt="Magnify" className="h-20 w-20 rounded-2xl object-cover" />
             </div>
             <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent mb-2">
               Magnify

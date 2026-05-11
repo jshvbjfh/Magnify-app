@@ -87,7 +87,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   }
 
   async function loadWaiters() {
-    const data = await fetchJson<{ waiters?: Waiter[]; restaurant?: Restaurant }>('/api/restaurant/waiters', { credentials:'include' })
+    const data = await fetchJson<{ waiters?: Waiter[]; ownerAccounts?: Waiter[]; restaurant?: Restaurant }>('/api/restaurant/waiters', { credentials:'include' })
     if (!data) {
       setLoadError('Waiter accounts could not be loaded from the local server.')
       return
@@ -106,14 +106,12 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   }
 
   async function loadOwnerAccounts() {
-    const data = await fetchJson<{ waiters?: Waiter[]; restaurant?: Restaurant }>('/api/restaurant/waiters', { credentials:'include' })
+    const data = await fetchJson<{ ownerAccounts?: Waiter[]; restaurant?: Restaurant }>('/api/restaurant/waiters', { credentials:'include' })
     if (!data) {
       setLoadError('Owner accounts could not be loaded from the local server.')
       return
     }
-    const all: Waiter[] = Array.isArray(data.waiters) ? data.waiters : []
-    setOwnerAccounts(all.filter(w => (w as any).role === 'owner'))
-    setWaiters(all.filter(w => (w as any).role === 'waiter'))
+    setOwnerAccounts(Array.isArray(data.ownerAccounts) ? data.ownerAccounts : [])
     if (data.restaurant) setRestaurant(data.restaurant)
   }
 
@@ -212,7 +210,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       setLastCreated({ name: snapshot.name, email: snapshot.email, password: snapshot.password })
       setWaiterSuccess(true);setTimeout(()=>setWaiterSuccess(false),3000)
       setShowWaiterForm(false);setWaiterForm({name:'',email:'',password:''})
-      loadOwnerAccounts()
+      loadWaiters()
       return
     }
     const payload = await res.json().catch(() => null)

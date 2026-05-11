@@ -97,7 +97,10 @@ type ConflictResolution = 'accept_local' | 'accept_remote'
 
 const STORAGE_KEY = 'magnify.ownerSync.config'
 
-type StoredOwnerSyncConfig = Partial<Pick<OwnerSyncConfig, 'enabled' | 'targetUrl' | 'email' | 'password'>>
+// Password is intentionally excluded from StoredOwnerSyncConfig — it must not be
+// persisted to localStorage. The sync server supports x-sync-secret (shared secret)
+// for server-managed sync; manual password mode requires re-entry each session.
+type StoredOwnerSyncConfig = Partial<Pick<OwnerSyncConfig, 'enabled' | 'targetUrl' | 'email'>>
 
 function readStoredOwnerSyncConfig(): StoredOwnerSyncConfig | null {
   if (typeof window === 'undefined') return null
@@ -125,7 +128,8 @@ export function loadOwnerSyncConfig(serverConfig?: ServerOwnerSyncConfig | null)
   const stored = readStoredOwnerSyncConfig()
   const storedTargetUrl = typeof stored?.targetUrl === 'string' ? normalizeSyncTargetUrl(stored.targetUrl) : ''
   const storedEmail = typeof stored?.email === 'string' ? stored.email.trim().toLowerCase() : ''
-  const storedPassword = typeof stored?.password === 'string' ? stored.password : ''
+  // Password is never read from localStorage — caller must supply it from UI state
+  const storedPassword = ''
 
   return {
     enabled: typeof stored?.enabled === 'boolean'
@@ -139,11 +143,11 @@ export function loadOwnerSyncConfig(serverConfig?: ServerOwnerSyncConfig | null)
 
 export function saveOwnerSyncConfig(config: OwnerSyncConfig) {
   if (typeof window === 'undefined') return
+  // Intentionally omit password — never persist credentials to localStorage
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
     enabled: config.enabled,
     targetUrl: normalizeSyncTargetUrl(config.targetUrl),
     email: config.email.trim().toLowerCase(),
-    password: config.password,
   }))
   window.dispatchEvent(new CustomEvent('ownerSyncConfigChanged', { detail: { enabled: config.enabled } }))
 }
@@ -160,12 +164,13 @@ export function seedOwnerSyncConfigFromLogin(params: {
   const email = params.email.trim().toLowerCase()
   const password = params.password
 
-  if (!targetUrl || !email || !password) return null
+  if (!targetUrl || !email) return null
 
   const nextConfig: OwnerSyncConfig = {
     enabled: true,
     targetUrl,
     email,
+    // Password is held in memory only; not compared against stored config
     password,
   }
 
@@ -174,7 +179,6 @@ export function seedOwnerSyncConfigFromLogin(params: {
     current.enabled === nextConfig.enabled
     && current.targetUrl === nextConfig.targetUrl
     && current.email === nextConfig.email
-    && current.password === nextConfig.password
   ) {
     return nextConfig
   }
@@ -220,7 +224,7 @@ export async function loadOwnerSyncStatus(): Promise<OwnerSyncStatus | null> {
       lastSyncedSummaries: Number(payload.lastSyncedSummaries ?? 0),
       syncConflictCount: Number(payload.syncConflictCount ?? 0),
       devices: Array.isArray(payload.devices)
-        ? payload.devices.map((device) => ({
+        ? payload.devices.map((device: any) => ({
             deviceId: String(device?.deviceId ?? ''),
             appVersion: String(device?.appVersion ?? 'unknown'),
             status: String(device?.status ?? 'unknown'),
@@ -233,7 +237,7 @@ export async function loadOwnerSyncStatus(): Promise<OwnerSyncStatus | null> {
           }))
         : [],
       recentEvents: Array.isArray(payload.recentEvents)
-        ? payload.recentEvents.map((event) => ({
+        ? payload.recentEvents.map((event: any) => ({
             id: String(event?.id ?? ''),
             status: event?.status === 'failure' ? 'failure' : 'success',
             message: String(event?.message ?? ''),
@@ -244,7 +248,7 @@ export async function loadOwnerSyncStatus(): Promise<OwnerSyncStatus | null> {
           }))
         : [],
       recentBatches: Array.isArray(payload.recentBatches)
-        ? payload.recentBatches.map((batch) => ({
+        ? payload.recentBatches.map((batch: any) => ({
             id: String(batch?.id ?? ''),
             batchId: String(batch?.batchId ?? ''),
             status: String(batch?.status ?? ''),
@@ -269,7 +273,7 @@ export async function loadSyncConflicts(): Promise<SyncConflictEntry[]> {
     const payload = await res.json().catch(() => null)
     if (!payload || !Array.isArray(payload.conflicts)) return []
 
-    return payload.conflicts.map((conflict) => ({
+    return payload.conflicts.map((conflict: any) => ({
       id: String(conflict?.id ?? ''),
       scopeId: String(conflict?.scopeId ?? ''),
       restaurantId: conflict?.restaurantId ? String(conflict.restaurantId) : null,

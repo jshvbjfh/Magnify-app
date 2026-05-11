@@ -39,6 +39,15 @@ export async function provisionRestaurantAccountInCloud(params: {
   const syncPassword = pickFirstSecret(params.syncPassword, process.env.OWNER_SYNC_PASSWORD)
   const sharedSecret = String(process.env.OWNER_SYNC_SHARED_SECRET ?? '').trim()
   const accountLabel = params.role === 'owner' ? 'Owner' : params.role === 'kitchen' ? 'Kitchen' : 'Waiter'
+  const branchId = String(params.branchId ?? '').trim()
+
+  if (!branchId) {
+    return {
+      ok: false as const,
+      status: 400,
+      error: `${accountLabel} cloud login requires an active branch. Select a branch, then try again.`,
+    }
+  }
 
   if (!params.restaurant.syncRestaurantId || !params.restaurant.syncToken) {
     return {
@@ -72,7 +81,7 @@ export async function provisionRestaurantAccountInCloud(params: {
         name: params.name,
         email: params.email,
         password: params.password,
-        branchId: params.branchId ?? null,
+        branchId,
       }),
       cache: 'no-store',
     })

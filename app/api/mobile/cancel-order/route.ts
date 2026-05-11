@@ -39,19 +39,21 @@ async function verifyToken(req: Request) {
 export async function POST(req: Request) {
   try {
     const claims = await verifyToken(req)
-    const { restaurantId, branchId } = claims
-
-    // branchId=null is a critical security gap — reject hard
-    if (!branchId) {
-      return jsonNoStore(
-        { error: 'Branch assignment required to cancel orders. Contact your manager.' },
-        { status: 403 },
-      )
-    }
+    const { restaurantId } = claims
 
     const context = await getRestaurantContextForUser(claims.sub)
     if (!context?.restaurantId || context.restaurantId !== restaurantId) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const effectiveBranchId = context.branchId ?? null
+
+    // branchId=null is a critical security gap — reject hard
+    if (!effectiveBranchId) {
+      return jsonNoStore(
+        { error: 'Branch assignment required to cancel orders. Contact your manager.' },
+        { status: 403 },
+      )
     }
 
     const body = await req.json() as {
@@ -69,7 +71,7 @@ export async function POST(req: Request) {
     }
 
     const order = await prisma.restaurantOrder.findFirst({
-      where: { id: orderId, restaurantId, branchId },
+      where: { id: orderId, restaurantId, branchId: effectiveBranchId },
     })
 
     if (!order) {
@@ -93,7 +95,7 @@ export async function POST(req: Request) {
     const approver = await resolveCancellationApprover({
       billingUserId: context.billingUserId,
       restaurantId,
-      branchId,
+      branchId: effectiveBranchId,
       pin: supervisorPin,
     })
 
@@ -140,7 +142,7 @@ export async function POST(req: Request) {
 
     // Enqueue AFTER the transaction commits — non-fatal if this fails
     try {
-      await enqueueOrderSync(prisma, orderId, restaurantId, branchId)
+      await enqueueOrderSync(prisma, orderId, restaurantId, effectiveBranchId)
     } catch (enqueueErr) {
       console.error('[cancel-order] enqueueOrderSync failed for order', orderId, enqueueErr)
     }

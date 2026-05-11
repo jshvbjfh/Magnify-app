@@ -366,7 +366,9 @@ async function seedFullSnapshotIfNeeded(restaurantId: string, billingUserId: str
       restaurantId,
       branchId: dish.branchId ?? branchId ?? null,
       entityType: 'dishIngredient',
-      entityId: `${row.dishId}_${row.ingredientId}`,
+      // S4: Use colon separator to match live outbox rows (dishId:ingredientId).
+      // Underscore was wrong \u2014 conflict detection compares entityId strings exactly.
+      entityId: `${row.dishId}:${row.ingredientId}`,
       operation: 'upsert',
       payload,
     })
@@ -426,7 +428,7 @@ async function ensureEssentialSyncIdentityRows(restaurantId: string) {
   }
 }
 
-async function listPrioritizedPendingSyncOutboxChanges(restaurantId: string, branchId: string | null, limit: number) {
+async function listPrioritizedPendingSyncOutboxChanges(restaurantId: string, branchId: string | null | undefined, limit: number) {
   const now = new Date()
   const priorityRows = await prisma.syncOutbox.findMany({
     where: {
@@ -497,6 +499,12 @@ export async function POST(req: Request) {
 
     const billingUserId = context?.billingUserId ?? userId
     const branchId = context?.branchId ?? null
+    const branchIdentity = branchId
+      ? await prisma.restaurantBranch.findUnique({
+          where: { id: branchId },
+          select: { id: true, code: true, name: true, isMain: true },
+        })
+      : null
 
     if (!restaurant.syncRestaurantId || !restaurant.syncToken) {
       const state = await markSyncFailure(restaurant.id, 'Branch sync identity is missing; relink this branch before retrying cloud sync')
@@ -572,11 +580,13 @@ export async function POST(req: Request) {
       orderBy: { date: 'asc' },
     })
 
+    const pendingOutboxBranchId = syncUser.role === 'admin' ? undefined : branchId
+
     const [restaurantCursor, globalCursor, pendingOutboxRows] = await Promise.all([
       getSyncCursor(prisma, { scopeId: restaurant.id, restaurantId: restaurant.id }),
       getSyncCursor(prisma, { scopeId: GLOBAL_SYNC_SCOPE_ID, restaurantId: restaurant.id }),
       // 100 entries per cycle — was 30, which caused multi-cycle backlogs on first sync
-    listPrioritizedPendingSyncOutboxChanges(restaurant.id, branchId, 100),
+    listPrioritizedPendingSyncOutboxChanges(restaurant.id, pendingOutboxBranchId, 100),
     ])
 
     const { transactions, syncedIds } = buildSyncTransactions(unsyncedTransactions)
@@ -623,6 +633,7 @@ export async function POST(req: Request) {
         restaurantName: restaurant.name,
         restaurantToken: restaurant.syncToken,
         branchId,
+        branchIdentity,
         batchId,
         payloadHash,
         deviceId,
@@ -839,6 +850,10 @@ export async function POST(req: Request) {
 
     const noOutboundChanges = transactions.length === 0 && summaries.length === 0 && changes.length === 0
     const noPulledChanges = pulledChanges.length === 0
+    const pushedTransactionCount = Number(payload?.transactions ?? transactions.length)
+    const pushedSummaryCount = Number(payload?.summaries ?? summaries.length)
+    const pulledTransactionCount = appliedPulledChanges.filter((change) => change.entityType === 'transaction').length
+    const syncedTransactionCount = pushedTransactionCount + pulledTransactionCount
     const syncMessage = payload?.message || (noOutboundChanges && noPulledChanges
       ? 'No local or remote changes to sync'
       : 'Owner cloud sync completed successfully')
@@ -846,14 +861,14 @@ export async function POST(req: Request) {
     await upsertLocalSyncBatch(restaurant.id, batchId, payloadHash, {
       status: 'success',
       errorMessage: null,
-      syncedTransactions: Number(payload?.transactions ?? transactions.length),
-      syncedSummaries: Number(payload?.summaries ?? summaries.length),
+      syncedTransactions: syncedTransactionCount,
+      syncedSummaries: pushedSummaryCount,
       appliedAt: new Date(),
     })
 
     await markSyncSuccess(restaurant.id, {
-      transactions: Number(payload?.transactions ?? transactions.length),
-      summaries: Number(payload?.summaries ?? summaries.length),
+      transactions: syncedTransactionCount,
+      summaries: pushedSummaryCount,
     }, syncMessage)
 
     logSyncActivity(conflictCount > 0 ? 'warn' : 'info', 'sync.local.completed', {
@@ -861,8 +876,10 @@ export async function POST(req: Request) {
       restaurantSyncId: restaurant.syncRestaurantId,
       deviceId,
       batchId,
-      syncedTransactions: Number(payload?.transactions ?? transactions.length),
-      syncedSummaries: Number(payload?.summaries ?? summaries.length),
+      syncedTransactions: syncedTransactionCount,
+      syncedSummaries: pushedSummaryCount,
+      pushedTransactions: pushedTransactionCount,
+      pulledTransactionChanges: pulledTransactionCount,
       pushedChanges: Number(payload?.changes ?? changes.length),
       pulledChanges: pulledChanges.length,
       appliedChanges,
@@ -874,8 +891,10 @@ export async function POST(req: Request) {
       message: syncMessage,
       consecutiveFailures: 0,
       batchId,
-      syncedTransactions: Number(payload?.transactions ?? transactions.length),
-      syncedSummaries: Number(payload?.summaries ?? summaries.length),
+      syncedTransactions: syncedTransactionCount,
+      syncedSummaries: pushedSummaryCount,
+      pushedTransactions: pushedTransactionCount,
+      pulledTransactionChanges: pulledTransactionCount,
       pushedChanges: Number(payload?.changes ?? changes.length),
       pulledChanges: pulledChanges.length,
       appliedChanges,
@@ -893,7 +912,7 @@ export async function POST(req: Request) {
     let restaurantId: string | null = null
     if (userId) {
       const context = await getRestaurantContextForUser(userId).catch(() => null)
-      let restaurant = context?.restaurant ?? null
+      let restaurant: { id: string } | null = context?.restaurant ?? null
       if (!restaurant && canAutoCreateRestaurantContext()) {
         const userExists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } }).catch(() => null)
         if (userExists) {

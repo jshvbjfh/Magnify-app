@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
-/** DELETE /api/restaurant/waiters/[id] — remove a waiter account */
+/** DELETE /api/restaurant/waiters/[id] — remove a waiter, kitchen, or owner account */
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -14,11 +14,19 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch' }, { status: 400 })
 
   const { id } = await params
-  // Ensure waiter belongs to this restaurant and is not an admin/owner
-  const waiter = await prisma.user.findFirst({ where: { id, restaurantId: context.restaurantId, branchId: context.branchId } })
-  if (!waiter) return NextResponse.json({ error: 'Waiter not found' }, { status: 404 })
-  if (!['waiter', 'kitchen'].includes(waiter.role)) {
-    return NextResponse.json({ error: 'Cannot delete admin or owner accounts from the staff list' }, { status: 403 })
+  const staffAccount = await prisma.user.findFirst({ where: { id, restaurantId: context.restaurantId } })
+  if (!staffAccount) return NextResponse.json({ error: 'Staff account not found' }, { status: 404 })
+
+  if (staffAccount.role === 'admin') {
+    return NextResponse.json({ error: 'Cannot delete admin accounts from the staff list' }, { status: 403 })
+  }
+
+  if (!['waiter', 'kitchen', 'owner'].includes(staffAccount.role)) {
+    return NextResponse.json({ error: 'Unsupported staff account role' }, { status: 403 })
+  }
+
+  if (staffAccount.role !== 'owner' && staffAccount.branchId !== context.branchId) {
+    return NextResponse.json({ error: 'Staff account not found' }, { status: 404 })
   }
 
   await prisma.user.delete({ where: { id } })

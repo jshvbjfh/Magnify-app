@@ -17,9 +17,6 @@ import RestaurantTransactions from '@/components/restaurant/RestaurantTransactio
 import RestaurantAnalytics from '@/components/restaurant/RestaurantAnalytics'
 import RestaurantSettings from '@/components/restaurant/RestaurantSettings'
 import RestaurantCloudSync from '@/components/restaurant/RestaurantCloudSync'
-import WaiterShell from '@/components/restaurant/WaiterShell'
-import KitchenShell from '@/components/restaurant/KitchenShell'
-import OwnerShell from '@/components/restaurant/OwnerShell'
 import RestaurantLive from '@/components/restaurant/RestaurantLive'
 import { RestaurantBranchProvider } from '@/contexts/RestaurantBranchContext'
 import { AI_ANALYTICS_ENABLED } from '@/lib/aiAnalyticsFeature'
@@ -110,7 +107,16 @@ export default function RestaurantShell() {
   const canQueryServer = () => typeof navigator === 'undefined' || navigator.onLine !== false
 
   useEffect(() => {
-    if (status !== 'authenticated' || !['admin', 'owner'].includes(userRole)) {
+    if (status !== 'authenticated') return
+    if (userRole === 'admin') return
+
+    // This shell is manager-only. If a cached client transition mounts it for another
+    // role, force a hard round-trip so the server can render the correct app shell.
+    window.location.replace('/restaurant')
+  }, [status, userRole])
+
+  useEffect(() => {
+    if (status !== 'authenticated' || userRole !== 'admin') {
       setBranches([])
       setActiveBranchId(null)
       setBranchesLoaded(false)
@@ -267,7 +273,7 @@ export default function RestaurantShell() {
   }, [])
 
   useEffect(() => {
-    if (!['admin', 'owner'].includes(userRole)) return
+    if (userRole !== 'admin') return
 
     let cancelled = false
     const loadWastePending = async () => {
@@ -316,15 +322,16 @@ export default function RestaurantShell() {
     return null
   }
 
-  // Route non-admin accounts to their own views — MUST be after all hooks
-  if (userRole === 'waiter') return <WaiterShell />
-  if (userRole === 'kitchen') return <KitchenShell />
-  if (userRole === 'owner') return <OwnerShell key={String((session?.user as any)?.id ?? 'owner')} />
-
-  // Only admin accounts reach this point — block anything else
+  // Only admin accounts reach this point.
   if (userRole !== 'admin') {
-    void signIn()
-    return null
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="flex flex-col items-center gap-3 text-gray-400">
+          <div className="h-8 w-8 rounded-full border-4 border-orange-200 border-t-orange-500 animate-spin"/>
+          <span className="text-sm">Loading your workspace…</span>
+        </div>
+      </div>
+    )
   }
 
   const isDishTracking = trackingMode === 'dish_tracking'

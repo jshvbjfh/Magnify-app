@@ -28,6 +28,12 @@ function makeAutoCode(prefix: string) {
 	return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`.toUpperCase()
 }
 
+function assertRestaurantBranchForWrite(restaurantId?: string | null, branchId?: string | null) {
+	if (!restaurantId) return
+	if (String(branchId ?? '').trim()) return
+	throw new Error('No restaurant branch found for this write operation')
+}
+
 export function normalizePaymentMethod(paymentMethod?: string): string {
 	const raw = String(paymentMethod || 'Cash').trim().toLowerCase()
 	if (raw.includes('internal')) return 'Internal'
@@ -45,7 +51,7 @@ export async function ensureCoreCategories(db: PrismaDb, restaurantId: string | 
 	for (const type of types) {
 		const name = type.charAt(0).toUpperCase() + type.slice(1)
 		const category = await db.category.upsert({
-			where: { restaurantId_name: { restaurantId, name } },
+			where: { restaurantId_name: { restaurantId: restaurantId as unknown as string, name } },
 			update: { type },
 			create: { restaurantId, name, type },
 		})
@@ -148,6 +154,7 @@ export async function recordJournalEntry(db: PrismaDb, params: {
 	sourceDeviceId?: string | null
 }) {
 	const restaurantId = params.restaurantId ?? null
+	assertRestaurantBranchForWrite(restaurantId, params.branchId)
 	const direction = params.direction
 	const categoryType = params.categoryType || (direction === 'out' ? 'expense' : 'income')
 	const categories = await ensureCoreCategories(db, restaurantId)

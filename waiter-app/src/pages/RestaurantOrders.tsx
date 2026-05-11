@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Search, ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
-  ArrowLeft, Trash2, X, Receipt,
+  ArrowLeft, Trash2, X, Receipt, ShieldAlert,
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
-import { pushSync } from '../services/sync'
+import { pushSync, cancelOrderOnServer, validateCancellationPinOffline } from '../services/sync'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -112,12 +112,15 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   const [submitError,      setSubmitError]      = useState<string | null>(null)
   const [confirmSuccess,   setConfirmSuccess]   = useState<string | null>(null)
   const [takenBy,          setTakenBy]          = useState('')
-  const [payingTableKey,   setPayingTableKey]   = useState<string | null>(null)
-  const [payMethod,        setPayMethod]        = useState('Cash')
-  const [payingSaving,     setPayingSaving]     = useState(false)
+  const [payingTableKey,    setPayingTableKey]    = useState<string | null>(null)
+  const [payMethod,         setPayMethod]         = useState('Cash')
+  const [payingSaving,      setPayingSaving]      = useState(false)
+  const [cancelingTableKey, setCancelingTableKey] = useState<string | null>(null)
+  const [servingSaving,     setServingSaving]     = useState(false)
 
   const orderSubmitLockRef = useRef(false)
   const paymentLockRef     = useRef(false)
+  const servingLockRef     = useRef(false)
 
   // ── Data loaders ──
 
@@ -324,9 +327,17 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   }
 
   async function markOrderServed(orderId: string) {
-    await updateOrder(orderId, { served_at: new Date().toISOString() })
-    await loadPOS()
-    pushSync().catch(() => {})
+    if (servingLockRef.current) return
+    servingLockRef.current = true
+    setServingSaving(true)
+    try {
+      await updateOrder(orderId, { served_at: new Date().toISOString() })
+      await loadPOS()
+      pushSync().catch(() => {})
+    } finally {
+      servingLockRef.current = false
+      setServingSaving(false)
+    }
   }
 
   async function collectPayment(tableKey: string) {
@@ -360,23 +371,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
     }
   }
 
-  async function cancelOrder(tableKey: string) {
-    const order = pendingOrders.find(o => (o.table_id ?? 'takeaway') === tableKey)
-    if (!order) return
-    await updateOrder(order.id, {
-      status:      'CANCELED',
-      canceled_at: new Date().toISOString(),
-      cancel_reason: 'Canceled by waiter',
-    })
-    setLocalCart(prev => ({ ...prev, [tableKey]: [] }))
-    setSelectedTableKey('takeaway')
-    setShowPanel('dishes')
-    setTakenBy('')
-    setConfirmSuccess(null)
-    setSubmitError(null)
-    await loadPOS()
-    pushSync().catch(() => {})
-  }
+  // cancelOrder is now handled by CancelModal — this stub kept for reference only
 
   // ── Derived values ──
 
@@ -396,7 +391,6 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
     ? cartItems
     : confirmedItems.map(i => ({ dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price, qty: i.qty }))
   const { subtotal, vatAmount, totalAmount } = calcTotals(rightItems)
-  const tableNumber       = selectedTableKey === 'takeaway' ? 'T/A' : `#${tables.findIndex(t => t.id === selectedTableKey) + 1}`
   const currentOrderServed = Boolean(currentOrder?.served_at)
   const activeTableKeys    = new Set(pendingOrders.map(o => o.table_id ?? 'takeaway'))
 
@@ -555,24 +549,19 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
         {/* Header */}
         <div className="bg-white border-b border-gray-200 px-5 flex flex-col flex-shrink-0">
 
-          {/* Row 1: time label + search */}
+          {/* Row 1: selected table name (or time label for takeaway) + search */}
           <div className="flex items-center justify-between py-3">
-            <h2 className="text-xl font-bold text-gray-900">{getTimeLabel()}</h2>
+            <h2 className="text-xl font-bold text-gray-900">
+              {selectedTableKey === 'takeaway'
+                ? getTimeLabel()
+                : (tables.find(t => t.id === selectedTableKey)?.name ?? getTimeLabel())}
+            </h2>
             {activeTableKeys.size > 0 && (
               <span className="text-[13px] font-semibold text-orange-500">
                 {activeTableKeys.size} pending
               </span>
             )}
             <div className="flex items-center gap-2 flex-shrink-0">
-              {/* Mobile: jump to order panel */}
-              {(cartItems.length > 0 || confirmedItems.length > 0) && (
-                <button
-                  onClick={() => setShowPanel('order')}
-                  className="md:hidden flex items-center gap-1 bg-orange-500 text-white px-2.5 py-1 rounded-full text-xs font-bold">
-                  <ShoppingBag className="h-3.5 w-3.5" />
-                  <span>{cartItems.length > 0 ? cartItems.length : confirmedItems.length}</span>
-                </button>
-              )}
               {showSearch ? (
                 <input
                   autoFocus type="text" value={searchQuery}
@@ -713,6 +702,20 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             </div>
           )}
         </div>
+
+        {/* ── Yellow "Check Receipt" button — mobile only, appears when table has items ── */}
+        {(cartItems.length > 0 || confirmedItems.length > 0) && (
+          <div className="md:hidden flex-shrink-0 px-4 py-3 border-t border-gray-200 bg-gray-50">
+            <button
+              onClick={() => setShowPanel('order')}
+              className="w-full bg-yellow-400 hover:bg-yellow-500 active:bg-yellow-500 text-gray-900 font-bold py-4 rounded-2xl text-base transition-colors shadow-sm flex items-center justify-center gap-2">
+              <Receipt className="h-5 w-5" />
+              {cartItems.length > 0
+                ? `Order · ${cartItems.length} item${cartItems.length > 1 ? 's' : ''}`
+                : 'Check Receipt'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ── RIGHT PANEL: current order ── */}
@@ -726,12 +729,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             className="p-1.5 -ml-1.5 mr-1 rounded-lg hover:bg-gray-100 transition-colors flex-shrink-0">
             <ArrowLeft className="h-5 w-5 text-gray-600" />
           </button>
-          <span className="text-2xl font-black text-gray-900">{tableNumber}</span>
-          <select value={selectedTableKey} onChange={e => setSelectedTableKey(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-white text-gray-600">
-            <option value="takeaway">Takeaway</option>
-            {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
+          <span className="text-lg font-bold text-gray-900 flex-1 text-center">
+            {selectedTableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')}
+          </span>
         </div>
 
         {/* Mode label strip */}
@@ -744,7 +744,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             ? 'Building order — not sent yet'
             : confirmedItems.length
               ? `Order · ${currentOrder?.order_number ?? ''}`
-              : 'No items'}
+              : 'Tap a dish to add items'}
         </div>
 
         {/* Items list */}
@@ -847,9 +847,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             ) : (
               <>
                 {currentOrder && !currentOrderServed && (
-                  <button onClick={() => markOrderServed(currentOrder.id)}
-                    className="w-full flex items-center justify-center gap-2 bg-white border border-green-300 hover:bg-green-50 text-green-700 font-semibold py-3 rounded-2xl text-sm transition-colors mt-1 shadow-sm">
-                    <CheckCircle2 className="h-4 w-4" /> Mark Served
+                  <button onClick={() => markOrderServed(currentOrder.id)} disabled={servingSaving}
+                    className="w-full flex items-center justify-center gap-2 bg-white border border-green-300 hover:bg-green-50 text-green-700 font-semibold py-3 rounded-2xl text-sm transition-colors mt-1 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed">
+                    <CheckCircle2 className="h-4 w-4" /> {servingSaving ? 'Marking…' : 'Mark Served'}
                   </button>
                 )}
                 <button onClick={() => setPayingTableKey(selectedTableKey)}
@@ -861,9 +861,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                   <Receipt className="h-3.5 w-3.5" /> Refresh order
                 </button>
                 {currentOrder && (
-                  <button onClick={() => cancelOrder(selectedTableKey)}
-                    className="w-full text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
-                    Cancel order
+                  <button
+                    onClick={() => setCancelingTableKey(selectedTableKey)}
+                    className="w-full flex items-center justify-center gap-1.5 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
+                    <ShieldAlert className="h-3.5 w-3.5" /> Cancel order
                   </button>
                 )}
               </>
@@ -878,6 +879,134 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
           onClose={() => { setPayingTableKey(null); setPayMethod('Cash') }}
         />
       )}
+
+      {cancelingTableKey && (
+        <CancelModal
+          tableKey={cancelingTableKey}
+          onClose={() => setCancelingTableKey(null)}
+        />
+      )}
     </div>
   )
+
+  // ── Cancel Modal ── (defined inside component to access closure state)
+  function CancelModal({ tableKey, onClose }: { tableKey: string; onClose: () => void }) {
+    const [pin,    setPin]    = useState('')
+    const [reason, setReason] = useState('')
+    const [saving, setSaving] = useState(false)
+    const [error,  setError]  = useState<string | null>(null)
+
+    const tableName = tableKey === 'takeaway'
+      ? 'Takeaway'
+      : (tables.find(t => t.id === tableKey)?.name ?? 'Table')
+
+    async function submit() {
+      if (pin.length !== 5) { setError('PIN must be exactly 5 digits'); return }
+      if (!reason.trim())   { setError('Please enter a reason');        return }
+
+      const order = pendingOrders.find(o => (o.table_id ?? 'takeaway') === tableKey)
+      if (!order) { setError('Order not found'); return }
+
+      setSaving(true)
+      setError(null)
+      try {
+        let result: { approvedBy: string }
+        try {
+          result = await cancelOrderOnServer({
+            orderId:       order.id,
+            supervisorPin: pin,
+            cancelReason:  reason.trim(),
+          })
+        } catch (serverErr) {
+          const isNetworkErr = (serverErr as Error).name === 'NetworkRequestError'
+          if (!isNetworkErr) throw serverErr
+          // Server unreachable — validate PIN against cached bcrypt hashes
+          result = await validateCancellationPinOffline(pin)
+        }
+        // Mirror cancellation in local DB so POS is consistent offline
+        await updateOrder(order.id, {
+          status:        'CANCELED',
+          canceled_at:   new Date().toISOString(),
+          cancel_reason: reason.trim(),
+        })
+        setLocalCart(prev => ({ ...prev, [tableKey]: [] }))
+        setSelectedTableKey('takeaway')
+        setShowPanel('dishes')
+        setConfirmSuccess(`Order canceled · approved by ${result.approvedBy}`)
+        setTimeout(() => setConfirmSuccess(null), 5000)
+        await loadPOS()
+        pushSync().catch(() => {})
+        onClose()
+      } catch (err) {
+        setError((err as Error).message)
+      } finally {
+        setSaving(false)
+      }
+    }
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-gray-900 flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5 text-red-500" />
+              Cancel Order — {tableName}
+            </h3>
+            <button onClick={onClose} disabled={saving}>
+              <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
+            </button>
+          </div>
+
+          <p className="text-sm text-gray-500">
+            A supervisor must enter their 5-digit PIN to approve this cancellation.
+          </p>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-600 mb-1 block">Supervisor PIN</label>
+            <input
+              type="password"
+              inputMode="numeric"
+              maxLength={5}
+              value={pin}
+              onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 5)); setError(null) }}
+              placeholder="● ● ● ● ●"
+              className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-red-400"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-600 mb-1 block">Reason</label>
+            <input
+              type="text"
+              value={reason}
+              onChange={e => { setReason(e.target.value); setError(null) }}
+              placeholder="e.g. Customer changed mind"
+              className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+            />
+          </div>
+
+          {error && (
+            <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
+              {error}
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={onClose}
+              disabled={saving}
+              className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 disabled:opacity-50">
+              Go Back
+            </button>
+            <button
+              onClick={submit}
+              disabled={saving || pin.length !== 5 || !reason.trim()}
+              className="flex-1 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
+              {saving ? 'Canceling…' : 'Confirm Cancel'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 }

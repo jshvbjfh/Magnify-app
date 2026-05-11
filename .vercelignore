@@ -9,6 +9,7 @@ dist-release-*
 node_modules
 android
 .env
+.env.*
 .env.local
 dev.db
 prisma/dev.db
@@ -17,4 +18,8 @@ prisma/dev.db-journal
 *.aab
 *.log
 tsconfig.tsbuildinfo
+runtime.env
+electron/runtime.env
+.tmp-*
+.vscode
 release

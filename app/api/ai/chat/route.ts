@@ -268,7 +268,7 @@ function normalizeAiActionBlock(rawBlock: any): any | null {
 					: [rawBlock]
 
 		const transactions = rawTransactions
-			.map((entry) => normalizeAiTransactionEntry(entry))
+			.map((entry: unknown) => normalizeAiTransactionEntry(entry))
 			.filter(Boolean)
 
 		if (!transactions.length) return null
@@ -298,7 +298,7 @@ function normalizeAiActionBlock(rawBlock: any): any | null {
 					: [rawBlock]
 
 	const items = rawItems
-		.map((entry) => normalizeAiItemEntry(entry))
+		.map((entry: unknown) => normalizeAiItemEntry(entry))
 		.filter(Boolean)
 
 	const normalizedBlock: Record<string, any> = {
@@ -597,6 +597,13 @@ async function createInventoryPurchaseBatch(params: {
 		: quantity > 0 && totalCost > 0
 			? totalCost / quantity
 			: null
+	const resolvedBranchId = params.restaurantId
+		? String(params.branchId ?? '').trim() || null
+		: null
+
+	if (params.restaurantId && !resolvedBranchId) {
+		throw new Error('No restaurant branch found for this write operation')
+	}
 
 	if (!(quantity > 0) || !(resolvedUnitCost !== null && resolvedUnitCost > 0)) {
 		return null
@@ -606,7 +613,7 @@ async function createInventoryPurchaseBatch(params: {
 		data: {
 			userId: params.userId,
 			restaurantId: params.restaurantId ?? null,
-			branchId: params.branchId ?? null,
+			branchId: resolvedBranchId,
 			ingredientId: params.ingredientId,
 			supplier: params.supplier || 'AI Purchase',
 			quantityPurchased: quantity,
@@ -621,6 +628,7 @@ async function createInventoryPurchaseBatch(params: {
 async function createJournalPair(params: {
 	userId: string
 	restaurantId: string | null
+	branchId?: string | null
 	date: Date
 	description: string
 	amount: number
@@ -635,12 +643,20 @@ async function createJournalPair(params: {
 }) {
 	const pairId = params.pairId || `pair-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
 	const authoritativeForRevenue = params.authoritativeForRevenue ?? true
+	const resolvedBranchId = params.restaurantId
+		? String(params.branchId ?? '').trim() || null
+		: null
+
+	if (params.restaurantId && !resolvedBranchId) {
+		throw new Error('No restaurant branch found for this write operation')
+	}
 
 	await prisma.transaction.createMany({
 		data: [
 			{
 				userId: params.userId,
 				restaurantId: params.restaurantId,
+				branchId: resolvedBranchId,
 				accountId: params.debitAccountId,
 				categoryId: params.debitCategoryId,
 				date: params.date,
@@ -656,6 +672,7 @@ async function createJournalPair(params: {
 			{
 				userId: params.userId,
 				restaurantId: params.restaurantId,
+				branchId: resolvedBranchId,
 				accountId: params.creditAccountId,
 				categoryId: params.creditCategoryId,
 				date: params.date,
@@ -693,6 +710,10 @@ export async function POST(req: NextRequest) {
 		const restaurantId = restaurantContext.restaurantId
 		const billingUserId = restaurantContext.billingUserId
 		const branchId = restaurantContext.branchId ?? null
+		if (restaurantId && !branchId) {
+			return NextResponse.json({ error: 'No restaurant branch found for this write operation' }, { status: 400 })
+		}
+		const restaurantWriteBranchId = branchId
 		const restaurantReadScope = buildRestaurantReadScope(restaurantId)
 
 		if (!message || typeof message !== 'string') {
@@ -2341,6 +2362,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 							await createJournalPair({
 								userId,
 								restaurantId,
+								branchId: restaurantWriteBranchId,
 								date,
 								description,
 								amount,
@@ -2379,6 +2401,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 							await createJournalPair({
 								userId,
 								restaurantId,
+								branchId: restaurantWriteBranchId,
 								date,
 								description,
 								amount,
@@ -2439,6 +2462,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 							await createJournalPair({
 								userId,
 								restaurantId,
+								branchId: restaurantWriteBranchId,
 								date,
 								description,
 								amount,
@@ -2525,7 +2549,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 								data: {
 									userId,
 									restaurantId,
-									branchId,
+									branchId: restaurantWriteBranchId,
 									name: item.name,
 									unit: item.unit,
 									unitCost: item.unitPrice || null,
@@ -2540,7 +2564,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 									userId,
 									restaurantId,
 									ingredientId: newItem.id,
-									branchId,
+									branchId: restaurantWriteBranchId,
 									quantity: openingQuantity,
 									unitCost: resolvedUnitPrice,
 									totalCost: openingQuantity * Number(resolvedUnitPrice),
@@ -2624,6 +2648,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						await createJournalPair({
 							userId,
 							restaurantId,
+							branchId: restaurantWriteBranchId,
 							date: saleDate,
 							description,
 							amount: totalAmount,
@@ -2696,7 +2721,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 									data: {
 										userId,
 										restaurantId,
-										branchId,
+										branchId: restaurantWriteBranchId,
 										name: item.name,
 										unit,
 										unitCost: unitPrice,
@@ -2728,6 +2753,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						await createJournalPair({
 							userId,
 							restaurantId,
+							branchId: restaurantWriteBranchId,
 							date: purchaseDate,
 							description,
 							amount: totalCost,
@@ -2744,7 +2770,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 							userId,
 							restaurantId,
 							ingredientId: inventoryItem.id,
-									branchId,
+							branchId: restaurantWriteBranchId,
 							quantity,
 							unitCost: item.unitPrice ?? inventoryItem.unitCost ?? (quantity > 0 ? totalCost / quantity : null),
 							totalCost,
@@ -2815,7 +2841,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 						})
 					} else {
 						invItem = await prisma.inventoryItem.create({
-								data: { userId, restaurantId, branchId, name: item.name, unit, unitCost, quantity: qty, inventoryType: 'ingredient', ...(qty > 0 ? { lastRestockedAt: aapDate } : {}) } as any
+								data: { userId, restaurantId, branchId: restaurantWriteBranchId, name: item.name, unit, unitCost, quantity: qty, inventoryType: 'ingredient', ...(qty > 0 ? { lastRestockedAt: aapDate } : {}) } as any
 							})
 						}
 
@@ -2828,6 +2854,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 								await createJournalPair({
 									userId,
 									restaurantId,
+									branchId: restaurantWriteBranchId,
 									date: aapDate,
 									description: `Purchase of ${qty} ${unit} ${item.name}`,
 									amount: totalCost,
@@ -2847,7 +2874,7 @@ If the user mentions the result of a past campaign ("the burger night worked", "
 							userId,
 							restaurantId,
 							ingredientId: invItem.id,
-									branchId,
+							branchId: restaurantWriteBranchId,
 							quantity: qty,
 							unitCost: unitCost ?? (qty > 0 ? totalCost / qty : null),
 							totalCost,

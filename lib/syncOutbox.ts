@@ -12,6 +12,31 @@ export const SYNC_OUTBOX_BASE_RETRY_MS = 30_000
 export const SYNC_OUTBOX_MAX_RETRY_MS = 15 * 60_000
 export const SYNC_OUTBOX_MAX_ATTEMPTS = 8
 
+// S3: Single authoritative source for sync entity type classification.
+// All code that needs to know which entities are restaurant-wide vs branch-scoped
+// must derive from these sets — never define a parallel list elsewhere.
+export const RESTAURANT_WIDE_ENTITY_TYPES = new Set([
+  'restaurant',
+  'restaurantBranch',
+  'pricingPlan',
+])
+
+export const BRANCH_REQUIRED_ENTITY_TYPES = new Set([
+  'dish',
+  'inventoryItem',
+  'employee',
+  'restaurantTable',
+  'restaurantOrder',
+  'wasteLog',
+  'inventoryPurchase',
+  'inventoryBatchUsageLedger',
+  'inventoryAdjustmentLog',
+  'shift',
+  'dishSale',
+  'transaction',
+  'dishIngredient',
+])
+
 export type SyncOperation = 'upsert' | 'delete'
 
 export type SyncChangeEnvelope = {
@@ -44,7 +69,7 @@ export function getSyncScopeId(restaurantId?: string | null) {
 }
 
 export function isRestaurantWideSyncEntity(entityType?: string | null) {
-  return entityType === 'restaurant' || entityType === 'restaurantBranch'
+  return RESTAURANT_WIDE_ENTITY_TYPES.has(entityType as any)
 }
 
 export function getSyncDeviceId() {

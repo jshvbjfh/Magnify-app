@@ -164,9 +164,19 @@ export async function POST(req: Request) {
         : null
 
       const hasBranchScopedBackupData = Boolean(
+        (backup.transactions?.length ?? 0)
         (backup.tables?.length ?? 0)
         || (backup.restaurantOrders?.length ?? 0)
-        || (backup.dishes?.length ?? 0),
+        || (backup.inventoryItems?.length ?? 0)
+        || (backup.inventoryPurchases?.length ?? 0)
+        || (backup.inventoryAdjustmentLogs?.length ?? 0)
+        || (backup.inventoryBatchUsageLedgers?.length ?? 0)
+        || (backup.dishes?.length ?? 0)
+        || (backup.dishSales?.length ?? 0)
+        || (backup.wasteLogs?.length ?? 0)
+        || (backup.employees?.length ?? 0)
+        || (backup.shifts?.length ?? 0)
+        || (backup.dailySummaries?.length ?? 0)
       )
 
       if (restaurant && hasBranchScopedBackupData && !restoreBranchId) {
@@ -240,7 +250,7 @@ export async function POST(req: Request) {
             id: txn.id,
             userId: billingUserId,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             uploadId: null,
             accountId: txn.accountId,
             categoryId: txn.categoryId,
@@ -403,7 +413,7 @@ export async function POST(req: Request) {
           update: {
             name: item.name,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             unit: item.unit,
             purchaseUnit: item.purchaseUnit ?? null,
             unitsPerPurchaseUnit: item.unitsPerPurchaseUnit ?? null,
@@ -416,7 +426,7 @@ export async function POST(req: Request) {
             id: item.id,
             userId: billingUserId,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             name: item.name,
             description: item.description ?? null,
             unit: item.unit,
@@ -442,7 +452,7 @@ export async function POST(req: Request) {
           where: { id: purchase.id },
           update: {
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             batchId: purchase.batchId ?? null,
             purchaseQuantity: purchase.purchaseQuantity ?? null,
             purchaseUnit: purchase.purchaseUnit ?? null,
@@ -457,7 +467,7 @@ export async function POST(req: Request) {
             id: purchase.id,
             userId: billingUserId,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             batchId: purchase.batchId ?? null,
             ingredientId: purchase.ingredientId,
             supplier: purchase.supplier ?? null,
@@ -481,7 +491,7 @@ export async function POST(req: Request) {
           where: { id: log.id },
           update: {
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             ingredientId: log.ingredientId,
             adjustmentType: log.adjustmentType,
             quantityDelta: log.quantityDelta,
@@ -495,7 +505,7 @@ export async function POST(req: Request) {
             id: log.id,
             userId: billingUserId,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             ingredientId: log.ingredientId,
             adjustmentType: log.adjustmentType,
             quantityDelta: log.quantityDelta,
@@ -515,7 +525,7 @@ export async function POST(req: Request) {
           where: { id: usage.id },
           update: {
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             purchaseId: usage.purchaseId,
             ingredientId: usage.ingredientId,
             sourceType: usage.sourceType,
@@ -532,7 +542,7 @@ export async function POST(req: Request) {
             id: usage.id,
             userId: billingUserId,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             purchaseId: usage.purchaseId,
             ingredientId: usage.ingredientId,
             sourceType: usage.sourceType,
@@ -603,7 +613,7 @@ export async function POST(req: Request) {
           where: { id: sale.id },
           update: {
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             orderId: sale.orderId,
             quantitySold: sale.quantitySold,
             totalSaleAmount: sale.totalSaleAmount,
@@ -613,7 +623,7 @@ export async function POST(req: Request) {
             id: sale.id,
             userId: billingUserId,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             orderId: sale.orderId,
             dishId: sale.dishId,
             quantitySold: sale.quantitySold,
@@ -649,12 +659,12 @@ export async function POST(req: Request) {
       for (const log of (backup.wasteLogs ?? [])) {
         await tx.wasteLog.upsert({
           where: { id: log.id },
-          update: { ...(restaurant ? { restaurantId: restaurant.id } : {}), ...(activeBranchId ? { branchId: activeBranchId } : {}), quantityWasted: log.quantityWasted, reason: log.reason, notes: log.notes },
+          update: { ...(restaurant ? { restaurantId: restaurant.id } : {}), ...(restoreBranchId ? { branchId: restoreBranchId } : {}), quantityWasted: log.quantityWasted, reason: log.reason, notes: log.notes },
           create: {
             id: log.id,
             userId: billingUserId,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             ingredientId: log.ingredientId,
             quantityWasted: log.quantityWasted,
             reason: log.reason,
@@ -672,7 +682,7 @@ export async function POST(req: Request) {
           where: { id: emp.id },
           update: {
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             name: emp.name,
             role: emp.role,
             payType: emp.payType,
@@ -684,7 +694,7 @@ export async function POST(req: Request) {
             id: emp.id,
             userId: billingUserId,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             name: emp.name,
             role: emp.role,
             payType: emp.payType,
@@ -701,13 +711,13 @@ export async function POST(req: Request) {
       for (const shift of (backup.shifts ?? [])) {
         await tx.shift.upsert({
           where: { id: shift.id },
-          update: { ...(restaurant ? { restaurantId: restaurant.id } : {}), ...(activeBranchId ? { branchId: activeBranchId } : {}), hoursWorked: shift.hoursWorked, calculatedWage: shift.calculatedWage, notes: shift.notes },
+          update: { ...(restaurant ? { restaurantId: restaurant.id } : {}), ...(restoreBranchId ? { branchId: restoreBranchId } : {}), hoursWorked: shift.hoursWorked, calculatedWage: shift.calculatedWage, notes: shift.notes },
           create: {
             id: shift.id,
             employeeId: shift.employeeId,
             userId: billingUserId,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             date: new Date(shift.date),
             hoursWorked: shift.hoursWorked,
             calculatedWage: shift.calculatedWage,
@@ -723,7 +733,7 @@ export async function POST(req: Request) {
           where: { id: ds.id },
           update: {
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             totalRevenue: ds.totalRevenue,
             totalExpenses: ds.totalExpenses,
             profitLoss: ds.profitLoss,
@@ -732,7 +742,7 @@ export async function POST(req: Request) {
             id: ds.id,
             userId: billingUserId,
             ...(restaurant ? { restaurantId: restaurant.id } : {}),
-            ...(activeBranchId ? { branchId: activeBranchId } : {}),
+            ...(restoreBranchId ? { branchId: restoreBranchId } : {}),
             date: new Date(ds.date),
             totalRevenue: ds.totalRevenue,
             totalExpenses: ds.totalExpenses,

@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { hash } from 'bcryptjs'
 import { provisionRestaurantAccountInCloud } from '@/lib/cloudRestaurantAccountProvision'
-import { ensureRestaurantForOwner, getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions)
@@ -15,10 +15,6 @@ async function requireAdmin() {
     id: session.user.id,
     email: typeof session.user.email === 'string' ? session.user.email.trim().toLowerCase() : '',
   }
-}
-
-async function getOrCreateRestaurant(ownerId: string) {
-  return ensureRestaurantForOwner(ownerId)
 }
 
 function isLocalFirstDesktopMode() {
@@ -34,9 +30,12 @@ function canProvisionToCloud() {
 export async function GET() {
   try {
     const admin = await requireAdmin()
-    const restaurant = await getOrCreateRestaurant(admin.id)
+    // S1: Use getRestaurantContextForUser instead of ensureRestaurantForOwner to avoid
+    // creating a phantom restaurant when an admin (not owner) user hits this endpoint.
     const adminContext = await getRestaurantContextForUser(admin.id)
-    if (!adminContext?.branchId || adminContext.restaurantId !== restaurant.id) {
+    const restaurant = adminContext?.restaurant
+    if (!restaurant) return NextResponse.json({ error: 'No restaurant is linked to this account' }, { status: 409 })
+    if (!adminContext.branchId) {
       return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
     }
 
@@ -55,9 +54,12 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const admin = await requireAdmin()
-    const restaurant = await getOrCreateRestaurant(admin.id)
+    // S1: Use getRestaurantContextForUser instead of ensureRestaurantForOwner to avoid
+    // creating a phantom restaurant when an admin (not owner) user hits this endpoint.
     const adminContext = await getRestaurantContextForUser(admin.id)
-    if (!adminContext?.branchId || adminContext.restaurantId !== restaurant.id) {
+    const restaurant = adminContext?.restaurant
+    if (!restaurant) return NextResponse.json({ error: 'No restaurant is linked to this account' }, { status: 409 })
+    if (!adminContext.branchId) {
       return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
     }
 
@@ -78,6 +80,7 @@ export async function POST(req: Request) {
         name: name.trim(),
         email: email.trim().toLowerCase(),
         password,
+        branchId: adminContext.branchId,
         syncTargetUrl,
         syncEmail,
         syncPassword,

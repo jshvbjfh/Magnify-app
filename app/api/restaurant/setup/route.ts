@@ -24,7 +24,7 @@ export async function GET() {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const userId = session.user.id
 
-  const context = await getRestaurantContextForUser(userId)
+  let context = await getRestaurantContextForUser(userId)
   let targetRestaurantId = context?.restaurantId
   if (!targetRestaurantId) {
     let created: Awaited<ReturnType<typeof ensureRestaurantForOwner>>
@@ -33,6 +33,7 @@ export async function GET() {
       throw e
     }
     targetRestaurantId = created?.id
+    context = await getRestaurantContextForUser(userId)
   }
   if (!targetRestaurantId) return NextResponse.json({ error: 'No restaurant found' }, { status: 404 })
   const restaurant = await prisma.restaurant.findUnique({
@@ -41,10 +42,21 @@ export async function GET() {
   })
   if (!restaurant) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
 
-  const waiters = await prisma.user.findMany({
-    where: { restaurantId: restaurant.id },
-    select: { id: true, name: true, email: true, role: true, createdAt: true }
-  })
+  if ((!context?.branchId || context.restaurantId !== restaurant.id) && targetRestaurantId === restaurant.id) {
+    context = await getRestaurantContextForUser(userId)
+  }
+
+  const activeBranchId = context?.restaurantId === restaurant.id ? context.branchId : null
+  const waiters = activeBranchId
+    ? await prisma.user.findMany({
+        where: {
+          restaurantId: restaurant.id,
+          branchId: activeBranchId,
+          role: { in: ['waiter', 'kitchen'] },
+        },
+        select: { id: true, name: true, email: true, role: true, createdAt: true }
+      })
+    : []
 
   return NextResponse.json({ restaurant, waiters })
 }

@@ -66,6 +66,10 @@ export function isCashEquivalentAccountName(name?: string) {
 		|| normalized.includes('momo')
 }
 
+function isSupplementalIncomeTransaction(sourceKind?: string | null) {
+	return String(sourceKind || '').trim().toLowerCase() !== 'dish_sale_mirror'
+}
+
 export async function requireReportingContext(userId: string): Promise<ReportingContext> {
 	const context = await getRestaurantContextForUser(userId)
 	if (!context) {
@@ -140,10 +144,9 @@ function roundCurrency(value: number) {
 export async function getOperationalReportMetrics(context: ReportingContext, range: DateRange = {}) {
 	const restaurantScope = buildRestaurantScopeCondition(context.restaurantId) as any
 	const branchScope = buildBranchScopeCondition(context.branchId) as any
-	const [sales, shifts, wasteLogs, expenseTransactions] = await Promise.all([
+	const [sales, shifts, wasteLogs, expenseTransactions, incomeTransactions] = await Promise.all([
 		prisma.dishSale.findMany({
 			where: {
-				userId: context.billingUserId,
 				...restaurantScope,
 				...branchScope,
 				...buildDateRangeCondition('saleDate', range),
@@ -162,7 +165,6 @@ export async function getOperationalReportMetrics(context: ReportingContext, ran
 		}),
 		prisma.shift.findMany({
 			where: {
-				userId: context.billingUserId,
 				...restaurantScope,
 				...branchScope,
 				...buildDateRangeCondition('date', range),
@@ -172,7 +174,6 @@ export async function getOperationalReportMetrics(context: ReportingContext, ran
 		}),
 		prisma.wasteLog.findMany({
 			where: {
-				userId: context.billingUserId,
 				...restaurantScope,
 				...branchScope,
 				...buildDateRangeCondition('date', range),
@@ -182,7 +183,6 @@ export async function getOperationalReportMetrics(context: ReportingContext, ran
 		}),
 		prisma.transaction.findMany({
 			where: {
-				userId: context.billingUserId,
 				...restaurantScope,
 				...branchScope,
 				...buildDateRangeCondition('date', range),
@@ -212,14 +212,43 @@ export async function getOperationalReportMetrics(context: ReportingContext, ran
 			},
 			orderBy: { date: 'asc' },
 		}),
+		prisma.transaction.findMany({
+			where: {
+				...restaurantScope,
+				...branchScope,
+				...buildDateRangeCondition('date', range),
+				category: { is: { type: 'income' } },
+				NOT: [
+					{
+						sourceKind: 'dish_sale_mirror',
+					},
+				],
+			},
+			select: {
+				id: true,
+				date: true,
+				amount: true,
+				type: true,
+				description: true,
+				sourceKind: true,
+				account: { select: { name: true } },
+				category: { select: { name: true, type: true } },
+			},
+			orderBy: { date: 'asc' },
+		}),
 	])
 
 	const typedSales = sales as SaleRow[]
 	const typedShifts = shifts as ShiftRow[]
 	const typedWasteLogs = wasteLogs as WasteRow[]
 	const typedExpenseTransactions = expenseTransactions as ExpenseTransaction[]
+	const typedIncomeTransactions = incomeTransactions as ExpenseTransaction[]
 
-	const revenue = typedSales.reduce((sum, sale) => sum + sale.totalSaleAmount, 0)
+	const supplementalRevenue = typedIncomeTransactions.reduce((sum, txn) => {
+		if (!isSupplementalIncomeTransaction(txn.sourceKind)) return sum
+		return sum + (txn.type === 'credit' ? txn.amount : -txn.amount)
+	}, 0)
+	const revenue = typedSales.reduce((sum, sale) => sum + sale.totalSaleAmount, 0) + supplementalRevenue
 	const cogs = typedSales.reduce((sum, sale) => sum + sale.calculatedFoodCost, 0)
 	const laborCost = typedShifts.reduce((sum, shift) => sum + shift.calculatedWage, 0)
 	const wasteCost = typedWasteLogs.reduce((sum, waste) => sum + waste.calculatedCost, 0)
@@ -237,6 +266,15 @@ export async function getOperationalReportMetrics(context: ReportingContext, ran
 		const monthKey = toMonthKey(sale.saleDate)
 		addSeriesEntry(dailyMap, dayKey, sale.totalSaleAmount, sale.calculatedFoodCost)
 		addSeriesEntry(monthlyMap, monthKey, sale.totalSaleAmount, sale.calculatedFoodCost)
+	}
+
+	for (const txn of typedIncomeTransactions) {
+		if (!isSupplementalIncomeTransaction(txn.sourceKind)) continue
+		const signedAmount = txn.type === 'credit' ? txn.amount : -txn.amount
+		const dayKey = toDateKey(txn.date)
+		const monthKey = toMonthKey(txn.date)
+		addSeriesEntry(dailyMap, dayKey, signedAmount, 0)
+		addSeriesEntry(monthlyMap, monthKey, signedAmount, 0)
 	}
 
 	for (const shift of typedShifts) {
@@ -354,7 +392,7 @@ export function buildOperationalIncomeStatement(metrics: Awaited<ReturnType<type
 	return {
 		income: {
 			total: metrics.summary.revenue,
-			accounts: metrics.summary.revenue === 0 ? {} : { 'Restaurant Sales': metrics.summary.revenue },
+			accounts: metrics.summary.revenue === 0 ? {} as Record<string, number> : { 'Restaurant Sales': metrics.summary.revenue },
 		},
 		expenses: {
 			total: metrics.summary.expenses,
@@ -369,7 +407,6 @@ export async function getScopedCashBalance(context: ReportingContext, endDate?: 
 	const branchScope = buildBranchScopeCondition(context.branchId) as any
 	const transactions = await prisma.transaction.findMany({
 		where: {
-			userId: context.billingUserId,
 			...restaurantScope,
 			...branchScope,
 			...buildDateRangeCondition('date', { end: endDate }),

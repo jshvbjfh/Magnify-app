@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,21 +35,28 @@ async function verifyToken(req: Request) {
 export async function GET(req: Request) {
   try {
     const claims = await verifyToken(req)
-    const { restaurantId, branchId } = claims
+    const { restaurantId } = claims
+    const context = await getRestaurantContextForUser(claims.sub)
+
+    if (!context?.restaurantId || context.restaurantId !== restaurantId) {
+      return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const effectiveBranchId = context.branchId ?? null
 
     // A waiter with no branch assigned must not receive another branch's data.
     // Return 403 so the app shows a clear "account not configured" message rather
     // than silently returning the entire restaurant's menu.
-    if (!branchId) {
+    if (!effectiveBranchId) {
       return jsonNoStore(
         { error: 'Your account has no branch assigned. Ask your manager to assign a branch before using the waiter app.' },
         { status: 403 }
       )
     }
 
-    const dishWhere = { restaurantId, branchId, isActive: true }
+    const dishWhere = { restaurantId, branchId: effectiveBranchId, isActive: true }
 
-    const tableWhere = { restaurantId, branchId }
+    const tableWhere = { restaurantId, branchId: effectiveBranchId }
 
     const [dishes, tables, restaurant, approverEmployees] = await Promise.all([
       prisma.dish.findMany({
@@ -80,7 +88,7 @@ export async function GET(req: Request) {
       prisma.employee.findMany({
         where: {
           restaurantId,
-          branchId,
+          branchId: effectiveBranchId,
           isActive: true,
           canApproveOrderCancellation: true,
           cancellationPinHash: { not: null },
@@ -114,7 +122,7 @@ export async function GET(req: Request) {
       // the branchId context without requiring a debugger.
       console.warn('[mobile/pull] zero dishes returned', {
         restaurantId,
-        branchId,
+        branchId: effectiveBranchId,
         tablesCount: normalisedTables.length,
       })
     }

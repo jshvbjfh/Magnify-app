@@ -291,3 +291,31 @@ export async function markOrdersSynced(orders: Array<{ id: string; updated_at: s
     )
   }
 }
+
+// ---- cancellation_approvers ------------------------------------------------
+// Pulled from server on every pullSync. Stores id, name, and bcrypt hash only.
+// No PINs in plaintext — offline validation uses bcrypt.compare() locally.
+
+export interface CancellationApprover {
+  id: string
+  name: string
+  pin_hash: string
+}
+
+export async function replaceCancellationApprovers(approvers: CancellationApprover[]): Promise<void> {
+  const db = getDB()
+  const statements: StatementSet = [
+    { statement: 'DELETE FROM cancellation_approvers', values: [] },
+    ...approvers.map((a) => ({
+      statement: 'INSERT INTO cancellation_approvers (id, name, pin_hash) VALUES (?, ?, ?)',
+      values: [a.id, a.name, a.pin_hash],
+    })),
+  ]
+  await db.executeSet(statements)
+}
+
+export async function getCancellationApprovers(): Promise<CancellationApprover[]> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM cancellation_approvers ORDER BY name', [])
+  return (rows ?? []) as unknown as CancellationApprover[]
+}

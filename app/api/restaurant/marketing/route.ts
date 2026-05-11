@@ -103,7 +103,7 @@ export async function GET(req: NextRequest) {
     hourRevenue[new Date(s.saleDate).getHours()] += s.totalSaleAmount
   }
   const hourTrend = Object.entries(hourRevenue).map(([h, revenue]) => ({
-    hour: `${h.padStart ? h : String(h).padStart(2, '0')}:00`,
+    hour: `${h.padStart(2, '0')}:00`,
     revenue,
   }))
 

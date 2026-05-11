@@ -7,7 +7,11 @@ import { resolveRestaurantForSyncUser } from '@/lib/restaurantAccess'
 import type { SyncSummaryPayload, SyncTransactionPayload } from '@/lib/minimalSync'
 import { applyIncomingSyncChanges, recordRemoteChangeForPull } from '@/lib/syncEngine'
 import { logSyncActivity } from '@/lib/syncLogging'
-import { CLOUD_SYNC_TARGET, GLOBAL_SYNC_SCOPE_ID, isRestaurantWideSyncEntity, latestSyncChangeTimestamp, latestSyncMutationId, mapSyncOutboxRows, type SyncChangeEnvelope } from '@/lib/syncOutbox'
+import { CLOUD_SYNC_TARGET, BRANCH_REQUIRED_ENTITY_TYPES, GLOBAL_SYNC_SCOPE_ID, isRestaurantWideSyncEntity, latestSyncChangeTimestamp, latestSyncMutationId, mapSyncOutboxRows, type SyncChangeEnvelope } from '@/lib/syncOutbox'
+import { createRateLimiter, getRateLimitKey } from '@/lib/rateLimit'
+
+// 30 sync requests per device per minute is generous for normal usage.
+const syncLimiter = createRateLimiter({ windowMs: 60_000, max: 30 })
 
 // Vercel Pro: 60s max. Hobby: 10s max (sync will time out on large batches on Hobby).
 // If still on Hobby, reduce ENTITY_ORDER batch count and use pgbouncer in DATABASE_URL.
@@ -29,20 +33,15 @@ type CloudBranchContext = {
   resolvedBranchId: string | null
 }
 
-const REQUIRED_BRANCH_SYNC_ENTITY_TYPES = new Set([
-  'dish',
-  'inventoryItem',
-  'employee',
-  'restaurantTable',
-  'restaurantOrder',
-  'wasteLog',
-  'inventoryPurchase',
-  'inventoryBatchUsageLedger',
-  'inventoryAdjustmentLog',
-  'shift',
-  'dishSale',
-  'transaction',
-])
+type RequestedBranchIdentity = {
+  id: string | null
+  code: string
+  name: string
+  isMain: boolean
+}
+
+// S3: Derived from BRANCH_REQUIRED_ENTITY_TYPES in syncOutbox — single source of truth.
+const REQUIRED_BRANCH_SYNC_ENTITY_TYPES = BRANCH_REQUIRED_ENTITY_TYPES
 
 function matchesSharedSecret(input: string, expected: string) {
   if (!input || !expected) return false
@@ -92,6 +91,7 @@ async function resolveCloudBranchContext(
   db: PrismaDb,
   restaurantId: string,
   requestedBranchId: string | null,
+  requestedBranchIdentity: RequestedBranchIdentity | null,
   changes: SyncChangeEnvelope[],
 ): Promise<CloudBranchContext> {
   const existingBranches = await db.restaurantBranch.findMany({
@@ -127,11 +127,21 @@ async function resolveCloudBranchContext(
     ? activeBranches[0]
     : null
 
+  const hintedBranch = requestedBranchIdentity
+    ? existingBranches.find((branch) => requestedBranchIdentity.code && branch.code === requestedBranchIdentity.code)
+      ?? existingBranches.find((branch) => requestedBranchIdentity.name && branch.name === requestedBranchIdentity.name)
+      ?? (requestedBranchIdentity.isMain ? existingBranches.find((branch) => branch.isMain) : undefined)
+    : undefined
+
+  if (requestedBranchId && hintedBranch) {
+    branchIdRemap.set(requestedBranchId, hintedBranch.id)
+  }
+
   return {
     branchIdRemap,
     existingBranchIds: new Set(existingBranches.map((branch) => branch.id)),
     resolvedBranchId: requestedBranchId
-      ? branchIdRemap.get(requestedBranchId) ?? loneActiveMainBranch?.id ?? requestedBranchId
+      ? branchIdRemap.get(requestedBranchId) ?? hintedBranch?.id ?? loneActiveMainBranch?.id ?? requestedBranchId
       : null,
   }
 }
@@ -267,6 +277,14 @@ async function collectPullChanges(db: PrismaDb, params: { restaurantId: string; 
 }
 
 export async function POST(req: Request) {
+  const rlResult = syncLimiter.check(getRateLimitKey(req, 'sync'))
+  if (!rlResult.allowed) {
+    return NextResponse.json({ error: 'Too many requests' }, {
+      status: 429,
+      headers: { 'Retry-After': String(Math.ceil((rlResult.resetAt - Date.now()) / 1000)) },
+    })
+  }
+
   let parsedBody: any = null
 
   try {
@@ -317,6 +335,14 @@ export async function POST(req: Request) {
     const restaurantName = String(parsedBody.restaurantName ?? '').trim()
     const restaurantToken = String(parsedBody.restaurantToken ?? '')
     const branchId = String(parsedBody.branchId ?? '').trim() || null
+    const branchIdentity = parsedBody.branchIdentity && typeof parsedBody.branchIdentity === 'object'
+      ? {
+          id: typeof parsedBody.branchIdentity.id === 'string' ? parsedBody.branchIdentity.id.trim() || null : null,
+          code: typeof parsedBody.branchIdentity.code === 'string' ? parsedBody.branchIdentity.code.trim() : '',
+          name: typeof parsedBody.branchIdentity.name === 'string' ? parsedBody.branchIdentity.name.trim() : '',
+          isMain: Boolean(parsedBody.branchIdentity.isMain),
+        }
+      : null
     const batchId = String(parsedBody.batchId ?? '').trim()
     const payloadHash = String(parsedBody.payloadHash ?? '').trim()
     const deviceId = String(parsedBody.deviceId ?? '').trim() || null
@@ -347,7 +373,7 @@ export async function POST(req: Request) {
       }, { status: resolvedRestaurant.status })
     }
     const restaurant = resolvedRestaurant.restaurant
-    const branchContext = await resolveCloudBranchContext(prisma, restaurant.id, branchId, changes)
+    const branchContext = await resolveCloudBranchContext(prisma, restaurant.id, branchId, branchIdentity, changes)
     const resolvedBranchId = branchContext.resolvedBranchId
 
     const existingBatch = await prisma.restaurantSyncBatch.findUnique({
@@ -418,6 +444,13 @@ export async function POST(req: Request) {
         },
       })
 
+      // S-ENTITY_ORDER: This map must stay in sync with RESTAURANT_WIDE_ENTITY_TYPES and
+      // BRANCH_REQUIRED_ENTITY_TYPES in lib/syncOutbox.ts. When adding a new entity type:
+      // 1. Add it to the correct set in syncOutbox.ts
+      // 2. Add a case in lib/syncEngine.ts applyResolvedSyncChange
+      // 3. Add it here with the correct dependency order (parent before child)
+      // Unknown types fall through to ENTITY_ORDER ?? 99 (sorted last) and then hit
+      // the M1 throw in the switch default — they will NOT be silently dropped.
       const ENTITY_ORDER: Record<string, number> = {
         restaurant: 0,
         restaurantBranch: 1,
@@ -554,6 +587,26 @@ export async function POST(req: Request) {
       }
 
       const appliedEntityChanges = await applyIncomingSyncChanges(tx, sortedChanges, { localDeviceId: 'cloud', remapUserId: billingUserId })
+      // C2: Log per-entity failures without aborting the batch transaction.
+      // Also persist each failure to RestaurantSyncEvent so the admin sync-health panel can surface them.
+      for (const { change: failedChange, error: failedError } of appliedEntityChanges.failedChanges ?? []) {
+        logSyncActivity('warn', 'sync.cloud.entity_apply_failed', {
+          restaurantId: restaurant.id,
+          entityType: failedChange.entityType,
+          entityId: failedChange.entityId,
+          error: failedError,
+        })
+        await tx.restaurantSyncEvent.create({
+          data: {
+            restaurantId: restaurant.id,
+            status: 'entity_apply_failed',
+            message: `[${failedChange.entityType}] ${failedChange.entityId}: ${failedError}`,
+            syncedTransactions: 0,
+            syncedSummaries: 0,
+            consecutiveFailures: 1,
+          },
+        })
+      }
       for (const change of appliedEntityChanges.appliedChanges) {
         await recordRemoteChangeForPull(tx, {
           ...change,

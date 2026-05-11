@@ -18,6 +18,7 @@ autoUpdater.allowPrerelease = false
 const DESKTOP_UPDATE_INITIAL_DELAY_MS = 5000
 const DESKTOP_UPDATE_RETRY_DELAYS_MS = [30000, 120000]
 const DESKTOP_UPDATE_POLL_INTERVAL_MS = 10 * 60 * 1000
+const DESKTOP_PRISMA_COMMAND_TIMEOUT_MS = 120000
 const DESKTOP_LEGACY_BASELINE_MIGRATION = '20260411120000_add_sync_infrastructure_tables'
 const DESKTOP_BRANCH_FOUNDATION_MIGRATION = '20260421173000_add_restaurant_branch_foundation'
 
@@ -986,6 +987,22 @@ app.whenReady().then(async () => {
 	appendStartupLog(`Runtime Gemini keys skipped=${skipRuntimeGemini}`)
 	loadEnvFile(path.join(__dirname, 'runtime.env'), { skipGemini: skipRuntimeGemini })
 
+	// NEXTAUTH_SECRET must never be bundled in the package (extractable from .exe).
+	// Generate a stable per-device secret on first launch and persist it in userData.
+	if (!process.env.NEXTAUTH_SECRET) {
+		const secretPath = path.join(app.getPath('userData'), 'auth.secret')
+		let deviceSecret
+		if (fs.existsSync(secretPath)) {
+			deviceSecret = fs.readFileSync(secretPath, 'utf8').trim()
+		} else {
+			deviceSecret = randomBytes(32).toString('hex')
+			fs.mkdirSync(path.dirname(secretPath), { recursive: true })
+			fs.writeFileSync(secretPath, deviceSecret, { encoding: 'utf8', mode: 0o600 })
+		}
+		process.env.NEXTAUTH_SECRET = deviceSecret
+		appendStartupLog('NEXTAUTH_SECRET loaded from device secret store')
+	}
+
 	const configuredDatabaseUrl = String(process.env.DATABASE_URL || '')
 	const hasCloudDatabaseUrl = configuredDatabaseUrl.startsWith('postgresql://') || configuredDatabaseUrl.startsWith('postgres://')
 	const electronDataMode = normalizeElectronDataMode(process.env.ELECTRON_DATA_MODE || (app.isPackaged ? 'local-first' : 'cloud'))
@@ -1041,7 +1058,7 @@ app.whenReady().then(async () => {
 		let migrationFailureMessage = null
 
 		try {
-			const { execSync } = require('child_process')
+			const { execFileSync } = require('child_process')
 			const userDataDir = app.getPath('userData')
 			const migrationLogPath = path.join(userDataDir, 'migration.log')
 			const schemaPath = resolveRuntimeAsset(appDir, 'prisma', 'schema.prisma')
@@ -1077,16 +1094,18 @@ app.whenReady().then(async () => {
 					NODE_PATH: [...migrationNodePaths, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
 				}
 				appendStartupLog(`Migration NODE_PATH=${migrationEnv.NODE_PATH}`)
+				appendStartupLog(`Migration timeout=${DESKTOP_PRISMA_COMMAND_TIMEOUT_MS}ms`)
 
-				const runPrismaCommand = (commandArgs) => execSync(
-					`"${process.execPath}" "${prismaJsEntrypoint}" ${commandArgs} --schema "${schemaPath}"`,
-					{
+				const runPrismaCommand = (commandArgs) => {
+					const args = [...commandArgs.split(/\s+/).filter(Boolean), '--schema', schemaPath]
+					return execFileSync(process.execPath, [prismaJsEntrypoint, ...args], {
 						cwd: userDataDir,
 						env: migrationEnv,
 						stdio: 'pipe',
-						timeout: 20000,
-					}
-				).toString()
+						timeout: DESKTOP_PRISMA_COMMAND_TIMEOUT_MS,
+						windowsHide: true,
+					}).toString()
+				}
 				runDesktopPrismaCommand = runPrismaCommand
 
 				try {

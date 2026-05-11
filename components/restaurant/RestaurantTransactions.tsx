@@ -10,6 +10,7 @@ import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestau
 interface Transaction {
   id: string
   date: string
+  createdAt?: string
   description: string
   amount: number
   type: 'debit' | 'credit'
@@ -49,6 +50,26 @@ function todayStr(): string {
 function toKigaliDateKey(value: string | Date): string {
   const date = value instanceof Date ? value : new Date(value)
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(date)
+}
+
+function formatRecordedTime(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value)
+  if (!Number.isFinite(date.getTime())) return '--'
+  return new Intl.DateTimeFormat('en-RW', {
+    timeZone: 'Africa/Kigali',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function formatRecordedDateTime(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value)
+  if (!Number.isFinite(date.getTime())) return 'Unknown time'
+  return new Intl.DateTimeFormat('en-RW', {
+    timeZone: 'Africa/Kigali',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date)
 }
 
 function ordinal(n: number): string {
@@ -467,6 +488,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100 bg-gray-50">
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Time</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Description</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Account</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Category</th>
@@ -479,6 +501,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                   <tbody className="divide-y divide-gray-50">
                     {isAddingRow && (
                       <tr className="bg-orange-50">
+                        <td className="px-3 py-2 text-xs font-medium text-gray-400 whitespace-nowrap">On save</td>
                         <td className="px-3 py-2">
                           <input
                             type="text"
@@ -581,8 +604,12 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                           : t.isManual
                             ? 'bg-gray-100 text-gray-500'
                             : 'bg-emerald-100 text-emerald-700'
+                      const recordedAt = t.createdAt ?? t.date
                       return (
                         <tr key={t.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 text-xs font-medium text-gray-500 whitespace-nowrap" title={formatRecordedDateTime(recordedAt)}>
+                            {formatRecordedTime(recordedAt)}
+                          </td>
                           <td className="px-4 py-3 text-gray-800 font-medium max-w-xs truncate" title={t.description}>
                             {t.description}
                           </td>

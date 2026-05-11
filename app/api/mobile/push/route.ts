@@ -100,7 +100,7 @@ interface MobileOrderItem {
 export async function POST(req: Request) {
   try {
     const claims = await verifyToken(req)
-    const { restaurantId, branchId } = claims
+    const { restaurantId } = claims
     const context = await getRestaurantContextForUser(claims.sub)
     const mobileSourceDeviceId = `mobile:${claims.sub}`
 
@@ -108,21 +108,7 @@ export async function POST(req: Request) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Auto-resolve branchId for single-branch restaurants where the waiter JWT has no
-    // branch assignment. If branchId cannot be resolved, reject the entire push —
-    // every order (PENDING, PAID, CANCELLED, CONFIRMED) must carry a branchId for
-    // revenue attribution, reporting, and inventory correctness.
-    let effectiveBranchId: string | null = branchId ?? null
-    if (!effectiveBranchId) {
-      const activeBranches = await prisma.restaurantBranch.findMany({
-        where: { restaurantId, isActive: true },
-        select: { id: true },
-        take: 2, // only need to know if there is exactly one
-      })
-      if (activeBranches.length === 1) {
-        effectiveBranchId = activeBranches[0].id
-      }
-    }
+    const effectiveBranchId = context.branchId ?? null
 
     if (!effectiveBranchId) {
       return jsonNoStore(
@@ -149,13 +135,13 @@ export async function POST(req: Request) {
       // Security: ensure the order belongs to the authenticated restaurant
       if (order.restaurant_id !== restaurantId) continue
 
-      // Security: reject orders claiming a branch the waiter is not assigned to.
-      // The JWT branchId is the authoritative value — never trust the client payload.
-      if (branchId && order.branch_id && order.branch_id !== branchId) continue
+      // Security: reject orders claiming a branch other than the waiter's current
+      // server-side branch assignment.
+      if (order.branch_id && order.branch_id !== effectiveBranchId) continue
 
       const items = orderItems.filter(i => i.order_id === order.id)
 
-      // Always stamp with the JWT-verified branchId and createdById.
+      // Always stamp with the current server-side branchId and createdById.
       // createdById is a non-nullable column; the waiter's user ID is in claims.sub.
       const resolvedBranchId = effectiveBranchId
       const normalizedOrderNumber = normalizeRequiredText(order.order_number, buildFallbackOrderNumber(order.id))

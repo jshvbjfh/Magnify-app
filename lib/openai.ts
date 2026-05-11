@@ -71,7 +71,7 @@ function getGeminiQuotaCooldownDetails(e: any): { kind: GeminiQuotaCooldownKind;
 	const retryConfig = getGeminiCooldownConfig()
 	const details = Array.isArray(e?.errorDetails) ? e.errorDetails : []
 	const detailText = details
-		.map((detail) => {
+		.map((detail: unknown) => {
 			try {
 				return JSON.stringify(detail)
 			} catch {

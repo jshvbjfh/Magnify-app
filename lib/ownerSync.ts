@@ -123,6 +123,16 @@ function isWasteLikeTransaction(entry: { sourceKind?: string | null; description
   return String(entry.description || '').trim().toLowerCase().startsWith('waste:')
 }
 
+function isCashEquivalentAccountName(name?: string | null) {
+  const normalized = String(name || '').trim().toLowerCase()
+  return normalized === 'cash'
+    || normalized.includes('cash')
+    || normalized === 'current account'
+    || normalized.includes('bank')
+    || normalized === 'mobile money'
+    || normalized.includes('momo')
+}
+
 function isSupplementalIncomeTransaction(entry: { categoryType?: string | null; sourceKind?: string | null }) {
   const normalizedCategoryType = String(entry.categoryType || '').trim().toLowerCase()
   if (normalizedCategoryType !== 'income') return false
@@ -342,29 +352,19 @@ export function buildOwnerDashboardPayload(
   }, { purchaseCost: 0, usedCost: 0, stockValue: 0 })
 
   const historyMap = new Map<string, { revenue: number; expenses: number }>()
-  for (const sale of sales) {
-    const key = toDateKey(new Date(sale.date))
-    const current = historyMap.get(key) ?? { revenue: 0, expenses: 0 }
-    current.revenue += sale.totalSaleAmount
-    current.expenses += sale.calculatedFoodCost
-    historyMap.set(key, current)
-  }
-  for (const shift of shifts) {
-    const key = toDateKey(new Date(shift.date))
-    const current = historyMap.get(key) ?? { revenue: 0, expenses: 0 }
-    current.expenses += shift.calculatedWage
-    historyMap.set(key, current)
-  }
-  for (const txn of expenseTransactions) {
+  for (const txn of filteredTransactions) {
+    if (isWasteLikeTransaction(txn)) continue
+    if (!isCashEquivalentAccountName(txn.accountName)) continue
+
     const key = toDateKey(new Date(txn.date))
     const current = historyMap.get(key) ?? { revenue: 0, expenses: 0 }
-    current.expenses += txn.type === 'debit' ? txn.amount : -txn.amount
-    historyMap.set(key, current)
-  }
-  for (const txn of incomeTransactions) {
-    const key = toDateKey(new Date(txn.date))
-    const current = historyMap.get(key) ?? { revenue: 0, expenses: 0 }
-    current.revenue += txn.type === 'credit' ? txn.amount : -txn.amount
+
+    if (txn.type === 'debit') {
+      current.revenue += txn.amount
+    } else if (txn.type === 'credit') {
+      current.expenses += txn.amount
+    }
+
     historyMap.set(key, current)
   }
 

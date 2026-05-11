@@ -11,8 +11,17 @@ prisma/dev.db
 prisma/dev.db-journal
 prisma/schema.generated.prisma
 dist/
+dist-*/
 release/
 .vercel
 .env*.local
+.env.vercel*
 *.jks
 *.keystore
+dev.db
+dev.db-journal
+.tmp-*.cjs
+.tmp-*.mjs
+.tmp-*.js
+runtime.env
+public/uploads/chat/

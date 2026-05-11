@@ -497,7 +497,7 @@ export default function RestaurantSettings() {
     setRetryingOutbox(false)
     setSyncMessage(result.ok
       ? `Requeued ${result.resetCount} stalled sync change${result.resetCount === 1 ? '' : 's'}.`
-      : result.error)
+      : result.error ?? null)
     await refreshSyncStatus()
   }
 
@@ -507,7 +507,7 @@ export default function RestaurantSettings() {
     setResolvingConflictId(null)
     setSyncMessage(result.ok
       ? `Conflict resolved by ${resolution === 'accept_local' ? 'keeping the local version' : 'accepting the remote version'}.`
-      : result.error)
+      : result.error ?? null)
     await refreshSyncStatus()
   }
 

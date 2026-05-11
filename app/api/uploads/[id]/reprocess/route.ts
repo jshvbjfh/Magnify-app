@@ -37,7 +37,7 @@ async function ensureCoreCategories(db: DbClient) {
 	for (const t of types) {
 		const name = t.charAt(0).toUpperCase() + t.slice(1)
 		const cat = await db.category.upsert({
-			where: { restaurantId_name: { restaurantId: null, name } },
+			where: { restaurantId_name: { restaurantId: null as unknown as string, name } },
 			update: { type: t },
 			create: { restaurantId: null, name, type: t }
 		})

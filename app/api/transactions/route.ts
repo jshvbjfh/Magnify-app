@@ -78,7 +78,7 @@ export async function GET(req: Request) {
 				...(await buildTransactionScopeFilter(context.restaurantId, context.branchId)),
 				...dateFilter,
 			},
-			orderBy: { date: 'desc' },
+			orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
 			include: {
 				account: true,
 				category: true,
@@ -90,6 +90,7 @@ export async function GET(req: Request) {
 			transactions: transactions.map((t) => ({
 				id: t.id,
 				date: t.date.toISOString(),
+				createdAt: t.createdAt.toISOString(),
 				description: t.description,
 				amount: t.amount,
 				type: t.type,
@@ -124,6 +125,9 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
 	try {
 		const context = await requireTransactionContext()
+		if (context.restaurantId && !context.branchId) {
+			return new NextResponse('No restaurant branch found for this write operation', { status: 400 })
+		}
 		const body = await req.json()
 
 		const amount = parseAmount(body.amount)
@@ -171,6 +175,9 @@ export async function POST(req: Request) {
 		}
 
 		const message = error instanceof Error ? error.message : 'Error'
+		if (message === 'No restaurant branch found for this write operation') {
+			return new NextResponse(message, { status: 400 })
+		}
 		console.error('Error saving transaction:', error)
 		return new NextResponse(message, { status: 500 })
 	}

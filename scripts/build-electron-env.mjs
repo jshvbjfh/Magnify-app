@@ -17,8 +17,9 @@ const normalizedElectronDataMode = String(process.env.ELECTRON_DATA_MODE ?? '')
 const includeCloudDatabase = normalizedElectronDataMode === 'cloud'
 	|| /^(1|true|yes)$/i.test(String(process.env.ELECTRON_INCLUDE_CLOUD_DATABASE ?? '').trim())
 
+// SECURITY: NEXTAUTH_SECRET is generated per-device at runtime in main.js — never bundle it.
+// SECURITY: OWNER_SYNC_SHARED_SECRET and OWNER_SYNC_PASSWORD are credentials — configure via Settings UI after install.
 const allowedKeys = [
-	'NEXTAUTH_SECRET',
 	'GEMINI_MODEL',
 	'GEMINI_FALLBACK_MODEL',
 	'TRIAL_DAYS',
@@ -29,8 +30,6 @@ const allowedKeys = [
 	'ELECTRON_AUTO_UPDATE',
 	'OWNER_SYNC_TARGET_URL',
 	'OWNER_SYNC_EMAIL',
-	'OWNER_SYNC_PASSWORD',
-	'OWNER_SYNC_SHARED_SECRET',
 ]
 
 function parseEnvFile(filePath) {
@@ -79,10 +78,9 @@ if (!collected.has('ELECTRON_AUTO_UPDATE')) {
 
 const hasOwnerSyncTarget = Boolean(String(collected.get('OWNER_SYNC_TARGET_URL') ?? '').trim())
 const hasOwnerSyncEmail = Boolean(String(collected.get('OWNER_SYNC_EMAIL') ?? '').trim())
-const hasOwnerSyncAuth = Boolean(String(collected.get('OWNER_SYNC_SHARED_SECRET') ?? '').trim() || String(collected.get('OWNER_SYNC_PASSWORD') ?? '').trim())
-
-if (!hasOwnerSyncTarget || !hasOwnerSyncEmail || !hasOwnerSyncAuth) {
-	console.warn('[build-electron-env] OWNER_SYNC_* is incomplete. Server-managed desktop sync will be unavailable. Branch devices can still self-configure after a successful admin login if the cloud bridge URL is available, or be configured manually in Settings, or use an existing electron/runtime.env with the missing values.')
+// Auth credentials (shared secret / password) are never bundled — configure via Settings UI after install.
+if (!hasOwnerSyncTarget || !hasOwnerSyncEmail) {
+	console.warn('[build-electron-env] OWNER_SYNC_TARGET_URL or OWNER_SYNC_EMAIL is missing. Server-managed desktop sync will need manual configuration in Settings after install.')
 }
 
 const contents = Array.from(collected.entries())

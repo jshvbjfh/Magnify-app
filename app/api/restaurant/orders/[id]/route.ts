@@ -40,7 +40,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const context = await getRestaurantContextForUser(session.user.id)
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
-  const includeBranchlessRows = await isMainRestaurantBranch(context.restaurantId, context.branchId)
+  // Narrowed consts so TypeScript preserves non-null type inside closures/callbacks
+  const restaurantId = context.restaurantId
+  const branchId = context.branchId
+  const includeBranchlessRows = await isMainRestaurantBranch(restaurantId, branchId)
 
   const { id } = await params
   const { action, cancelReason, paymentMethod, supervisorPin, actionKey } = await req.json()
@@ -54,14 +57,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   async function getCurrentOrderSnapshot() {
     return prisma.restaurantOrder.findFirst({
-      where: { id, restaurantId: context.restaurantId, branchId: context.branchId },
+      where: { id, restaurantId: restaurantId, branchId: branchId },
       include: { items: { where: { status: 'ACTIVE' } } },
     })
   }
 
   async function resolveDuplicateActionResponse() {
     if (!normalizedActionKey) return null
-    const existingAction = await findRestaurantAction(context.restaurantId, normalizedActionKey, context.branchId)
+    const existingAction = await findRestaurantAction(restaurantId, normalizedActionKey, branchId)
     const currentOrder = await getCurrentOrderSnapshot()
     return NextResponse.json({ duplicate: true, action: existingAction, order: currentOrder }, { status: 200 })
   }
@@ -113,7 +116,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         const paidOrder = await finalizeRestaurantOrderPayment(tx, {
           billingUserId: context.billingUserId,
           restaurantId: context.restaurantId,
-          branchId: context.branchId,
+          branchId: branchId,
           includeBranchlessRows,
           orderId: id,
           paidById: session.user.id,
@@ -194,7 +197,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
       if (order.tableId) {
         await tx.restaurantTable.updateMany({
-          where: { id: order.tableId, restaurantId: context.restaurantId, branchId: context.branchId },
+          where: { id: order.tableId, restaurantId: context.restaurantId, branchId: branchId },
           data: { status: 'available' },
         })
         await enqueueRestaurantTableSync(tx, order.tableId, context.restaurantId)
@@ -302,7 +305,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
         if (order.tableId) {
           await tx.restaurantTable.updateMany({
-            where: { id: order.tableId, restaurantId: context.restaurantId, branchId: context.branchId },
+            where: { id: order.tableId, restaurantId: context.restaurantId, branchId: branchId },
             data: { status: 'available' },
           })
           await enqueueRestaurantTableSync(tx, order.tableId, context.restaurantId)

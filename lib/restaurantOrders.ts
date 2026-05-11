@@ -87,6 +87,20 @@ export async function enqueueOrderSync(
   })
 }
 
+function formatTimelineEventAt(value: Date | string | null) {
+  if (!value) return null
+  const date = value instanceof Date ? value : new Date(value)
+  if (!Number.isFinite(date.getTime())) return null
+
+  return new Intl.DateTimeFormat('en-RW', {
+    timeZone: 'Africa/Kigali',
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
 export function buildRestaurantOrderTimeline(order: {
   createdAt: Date | string
   createdByName: string
@@ -98,12 +112,20 @@ export function buildRestaurantOrderTimeline(order: {
   canceledByName: string | null
   cancelReason: string | null
 }) {
-  const timeline = [`Created by ${order.createdByName}`]
+  const createdAtLabel = formatTimelineEventAt(order.createdAt)
+  const timeline = [`Pushed by ${order.createdByName || 'Staff'}${createdAtLabel ? ` at ${createdAtLabel}` : ''}`]
 
-  if (order.servedAt) timeline.push(`Served by ${order.servedByName || 'Staff'}`)
-  if (order.paidAt) timeline.push(`Payment recorded by ${order.paidByName || 'Staff'}`)
+  if (order.servedAt) {
+    const servedAtLabel = formatTimelineEventAt(order.servedAt)
+    timeline.push(`Served by ${order.servedByName || 'Staff'}${servedAtLabel ? ` at ${servedAtLabel}` : ''}`)
+  }
+  if (order.paidAt) {
+    const paidAtLabel = formatTimelineEventAt(order.paidAt)
+    timeline.push(`Payment recorded by ${order.paidByName || 'Staff'}${paidAtLabel ? ` at ${paidAtLabel}` : ''}`)
+  }
   if (order.canceledAt) {
-    timeline.push(`Canceled by ${order.canceledByName || 'Staff'}${order.cancelReason ? ` - ${order.cancelReason}` : ''}`)
+    const canceledAtLabel = formatTimelineEventAt(order.canceledAt)
+    timeline.push(`Canceled by ${order.canceledByName || 'Staff'}${canceledAtLabel ? ` at ${canceledAtLabel}` : ''}${order.cancelReason ? ` - ${order.cancelReason}` : ''}`)
   }
 
   return timeline

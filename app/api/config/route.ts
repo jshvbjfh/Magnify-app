@@ -42,22 +42,30 @@ export async function POST(req: NextRequest) {
 			return NextResponse.json({ error: 'Invalid API key' }, { status: 400 })
 		}
 
-		const trimmed = geminiApiKey.trim()
+		// Strip all whitespace including embedded newlines — prevents env file injection
+		const trimmed = geminiApiKey.replace(/\s/g, '')
+		if (!trimmed) {
+			return NextResponse.json({ error: 'Invalid API key' }, { status: 400 })
+		}
 
 		// Update process.env immediately (no restart needed for this session)
 		process.env.GEMINI_API_KEY = trimmed
 
-		// Persist to .env file
-		const envPath = path.join(process.cwd(), '.env')
-		let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : ''
+		// Persist to .env file — only in local/Electron environments.
+		// On Vercel and other read-only filesystems this would throw; the in-memory
+		// update above is sufficient for the lifetime of the serverless function.
+		if (process.env.NODE_ENV !== 'production') {
+			const envPath = path.join(process.cwd(), '.env')
+			let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : ''
 
-		if (/^GEMINI_API_KEY=/m.test(envContent)) {
-			envContent = envContent.replace(/^GEMINI_API_KEY=.*/m, `GEMINI_API_KEY="${trimmed}"`)
-		} else {
-			envContent = envContent.trimEnd() + `\nGEMINI_API_KEY="${trimmed}"\n`
+			if (/^GEMINI_API_KEY=/m.test(envContent)) {
+				envContent = envContent.replace(/^GEMINI_API_KEY=.*/m, `GEMINI_API_KEY="${trimmed}"`)
+			} else {
+				envContent = envContent.trimEnd() + `\nGEMINI_API_KEY="${trimmed}"\n`
+			}
+
+			fs.writeFileSync(envPath, envContent, 'utf8')
 		}
-
-		fs.writeFileSync(envPath, envContent, 'utf8')
 
 		return NextResponse.json({ ok: true, gemini: getGeminiDiagnostics() })
 	} catch (e: any) {

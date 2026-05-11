@@ -470,10 +470,11 @@ model InventoryItem {
   saleIngredients DishSaleIngredient[]
   user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   purchases       InventoryPurchase[]
-  adjustmentLogs  InventoryAdjustmentLog[]
-  wasteLogs       WasteLog[]
+  adjustmentLogs    InventoryAdjustmentLog[]
+  wasteLogs         WasteLog[]
+  batchUsageLedgers InventoryBatchUsageLedger[]
 
-  @@unique([userId, name])
+  @@unique([userId, restaurantId, branchId, name])
   @@index([restaurantId])
   @@map("inventory_items")
 }
@@ -493,7 +494,7 @@ model Dish {
   sales        DishSale[]
   user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, name])
+  @@unique([userId, restaurantId, branchId, name])
   @@index([restaurantId, branchId, isActive])
   @@map("dishes")
 }
@@ -575,6 +576,7 @@ model InventoryPurchase {
   purchaseUnitCost     Float?
   ingredient           InventoryItem @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
   user                 User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batchUsageLedgers    InventoryBatchUsageLedger[]
 
   @@index([restaurantId])
   @@map("inventory_purchases")
@@ -765,7 +767,7 @@ model SyncConflictLog {
 }
 
 model InventoryBatchUsageLedger {
-  id               String        @id @default(cuid())
+  id               String            @id @default(cuid())
   userId           String
   restaurantId     String?
   purchaseId       String
@@ -777,10 +779,12 @@ model InventoryBatchUsageLedger {
   unitCost         Float
   totalCost        Float
   reason           String?
-  consumedAt       DateTime      @default(now())
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  consumedAt       DateTime          @default(now())
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
   branchId         String?
+  purchase         InventoryPurchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  ingredient       InventoryItem     @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
 
   @@index([restaurantId, ingredientId, consumedAt])
   @@index([restaurantId, batchId])

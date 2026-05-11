@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS app_logs (
   details TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS cancellation_approvers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  pin_hash TEXT NOT NULL
+);
 `
 
 export async function initDB(): Promise<void> {
@@ -337,4 +343,30 @@ export async function markOrdersSynced(orders: Array<{ id: string; updated_at: s
       [order.id, order.updated_at]
     )
   }
+}
+
+// ─── Cancellation Approvers ──────────────────────────────────────────────────
+// Pulled from server on every pullSync. Only stores id, name, and bcrypt hash.
+// No PINs in plaintext — validation is bcrypt.compare() locally when offline.
+
+export interface CancellationApprover {
+  id: string
+  name: string
+  pin_hash: string
+}
+
+export async function replaceCancellationApprovers(approvers: CancellationApprover[]): Promise<void> {
+  const d = getDB()
+  await d.executeSet([
+    { statement: 'DELETE FROM cancellation_approvers', values: [] },
+    ...approvers.map(a => ({
+      statement: 'INSERT INTO cancellation_approvers (id, name, pin_hash) VALUES (?, ?, ?)',
+      values: [a.id, a.name, a.pin_hash],
+    })),
+  ])
+}
+
+export async function getCancellationApprovers(): Promise<CancellationApprover[]> {
+  const res = await getDB().query('SELECT * FROM cancellation_approvers ORDER BY name')
+  return (res.values ?? []) as CancellationApprover[]
 }

@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
 import { recordJournalEntry } from '@/lib/accounting'
 import { prisma } from '@/lib/prisma'
-import { ensureRestaurantForOwner } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 async function requireUserId() {
 	const session = await getServerSession(authOptions)
@@ -16,7 +16,10 @@ async function requireUserId() {
 export async function GET() {
 	try {
 		const userId = await requireUserId()
-		const restaurant = await ensureRestaurantForOwner(userId)
+		// S2: No auto-create — prevents phantom restaurant for non-owner sessions.
+		const context = await getRestaurantContextForUser(userId)
+		const restaurant = context?.restaurant
+		if (!restaurant) return NextResponse.json({ receivables: [], total: 0 }, { status: 200 })
 
 		// Find the Accounts Receivable account
 		const arAccount = await prisma.account.findFirst({
@@ -140,7 +143,10 @@ export async function GET() {
 export async function POST(req: Request) {
 	try {
 		const userId = await requireUserId()
-		const restaurant = await ensureRestaurantForOwner(userId)
+		// S2: No auto-create — prevents phantom restaurant for non-owner sessions.
+		const context = await getRestaurantContextForUser(userId)
+		const restaurant = context?.restaurant
+		if (!restaurant) return NextResponse.json({ error: 'No restaurant linked to this account' }, { status: 409 })
 		const body = await req.json()
 
 		const amount = parseFloat(String(body.amount || 0))
