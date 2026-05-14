@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const http = require('http')
 const path = require('path')
 const fs = require('fs')
 
@@ -39,9 +40,11 @@ function loadRuntimeEnv() {
 let db = null
 
 // Schema mirrors the Android waiter-app SQLite schema exactly so orders sync correctly.
-const SCHEMA_SQL = `
-PRAGMA journal_mode=WAL;
-
+const MIGRATIONS = [
+  {
+    // Initial schema — all CREATE TABLE IF NOT EXISTS, safe for existing installs.
+    version: 1,
+    sql: `
 CREATE TABLE IF NOT EXISTS dishes (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -119,14 +122,41 @@ CREATE TABLE IF NOT EXISTS cancellation_approvers (
   name TEXT NOT NULL,
   pin_hash TEXT NOT NULL
 );
-`
+`,
+  },
+  // To add a migration, append a new entry here:
+  // { version: 2, sql: 'ALTER TABLE orders ADD COLUMN kitchen_note TEXT;' },
+]
+
+function runMigrations(database) {
+  database.exec(`
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+  `)
+
+  const maxRow = database.prepare('SELECT COALESCE(MAX(version), 0) AS max_v FROM schema_migrations').get()
+  const maxApplied = maxRow?.max_v ?? 0
+
+  const applyMigration = database.transaction((migration) => {
+    database.exec(migration.sql)
+    database.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(migration.version, new Date().toISOString())
+  })
+
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= maxApplied) continue
+    applyMigration(migration)
+  }
+}
 
 function initDatabase() {
   // Require inline so electron-builder can correctly bundle it as a native module
   const Database = require('better-sqlite3')
   const dbPath = path.join(app.getPath('userData'), 'magnify_waiter.db')
   db = new Database(dbPath)
-  db.exec(SCHEMA_SQL)
+  db.pragma('journal_mode=WAL')
+  runMigrations(db)
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +265,47 @@ function registerIpcHandlers() {
 // ---------------------------------------------------------------------------
 let mainWindow = null
 
-function createWindow() {
+const DEV_SERVER_PORTS = [5174, 5175, 5176, 5177, 5178]
+const DEV_SERVER_TIMEOUT_MS = 15000
+const DEV_SERVER_RETRY_MS = 300
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function canReachDevServer(url) {
+  return new Promise(resolve => {
+    const request = http.get(url, response => {
+      response.resume()
+      resolve(true)
+    })
+
+    request.on('error', () => resolve(false))
+    request.setTimeout(1000, () => {
+      request.destroy()
+      resolve(false)
+    })
+  })
+}
+
+async function resolveDevServerUrl() {
+  const configuredUrl = process.env.VITE_DEV_SERVER_URL
+  const candidates = configuredUrl
+    ? [configuredUrl]
+    : DEV_SERVER_PORTS.map(port => `http://localhost:${port}`)
+
+  const deadline = Date.now() + DEV_SERVER_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    for (const candidate of candidates) {
+      if (await canReachDevServer(candidate)) return candidate
+    }
+    await wait(DEV_SERVER_RETRY_MS)
+  }
+
+  return candidates[0]
+}
+
+async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -253,8 +323,8 @@ function createWindow() {
 
   // In development load Vite dev server; in production load built index.html
   if (!app.isPackaged) {
-    const devUrl = process.env.VITE_DEV_SERVER_URL ?? 'http://localhost:5174'
-    mainWindow.loadURL(devUrl)
+    const devUrl = await resolveDevServerUrl()
+    await mainWindow.loadURL(devUrl)
     mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'))
@@ -340,15 +410,15 @@ function setupAutoUpdater() {
 // ---------------------------------------------------------------------------
 // App lifecycle
 // ---------------------------------------------------------------------------
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   loadRuntimeEnv()
   initDatabase()
   registerIpcHandlers()
-  createWindow()
+  await createWindow()
   setupAutoUpdater()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow()
   })
 })
 

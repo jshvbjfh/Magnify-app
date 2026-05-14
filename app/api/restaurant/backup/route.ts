@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { hasBranchScopedBackupData } from '@/lib/backupUtils'
 
 export const dynamic = 'force-dynamic'
 
@@ -163,23 +164,7 @@ export async function POST(req: Request) {
           }))?.id ?? null
         : null
 
-      const hasBranchScopedBackupData = Boolean(
-        (backup.transactions?.length ?? 0)
-        (backup.tables?.length ?? 0)
-        || (backup.restaurantOrders?.length ?? 0)
-        || (backup.inventoryItems?.length ?? 0)
-        || (backup.inventoryPurchases?.length ?? 0)
-        || (backup.inventoryAdjustmentLogs?.length ?? 0)
-        || (backup.inventoryBatchUsageLedgers?.length ?? 0)
-        || (backup.dishes?.length ?? 0)
-        || (backup.dishSales?.length ?? 0)
-        || (backup.wasteLogs?.length ?? 0)
-        || (backup.employees?.length ?? 0)
-        || (backup.shifts?.length ?? 0)
-        || (backup.dailySummaries?.length ?? 0)
-      )
-
-      if (restaurant && hasBranchScopedBackupData && !restoreBranchId) {
+      if (restaurant && hasBranchScopedBackupData(backup) && !restoreBranchId) {
         throw new Error('Active branch is required to restore branch-scoped restaurant data.')
       }
 

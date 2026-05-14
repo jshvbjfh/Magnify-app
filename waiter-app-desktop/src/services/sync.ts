@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs'
 import {
-  replaceDishes, replaceTables, setConfig,
+  replaceDishes, replaceTables, setConfig, getConfig,
   getDishes, getTables, getUnsyncedOrders, markOrdersSynced,
   replaceCancellationApprovers, getCancellationApprovers,
   type Dish, type RestaurantTable, type CancellationApprover,
@@ -17,10 +17,18 @@ import { logError, logInfo, logWarn } from './logger'
 
 // ─── Pull (Neon → SQLite) ────────────────────────────────────────────────────
 
+export interface BranchInfo {
+  id: string
+  name: string
+  code: string
+  isMain: boolean
+}
+
 export interface PullPayload {
   dishes: Dish[]
   tables: RestaurantTable[]
   restaurant: { id: string; name: string }
+  branches?: BranchInfo[]
   cancellationApprovers?: CancellationApprover[]
 }
 
@@ -37,15 +45,19 @@ async function requireValidToken(): Promise<string> {
   return token
 }
 
-export async function pullSync(): Promise<PullResult> {
+export async function pullSync(branchId?: string): Promise<PullResult> {
   if (!API.pull) throw new Error('API base URL is not configured. Set WAITER_API_BASE_URL in runtime.env.')
   const token = await requireValidToken()
   const method = 'GET'
 
+  // Use explicit branchId arg, or fall back to any stored active branch override.
+  const activeBranch = branchId ?? (await getConfig('activeBranchId')) ?? undefined
+  const pullUrl = activeBranch ? `${API.pull}?branchId=${encodeURIComponent(activeBranch)}` : API.pull
+
   const response = await sendRequest({
     scope: 'sync',
     method,
-    url: API.pull,
+    url: pullUrl,
     headers: { Authorization: `Bearer ${token}` },
   })
 
@@ -144,6 +156,11 @@ export async function pullSync(): Promise<PullResult> {
   await setConfig('lastPullAttemptAt', now)
   if (didRefreshLocalSnapshot) {
     await setConfig('lastPulledAt', now)
+  }
+
+  // Store branch list so the UI can render branch chips without another network call.
+  if (Array.isArray(payload.branches) && payload.branches.length > 0) {
+    await setConfig('branches', JSON.stringify(payload.branches))
   }
 
   // Store cancellation approvers for offline PIN validation

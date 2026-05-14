@@ -259,8 +259,11 @@ export async function updateOrder(
 
 export async function getOrders(filter?: { status?: string }): Promise<Order[]> {
   const db = getDB()
-  const where = filter?.status ? `WHERE status = '${filter.status.replace(/'/g, "''")}'` : ''
-  const rows = await db.query(`SELECT * FROM orders ${where} ORDER BY created_at DESC`, [])
+  if (filter?.status) {
+    const rows = await db.query('SELECT * FROM orders WHERE status = ? ORDER BY created_at DESC', [filter.status])
+    return (rows ?? []) as unknown as Order[]
+  }
+  const rows = await db.query('SELECT * FROM orders ORDER BY created_at DESC', [])
   return (rows ?? []) as unknown as Order[]
 }
 

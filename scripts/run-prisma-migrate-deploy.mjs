@@ -46,6 +46,10 @@ function resolveProvider() {
 	return detectProvider(String(process.env.DATABASE_URL ?? '').trim().toLowerCase())
 }
 
+function getLocalSqliteUrl() {
+	return `file:${resolve(process.cwd(), 'prisma', 'dev.db').replace(/\\/g, '/')}`
+}
+
 const provider = resolveProvider()
 const env = { ...process.env }
 
@@ -63,9 +67,17 @@ const schemaPath = provider === 'postgresql'
 	: resolve(process.cwd(), 'prisma', 'schema.prisma')
 const prismaCliEntrypoint = resolve(process.cwd(), 'node_modules', 'prisma', 'build', 'index.js')
 
-console.log(`Running prisma migrate deploy for ${provider} using ${schemaPath}`)
+if (provider === 'sqlite') {
+	env.DATABASE_URL = getLocalSqliteUrl()
+}
 
-const result = spawnSync(process.execPath, [prismaCliEntrypoint, 'migrate', 'deploy', '--schema', schemaPath], {
+const cliArgs = provider === 'postgresql'
+	? ['migrate', 'deploy', '--schema', schemaPath]
+	: ['db', 'push', '--schema', schemaPath, '--accept-data-loss', '--skip-generate']
+
+console.log(`Running prisma ${provider === 'postgresql' ? 'migrate deploy' : 'db push'} for ${provider} using ${schemaPath}`)
+
+const result = spawnSync(process.execPath, [prismaCliEntrypoint, ...cliArgs], {
 	stdio: 'inherit',
 	env,
 })

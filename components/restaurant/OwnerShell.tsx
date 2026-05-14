@@ -24,13 +24,30 @@ import {
 } from 'lucide-react'
 import { signIn, signOut, useSession } from 'next-auth/react'
 
-type OwnerView = 'home' | 'details' | 'history' | 'reports' | 'inventory'
+type OwnerView = 'home' | 'details' | 'history' | 'reports' | 'inventory' | 'diagnostics'
 type Period = 'today' | 'week' | 'month'
 type FilterState = {
   mode: 'preset' | 'custom'
   period: Period
   from: string
   to: string
+}
+
+type DebugInfo = {
+  role: string
+  restaurantId: string
+  branchId: string | null
+  dbMode: string
+  counts: {
+    orderCount: number
+    paidOrderCount: number
+    pendingOrderCount: number
+    accountingTransactionCount: number
+    restaurantScopedTransactionCount: number
+  }
+  lastOrder: { orderNumber: string; createdAt: string; status: string } | null
+  lastPaidOrder: { orderNumber: string; paidAt: string; totalAmount: number } | null
+  lastTransaction: { description: string; amount: number; createdAt: string } | null
 }
 
 type DashboardData = {
@@ -251,7 +268,8 @@ const NAV_ITEMS: { id: OwnerView; label: string; icon: React.ReactNode }[] = [
   { id: 'details',   label: 'Details',   icon: <FileText className="h-5 w-5" /> },
   { id: 'history',   label: 'History',   icon: <CalendarDays className="h-5 w-5" /> },
   { id: 'reports',   label: 'Reports',   icon: <BarChart3 className="h-5 w-5" /> },
-  { id: 'inventory', label: 'Inventory', icon: <Package className="h-5 w-5" /> },
+  { id: 'inventory',    label: 'Inventory',    icon: <Package className="h-5 w-5" /> },
+  { id: 'diagnostics', label: 'Diagnostics', icon: <Activity className="h-5 w-5" /> },
 ]
 
 function formatCurrency(value: number) {
@@ -451,6 +469,32 @@ export default function OwnerShell() {
   const [selectedHomeDate, setSelectedHomeDate] = useState<string>(today)
   const [selectedDetailsDate, setSelectedDetailsDate] = useState<string>(today)
   const userRole = (session?.user as any)?.role
+
+  const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null)
+  const [debugLoading, setDebugLoading] = useState(false)
+  const [debugError, setDebugError] = useState<string | null>(null)
+  const fetchDebugInfo = useCallback(async () => {
+    setDebugLoading(true)
+    setDebugError(null)
+    setDebugInfo(null)
+    try {
+      const res = await fetch('/api/restaurant/debug')
+      if (res.ok) {
+        setDebugInfo(await res.json() as DebugInfo)
+      } else {
+        const body = await res.json().catch(() => null)
+        setDebugError(body?.error ?? `Diagnostics unavailable (${res.status})`)
+      }
+    } catch {
+      setDebugError('Network error — check your connection and try again.')
+    } finally {
+      setDebugLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (view === 'diagnostics') void fetchDebugInfo()
+  }, [view, selectedBranchId, fetchDebugInfo])
 
   useEffect(() => {
     if (sessionStatus === 'unauthenticated') {
@@ -1225,13 +1269,83 @@ export default function OwnerShell() {
                   )
               ) : null}
 
+              {view === 'diagnostics' ? (
+                <div className="mx-auto max-w-2xl px-4 pt-6 pb-24 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-xl font-bold text-gray-900">Diagnostics</h2>
+                    <button
+                      onClick={() => void fetchDebugInfo()}
+                      disabled={debugLoading}
+                      className="flex items-center gap-2 rounded-xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${debugLoading ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </button>
+                  </div>
+
+                  {debugLoading && !debugInfo && !debugError && (
+                    <p className="text-sm text-gray-400">Loading diagnostics…</p>
+                  )}
+
+                  {debugError && (
+                    <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+                      <p className="text-sm font-medium text-red-700">Could not load diagnostics</p>
+                      <p className="mt-1 text-xs text-red-500">{debugError}</p>
+                    </div>
+                  )}
+
+                  {debugInfo && (
+                    <>
+                      <section className="rounded-2xl bg-white p-4 shadow-sm border border-gray-100 space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">System</p>
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                          <div><p className="text-gray-400 text-xs">Database</p><p className="font-medium">{debugInfo.dbMode}</p></div>
+                          <div><p className="text-gray-400 text-xs">Role</p><p className="font-medium capitalize">{debugInfo.role}</p></div>
+                          <div className="col-span-2"><p className="text-gray-400 text-xs">Branch ID</p><p className="font-medium font-mono text-xs break-all">{debugInfo.branchId ?? '—'}</p></div>
+                        </div>
+                      </section>
+
+                      <section className="rounded-2xl bg-white p-4 shadow-sm border border-gray-100 space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Counts</p>
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                          <div><p className="text-gray-400 text-xs">Total orders</p><p className="font-bold text-lg">{debugInfo.counts.orderCount}</p></div>
+                          <div><p className="text-gray-400 text-xs">Paid orders</p><p className="font-bold text-lg text-green-600">{debugInfo.counts.paidOrderCount}</p></div>
+                          <div><p className="text-gray-400 text-xs">Pending orders</p><p className="font-bold text-lg text-orange-500">{debugInfo.counts.pendingOrderCount}</p></div>
+                          <div><p className="text-gray-400 text-xs">Transactions (branch)</p><p className="font-bold text-lg">{debugInfo.counts.restaurantScopedTransactionCount}</p></div>
+                        </div>
+                      </section>
+
+                      <section className="rounded-2xl bg-white p-4 shadow-sm border border-gray-100 space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Last Activity</p>
+                        <div className="space-y-3 text-sm">
+                          {debugInfo.lastOrder ? (
+                            <div>
+                              <p className="text-gray-400 text-xs">Last order</p>
+                              <p className="font-medium">{debugInfo.lastOrder.orderNumber} — {debugInfo.lastOrder.status}</p>
+                              <p className="text-xs text-gray-400">{formatCompactDate(debugInfo.lastOrder.createdAt)}</p>
+                            </div>
+                          ) : <p className="text-gray-400 text-xs">No orders yet</p>}
+                          {debugInfo.lastPaidOrder && (
+                            <div>
+                              <p className="text-gray-400 text-xs">Last payment</p>
+                              <p className="font-medium">{debugInfo.lastPaidOrder.orderNumber} — {formatCurrency(debugInfo.lastPaidOrder.totalAmount)}</p>
+                              <p className="text-xs text-gray-400">{formatCompactDate(debugInfo.lastPaidOrder.paidAt)}</p>
+                            </div>
+                          )}
+                        </div>
+                      </section>
+                    </>
+                  )}
+                </div>
+              ) : null}
+
             </div>
           ) : null}
         </main>
 
         {/* â”€â”€ Bottom nav bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <nav className="fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur border-t border-gray-200 px-2 py-2">
-          <div className="mx-auto grid max-w-6xl grid-cols-5 gap-1">
+          <div className="mx-auto grid max-w-6xl grid-cols-6 gap-1">
             {NAV_ITEMS.map((item) => {
               const active = view === item.id
               return (

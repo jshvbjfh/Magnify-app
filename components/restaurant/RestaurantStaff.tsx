@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
-import { Plus, Users, Clock, X, CheckCircle2, Sparkles, UserCheck, Copy, Trash2, Eye, EyeOff, Wifi, ChefHat, Crown } from 'lucide-react'
+import { Plus, Users, Clock, X, CheckCircle2, Sparkles, UserCheck, Copy, Trash2, Eye, EyeOff, Wifi, ChefHat, Crown, AlertTriangle } from 'lucide-react'
 import { loadOwnerSyncConfig, loadServerOwnerSyncConfig } from '@/lib/ownerSyncBrowser'
 import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
 
@@ -21,6 +21,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [actionNotice, setActionNotice] = useState<string | null>(null)
   const [tab, setTab] = useState<'employees'|'shifts'|'waiters'|'kitchen'|'owner'>('employees')
   const [showEmpForm, setShowEmpForm] = useState(false)
   const [showShiftForm, setShowShiftForm] = useState(false)
@@ -69,6 +70,11 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
     } catch {
       return null
     }
+  }
+
+  function getCloudProvisionNotice(payload: any) {
+    const warning = typeof payload?.cloudProvisionWarning === 'string' ? payload.cloudProvisionWarning.trim() : ''
+    return warning ? `Account created locally. ${warning}` : null
   }
 
   async function load() {
@@ -196,6 +202,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   async function saveWaiter(e:React.FormEvent) {
     e.preventDefault()
     setActionError(null)
+    setActionNotice(null)
     const snapshot = { ...waiterForm }
     let syncPayload: Record<string, string> = {}
     try {
@@ -206,20 +213,22 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       }
     } catch {}
     const res = await fetch('/api/restaurant/waiters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...waiterForm,...syncPayload}),credentials:'include'})
+    const payload = await res.json().catch(() => null)
     if(res.ok){
+      setActionNotice(getCloudProvisionNotice(payload))
       setLastCreated({ name: snapshot.name, email: snapshot.email, password: snapshot.password })
       setWaiterSuccess(true);setTimeout(()=>setWaiterSuccess(false),3000)
       setShowWaiterForm(false);setWaiterForm({name:'',email:'',password:''})
       loadWaiters()
       return
     }
-    const payload = await res.json().catch(() => null)
     setActionError(payload?.error || 'Failed to create waiter account.')
   }
 
   async function saveKitchenAccount(e:React.FormEvent) {
     e.preventDefault()
     setActionError(null)
+    setActionNotice(null)
     const snapshot = { ...kitchenForm }
     let syncPayload: Record<string, string> = {}
     try {
@@ -230,14 +239,15 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       }
     } catch {}
     const res = await fetch('/api/restaurant/kitchen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...kitchenForm,...syncPayload}),credentials:'include'})
+    const payload = await res.json().catch(() => null)
     if(res.ok){
+      setActionNotice(getCloudProvisionNotice(payload))
       setLastCreatedKitchen({ name: snapshot.name, email: snapshot.email, password: snapshot.password })
       setKitchenSuccess(true);setTimeout(()=>setKitchenSuccess(false),3000)
       setShowKitchenForm(false);setKitchenForm({name:'',email:'',password:''})
       loadKitchenAccounts()
       return
     }
-    const payload = await res.json().catch(() => null)
     setActionError(payload?.error || 'Failed to create kitchen account.')
   }
 
@@ -251,6 +261,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
     e.preventDefault()
     if (ownerSubmitting) return
     setActionError(null)
+    setActionNotice(null)
     setOwnerSubmitting(true)
     const snapshot = { ...ownerForm }
     let syncPayload: Record<string, string> = {}
@@ -269,14 +280,15 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
 
     try {
       const res = await fetch('/api/restaurant/waiters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...ownerForm,role:'owner',...syncPayload}),credentials:'include'})
+      const payload = await res.json().catch(() => null)
       if(res.ok){
+        setActionNotice(getCloudProvisionNotice(payload))
         setLastCreatedOwner({ name: snapshot.name, email: snapshot.email, password: snapshot.password })
         setOwnerSuccess(true);setTimeout(()=>setOwnerSuccess(false),3000)
         setShowOwnerForm(false);setOwnerForm({name:'',email:'',password:''})
         loadOwnerAccounts()
         return
       }
-      const payload = await res.json().catch(() => null)
       setActionError(payload?.error || 'Failed to create owner account.')
     } finally {
       setOwnerSubmitting(false)
@@ -379,6 +391,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       {kitchenSuccess&&<div className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 text-sm font-medium px-4 py-3 rounded-xl"><CheckCircle2 className="h-4 w-4"/>Kitchen account created! They can now log in.</div>}
       {ownerSuccess&&<div className="flex items-center gap-2 bg-purple-50 border border-purple-200 text-purple-700 text-sm font-medium px-4 py-3 rounded-xl"><CheckCircle2 className="h-4 w-4"/>Owner account created! The boss can now log in.</div>}
       {loadError&&<div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium px-4 py-3 rounded-xl"><Wifi className="h-4 w-4"/>{loadError}</div>}
+      {actionNotice&&<div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium px-4 py-3 rounded-xl"><AlertTriangle className="h-4 w-4"/>{actionNotice}</div>}
       {actionError&&<div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-sm font-medium px-4 py-3 rounded-xl"><X className="h-4 w-4"/>{actionError}</div>}
 
       {showOwnerForm&&(

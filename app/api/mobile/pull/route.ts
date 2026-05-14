@@ -42,23 +42,40 @@ export async function GET(req: Request) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const effectiveBranchId = context.branchId ?? null
+    const userBranchId = context.branchId ?? null
 
     // A waiter with no branch assigned must not receive another branch's data.
     // Return 403 so the app shows a clear "account not configured" message rather
     // than silently returning the entire restaurant's menu.
-    if (!effectiveBranchId) {
+    if (!userBranchId) {
       return jsonNoStore(
         { error: 'Your account has no branch assigned. Ask your manager to assign a branch before using the waiter app.' },
         { status: 403 }
       )
     }
 
+    // Optional branch override: waiter app sends ?branchId= when user taps a branch chip.
+    // Validate the requested branch belongs to this restaurant before accepting it.
+    const url = new URL(req.url)
+    const requestedBranchId = url.searchParams.get('branchId')
+    let effectiveBranchId = userBranchId
+
+    if (requestedBranchId && requestedBranchId !== userBranchId) {
+      const validBranch = await prisma.restaurantBranch.findFirst({
+        where: { id: requestedBranchId, restaurantId, isActive: true },
+        select: { id: true },
+      })
+      if (!validBranch) {
+        return jsonNoStore({ error: 'Branch not found or not accessible.' }, { status: 403 })
+      }
+      effectiveBranchId = requestedBranchId
+    }
+
     const dishWhere = { restaurantId, branchId: effectiveBranchId, isActive: true }
 
     const tableWhere = { restaurantId, branchId: effectiveBranchId }
 
-    const [dishes, tables, restaurant, approverEmployees] = await Promise.all([
+    const [dishes, tables, restaurant, approverEmployees, allBranches] = await Promise.all([
       prisma.dish.findMany({
         where: dishWhere,
         select: {
@@ -94,6 +111,12 @@ export async function GET(req: Request) {
           cancellationPinHash: { not: null },
         },
         select: { id: true, name: true, cancellationPinHash: true },
+      }),
+
+      prisma.restaurantBranch.findMany({
+        where: { restaurantId, isActive: true },
+        select: { id: true, name: true, code: true, isMain: true },
+        orderBy: { sortOrder: 'asc' },
       }),
     ])
 
@@ -131,6 +154,7 @@ export async function GET(req: Request) {
       dishes: normalisedDishes,
       tables: normalisedTables,
       restaurant: restaurant ?? { id: restaurantId, name: 'Restaurant' },
+      branches: allBranches,
       cancellationApprovers: approverEmployees.map(e => ({
         id: e.id,
         name: e.name,

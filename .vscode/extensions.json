@@ -1,0 +1,9 @@
+{
+  "recommendations": [
+    "redhat.java",
+    "vscjava.vscode-java-dependency",
+    "vscjava.vscode-java-debug",
+    "adelphes.android-dev-ext",
+    "openai.chatgpt"
+  ]
+}

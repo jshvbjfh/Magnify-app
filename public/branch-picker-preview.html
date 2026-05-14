@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Branch Picker Preview</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  .phone-frame {
+    width: 390px; height: 844px;
+    background: white; border-radius: 48px;
+    box-shadow: 0 40px 80px rgba(0,0,0,0.35), inset 0 0 0 2px #d1d5db;
+    overflow: hidden; position: relative;
+  }
+  .screen { width: 100%; height: 100%; overflow: hidden; display: flex; flex-direction: column; }
+  .tab-bar { flex-shrink: 0; }
+  .content { flex: 1; overflow-y: auto; }
+
+  /* Desktop frame */
+  .desktop-frame {
+    width: 720px; min-height: 480px;
+    background: white; border-radius: 16px;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.25), inset 0 0 0 1px #d1d5db;
+    overflow: hidden;
+  }
+  .card-active { border-color: #f97316; background: #fff7ed; }
+  .card-inactive { border-color: #e2e8f0; background: #f8fafc; }
+  .card-inactive:hover { border-color: #cbd5e1; background: #f1f5f9; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .pulse { animation: pulse 2s infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin 1s linear infinite; }
+</style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center gap-16 p-12">
+
+  <h1 class="text-2xl font-bold text-gray-700">Waiter App — Branch Picker Design Preview</h1>
+
+  <div class="flex flex-wrap gap-16 items-start justify-center">
+
+    <!-- ── PHONE: Branch Picker Screen ── -->
+    <div class="flex flex-col items-center gap-3">
+      <p class="text-sm font-semibold text-gray-500 uppercase tracking-widest">Mobile · Branch Picker Screen</p>
+      <div class="phone-frame">
+        <div class="screen bg-[#f9fafb]">
+
+          <!-- Header -->
+          <div class="bg-[#ff6a36] px-5 py-5 pt-12 flex items-center gap-3 flex-shrink-0">
+            <div class="flex-1">
+              <p class="text-white text-lg font-bold tracking-tight">Magnify</p>
+              <p class="text-orange-100 text-xs">Waiter Terminal</p>
+            </div>
+            <div class="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center text-white text-sm font-bold">JN</div>
+          </div>
+
+          <!-- Subheader strip -->
+          <div class="bg-white border-b border-slate-200 px-5 py-3 flex-shrink-0">
+            <p class="text-[11px] font-bold uppercase tracking-widest text-slate-400">John Nzeyimana · Select branch</p>
+          </div>
+
+          <!-- Branch cards -->
+          <div class="content px-4 py-5 flex flex-col gap-3">
+            <p class="text-[13px] text-slate-500 mb-1">Which branch are you working at today?</p>
+
+            <!-- Active branch card -->
+            <button class="w-full text-left rounded-2xl border-2 border-orange-500 bg-orange-50 px-4 py-4 shadow-sm relative">
+              <div class="flex items-start justify-between">
+                <div>
+                  <span class="text-[10px] font-bold uppercase tracking-widest text-orange-400">Main Branch</span>
+                  <p class="text-base font-bold text-slate-900 mt-0.5">Kigali Main</p>
+                  <p class="text-xs text-slate-500 mt-1">KG 5 Ave, Kigali</p>
+                </div>
+                <div class="h-7 w-7 rounded-full bg-orange-500 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <svg class="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                </div>
+              </div>
+              <div class="mt-3 flex gap-2">
+                <span class="rounded-full bg-orange-100 text-orange-700 text-[10px] font-semibold px-2.5 py-0.5">Open</span>
+                <span class="rounded-full bg-slate-100 text-slate-500 text-[10px] font-semibold px-2.5 py-0.5">Tables: 12</span>
+              </div>
+            </button>
+
+            <!-- Inactive branch card -->
+            <button class="w-full text-left rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+              <div class="flex items-start justify-between">
+                <div>
+                  <span class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Branch · NYC</span>
+                  <p class="text-base font-bold text-slate-900 mt-0.5">Nyamirambo</p>
+                  <p class="text-xs text-slate-500 mt-1">KN 14 St, Kigali</p>
+                </div>
+                <div class="h-7 w-7 rounded-full bg-slate-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <svg class="h-4 w-4 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+                </div>
+              </div>
+              <div class="mt-3 flex gap-2">
+                <span class="rounded-full bg-green-100 text-green-700 text-[10px] font-semibold px-2.5 py-0.5">Open</span>
+                <span class="rounded-full bg-slate-100 text-slate-500 text-[10px] font-semibold px-2.5 py-0.5">Tables: 8</span>
+              </div>
+            </button>
+
+            <!-- Inactive branch card 2 -->
+            <button class="w-full text-left rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
+              <div class="flex items-start justify-between">
+                <div>
+                  <span class="text-[10px] font-bold uppercase tracking-widest text-slate-400">Branch · GKL</span>
+                  <p class="text-base font-bold text-slate-900 mt-0.5">Gikondo</p>
+                  <p class="text-xs text-slate-500 mt-1">KG 11 Ave, Kigali</p>
+                </div>
+                <div class="h-7 w-7 rounded-full bg-slate-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <svg class="h-4 w-4 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+                </div>
+              </div>
+              <div class="mt-3 flex gap-2">
+                <span class="rounded-full bg-amber-100 text-amber-700 text-[10px] font-semibold px-2.5 py-0.5">Busy</span>
+                <span class="rounded-full bg-slate-100 text-slate-500 text-[10px] font-semibold px-2.5 py-0.5">Tables: 6</span>
+              </div>
+            </button>
+
+            <!-- Enter POS button -->
+            <button class="mt-2 w-full rounded-2xl bg-[#ff6a36] py-4 text-sm font-bold text-white shadow-md shadow-orange-200">
+              Enter POS → Kigali Main
+            </button>
+
+            <p class="text-center text-[11px] text-slate-400 mt-1">Your last branch is remembered on this device</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PHONE: Inside POS with branch switcher ── -->
+    <div class="flex flex-col items-center gap-3">
+      <p class="text-sm font-semibold text-gray-500 uppercase tracking-widest">Mobile · POS with Branch Chip</p>
+      <div class="phone-frame">
+        <div class="screen bg-[#f9fafb]">
+
+          <!-- Header -->
+          <div class="bg-[#ff6a36] px-5 pt-12 pb-3 flex-shrink-0">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-white text-lg font-bold tracking-tight">Magnify</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <!-- Online badge -->
+                <div class="flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-1">
+                  <div class="h-1.5 w-1.5 rounded-full bg-green-300 pulse"></div>
+                  <span class="text-white text-[11px] font-semibold">Online</span>
+                </div>
+                <div class="h-9 w-9 rounded-full bg-white/20 flex items-center justify-center text-white text-sm font-bold">JN</div>
+              </div>
+            </div>
+
+            <!-- Branch pill strip -->
+            <div class="mt-2.5 flex items-center gap-2 overflow-x-auto pb-1">
+              <span class="text-[10px] font-bold uppercase tracking-widest text-orange-200 whitespace-nowrap">Branch</span>
+              <button class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-orange-300 bg-orange-400/30 px-3 py-1.5 text-xs font-semibold text-white">
+                Kigali Main
+                <span class="rounded-full bg-white/20 px-1.5 py-0.5 text-[10px]">Main</span>
+              </button>
+              <button class="inline-flex items-center whitespace-nowrap rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-orange-100">
+                Nyamirambo
+              </button>
+              <button class="inline-flex items-center whitespace-nowrap rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-orange-100">
+                Gikondo
+              </button>
+            </div>
+          </div>
+
+          <!-- Tab bar -->
+          <div class="bg-white border-b border-slate-100 flex flex-shrink-0">
+            <button class="flex-1 flex flex-col items-center gap-1 py-2.5 text-orange-500 border-b-2 border-orange-500">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+              <span class="text-[10px] font-semibold">Menu</span>
+            </button>
+            <button class="flex-1 flex flex-col items-center gap-1 py-2.5 text-slate-400">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+              <span class="text-[10px] font-semibold">Transactions</span>
+            </button>
+            <button class="flex-1 flex flex-col items-center gap-1 py-2.5 text-slate-400">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
+              <span class="text-[10px] font-semibold">Tables</span>
+            </button>
+            <button class="flex-1 flex flex-col items-center gap-1 py-2.5 text-slate-400">
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+              <span class="text-[10px] font-semibold">Logs</span>
+            </button>
+          </div>
+
+          <!-- Menu content placeholder -->
+          <div class="content px-4 py-4">
+            <div class="flex items-center justify-between mb-3">
+              <p class="text-xs font-bold uppercase tracking-widest text-slate-500">Menu — Kigali Main</p>
+              <span class="rounded-full bg-orange-50 text-orange-600 text-[10px] font-semibold px-2.5 py-1">24 items</span>
+            </div>
+
+            <!-- Dish rows placeholder -->
+            <div class="space-y-2">
+              <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between">
+                <div><p class="text-sm font-semibold text-slate-900">Grilled Chicken</p><p class="text-xs text-slate-400">Main · 1,800 RWF</p></div>
+                <button class="h-7 w-7 rounded-full bg-orange-500 text-white flex items-center justify-center text-lg font-bold">+</button>
+              </div>
+              <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between">
+                <div><p class="text-sm font-semibold text-slate-900">Beef Brochette</p><p class="text-xs text-slate-400">Main · 2,400 RWF</p></div>
+                <button class="h-7 w-7 rounded-full bg-orange-500 text-white flex items-center justify-center text-lg font-bold">+</button>
+              </div>
+              <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between opacity-50">
+                <div><p class="text-sm font-semibold text-slate-900">Fish Fillet</p><p class="text-xs text-slate-400">Main · 3,000 RWF · Out of stock</p></div>
+                <button class="h-7 w-7 rounded-full bg-slate-200 text-slate-400 flex items-center justify-center text-lg font-bold" disabled>+</button>
+              </div>
+              <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between">
+                <div><p class="text-sm font-semibold text-slate-900">Isombe</p><p class="text-xs text-slate-400">Local · 1,200 RWF</p></div>
+                <button class="h-7 w-7 rounded-full bg-orange-500 text-white flex items-center justify-center text-lg font-bold">+</button>
+              </div>
+              <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between">
+                <div><p class="text-sm font-semibold text-slate-900">Ugali</p><p class="text-xs text-slate-400">Sides · 600 RWF</p></div>
+                <button class="h-7 w-7 rounded-full bg-orange-500 text-white flex items-center justify-center text-lg font-bold">+</button>
+              </div>
+              <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 flex items-center justify-between">
+                <div><p class="text-sm font-semibold text-slate-900">Fanta Orange</p><p class="text-xs text-slate-400">Drinks · 500 RWF</p></div>
+                <button class="h-7 w-7 rounded-full bg-orange-500 text-white flex items-center justify-center text-lg font-bold">+</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── DESKTOP FRAME ── -->
+  <div class="flex flex-col items-center gap-3">
+    <p class="text-sm font-semibold text-gray-500 uppercase tracking-widest">Desktop (Electron) · Branch Picker Screen</p>
+    <div class="desktop-frame">
+
+      <!-- Header bar -->
+      <div class="bg-[#ff6a36] px-6 py-4 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="h-8 w-8 rounded-xl bg-white/20 flex items-center justify-center">
+            <svg class="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          </div>
+          <p class="text-white text-base font-bold tracking-tight">Magnify — Waiter Desktop</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <div class="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5">
+            <div class="h-1.5 w-1.5 rounded-full bg-green-300 pulse"></div>
+            <span class="text-white text-xs font-semibold">Online</span>
+          </div>
+          <div class="flex items-center gap-2 rounded-full bg-white/15 px-3 py-1.5">
+            <div class="h-7 w-7 rounded-full bg-white/30 flex items-center justify-center text-white text-xs font-bold">JN</div>
+            <span class="text-white text-xs font-semibold">John Nzeyimana</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Body -->
+      <div class="bg-[#f9fafb] px-8 py-6">
+        <p class="text-base font-bold text-slate-800 mb-1">Which branch are you working at today?</p>
+        <p class="text-sm text-slate-500 mb-5">Select your branch to load the menu and tables. You can switch at any time.</p>
+
+        <!-- 3-column branch grid -->
+        <div class="grid grid-cols-3 gap-4">
+          <!-- Active -->
+          <button class="rounded-2xl border-2 border-orange-500 bg-orange-50 px-5 py-5 text-left shadow-sm">
+            <div class="flex items-start justify-between mb-2">
+              <span class="text-[10px] font-bold uppercase tracking-widest text-orange-400">Main</span>
+              <div class="h-6 w-6 rounded-full bg-orange-500 flex items-center justify-center">
+                <svg class="h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+              </div>
+            </div>
+            <p class="text-base font-bold text-slate-900">Kigali Main</p>
+            <p class="text-xs text-slate-500 mt-1">KG 5 Ave, Kigali</p>
+            <div class="mt-3 flex gap-2">
+              <span class="rounded-full bg-orange-100 text-orange-600 text-[10px] font-semibold px-2 py-0.5">Open</span>
+              <span class="rounded-full bg-slate-100 text-slate-500 text-[10px] font-semibold px-2 py-0.5">12 tables</span>
+            </div>
+          </button>
+
+          <!-- Inactive -->
+          <button class="rounded-2xl border border-slate-200 bg-white px-5 py-5 text-left shadow-sm hover:border-slate-300 hover:shadow-md transition-all">
+            <div class="flex items-start justify-between mb-2">
+              <span class="text-[10px] font-bold uppercase tracking-widest text-slate-400">NYC</span>
+              <div class="h-6 w-6 rounded-full bg-slate-100 flex items-center justify-center">
+                <svg class="h-3.5 w-3.5 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+              </div>
+            </div>
+            <p class="text-base font-bold text-slate-900">Nyamirambo</p>
+            <p class="text-xs text-slate-500 mt-1">KN 14 St, Kigali</p>
+            <div class="mt-3 flex gap-2">
+              <span class="rounded-full bg-green-100 text-green-700 text-[10px] font-semibold px-2 py-0.5">Open</span>
+              <span class="rounded-full bg-slate-100 text-slate-500 text-[10px] font-semibold px-2 py-0.5">8 tables</span>
+            </div>
+          </button>
+
+          <!-- Inactive 2 -->
+          <button class="rounded-2xl border border-slate-200 bg-white px-5 py-5 text-left shadow-sm hover:border-slate-300 hover:shadow-md transition-all">
+            <div class="flex items-start justify-between mb-2">
+              <span class="text-[10px] font-bold uppercase tracking-widest text-slate-400">GKL</span>
+              <div class="h-6 w-6 rounded-full bg-slate-100 flex items-center justify-center">
+                <svg class="h-3.5 w-3.5 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+              </div>
+            </div>
+            <p class="text-base font-bold text-slate-900">Gikondo</p>
+            <p class="text-xs text-slate-500 mt-1">KG 11 Ave, Kigali</p>
+            <div class="mt-3 flex gap-2">
+              <span class="rounded-full bg-amber-100 text-amber-700 text-[10px] font-semibold px-2 py-0.5">Busy</span>
+              <span class="rounded-full bg-slate-100 text-slate-500 text-[10px] font-semibold px-2 py-0.5">6 tables</span>
+            </div>
+          </button>
+        </div>
+
+        <!-- Enter button -->
+        <div class="mt-6 flex items-center gap-4">
+          <button class="rounded-2xl bg-[#ff6a36] px-8 py-3.5 text-sm font-bold text-white shadow-md shadow-orange-200">
+            Enter POS → Kigali Main
+          </button>
+          <p class="text-xs text-slate-400">Last branch is remembered on this device</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="text-xs text-gray-400 pb-8">Design preview only — branch-picker-preview.html</p>
+</body>
+</html>

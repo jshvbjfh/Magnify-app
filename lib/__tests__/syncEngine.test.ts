@@ -308,6 +308,46 @@ describe('applyResolvedSyncChange', () => {
         /no resolvable branchId/,
       )
     })
+
+    it('dish C1: conflict query includes restaurantId and branchId so same-name dishes in different restaurants/branches are not merged', async () => {
+      // Dish unique constraint is @@unique([userId, restaurantId, branchId, name]).
+      // The C1 findFirst must scope by all four fields so a dish named "Rice" in
+      // restaurant A is never merged with one in restaurant B.
+      const findFirst = vi.fn().mockResolvedValue(null) // no conflict in this scope
+      const db = makeMockDb({
+        dish: {
+          findFirst,
+          upsert: vi.fn().mockResolvedValue({}),
+          deleteMany: vi.fn().mockResolvedValue({}),
+        },
+      })
+
+      const change = makeChange('dish', 'upsert', {
+        id: 'dish-rest-b',
+        name: 'Jollof Rice',
+        userId: 'user-1',
+        restaurantId: 'rest-B',
+        branchId: 'branch-B',
+        sellingPrice: 25,
+      }, { branchId: 'branch-B' })
+
+      await applyResolvedSyncChange(db, change, { remapUserId: 'user-1' })
+
+      // The conflict query must scope by restaurantId AND branchId, not just (userId, name)
+      expect(findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            restaurantId: 'rest-B',
+            branchId: 'branch-B',
+            name: 'Jollof Rice',
+          }),
+        }),
+      )
+      // No conflict found → upsert with the incoming id
+      expect(db.dish.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'dish-rest-b' } }),
+      )
+    })
   })
 
   // ── dishIngredient ─────────────────────────────────────────────────────────
@@ -703,5 +743,112 @@ describe('applyIncomingSyncChanges', () => {
     const diCall = dishIngredientUpsert.mock.calls[0][0]
     expect(diCall.where.dishId_ingredientId.dishId).toBe('existing-dish-id')
     expect(diCall.create.dishId).toBe('existing-dish-id')
+  })
+
+  // ── FK remap: wasteLog via applyIncomingSyncChanges ────────────────────────
+
+  it('wasteLog: ingredientId is remapped to the C1-displaced id within the same batch', async () => {
+    const wasteLogUpsert = vi.fn().mockResolvedValue({})
+    const db = makeMockDb({
+      inventoryItem: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'existing-item-id' }),
+        upsert: vi.fn().mockResolvedValue({}),
+        deleteMany: vi.fn().mockResolvedValue({}),
+      },
+      wasteLog: {
+        upsert: wasteLogUpsert,
+        deleteMany: vi.fn().mockResolvedValue({}),
+      },
+    })
+
+    // Batch: inventoryItem first (will be C1-displaced), then wasteLog referencing it
+    const changes: SyncChangeEnvelope[] = [
+      makeChange('inventoryItem', 'upsert', {
+        id: 'incoming-item-id',
+        name: 'Tomatoes',
+        userId: 'user-1',
+        restaurantId: 'rest-1',
+        branchId: 'branch-1',
+        unit: 'kg',
+      }),
+      makeChange('wasteLog', 'upsert', {
+        id: 'waste-1',
+        userId: 'user-1',
+        restaurantId: 'rest-1',
+        branchId: 'branch-1',
+        ingredientId: 'incoming-item-id',   // displaced id — must be remapped
+        quantityWasted: 2,
+        reason: 'spoilage',
+        date: new Date().toISOString(),
+        calculatedCost: 4,
+      }),
+    ]
+
+    const result = await applyIncomingSyncChanges(db, changes, {
+      localDeviceId: 'test-device',
+      remapUserId: 'user-1',
+    })
+
+    expect(result.failedChanges).toHaveLength(0)
+    expect(result.applied).toBe(2)
+
+    // wasteLog upsert must use the resolved (existing) ingredient id
+    const wasteCall = wasteLogUpsert.mock.calls[0][0]
+    expect(wasteCall.update.ingredientId).toBe('existing-item-id')
+    expect(wasteCall.create.ingredientId).toBe('existing-item-id')
+  })
+
+  // ── FK remap: dishSale via applyIncomingSyncChanges ────────────────────────
+
+  it('dishSale: dishId is remapped to the C1-displaced id within the same batch', async () => {
+    const dishSaleUpsert = vi.fn().mockResolvedValue({})
+    const db = makeMockDb({
+      dish: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'existing-dish-id' }),
+        upsert: vi.fn().mockResolvedValue({}),
+        deleteMany: vi.fn().mockResolvedValue({}),
+      },
+      dishSale: {
+        upsert: dishSaleUpsert,
+        deleteMany: vi.fn().mockResolvedValue({}),
+      },
+    })
+
+    // Batch: dish first (C1-displaced), then dishSale referencing the incoming dish id
+    const changes: SyncChangeEnvelope[] = [
+      makeChange('dish', 'upsert', {
+        id: 'incoming-dish-id',
+        name: 'Jollof Rice',
+        userId: 'user-1',
+        restaurantId: 'rest-1',
+        branchId: 'branch-1',
+        sellingPrice: 25,
+      }),
+      makeChange('dishSale', 'upsert', {
+        id: 'sale-1',
+        userId: 'user-1',
+        restaurantId: 'rest-1',
+        branchId: 'branch-1',
+        dishId: 'incoming-dish-id',   // displaced id — must be remapped
+        quantitySold: 3,
+        saleDate: new Date().toISOString(),
+        paymentMethod: 'Cash',
+        totalSaleAmount: 75,
+        calculatedFoodCost: 30,
+      }),
+    ]
+
+    const result = await applyIncomingSyncChanges(db, changes, {
+      localDeviceId: 'test-device',
+      remapUserId: 'user-1',
+    })
+
+    expect(result.failedChanges).toHaveLength(0)
+    expect(result.applied).toBe(2)
+
+    // dishSale upsert must use the resolved (existing) dish id
+    const saleCall = dishSaleUpsert.mock.calls[0][0]
+    expect(saleCall.update.dishId).toBe('existing-dish-id')
+    expect(saleCall.create.dishId).toBe('existing-dish-id')
   })
 })

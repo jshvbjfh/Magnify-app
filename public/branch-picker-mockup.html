@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Branch Picker — Waiter App Mockup</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f1f5f9; display: flex; gap: 32px; padding: 32px; justify-content: center; flex-wrap: wrap; }
+
+  /* ── Phone shell ── */
+  .phone {
+    width: 390px;
+    background: #fff;
+    border-radius: 40px;
+    box-shadow: 0 32px 80px rgba(0,0,0,0.18), 0 0 0 12px #1e293b;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 780px;
+    position: relative;
+  }
+  .phone-label {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    margin-bottom: 12px;
+  }
+
+  /* ── Status bar ── */
+  .status-bar {
+    background: #ea580c;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 20px 8px;
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  /* ── Header ── */
+  .header {
+    background: #ea580c;
+    padding: 14px 20px 18px;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .header-title { font-size: 20px; font-weight: 800; letter-spacing: -0.03em; }
+  .header-sub { font-size: 12px; opacity: .75; margin-top: 2px; }
+  .avatar {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.2);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 14px; color: white;
+  }
+
+  /* ── Branch picker body ── */
+  .picker-body {
+    flex: 1;
+    padding: 28px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .picker-prompt {
+    font-size: 22px;
+    font-weight: 800;
+    color: #0f172a;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+  }
+  .picker-sub {
+    font-size: 13px;
+    color: #64748b;
+    margin-top: 6px;
+  }
+  .branch-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .branch-card {
+    border: 2px solid #e2e8f0;
+    border-radius: 20px;
+    padding: 20px 16px;
+    cursor: pointer;
+    transition: all .15s;
+    background: white;
+    position: relative;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  }
+  .branch-card:hover { border-color: #f97316; box-shadow: 0 4px 16px rgba(249,115,22,.15); }
+  .branch-card.active {
+    border-color: #ea580c;
+    background: linear-gradient(135deg, #fff7ed, #fff);
+    box-shadow: 0 4px 20px rgba(234,88,12,.2);
+  }
+  .branch-card.active::after {
+    content: '✓';
+    position: absolute;
+    top: 10px; right: 12px;
+    font-size: 13px;
+    font-weight: 800;
+    color: #ea580c;
+    background: #fed7aa;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    line-height: 22px;
+    text-align: center;
+  }
+  .branch-icon {
+    width: 44px; height: 44px;
+    border-radius: 14px;
+    background: #f1f5f9;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    margin-bottom: 12px;
+  }
+  .branch-card.active .branch-icon { background: #fed7aa; }
+  .branch-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: #0f172a;
+    line-height: 1.2;
+  }
+  .branch-tag {
+    margin-top: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+  .branch-card.active .branch-tag { color: #ea580c; }
+
+  .confirm-btn {
+    width: 100%;
+    padding: 16px;
+    background: #ea580c;
+    color: white;
+    border: none;
+    border-radius: 16px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(234,88,12,.35);
+    letter-spacing: -0.01em;
+  }
+  .skip-btn {
+    width: 100%;
+    padding: 12px;
+    background: transparent;
+    color: #94a3b8;
+    border: none;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  /* ── POS view (post-branch-select) ── */
+  .branch-chip-bar {
+    background: white;
+    border-bottom: 1px solid #f1f5f9;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+  }
+  .chip-label { font-size: 10px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: .15em; white-space: nowrap; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    border: 1.5px solid #e2e8f0;
+    font-size: 12px;
+    font-weight: 600;
+    color: #64748b;
+    white-space: nowrap;
+    cursor: pointer;
+    background: #f8fafc;
+  }
+  .chip.active {
+    border-color: #ea580c;
+    background: #fff7ed;
+    color: #ea580c;
+  }
+  .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: #ea580c; }
+
+  .pos-body { flex: 1; padding: 16px; background: #f8fafc; }
+  .pos-placeholder {
+    border-radius: 16px;
+    border: 2px dashed #cbd5e1;
+    padding: 40px 20px;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 14px;
+    font-weight: 600;
+    margin-top: 12px;
+  }
+  .pos-header { font-size: 16px; font-weight: 700; color: #0f172a; }
+  .pos-sub { font-size: 12px; color: #64748b; margin-top: 2px; }
+
+  .nav-bar {
+    display: flex;
+    border-top: 1px solid #e2e8f0;
+    background: white;
+  }
+  .nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 0 12px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #94a3b8;
+    gap: 4px;
+    cursor: pointer;
+  }
+  .nav-item.active { color: #ea580c; }
+  .nav-icon { font-size: 18px; }
+</style>
+</head>
+<body>
+
+<!-- SCREEN 1: Branch Picker -->
+<div>
+  <p class="phone-label">Screen 1 — Branch Picker</p>
+  <div class="phone">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span>▲ ●●●●</span>
+    </div>
+    <div class="header">
+      <div>
+        <div class="header-title">Magnify</div>
+        <div class="header-sub">Waiter Terminal</div>
+      </div>
+      <div class="avatar">JN</div>
+    </div>
+
+    <div class="picker-body">
+      <div>
+        <div class="picker-prompt">Which branch<br>are you at today?</div>
+        <div class="picker-sub">Select your branch to load the right menu and tables.</div>
+      </div>
+
+      <div class="branch-grid">
+        <div class="branch-card active">
+          <div class="branch-icon">🏠</div>
+          <div class="branch-name">Main Branch</div>
+          <div class="branch-tag">Main · KGL-01</div>
+        </div>
+        <div class="branch-card">
+          <div class="branch-icon">🌆</div>
+          <div class="branch-name">Kigali City</div>
+          <div class="branch-tag">KGL-02</div>
+        </div>
+        <div class="branch-card">
+          <div class="branch-icon">🏙️</div>
+          <div class="branch-name">Nyamirambo</div>
+          <div class="branch-tag">KGL-03</div>
+        </div>
+        <div class="branch-card">
+          <div class="branch-icon">🏢</div>
+          <div class="branch-name">Remera</div>
+          <div class="branch-tag">KGL-04</div>
+        </div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:auto;">
+        <button class="confirm-btn">Continue to POS →</button>
+        <button class="skip-btn">Use last remembered branch</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 2: POS with branch chip in header -->
+<div>
+  <p class="phone-label">Screen 2 — POS (after branch selected)</p>
+  <div class="phone">
+    <div class="status-bar">
+      <span>9:43</span>
+      <span>▲ ●●●●</span>
+    </div>
+    <div class="header">
+      <div>
+        <div class="header-title">Magnify</div>
+        <div class="header-sub">Waiter Terminal</div>
+      </div>
+      <div class="avatar">JN</div>
+    </div>
+
+    <!-- Branch chip bar — same style as owner pills -->
+    <div class="branch-chip-bar">
+      <span class="chip-label">Branch</span>
+      <span class="chip active"><span class="chip-dot"></span>Main Branch</span>
+      <span class="chip">Kigali City</span>
+      <span class="chip">Nyamirambo</span>
+      <span class="chip">Remera</span>
+    </div>
+
+    <div class="pos-body">
+      <div class="pos-header">Menu — Main Branch</div>
+      <div class="pos-sub">Tap a dish to add to the current table's order</div>
+      <div class="pos-placeholder">
+        🍽️<br><br>
+        Dish grid loads here<br>
+        <span style="font-size:12px; font-weight:400;">Filtered to Main Branch menu</span>
+      </div>
+    </div>
+
+    <div class="nav-bar">
+      <div class="nav-item active">
+        <span class="nav-icon">🍽️</span>
+        <span>Menu</span>
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">🔄</span>
+        <span>Transactions</span>
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">🪑</span>
+        <span>Tables</span>
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">📋</span>
+        <span>Logs</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN 3: Single branch — skip picker -->
+<div>
+  <p class="phone-label">Screen 3 — Single branch (picker skipped)</p>
+  <div class="phone">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span>▲ ●●●●</span>
+    </div>
+    <div class="header">
+      <div>
+        <div class="header-title">Magnify</div>
+        <div class="header-sub">Waiter Terminal</div>
+      </div>
+      <div class="avatar">JN</div>
+    </div>
+
+    <!-- No chip bar — only 1 branch, no need to show -->
+    <div class="pos-body" style="padding-top: 24px;">
+      <div class="pos-header">Menu — Main Branch</div>
+      <div class="pos-sub">Single branch restaurant · picker skipped automatically</div>
+      <div class="pos-placeholder">
+        🍽️<br><br>
+        Dish grid loads here
+      </div>
+    </div>
+
+    <div class="nav-bar">
+      <div class="nav-item active">
+        <span class="nav-icon">🍽️</span>
+        <span>Menu</span>
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">🔄</span>
+        <span>Transactions</span>
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">🪑</span>
+        <span>Tables</span>
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">📋</span>
+        <span>Logs</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

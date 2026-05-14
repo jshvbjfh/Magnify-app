@@ -1,0 +1,13 @@
+{
+  "folders": [
+    {
+      "name": "android",
+      "path": "android"
+    }
+  ],
+  "settings": {
+    "java.import.gradle.enabled": true,
+    "java.import.gradle.wrapper.enabled": true,
+    "java.configuration.updateBuildConfiguration": "automatic"
+  }
+}

@@ -89,6 +89,7 @@ export async function POST(req: Request) {
     const accountRole = reqRole === 'owner' ? 'owner' : 'waiter'
     const normalizedEmail = email.trim().toLowerCase()
     const trimmedName = name.trim()
+    let cloudProvisionWarning: string | null = null
 
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } })
     const canUpdateExistingOwner = Boolean(
@@ -120,10 +121,7 @@ export async function POST(req: Request) {
       })
 
       if (!remoteProvision.ok) {
-        // In non-local-first mode, cloud provisioning failure is non-blocking
-        if (isLocalFirstDesktopMode()) {
-          return NextResponse.json({ error: remoteProvision.error }, { status: remoteProvision.status })
-        }
+        cloudProvisionWarning = remoteProvision.error
       }
     }
 
@@ -186,7 +184,7 @@ export async function POST(req: Request) {
       updated = true
     }
 
-    return NextResponse.json({ waiter, updated }, { status: updated ? 200 : 201 })
+    return NextResponse.json({ waiter, updated, cloudProvisionWarning }, { status: updated ? 200 : 201 })
   } catch (e: any) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
       return NextResponse.json({ error: 'Email already in use' }, { status: 409 })

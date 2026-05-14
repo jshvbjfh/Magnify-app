@@ -11,7 +11,7 @@ export async function GET() {
 
 	const role = (session.user as any).role
 	if (role !== 'admin' && role !== 'owner') {
-		return NextResponse.json({ error: 'Admin only' }, { status: 403 })
+		return NextResponse.json({ error: 'Admin or owner only' }, { status: 403 })
 	}
 
 	const context = await getRestaurantContextForUser(session.user.id)

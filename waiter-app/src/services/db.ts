@@ -6,7 +6,16 @@ let db: SQLiteDBConnection | null = null
 const DB_NAME = 'magnify_waiter'
 const DB_VERSION = 1
 
-const SCHEMA = `
+interface Migration {
+  version: number
+  sql: string
+}
+
+const MIGRATIONS: Migration[] = [
+  {
+    // Initial schema — all CREATE TABLE IF NOT EXISTS, safe for existing installs.
+    version: 1,
+    sql: `
 CREATE TABLE IF NOT EXISTS dishes (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -84,7 +93,11 @@ CREATE TABLE IF NOT EXISTS cancellation_approvers (
   name TEXT NOT NULL,
   pin_hash TEXT NOT NULL
 );
-`
+`,
+  },
+  // To add a migration, append a new entry here:
+  // { version: 2, sql: 'ALTER TABLE orders ADD COLUMN kitchen_note TEXT;' },
+]
 
 export async function initDB(): Promise<void> {
   if (db) return
@@ -99,7 +112,31 @@ export async function initDB(): Promise<void> {
   }
 
   await db.open()
-  await db.execute(SCHEMA)
+  await runMigrations()
+}
+
+async function runMigrations(): Promise<void> {
+  const d = getDB()
+
+  // Bootstrap the migrations tracking table.
+  await d.execute(`
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+  `)
+
+  const res = await d.query('SELECT COALESCE(MAX(version), 0) AS max_v FROM schema_migrations')
+  const maxApplied: number = ((res.values?.[0] as { max_v: number } | undefined)?.max_v) ?? 0
+
+  for (const migration of MIGRATIONS) {
+    if (migration.version <= maxApplied) continue
+    await d.execute(migration.sql)
+    await d.run(
+      'INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)',
+      [migration.version, new Date().toISOString()],
+    )
+  }
 }
 
 function getDB(): SQLiteDBConnection {
@@ -314,8 +351,14 @@ export async function updateOrder(
 }
 
 export async function getOrders(filter?: { status?: string }): Promise<Order[]> {
-  const where = filter?.status ? `WHERE status = '${filter.status}'` : ''
-  const res = await getDB().query(`SELECT * FROM orders ${where} ORDER BY created_at DESC`)
+  if (filter?.status) {
+    const res = await getDB().query(
+      'SELECT * FROM orders WHERE status = ? ORDER BY created_at DESC',
+      [filter.status]
+    )
+    return (res.values ?? []) as Order[]
+  }
+  const res = await getDB().query('SELECT * FROM orders ORDER BY created_at DESC')
   return (res.values ?? []) as Order[]
 }
 

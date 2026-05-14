@@ -11,6 +11,10 @@ export async function GET() {
 	if (!session?.user?.id) {
 		return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 	}
+	const role = (session.user as any)?.role
+	if (role !== 'admin' && role !== 'owner') {
+		return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+	}
 
 	const context = await getRestaurantContextForUser(session.user.id)
 	if (!context?.restaurantId || !context.branchId) {

@@ -70,11 +70,11 @@ const ELECTRON_ALLOWED_KEYS = [
   'ELECTRON_AUTO_UPDATE',
   'OWNER_SYNC_TARGET_URL',
   'OWNER_SYNC_EMAIL',
+  'OWNER_SYNC_SHARED_SECRET',
 ]
 
 const FORBIDDEN_KEYS = [
   'NEXTAUTH_SECRET',
-  'OWNER_SYNC_SHARED_SECRET',
   'OWNER_SYNC_PASSWORD',
   'DATABASE_URL',
   'POSTGRES_PRISMA_URL',
@@ -87,8 +87,8 @@ describe('Electron env allowlist', () => {
     expect(ELECTRON_ALLOWED_KEYS).not.toContain('NEXTAUTH_SECRET')
   })
 
-  it('does not include OWNER_SYNC_SHARED_SECRET', () => {
-    expect(ELECTRON_ALLOWED_KEYS).not.toContain('OWNER_SYNC_SHARED_SECRET')
+  it('includes OWNER_SYNC_SHARED_SECRET (intentionally bundled — desktop-only, low-risk)', () => {
+    expect(ELECTRON_ALLOWED_KEYS).toContain('OWNER_SYNC_SHARED_SECRET')
   })
 
   it('does not include OWNER_SYNC_PASSWORD', () => {

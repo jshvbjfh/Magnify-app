@@ -18,7 +18,6 @@ const includeCloudDatabase = normalizedElectronDataMode === 'cloud'
 	|| /^(1|true|yes)$/i.test(String(process.env.ELECTRON_INCLUDE_CLOUD_DATABASE ?? '').trim())
 
 // SECURITY: NEXTAUTH_SECRET is generated per-device at runtime in main.js — never bundle it.
-// SECURITY: OWNER_SYNC_SHARED_SECRET and OWNER_SYNC_PASSWORD are credentials — configure via Settings UI after install.
 const allowedKeys = [
 	'GEMINI_MODEL',
 	'GEMINI_FALLBACK_MODEL',
@@ -30,6 +29,7 @@ const allowedKeys = [
 	'ELECTRON_AUTO_UPDATE',
 	'OWNER_SYNC_TARGET_URL',
 	'OWNER_SYNC_EMAIL',
+	'OWNER_SYNC_SHARED_SECRET',
 ]
 
 function parseEnvFile(filePath) {

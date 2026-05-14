@@ -10,8 +10,8 @@ export async function GET() {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const role = (session.user as any).role
-  if (role !== 'admin') {
-    return NextResponse.json({ error: 'Only the restaurant manager desktop can export sync data.' }, { status: 403 })
+  if (role !== 'admin' && role !== 'owner') {
+    return NextResponse.json({ error: 'Only the restaurant manager or owner can export sync data.' }, { status: 403 })
   }
 
   const context = await getRestaurantContextForUser(session.user.id)

@@ -147,19 +147,18 @@ async function resolveCloudBranchContext(
 }
 
 async function ensureSyncAccounts(db: PrismaDb, restaurantId: string, syncRestaurantId: string) {
-  let incomeCategory = await db.category.findFirst({ where: { restaurantId, name: 'Synced Sales Revenue' } })
-  if (!incomeCategory) {
-    incomeCategory = await db.category.create({
-      data: { restaurantId, name: 'Synced Sales Revenue', type: 'income', description: 'Cloud-synced local restaurant sales' },
-    })
-  }
+  // Use upsert (not findFirst+create) to avoid unique-constraint races when sync retries quickly.
+  const incomeCategory = await db.category.upsert({
+    where: { restaurantId_name: { restaurantId, name: 'Synced Sales Revenue' } },
+    create: { restaurantId, name: 'Synced Sales Revenue', type: 'income', description: 'Cloud-synced local restaurant sales' },
+    update: {},
+  })
 
-  let expenseCategory = await db.category.findFirst({ where: { restaurantId, name: 'Synced Operating Expense' } })
-  if (!expenseCategory) {
-    expenseCategory = await db.category.create({
-      data: { restaurantId, name: 'Synced Operating Expense', type: 'expense', description: 'Cloud-synced local restaurant expenses' },
-    })
-  }
+  const expenseCategory = await db.category.upsert({
+    where: { restaurantId_name: { restaurantId, name: 'Synced Operating Expense' } },
+    create: { restaurantId, name: 'Synced Operating Expense', type: 'expense', description: 'Cloud-synced local restaurant expenses' },
+    update: {},
+  })
 
   const codeSuffix = syncRestaurantId.slice(-8).toUpperCase()
 

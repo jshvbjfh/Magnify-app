@@ -1,0 +1,31 @@
+{
+  "java.import.gradle.enabled": true,
+  "java.import.gradle.wrapper.enabled": true,
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "java.import.exclusions": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/dist-*/**",
+    "**/build/**"
+  ],
+  "java.project.resourceFilters": [
+    "node_modules",
+    ".git",
+    ".svn",
+    "CVS",
+    ".DS_Store",
+    "dist",
+    "build",
+    ".next"
+  ],
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/dist-*/**": true,
+    "**/build/**": true,
+    "**/.next/**": true
+  },
+  "files.associations": {
+    "**/node_modules/@capacitor/**/android/**/*.java": "plaintext"
+  }
+}

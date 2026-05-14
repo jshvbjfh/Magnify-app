@@ -1,0 +1,71 @@
+{
+  "name": "magnify-pos",
+  "version": "1.0.1",
+  "description": "Magnify POS — Waiter Terminal for Windows",
+  "main": "electron/main.js",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --kill-others \"vite\" \"electron .\"",
+    "build": "vite build",
+    "electron:build": "vite build && electron-builder",
+    "electron:publish": "vite build && electron-builder --publish always",
+    "preview": "vite preview",
+    "postinstall": "electron-rebuild -f -w better-sqlite3"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^9.4.3",
+    "electron-updater": "^6.1.8",
+    "lucide-react": "^0.344.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "concurrently": "^8.2.2",
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.12"
+  },
+  "build": {
+    "appId": "com.magnify.pos",
+    "productName": "Magnify POS",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "runtime.env",
+      "node_modules/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "magnify-app",
+      "repo": "magnify-pos-releases"
+    },
+    "extraResources": [
+      "runtime.env"
+    ],
+    "npmRebuild": true
+  }
+}

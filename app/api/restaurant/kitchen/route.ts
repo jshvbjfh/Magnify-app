@@ -67,6 +67,7 @@ export async function POST(req: Request) {
     if (!name?.trim() || !email?.trim() || !password?.trim()) {
       return NextResponse.json({ error: 'name, email, and password are required' }, { status: 400 })
     }
+    let cloudProvisionWarning: string | null = null
 
     const existing = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } })
     if (existing) {
@@ -88,9 +89,7 @@ export async function POST(req: Request) {
       })
 
       if (!remoteProvision.ok) {
-        if (isLocalFirstDesktopMode()) {
-          return NextResponse.json({ error: remoteProvision.error }, { status: remoteProvision.status })
-        }
+        cloudProvisionWarning = remoteProvision.error
       }
     }
 
@@ -108,7 +107,7 @@ export async function POST(req: Request) {
       select: { id: true, name: true, email: true, role: true, createdAt: true },
     })
 
-    return NextResponse.json({ kitchenUser }, { status: 201 })
+    return NextResponse.json({ kitchenUser, cloudProvisionWarning }, { status: 201 })
   } catch (e: any) {
     const status = e.message === 'Unauthorized' ? 401 : e.message === 'Admin only' ? 403 : 500
     return NextResponse.json({ error: e.message }, { status })

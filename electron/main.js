@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell, screen } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, shell, screen } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const http = require('http')
@@ -21,6 +21,7 @@ const DESKTOP_UPDATE_POLL_INTERVAL_MS = 10 * 60 * 1000
 const DESKTOP_PRISMA_COMMAND_TIMEOUT_MS = 120000
 const DESKTOP_LEGACY_BASELINE_MIGRATION = '20260411120000_add_sync_infrastructure_tables'
 const DESKTOP_BRANCH_FOUNDATION_MIGRATION = '20260421173000_add_restaurant_branch_foundation'
+const DESKTOP_INVENTORY_BRANCH_SCOPED_UNIQUE_MIGRATION = '20260430000001_inventory_item_branch_scoped_unique'
 
 let desktopUpdateDeferredTimer = null
 let desktopUpdatePollInterval = null
@@ -470,13 +471,33 @@ async function stampAppliedDesktopMigrations(migrationsDir, throughMigrationName
 		`)
 
 		for (const migrationName of migrationNames) {
-			const existingRows = await prisma.$queryRawUnsafe(
-				`SELECT "id" FROM "_prisma_migrations" WHERE "migration_name" = '${escapeSqliteLiteral(migrationName)}' LIMIT 1`
-			)
-			if (existingRows.length > 0) continue
-
 			const migrationFilePath = path.join(migrationsDir, migrationName, 'migration.sql')
 			const checksum = calculateFileSha256(migrationFilePath)
+			const existingRows = await prisma.$queryRawUnsafe(
+				`SELECT "id", "finished_at" AS finished_at, "rolled_back_at" AS rolled_back_at
+				 FROM "_prisma_migrations"
+				 WHERE "migration_name" = '${escapeSqliteLiteral(migrationName)}'
+				 ORDER BY "started_at" DESC
+				 LIMIT 1`
+			)
+
+			if (existingRows.length > 0) {
+				const existingRow = existingRows[0]
+				if (existingRow.finished_at && !existingRow.rolled_back_at) continue
+
+				await prisma.$executeRawUnsafe(`
+					UPDATE "_prisma_migrations"
+					SET
+						"checksum" = '${escapeSqliteLiteral(checksum)}',
+						"finished_at" = CURRENT_TIMESTAMP,
+						"logs" = NULL,
+						"rolled_back_at" = NULL,
+						"applied_steps_count" = 1
+					WHERE "id" = '${escapeSqliteLiteral(existingRow.id)}'
+				`)
+				continue
+			}
+
 			const migrationId = `desktop-baseline-${randomBytes(12).toString('hex')}`
 
 			await prisma.$executeRawUnsafe(`
@@ -503,6 +524,122 @@ async function stampAppliedDesktopMigrations(migrationsDir, throughMigrationName
 			`)
 		}
 	})
+}
+
+async function attemptInventoryBranchScopedUniqueRepair({ migrationsDir, userDataDir, runtimeDbPath }) {
+	if (!runtimeDbPath) {
+		return {
+			attempted: true,
+			repaired: false,
+			reason: 'Runtime desktop database path is unavailable for inventory branch unique repair',
+			backupPath: null,
+			stampWarning: null,
+			migrationOutput: '',
+		}
+	}
+
+	if (!migrationsDir || !fs.existsSync(migrationsDir)) {
+		return {
+			attempted: true,
+			repaired: false,
+			reason: 'Packaged migration directory is unavailable for inventory branch unique repair',
+			backupPath: null,
+			stampWarning: null,
+			migrationOutput: '',
+		}
+	}
+
+	let backupPath = null
+
+	try {
+		backupPath = createDesktopDatabaseBackup(runtimeDbPath, userDataDir, 'inventory-branch-unique')
+
+		await withDesktopPrismaClient(async (prisma) => {
+			const statements = [
+				`UPDATE "inventory_items"
+				 SET "branchId" = (
+				 	SELECT rb."id"
+				 	FROM "restaurant_branches" rb
+				 	WHERE rb."restaurantId" = "inventory_items"."restaurantId"
+				 	  AND rb."isMain" = 1
+				 	  AND rb."isActive" = 1
+				 	ORDER BY rb."createdAt" ASC
+				 	LIMIT 1
+				 )
+				 WHERE "branchId" IS NULL
+				   AND "restaurantId" IS NOT NULL`,
+				`UPDATE "inventory_items"
+				 SET "branchId" = (
+				 	SELECT rb."id"
+				 	FROM "restaurant_branches" rb
+				 	WHERE rb."restaurantId" = "inventory_items"."restaurantId"
+				 	  AND rb."isActive" = 1
+				 	ORDER BY rb."sortOrder" ASC, rb."createdAt" ASC
+				 	LIMIT 1
+				 )
+				 WHERE "branchId" IS NULL
+				   AND "restaurantId" IS NOT NULL`,
+				`DROP INDEX IF EXISTS "inventory_items_userId_name_key"`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS "inventory_items_userId_restaurantId_branchId_name_key"
+				 ON "inventory_items"("userId", "restaurantId", "branchId", "name")`,
+				`UPDATE "dishes"
+				 SET "branchId" = (
+				 	SELECT rb."id"
+				 	FROM "restaurant_branches" rb
+				 	WHERE rb."restaurantId" = "dishes"."restaurantId"
+				 	  AND rb."isMain" = 1
+				 	  AND rb."isActive" = 1
+				 	ORDER BY rb."createdAt" ASC
+				 	LIMIT 1
+				 )
+				 WHERE "branchId" IS NULL
+				   AND "restaurantId" IS NOT NULL`,
+				`UPDATE "dishes"
+				 SET "branchId" = (
+				 	SELECT rb."id"
+				 	FROM "restaurant_branches" rb
+				 	WHERE rb."restaurantId" = "dishes"."restaurantId"
+				 	  AND rb."isActive" = 1
+				 	ORDER BY rb."sortOrder" ASC, rb."createdAt" ASC
+				 	LIMIT 1
+				 )
+				 WHERE "branchId" IS NULL
+				   AND "restaurantId" IS NOT NULL`,
+				`DROP INDEX IF EXISTS "dishes_userId_name_key"`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS "dishes_userId_restaurantId_branchId_name_key"
+				 ON "dishes"("userId", "restaurantId", "branchId", "name")`,
+			]
+
+			for (const statement of statements) {
+				await prisma.$executeRawUnsafe(statement)
+			}
+		})
+
+		let stampWarning = null
+		try {
+			await stampAppliedDesktopMigrations(migrationsDir, DESKTOP_INVENTORY_BRANCH_SCOPED_UNIQUE_MIGRATION)
+		} catch (stampError) {
+			stampWarning = stampError?.message || String(stampError)
+		}
+
+		return {
+			attempted: true,
+			repaired: true,
+			reason: 'Applied idempotent repair for inventory/dish branch-scoped unique indexes',
+			backupPath,
+			stampWarning,
+			migrationOutput: 'Applied idempotent repair for inventory/dish branch-scoped unique indexes',
+		}
+	} catch (error) {
+		return {
+			attempted: true,
+			repaired: false,
+			reason: error?.message || String(error),
+			backupPath,
+			stampWarning: null,
+			migrationOutput: '',
+		}
+	}
 }
 
 async function attemptLegacyDesktopBranchRepair({ migrationsDir, runPrismaCommand, userDataDir, runtimeDbPath }) {
@@ -1003,6 +1140,26 @@ app.whenReady().then(async () => {
 		appendStartupLog('NEXTAUTH_SECRET loaded from device secret store')
 	}
 
+	// Load OWNER_SYNC_SHARED_SECRET from userData/sync.secret if it was configured post-install.
+	// The secret is never bundled in the package; the Settings UI writes it via the desktop API.
+	if (!process.env.OWNER_SYNC_SHARED_SECRET) {
+		const syncSecretPath = path.join(app.getPath('userData'), 'sync.secret')
+		if (fs.existsSync(syncSecretPath)) {
+			try {
+				const storedSecret = fs.readFileSync(syncSecretPath, 'utf8').trim()
+				if (storedSecret) {
+					process.env.OWNER_SYNC_SHARED_SECRET = storedSecret
+					appendStartupLog('OWNER_SYNC_SHARED_SECRET loaded from device sync secret store')
+				}
+			} catch {
+				// Best-effort; proceed without the secret if the file is unreadable.
+				appendStartupLog('OWNER_SYNC_SHARED_SECRET: sync.secret file unreadable, skipping')
+			}
+		} else {
+			appendStartupLog('OWNER_SYNC_SHARED_SECRET: not configured (use Settings › Owner cloud sync to configure)')
+		}
+	}
+
 	const configuredDatabaseUrl = String(process.env.DATABASE_URL || '')
 	const hasCloudDatabaseUrl = configuredDatabaseUrl.startsWith('postgresql://') || configuredDatabaseUrl.startsWith('postgres://')
 	const electronDataMode = normalizeElectronDataMode(process.env.ELECTRON_DATA_MODE || (app.isPackaged ? 'local-first' : 'cloud'))
@@ -1123,7 +1280,36 @@ app.whenReady().then(async () => {
 					const migrationStdout = migrationErr?.stdout ? migrationErr.stdout.toString() : ''
 					const migrationDetails = `${migrationErr?.message || 'Unknown migration error'}\n\nSTDOUT:\n${migrationStdout}\n\nSTDERR:\n${migrationStderr}`
 
-					if (/\bP3005\b/.test(migrationDetails)) {
+					if (/\bP3018\b/.test(migrationDetails) && /Migration name:\s*20260430000001_inventory_item_branch_scoped_unique/.test(migrationDetails) && /inventory_items_userId_restaurantId_branchId_name_key already exists/.test(migrationDetails)) {
+						appendStartupLog('Migration reported duplicate inventory branch unique index; attempting idempotent repair')
+						const uniqueRepair = await attemptInventoryBranchScopedUniqueRepair({
+							migrationsDir,
+							userDataDir,
+							runtimeDbPath: desktopRuntimeDbPath,
+						})
+
+						if (uniqueRepair.repaired) {
+							const repairLogLines = [
+								`[${new Date().toISOString()}] Inventory branch unique repair succeeded`,
+								uniqueRepair.backupPath ? `Backup: ${uniqueRepair.backupPath}` : null,
+								uniqueRepair.stampWarning ? `Stamp warning: ${uniqueRepair.stampWarning}` : null,
+								uniqueRepair.migrationOutput,
+							].filter(Boolean)
+
+							fs.writeFileSync(migrationLogPath, `${repairLogLines.join('\n')}\n`, 'utf8')
+							appendStartupLog(`Inventory branch unique repair succeeded${uniqueRepair.stampWarning ? ` (stamp warning: ${uniqueRepair.stampWarning})` : ''}`)
+							console.log('Inventory branch unique repair succeeded')
+						} else {
+							migrationFailureMessage = `${migrationDetails}\n\nAutomatic repair failed:\n${uniqueRepair.reason || 'not applicable'}`
+							fs.writeFileSync(
+								migrationLogPath,
+								`[${new Date().toISOString()}] Migration failed\n${migrationFailureMessage}`,
+								'utf8'
+							)
+							appendStartupLog(`Inventory branch unique repair failed: ${uniqueRepair.reason || 'unknown error'}`)
+							console.error('Inventory branch unique repair failed (non-fatal):', migrationFailureMessage)
+						}
+					} else if (/\bP3005\b/.test(migrationDetails)) {
 						appendStartupLog('Migration reported P3005 (non-empty DB without migration history); checking for legacy desktop branch repair')
 						const legacyRepair = await attemptLegacyDesktopBranchRepair({
 							migrationsDir,
@@ -1248,7 +1434,9 @@ app.whenReady().then(async () => {
 		NODE_ENV: 'production',
 		ELECTRON_RUN_AS_NODE: '1',
 		MAGNIFY_DEVICE_ID: branchDeviceId,
+		MAGNIFY_STARTUP_LOG_PATH: getStartupLogPath(),
 		MAGNIFY_INTERNAL_BOOTSTRAP_SECRET: internalBootstrapSecret,
+		MAGNIFY_USER_DATA_DIR: app.getPath('userData'),
 		NODE_PATH: [...bundledNodePaths, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
 	}
 	appendStartupLog(`Bundled NODE_PATH=${serverEnv.NODE_PATH}`)

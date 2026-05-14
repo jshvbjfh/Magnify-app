@@ -18,6 +18,14 @@ function formatConflictPayload(value: unknown) {
   }
 }
 
+function formatFileSize(sizeBytes: number) {
+  const normalized = Number(sizeBytes)
+  if (!Number.isFinite(normalized) || normalized <= 0) return '0 B'
+  if (normalized < 1024) return `${normalized} B`
+  if (normalized < 1024 * 1024) return `${(normalized / 1024).toFixed(1)} KB`
+  return `${(normalized / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function getVisibleSyncStatus(syncStatus: OwnerSyncStatus | null, syncInFlight: boolean) {
   if (syncInFlight) return 'syncing' as const
   return syncStatus?.currentStatus ?? 'idle'
@@ -147,6 +155,16 @@ type FifoValidationResponse = {
   }
 }
 
+type StartupLogResponse = {
+  available: boolean
+  path: string | null
+  updatedAt: string | null
+  sizeBytes: number
+  truncated: boolean
+  content: string
+  message: string | null
+}
+
 export default function RestaurantSettings() {
   const [billTopText, setBillTopText] = useState('')
   const [billBottomText, setBillBottomText] = useState('')
@@ -176,6 +194,11 @@ export default function RestaurantSettings() {
   const [loadingConflicts, setLoadingConflicts] = useState(true)
   const [retryingOutbox, setRetryingOutbox] = useState(false)
   const [resolvingConflictId, setResolvingConflictId] = useState<string | null>(null)
+  const [startupLog, setStartupLog] = useState<StartupLogResponse | null>(null)
+  const [loadingStartupLog, setLoadingStartupLog] = useState(true)
+  const [refreshingStartupLog, setRefreshingStartupLog] = useState(false)
+  const [downloadingStartupLog, setDownloadingStartupLog] = useState(false)
+  const [startupLogError, setStartupLogError] = useState<string | null>(null)
   const [inventoryIntegrity, setInventoryIntegrity] = useState<InventoryIntegrityResponse | null>(null)
   const [loadingInventoryIntegrity, setLoadingInventoryIntegrity] = useState(true)
   const [inventoryReconciliation, setInventoryReconciliation] = useState<InventoryReconciliationResponse | null>(null)
@@ -186,12 +209,54 @@ export default function RestaurantSettings() {
   const [loadingFifoValidation, setLoadingFifoValidation] = useState(true)
   const [loading, setLoading] = useState(true)
 
+  // Desktop sync secret state (only used on packaged desktop)
+  const [syncSecretInput, setSyncSecretInput] = useState('')
+  const [savingSecret, setSavingSecret] = useState(false)
+  const [savedSecret, setSavedSecret] = useState(false)
+  const [secretConfigured, setSecretConfigured] = useState<boolean | null>(null)
+  const [secretError, setSecretError] = useState<string | null>(null)
+  const [clearingSecret, setClearingSecret] = useState(false)
+
   // Backup / restore state
   const [backingUp, setBackingUp] = useState(false)
   const [restoring, setRestoring] = useState(false)
   const [restoreMessage, setRestoreMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lowerSettingsRef = useRef<HTMLDivElement>(null)
+
+  async function refreshStartupLog(options?: { silent?: boolean }) {
+    const silent = options?.silent === true
+
+    if (silent) setRefreshingStartupLog(true)
+    else setLoadingStartupLog(true)
+
+    setStartupLogError(null)
+
+    try {
+      const response = await fetch('/api/restaurant/startup-log', { credentials: 'include', cache: 'no-store' })
+      const data = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to load startup log')
+      }
+
+      setStartupLog({
+        available: Boolean(data?.available),
+        path: typeof data?.path === 'string' ? data.path : null,
+        updatedAt: typeof data?.updatedAt === 'string' ? data.updatedAt : null,
+        sizeBytes: Number(data?.sizeBytes ?? 0),
+        truncated: Boolean(data?.truncated),
+        content: typeof data?.content === 'string' ? data.content : '',
+        message: typeof data?.message === 'string' ? data.message : null,
+      })
+    } catch (error) {
+      setStartupLog(null)
+      setStartupLogError(error instanceof Error ? error.message : 'Failed to load startup log')
+    } finally {
+      if (silent) setRefreshingStartupLog(false)
+      else setLoadingStartupLog(false)
+    }
+  }
 
   async function refreshSyncStatus() {
     const [status, conflicts] = await Promise.all([
@@ -313,8 +378,12 @@ export default function RestaurantSettings() {
       loadServerOwnerSyncConfig(),
       loadOwnerSyncStatus(),
       loadSyncConflicts(),
+      fetch('/api/desktop/sync-secret', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
     ])
-      .then(([setupData, profileData, serverData, syncStatusData, conflictData]) => {
+      .then(([setupData, profileData, serverData, syncStatusData, conflictData, syncSecretData]) => {
+        if (syncSecretData && typeof syncSecretData.configured === 'boolean') {
+          setSecretConfigured(syncSecretData.configured)
+        }
         const localSyncConfig = loadOwnerSyncConfig(serverData)
 
         if (setupData) {
@@ -353,6 +422,7 @@ export default function RestaurantSettings() {
         setLoadingConflicts(false)
       })
 
+    void refreshStartupLog()
     void refreshInventoryIntegrity()
     void refreshFifoValidation()
   }, [])
@@ -474,6 +544,60 @@ export default function RestaurantSettings() {
     }
   }
 
+  async function saveSyncSecret() {
+    const secret = syncSecretInput.trim()
+    if (!secret) return
+    setSavingSecret(true)
+    setSecretError(null)
+    try {
+      const response = await fetch('/api/desktop/sync-secret', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ secret }),
+      })
+      const data = await response.json().catch(() => null)
+      if (!response.ok) {
+        setSecretError(data?.error ?? 'Failed to save sync secret.')
+        return
+      }
+      setSecretConfigured(true)
+      setSyncSecretInput('')
+      setSavedSecret(true)
+      setTimeout(() => setSavedSecret(false), 3000)
+      // Refresh server sync config so the sync readiness banner updates
+      const updated = await loadServerOwnerSyncConfig()
+      setServerSyncConfig(updated)
+    } catch (err) {
+      setSecretError(err instanceof Error ? err.message : 'Network error')
+    } finally {
+      setSavingSecret(false)
+    }
+  }
+
+  async function clearSyncSecret() {
+    setClearingSecret(true)
+    setSecretError(null)
+    try {
+      const response = await fetch('/api/desktop/sync-secret', {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => null)
+        setSecretError(data?.error ?? 'Failed to clear sync secret.')
+        return
+      }
+      setSecretConfigured(false)
+      const updated = await loadServerOwnerSyncConfig()
+      setServerSyncConfig(updated)
+    } catch (err) {
+      setSecretError(err instanceof Error ? err.message : 'Network error')
+    } finally {
+      setClearingSecret(false)
+    }
+  }
+
   async function saveSyncSettings() {
     setSavingSync(true)
     saveOwnerSyncConfig(syncConfig)
@@ -509,6 +633,34 @@ export default function RestaurantSettings() {
       ? `Conflict resolved by ${resolution === 'accept_local' ? 'keeping the local version' : 'accepting the remote version'}.`
       : result.error ?? null)
     await refreshSyncStatus()
+  }
+
+  async function downloadStartupLog() {
+    if (!startupLog?.available || downloadingStartupLog) return
+
+    setDownloadingStartupLog(true)
+    setStartupLogError(null)
+
+    try {
+      const response = await fetch('/api/restaurant/startup-log?download=1', { credentials: 'include', cache: 'no-store' })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null)
+        throw new Error(data?.error || 'Failed to download startup log')
+      }
+
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'startup.log'
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setStartupLogError(error instanceof Error ? error.message : 'Failed to download startup log')
+    } finally {
+      setDownloadingStartupLog(false)
+    }
   }
 
   async function downloadBackup() {
@@ -1079,7 +1231,7 @@ export default function RestaurantSettings() {
           className="flex w-full items-center justify-center gap-3 rounded-2xl border border-dashed border-orange-200 bg-orange-50 px-4 py-3 text-sm font-medium text-orange-700 transition-colors hover:bg-orange-100"
         >
           <ChevronDown className="h-4 w-4 animate-bounce" />
-          More settings below: cloud sync and backup
+          More settings below: cloud sync, startup logs, and backup
         </button>
       </div>
 
@@ -1133,6 +1285,59 @@ export default function RestaurantSettings() {
             </label>
           ) : null}
         </div>
+
+        {/* Server sync shared secret — desktop-only, shown when the endpoint is available */}
+        {secretConfigured !== null ? (
+          <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Server sync shared secret</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  A shared secret lets this desktop authenticate to the owner cloud without entering a password each session.
+                  It is stored securely on this device only and never sent to any server other than your configured sync target.
+                </p>
+              </div>
+              {secretConfigured ? (
+                <span className="shrink-0 inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-700">Configured</span>
+              ) : (
+                <span className="shrink-0 inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">Not set</span>
+              )}
+            </div>
+            {!secretConfigured || syncSecretInput ? (
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={syncSecretInput}
+                  onChange={e => { setSyncSecretInput(e.target.value); setSecretError(null) }}
+                  placeholder={secretConfigured ? 'Enter new secret to replace the current one' : 'Paste the shared secret from the owner cloud .env'}
+                  className="flex-1 rounded-xl border border-gray-300 px-4 py-2 text-sm outline-none focus:border-orange-400"
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => { void saveSyncSecret() }}
+                  disabled={savingSecret || !syncSecretInput.trim()}
+                  className="shrink-0 rounded-xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 hover:bg-orange-600"
+                >
+                  {savingSecret ? 'Saving…' : savedSecret ? 'Saved!' : 'Save secret'}
+                </button>
+              </div>
+            ) : null}
+            {secretConfigured && !syncSecretInput ? (
+              <button
+                type="button"
+                onClick={() => { void clearSyncSecret() }}
+                disabled={clearingSecret}
+                className="text-xs text-red-600 hover:underline disabled:opacity-50"
+              >
+                {clearingSecret ? 'Clearing…' : 'Remove saved secret'}
+              </button>
+            ) : null}
+            {secretError ? (
+              <p className="text-xs text-red-600">{secretError}</p>
+            ) : null}
+          </div>
+        ) : null}
 
         <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
           <input
@@ -1439,6 +1644,90 @@ export default function RestaurantSettings() {
             {retryingOutbox ? 'Requeueing…' : 'Requeue stalled changes'}
           </button>
         </div>
+      </div>
+
+      <div className="xl:col-span-2 rounded-2xl border border-gray-200 bg-white p-6 space-y-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-orange-500" />
+              <h2 className="text-base font-bold text-gray-900">Startup log</h2>
+            </div>
+            <p className="mt-1 text-sm text-gray-500">
+              Desktop startup, migration, and local server boot output for this admin device. Use it when branch login, sync, or startup errors need a first-pass trace.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => { void refreshStartupLog({ silent: true }) }}
+              disabled={loadingStartupLog || refreshingStartupLog}
+              className="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-60"
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshingStartupLog ? 'animate-spin' : ''}`} />
+              {refreshingStartupLog ? 'Refreshing…' : 'Refresh log'}
+            </button>
+            <button
+              onClick={() => { void downloadStartupLog() }}
+              disabled={!startupLog?.available || downloadingStartupLog}
+              className="inline-flex items-center gap-2 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-sm font-semibold text-orange-700 transition-colors hover:bg-orange-100 disabled:opacity-60"
+            >
+              <Download className="h-4 w-4" />
+              {downloadingStartupLog ? 'Downloading…' : 'Download full log'}
+            </button>
+          </div>
+        </div>
+
+        {startupLogError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {startupLogError}
+          </div>
+        ) : null}
+
+        {loadingStartupLog ? (
+          <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-6 text-sm text-gray-500">
+            Loading startup log…
+          </div>
+        ) : startupLog?.available ? (
+          <>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">File size</p>
+                <p className="mt-1 text-sm font-semibold text-gray-900">{formatFileSize(startupLog.sizeBytes)}</p>
+              </div>
+              <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Last updated</p>
+                <p className="mt-1 text-sm font-semibold text-gray-900">{formatSyncTimestamp(startupLog.updatedAt)}</p>
+              </div>
+              <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Log file</p>
+                <p className="mt-1 break-all text-xs font-medium text-gray-700">{startupLog.path || 'Unavailable'}</p>
+              </div>
+            </div>
+
+            {startupLog.message ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                {startupLog.message}
+              </div>
+            ) : null}
+
+            <div className="rounded-2xl border border-gray-200 bg-white p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900">Latest log output</h3>
+                  <p className="text-xs text-gray-500">
+                    {startupLog.truncated ? 'Showing the latest tail of startup.log.' : 'Showing the full current startup.log contents.'}
+                  </p>
+                </div>
+              </div>
+              <pre className="mt-3 max-h-96 overflow-auto rounded-xl bg-gray-950 px-4 py-3 text-xs leading-6 text-gray-100">{startupLog.content || 'startup.log exists but is currently empty.'}</pre>
+            </div>
+          </>
+        ) : (
+          <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-sm text-gray-500">
+            {startupLog?.message || 'Startup log is not available on this device yet.'}
+          </div>
+        )}
       </div>
 
       {/* ── Backup & Restore ── */}
