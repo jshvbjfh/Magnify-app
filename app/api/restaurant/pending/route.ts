@@ -51,10 +51,10 @@ export async function GET(req: Request) {
       dishPrice: item.dishPrice,
       qty: item.qty,
       status: item.kitchenStatus,
-      waiter: { id: order.createdById, name: order.createdByName },
+      waiter: { id: null, name: order.createdByName },
       addedAt: order.createdAt,
       readyAt: item.readyAt,
-      orderServedAt: order.servedAt,
+      orderServedAt: null,
       paymentMethod: order.paymentMethod,
       totalAmount: order.totalAmount,
       notes: null,
@@ -112,13 +112,12 @@ export async function POST(req: Request) {
               tableId: normalizedTableId,
               tableName: normalizedTableName,
               orderNumber: await generateRestaurantOrderNumber(tx, restaurantId, branchId),
-              createdById: session.user.id,
               createdByName: normalizedWaiterName,
             },
           })
         }
 
-        const item = await tx.restaurantOrderItem.create({
+        const item = await tx.orderItem.create({
           data: {
             orderId: activeOrder.id,
             dishId,
@@ -165,7 +164,7 @@ export async function POST(req: Request) {
       if (normalizedActionKey && isRestaurantActionConflict(error)) {
         const existingAction = await findRestaurantAction(restaurantId, normalizedActionKey, branchId)
         const existingItem = existingAction?.orderItemId
-          ? await prisma.restaurantOrderItem.findUnique({ where: { id: existingAction.orderItemId } })
+          ? await prisma.orderItem.findUnique({ where: { id: existingAction.orderItemId } })
           : null
         return NextResponse.json({ duplicate: true, action: existingAction, item: existingItem }, { status: 200 })
       }
@@ -204,7 +203,6 @@ export async function DELETE(req: Request) {
   const normalizedActionKey = normalizeRestaurantActionKey(actionKey)
 
   const approver = await resolveCancellationApprover({
-    billingUserId: context.billingUserId,
     restaurantId,
     branchId,
     pin: String(supervisorPin || ''),
@@ -216,7 +214,7 @@ export async function DELETE(req: Request) {
   const cancellationRecorderName = approver.name
 
   if (orderId) {
-    const item = await prisma.restaurantOrderItem.findFirst({
+    const item = await prisma.orderItem.findFirst({
       where: { id: orderId, order: { restaurantId, branchId, status: 'PENDING' } },
       include: { order: true },
     })
@@ -225,20 +223,16 @@ export async function DELETE(req: Request) {
 
     try {
       await prisma.$transaction(async (tx) => {
-      await tx.restaurantOrderItem.update({
+      await tx.orderItem.update({
         where: { id: orderId },
         data: {
           status: 'CANCELED',
-          canceledById: cancellationRecorderId,
-          canceledByName: cancellationRecorderName,
-          cancellationApprovedByEmployeeId: approver.id,
-          cancellationApprovedByEmployeeName: approver.name,
           cancelReason: reason,
           canceledAt: new Date(),
         },
       })
 
-      const remaining = await tx.restaurantOrderItem.count({
+      const remaining = await tx.orderItem.count({
         where: { orderId: item.orderId, status: 'ACTIVE' },
       })
 
@@ -248,11 +242,6 @@ export async function DELETE(req: Request) {
           data: {
             status: 'CANCELED',
             canceledAt: new Date(),
-            canceledById: cancellationRecorderId,
-            canceledByName: cancellationRecorderName,
-            cancellationApprovedByEmployeeId: approver.id,
-            cancellationApprovedByEmployeeName: approver.name,
-            cancellationApprovedAt: new Date(),
             cancelReason: reason,
           },
         })
@@ -303,14 +292,10 @@ export async function DELETE(req: Request) {
     try {
       await prisma.$transaction(async (tx) => {
       for (const targetOrder of targetOrders) {
-        await tx.restaurantOrderItem.updateMany({
+        await tx.orderItem.updateMany({
           where: { orderId: targetOrder.id, status: 'ACTIVE' },
           data: {
             status: 'CANCELED',
-            canceledById: cancellationRecorderId,
-            canceledByName: cancellationRecorderName,
-            cancellationApprovedByEmployeeId: approver.id,
-            cancellationApprovedByEmployeeName: approver.name,
             cancelReason: reason,
             canceledAt: new Date(),
           },
@@ -321,11 +306,6 @@ export async function DELETE(req: Request) {
           data: {
             status: 'CANCELED',
             canceledAt: new Date(),
-            canceledById: cancellationRecorderId,
-            canceledByName: cancellationRecorderName,
-            cancellationApprovedByEmployeeId: approver.id,
-            cancellationApprovedByEmployeeName: approver.name,
-            cancellationApprovedAt: new Date(),
             cancelReason: reason,
           },
         })

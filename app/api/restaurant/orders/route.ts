@@ -33,7 +33,12 @@ export async function GET(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = await getRestaurantContextForUser(session.user.id)
-  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ orders: [], summary: null })
+  if (!context?.restaurantId || !context.branchId) {
+    return NextResponse.json(
+      { error: 'No restaurant branch found for this account. Ask your administrator to check your account configuration.' },
+      { status: 400 },
+    )
+  }
 
   const { searchParams } = new URL(req.url)
   const rawPeriod = (searchParams.get('period') ?? 'today').toLowerCase()
@@ -74,7 +79,6 @@ export async function GET(req: Request) {
       ...order,
       displayStatus,
       cancelReason: displayStatus === 'CANCELED' ? order.cancelReason : null,
-      cancellationApprovedByEmployeeName: displayStatus === 'CANCELED' ? order.cancellationApprovedByEmployeeName : null,
       timeline: buildRestaurantOrderTimeline(order),
     }
   })
@@ -86,11 +90,10 @@ export async function GET(req: Request) {
   const summary = enriched.reduce((acc, order) => {
     acc.total += 1
     if (order.displayStatus === 'PENDING') acc.pending += 1
-    if (order.displayStatus === 'SERVED') acc.served += 1
     if (order.displayStatus === 'PAID') acc.paid += 1
     if (order.displayStatus === 'CANCELED') acc.canceled += 1
     return acc
-  }, { total: 0, pending: 0, served: 0, paid: 0, canceled: 0 })
+  }, { total: 0, pending: 0, paid: 0, canceled: 0 })
 
   return NextResponse.json({ orders: filtered, summary })
 }

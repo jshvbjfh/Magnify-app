@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from '@prisma/client'
-import { calculateGrossFromNet, calculateVatFromNet, RESTAURANT_VAT_RATE } from '@/lib/restaurantVat'
+import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
@@ -14,10 +14,9 @@ export function calculateRestaurantOrderTotals(items: TotalsInput) {
   return { subtotalAmount, vatAmount, totalAmount }
 }
 
-export function getRestaurantOrderDisplayStatus(order: { status: string; servedAt: Date | string | null }) {
+export function getRestaurantOrderDisplayStatus(order: { status: string }) {
   if (order.status === 'CANCELED') return 'CANCELED'
   if (order.status === 'PAID') return 'PAID'
-  if (order.servedAt) return 'SERVED'
   return 'PENDING'
 }
 
@@ -25,7 +24,7 @@ export async function generateRestaurantOrderNumber(db: PrismaDb, restaurantId: 
   const latest = await db.restaurantOrder.findFirst({
     where: {
       restaurantId,
-      ...(branchId !== undefined ? { branchId: branchId ?? null } : {}),
+      ...(branchId ? { branchId } : {}),
     },
     orderBy: { createdAt: 'desc' },
     select: { orderNumber: true },
@@ -44,7 +43,7 @@ export function isRestaurantOrderNumberConflict(error: unknown) {
 }
 
 export async function syncRestaurantOrderTotals(db: PrismaDb, orderId: string) {
-  const activeItems = await db.restaurantOrderItem.findMany({
+  const activeItems = await db.orderItem.findMany({
     where: { orderId, status: 'ACTIVE' },
     select: { dishPrice: true, qty: true },
   })
@@ -70,7 +69,6 @@ export async function enqueueOrderSync(
   })
   if (!order) return
 
-  // Guard: log if order has no items — this indicates a recording issue upstream
   if (order.items.length === 0 && order.status !== 'CANCELED') {
     console.warn(`[sync] enqueueOrderSync: order ${orderId} has 0 items (status=${order.status})`)
   }
@@ -82,7 +80,6 @@ export async function enqueueOrderSync(
     entityId: orderId,
     operation: 'upsert',
     sourceDeviceId: sourceDeviceId ?? null,
-    // items embedded in payload — syncEngine reads payload.items to recreate order items on cloud
     payload: { ...order, items: order.items },
   })
 }
@@ -103,29 +100,21 @@ function formatTimelineEventAt(value: Date | string | null) {
 
 export function buildRestaurantOrderTimeline(order: {
   createdAt: Date | string
-  createdByName: string
-  servedAt: Date | string | null
-  servedByName: string | null
+  createdByName?: string | null
   paidAt: Date | string | null
-  paidByName: string | null
   canceledAt: Date | string | null
-  canceledByName: string | null
   cancelReason: string | null
 }) {
   const createdAtLabel = formatTimelineEventAt(order.createdAt)
   const timeline = [`Pushed by ${order.createdByName || 'Staff'}${createdAtLabel ? ` at ${createdAtLabel}` : ''}`]
 
-  if (order.servedAt) {
-    const servedAtLabel = formatTimelineEventAt(order.servedAt)
-    timeline.push(`Served by ${order.servedByName || 'Staff'}${servedAtLabel ? ` at ${servedAtLabel}` : ''}`)
-  }
   if (order.paidAt) {
     const paidAtLabel = formatTimelineEventAt(order.paidAt)
-    timeline.push(`Payment recorded by ${order.paidByName || 'Staff'}${paidAtLabel ? ` at ${paidAtLabel}` : ''}`)
+    timeline.push(`Paid${paidAtLabel ? ` at ${paidAtLabel}` : ''}`)
   }
   if (order.canceledAt) {
     const canceledAtLabel = formatTimelineEventAt(order.canceledAt)
-    timeline.push(`Canceled by ${order.canceledByName || 'Staff'}${canceledAtLabel ? ` at ${canceledAtLabel}` : ''}${order.cancelReason ? ` - ${order.cancelReason}` : ''}`)
+    timeline.push(`Canceled${canceledAtLabel ? ` at ${canceledAtLabel}` : ''}${order.cancelReason ? ` - ${order.cancelReason}` : ''}`)
   }
 
   return timeline

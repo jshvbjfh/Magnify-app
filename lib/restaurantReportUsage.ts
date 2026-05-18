@@ -31,24 +31,15 @@ function isInRange(date: Date, startDate: Date | null, endDate: Date | null) {
 export async function getDishSaleUsageBreakdown(
 	db: PrismaDb,
 	params: {
-		billingUserId: string
 		restaurantId?: string | null
 		branchId?: string | null
-		includeBranchlessRows?: boolean
 		startDate?: Date | null
 		endDate?: Date | null
 	},
 ) {
-	const branchScopeWhere = params.branchId
-		? params.includeBranchlessRows
-			? { OR: [{ branchId: params.branchId }, { branchId: null }] }
-			: { branchId: params.branchId }
-		: {}
-
 	const whereBase = {
-		userId: params.billingUserId,
 		...(params.restaurantId ? { restaurantId: params.restaurantId } : {}),
-		...branchScopeWhere,
+		...(params.branchId ? { branchId: params.branchId } : {}),
 	}
 
 	const [ledgerRows, dishSales] = await Promise.all([
@@ -76,7 +67,7 @@ export async function getDishSaleUsageBreakdown(
 					include: {
 						ingredients: {
 							include: {
-								ingredient: {
+								inventoryItem: {
 									select: { unitCost: true },
 								},
 							},
@@ -122,20 +113,20 @@ export async function getDishSaleUsageBreakdown(
 				: null
 
 		for (const ingredientRow of sale.dish.ingredients) {
-			const key = `${sale.id}:${ingredientRow.ingredientId}`
+			const key = `${sale.id}:${ingredientRow.inventoryItemId}`
 			if (ledgerUsageBySourceIngredient.has(key)) continue
 
 			const qty = roundQty(Number(ingredientRow.quantityRequired ?? 0) * Number(sale.quantitySold ?? 0))
-			const cost = roundQty(qty * Number(ingredientRow.ingredient.unitCost ?? 0))
-			hasFallbackUsage.add(ingredientRow.ingredientId)
-			addQtyCost(totalUsageToEndMap, ingredientRow.ingredientId, qty, cost)
+			const cost = roundQty(qty * Number(ingredientRow.inventoryItem.unitCost ?? 0))
+			hasFallbackUsage.add(ingredientRow.inventoryItemId)
+			addQtyCost(totalUsageToEndMap, ingredientRow.inventoryItemId, qty, cost)
 
 			if (bucket === 'before') {
-				addQtyCost(beforeUsageMap, ingredientRow.ingredientId, qty, cost)
+				addQtyCost(beforeUsageMap, ingredientRow.inventoryItemId, qty, cost)
 			}
 
 			if (bucket === 'period') {
-				addQtyCost(periodUsageMap, ingredientRow.ingredientId, qty, cost)
+				addQtyCost(periodUsageMap, ingredientRow.inventoryItemId, qty, cost)
 			}
 		}
 	}

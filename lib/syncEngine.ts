@@ -1,6 +1,5 @@
-import type { Prisma, PrismaClient, SyncOutbox } from '@prisma/client'
+import type { Prisma, PrismaClient, SyncOutbox } from '.prisma/client'
 
-import { ensureAccount, ensureCoreCategories } from '@/lib/accounting'
 import {
   getSyncDeviceId,
   logSyncConflict,
@@ -17,28 +16,6 @@ function asDate(value: unknown) {
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
-function resolveSyncedAccountType(categoryType: string) {
-  if (categoryType === 'income') return 'revenue'
-  if (categoryType === 'expense') return 'expense'
-  return categoryType
-}
-
-function inferSyncedTransactionCategoryType(payload: Record<string, any>) {
-  const explicit = String(payload.categoryType ?? '').trim().toLowerCase()
-  if (explicit) return explicit
-
-  const sourceKind = String(payload.sourceKind ?? '').trim().toLowerCase()
-  if (sourceKind === 'dish_sale_mirror') return 'income'
-
-  const accountName = String(payload.accountName ?? '').trim().toLowerCase()
-  if (accountName.includes('payable')) return 'liability'
-  if (accountName.includes('receivable')) return 'asset'
-  if (accountName.includes('cash') || accountName.includes('bank') || accountName.includes('momo') || accountName.includes('mobile money')) {
-    return 'asset'
-  }
-
-  return payload.type === 'credit' ? 'income' : 'expense'
-}
 
 /**
  * Resolve a branchId for entities (dishes, tables) that must never have a null
@@ -69,15 +46,15 @@ async function resolveSyncBranchId(
 
   // Try the main branch first, then any active branch as a fallback.
   const branch =
-    await (db as PrismaClient).restaurantBranch.findFirst({
+    await (db as PrismaClient).branch.findFirst({
       where: { restaurantId: resId, isMain: true, isActive: true },
       select: { id: true },
       orderBy: { createdAt: 'asc' },
     }) ??
-    await (db as PrismaClient).restaurantBranch.findFirst({
+    await (db as PrismaClient).branch.findFirst({
       where: { restaurantId: resId, isActive: true },
       select: { id: true },
-      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      orderBy: { createdAt: 'asc' },
     })
 
   if (branch) {
@@ -114,10 +91,8 @@ async function hasPendingLocalConflict(db: PrismaDb, change: SyncChangeEnvelope,
 export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEnvelope, options?: { remapUserId?: string; idRemap?: Map<string, string> }) {
   const payload = (change.payload ?? {}) as Record<string, any>
 
-  // When syncing to cloud, local user IDs don't exist in the cloud users table.
-  // Remap ownerId/userId to the authenticated cloud user if provided.
+  // When syncing to cloud, use the authenticated cloud user's id as the restaurant owner.
   const ownerId = options?.remapUserId ?? payload.ownerId
-  const userId = options?.remapUserId ?? payload.userId
 
   switch (change.entityType) {
     case 'restaurant': {
@@ -146,14 +121,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           name: payload.name,
           ownerId: ownerId,
           joinCode: payload.joinCode,
-          syncRestaurantId: payload.syncRestaurantId ?? null,
-          syncToken: payload.syncToken ?? null,
           billHeader: payload.billHeader ?? '',
-          qrOrderingMode: payload.qrOrderingMode ?? 'order',
-          fifoEnabled: payload.fifoEnabled == null ? false : Boolean(payload.fifoEnabled),
-          fifoConfiguredAt: asDate(payload.fifoConfiguredAt),
-          fifoCutoverAt: asDate(payload.fifoCutoverAt),
-          trialStartAt: asDate(payload.trialStartAt) ?? new Date(),
           licenseExpiry: asDate(payload.licenseExpiry),
           licenseActive: Boolean(payload.licenseActive),
           createdAt: asDate(payload.createdAt) ?? undefined,
@@ -164,14 +132,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           name: payload.name,
           ownerId: ownerId,
           joinCode: payload.joinCode,
-          syncRestaurantId: payload.syncRestaurantId ?? null,
-          syncToken: payload.syncToken ?? null,
           billHeader: payload.billHeader ?? '',
-          qrOrderingMode: payload.qrOrderingMode ?? 'order',
-          fifoEnabled: payload.fifoEnabled == null ? false : Boolean(payload.fifoEnabled),
-          fifoConfiguredAt: asDate(payload.fifoConfiguredAt),
-          fifoCutoverAt: asDate(payload.fifoCutoverAt),
-          trialStartAt: asDate(payload.trialStartAt) ?? new Date(),
           licenseExpiry: asDate(payload.licenseExpiry),
           licenseActive: payload.licenseActive == null ? true : Boolean(payload.licenseActive),
           createdAt: asDate(payload.createdAt) ?? new Date(),
@@ -180,9 +141,9 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       })
       break
     }
-    case 'restaurantBranch': {
+    case 'branch': {
       if (change.operation === 'delete') {
-        await db.restaurantBranch.deleteMany({ where: { id: change.entityId } })
+        await db.branch.deleteMany({ where: { id: change.entityId } })
         break
       }
 
@@ -201,7 +162,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           if (incomingCode) conflictFilter.push({ code: incomingCode })
           if (incomingName) conflictFilter.push({ name: incomingName })
           if (conflictFilter.length > 0) {
-            await db.restaurantBranch.deleteMany({
+            await db.branch.deleteMany({
               where: {
                 id: { not: incomingId },
                 restaurantId: incomingRestaurantId,
@@ -212,15 +173,14 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         }
       }
 
-      await db.restaurantBranch.upsert({
+      await db.branch.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
           restaurantId: payload.restaurantId,
           name: payload.name,
-          code: payload.code,
+          code: payload.code ?? String(payload.name ?? '').slice(0, 8).toUpperCase(),
           isMain: Boolean(payload.isMain),
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
-          sortOrder: Number(payload.sortOrder ?? 0),
           createdAt: asDate(payload.createdAt) ?? undefined,
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
@@ -228,10 +188,9 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           id: String(payload.id || change.entityId),
           restaurantId: payload.restaurantId,
           name: payload.name,
-          code: payload.code,
+          code: payload.code ?? String(payload.name ?? '').slice(0, 8).toUpperCase(),
           isMain: Boolean(payload.isMain),
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
-          sortOrder: Number(payload.sortOrder ?? 0),
           createdAt: asDate(payload.createdAt) ?? new Date(),
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
@@ -278,37 +237,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       break
     }
     case 'pricingPlan': {
-      if (change.operation === 'delete') {
-        await db.pricingPlan.deleteMany({ where: { id: change.entityId } })
-        break
-      }
-
-      await db.pricingPlan.upsert({
-        where: { id: String(payload.id || change.entityId) },
-        update: {
-          name: payload.name,
-          duration: Number(payload.duration),
-          price: Number(payload.price),
-          currency: payload.currency ?? 'RWF',
-          isActive: Boolean(payload.isActive),
-          seedKey: payload.seedKey ?? null,
-          systemManaged: Boolean(payload.systemManaged),
-          createdAt: asDate(payload.createdAt) ?? undefined,
-          updatedAt: asDate(payload.updatedAt) ?? new Date(),
-        },
-        create: {
-          id: String(payload.id || change.entityId),
-          name: payload.name,
-          duration: Number(payload.duration),
-          price: Number(payload.price),
-          currency: payload.currency ?? 'RWF',
-          isActive: payload.isActive == null ? true : Boolean(payload.isActive),
-          seedKey: payload.seedKey ?? null,
-          systemManaged: Boolean(payload.systemManaged),
-          createdAt: asDate(payload.createdAt) ?? new Date(),
-          updatedAt: asDate(payload.updatedAt) ?? new Date(),
-        },
-      })
+      // PricingPlan model removed — silently skip to avoid breaking old sync payloads
       break
     }
     case 'dish': {
@@ -317,25 +246,19 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
-      // Reject null branchId — dishes without a branch are invisible to the
-      // waiter pull query.  Resolve to the restaurant's main branch instead of
-      // silently persisting bad data.  Log any resolution so it is auditable.
       const dishBranchId = await resolveSyncBranchId(
         db, payload.branchId, payload.restaurantId, 'dish', change.entityId,
       )
-      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
       if (!dishBranchId) throw new Error(`[syncEngine] dish:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
 
-      // C1: If a dish with the same (userId, restaurantId, branchId, name) exists under a different id,
-      // update that row instead of upsert-by-id, avoiding @@unique([userId,restaurantId,branchId,name]) violation.
-      // restaurantId and branchId must be included so same-name dishes in different restaurants/branches
-      // are NOT merged — each restaurant+branch pair has its own dish namespace.
+      // C1: If a dish with the same (restaurantId, branchId, name) exists under a different id,
+      // update that row instead of upsert-by-id to avoid @@unique([restaurantId,branchId,name]) violation.
       const incomingDishId = String(payload.id || change.entityId)
-      const dishConflict = userId
-        ? await db.dish.findFirst({ where: { userId, restaurantId: payload.restaurantId ?? null, branchId: dishBranchId, name: payload.name, NOT: { id: incomingDishId } }, select: { id: true } })
-        : null
+      const dishConflict = await db.dish.findFirst({
+        where: { restaurantId: payload.restaurantId ?? null, branchId: dishBranchId, name: payload.name, NOT: { id: incomingDishId } },
+        select: { id: true },
+      })
       const dishTargetId = dishConflict?.id ?? incomingDishId
-      // FK-remap: if C1 displaces the incoming id, record so dishIngredient/dishSale can resolve dishId.
       if (options?.idRemap && dishTargetId !== incomingDishId) {
         options.idRemap.set(incomingDishId, dishTargetId)
       }
@@ -343,7 +266,6 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       await db.dish.upsert({
         where: { id: dishTargetId },
         update: {
-          userId: userId,
           restaurantId: payload.restaurantId ?? null,
           branchId: dishBranchId,
           name: payload.name,
@@ -355,7 +277,6 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         },
         create: {
           id: dishTargetId,
-          userId: userId,
           restaurantId: payload.restaurantId ?? null,
           branchId: dishBranchId,
           name: payload.name,
@@ -370,167 +291,92 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
     }
     case 'dishIngredient': {
       if (change.operation === 'delete') {
-        // M2: Derive dishId/ingredientId from entityId (dishId:ingredientId) as fallback.
-        // If payload is empty or null, String(null) = "null" which deletes nothing silently.
-        const [parsedDishId, parsedIngredientId] = change.entityId.split(':')
+        const [parsedDishId, parsedItemId] = change.entityId.split(':')
         const rawDishId = String(payload.dishId || parsedDishId || '')
-        const rawIngredientId = String(payload.ingredientId || parsedIngredientId || '')
-        // Resolve via remap in case a parent dish or inventoryItem was C1-displaced this batch.
+        const rawItemId = String(payload.inventoryItemId || payload.ingredientId || parsedItemId || '')
         const dishId = options?.idRemap?.get(rawDishId) ?? rawDishId
-        const ingredientId = options?.idRemap?.get(rawIngredientId) ?? rawIngredientId
-        if (!dishId || !ingredientId) {
+        const inventoryItemId = options?.idRemap?.get(rawItemId) ?? rawItemId
+        if (!dishId || !inventoryItemId) {
           throw new Error(
-            `[syncEngine] dishIngredient delete ${change.entityId} — cannot resolve dishId/ingredientId from payload or entityId`,
+            `[syncEngine] dishIngredient delete ${change.entityId} — cannot resolve dishId/inventoryItemId from payload or entityId`,
           )
         }
         await db.dishIngredient.deleteMany({
-          where: { dishId, ingredientId },
+          where: { dishId, inventoryItemId },
         })
         break
       }
 
-      // Resolve dishId and ingredientId via the batch remap in case their parents were C1-displaced.
       const resolvedDishIngredientDishId = options?.idRemap?.get(String(payload.dishId)) ?? String(payload.dishId)
-      const resolvedDishIngredientIngredientId = options?.idRemap?.get(String(payload.ingredientId)) ?? String(payload.ingredientId)
+      const resolvedInventoryItemId = options?.idRemap?.get(String(payload.inventoryItemId ?? payload.ingredientId)) ?? String(payload.inventoryItemId ?? payload.ingredientId)
 
       await db.dishIngredient.upsert({
         where: {
-          dishId_ingredientId: {
+          dishId_inventoryItemId: {
             dishId: resolvedDishIngredientDishId,
-            ingredientId: resolvedDishIngredientIngredientId,
+            inventoryItemId: resolvedInventoryItemId,
           },
         },
         update: { quantityRequired: Number(payload.quantityRequired) },
         create: {
           dishId: resolvedDishIngredientDishId,
-          ingredientId: resolvedDishIngredientIngredientId,
+          inventoryItemId: resolvedInventoryItemId,
           quantityRequired: Number(payload.quantityRequired),
         },
       })
       break
     }
-    case 'employee': {
+    case 'employee':
+    case 'staff': {
       if (change.operation === 'delete') {
-        await db.employee.deleteMany({ where: { id: change.entityId } })
+        await db.staff.deleteMany({ where: { id: change.entityId } })
         break
       }
 
-      const employeeRestaurantId = String(payload.restaurantId ?? '').trim()
-      const employeeBranchId = await resolveSyncBranchId(
-        db, payload.branchId, employeeRestaurantId, 'employee', change.entityId,
+      const staffRestaurantId = String(payload.restaurantId ?? '').trim()
+      const staffBranchId = await resolveSyncBranchId(
+        db, payload.branchId, staffRestaurantId, 'staff', change.entityId,
       )
-      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
-      if (!employeeBranchId) throw new Error(`[syncEngine] employee:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+      if (!staffBranchId) throw new Error(`[syncEngine] staff:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
 
-      await db.employee.upsert({
-        where: { id: String(payload.id || change.entityId) },
+      const staffTargetId = String(payload.id || change.entityId)
+      await db.staff.upsert({
+        where: { id: staffTargetId },
         update: {
-          userId: userId,
-          restaurantId: employeeRestaurantId,
-          branchId: employeeBranchId,
+          restaurantId: staffRestaurantId,
           name: payload.name,
-          role: payload.role,
-          payType: payload.payType,
-          payRate: Number(payload.payRate),
+          role: payload.role ?? 'waiter',
+          pin: payload.pin ?? payload.cancellationPinHash ?? null,
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
-          canApproveOrderCancellation: Boolean(payload.canApproveOrderCancellation),
-          cancellationPinHash: payload.cancellationPinHash ?? null,
           phone: payload.phone ?? null,
           createdAt: asDate(payload.createdAt) ?? undefined,
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
         create: {
-          id: String(payload.id || change.entityId),
-          userId: userId,
-          restaurantId: employeeRestaurantId,
-          branchId: employeeBranchId,
+          id: staffTargetId,
+          restaurantId: staffRestaurantId,
           name: payload.name,
-          role: payload.role,
-          payType: payload.payType,
-          payRate: Number(payload.payRate),
+          role: payload.role ?? 'waiter',
+          pin: payload.pin ?? payload.cancellationPinHash ?? null,
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
-          canApproveOrderCancellation: Boolean(payload.canApproveOrderCancellation),
-          cancellationPinHash: payload.cancellationPinHash ?? null,
           phone: payload.phone ?? null,
           createdAt: asDate(payload.createdAt) ?? new Date(),
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
       })
+      // Ensure StaffBranch association exists
+      if (staffBranchId) {
+        await (db as any).staffBranch.upsert({
+          where: { staffId_branchId: { staffId: staffTargetId, branchId: staffBranchId } },
+          update: {},
+          create: { staffId: staffTargetId, branchId: staffBranchId },
+        })
+      }
       break
     }
     case 'transaction': {
-      if (change.operation === 'delete') {
-        await db.transaction.deleteMany({ where: { id: change.entityId } })
-        break
-      }
-
-      const transactionRestaurantId = String(payload.restaurantId ?? '').trim() || null
-      const transactionBranchId = transactionRestaurantId
-        ? await resolveSyncBranchId(db, payload.branchId, transactionRestaurantId, 'transaction', change.entityId)
-        : null
-      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
-      if (transactionRestaurantId && !transactionBranchId) throw new Error(`[syncEngine] transaction:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
-      const categoryType = inferSyncedTransactionCategoryType(payload)
-      const categories = await ensureCoreCategories(db, transactionRestaurantId)
-      const category = categories[categoryType] || categories.expense
-      const accountName = String(payload.accountName || 'General Expense')
-      const account = await ensureAccount(db, {
-        restaurantId: transactionRestaurantId,
-        name: accountName,
-        type: resolveSyncedAccountType(category.type),
-        categoryId: category.id,
-      })
-
-      await db.transaction.upsert({
-        where: { id: String(payload.id || change.entityId) },
-        update: {
-          userId: userId,
-          restaurantId: transactionRestaurantId,
-          branchId: transactionBranchId,
-          uploadId: payload.uploadId ?? null,
-          accountId: account.id,
-          categoryId: category.id,
-          date: asDate(payload.date) ?? new Date(),
-          description: String(payload.description ?? 'Synced transaction'),
-          amount: Number(payload.amount),
-          type: String(payload.type ?? 'credit'),
-          isManual: payload.isManual == null ? false : Boolean(payload.isManual),
-          paymentMethod: payload.paymentMethod ?? 'Cash',
-          pairId: payload.pairId ?? null,
-          accountName: account.name,
-          profitAmount: payload.profitAmount == null ? null : Number(payload.profitAmount),
-          costAmount: payload.costAmount == null ? null : Number(payload.costAmount),
-          synced: payload.synced == null ? true : Boolean(payload.synced),
-          sourceKind: payload.sourceKind ?? 'manual',
-          authoritativeForRevenue: payload.authoritativeForRevenue == null ? false : Boolean(payload.authoritativeForRevenue),
-          createdAt: asDate(payload.createdAt) ?? undefined,
-          updatedAt: asDate(payload.updatedAt) ?? new Date(),
-        },
-        create: {
-          id: String(payload.id || change.entityId),
-          userId: userId,
-          restaurantId: transactionRestaurantId,
-          branchId: transactionBranchId,
-          uploadId: payload.uploadId ?? null,
-          accountId: account.id,
-          categoryId: category.id,
-          date: asDate(payload.date) ?? new Date(),
-          description: String(payload.description ?? 'Synced transaction'),
-          amount: Number(payload.amount),
-          type: String(payload.type ?? 'credit'),
-          isManual: payload.isManual == null ? false : Boolean(payload.isManual),
-          paymentMethod: payload.paymentMethod ?? 'Cash',
-          pairId: payload.pairId ?? null,
-          accountName: account.name,
-          profitAmount: payload.profitAmount == null ? null : Number(payload.profitAmount),
-          costAmount: payload.costAmount == null ? null : Number(payload.costAmount),
-          synced: payload.synced == null ? true : Boolean(payload.synced),
-          sourceKind: payload.sourceKind ?? 'manual',
-          authoritativeForRevenue: payload.authoritativeForRevenue == null ? false : Boolean(payload.authoritativeForRevenue),
-          createdAt: asDate(payload.createdAt) ?? new Date(),
-          updatedAt: asDate(payload.updatedAt) ?? new Date(),
-        },
-      })
+      // Transaction model removed — journal entries are written by the accounting lib.
+      // Silently skip old transaction payloads from legacy desktop devices.
       break
     }
     case 'inventoryItem': {
@@ -546,21 +392,14 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
       if (!inventoryItemBranchId) throw new Error(`[syncEngine] inventoryItem:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
 
-      // C1: If an inventoryItem with the same (userId, restaurantId, branchId, name) exists under a
+      // C1: If an inventoryItem with the same (restaurantId, branchId, name) exists under a
       // different id, update that row instead of upsert-by-id, avoiding the @@unique violation.
-      // restaurantId is required so items with the same name in different restaurants are not merged.
-      // branchId is required so items with the same name in different branches are not merged.
       const incomingInventoryItemId = String(payload.id || change.entityId)
-      const inventoryItemConflict = userId
-        ? await db.inventoryItem.findFirst({
-            where: { userId, restaurantId: inventoryItemRestaurantId, branchId: inventoryItemBranchId, name: payload.name, NOT: { id: incomingInventoryItemId } },
-            select: { id: true },
-          })
-        : null
+      const inventoryItemConflict = await db.inventoryItem.findFirst({
+        where: { restaurantId: inventoryItemRestaurantId, branchId: inventoryItemBranchId, name: payload.name, NOT: { id: incomingInventoryItemId } },
+        select: { id: true },
+      })
       const inventoryItemTargetId = inventoryItemConflict?.id ?? incomingInventoryItemId
-      // FK-remap: if C1 displaces the incoming id, record the remap so FK-dependent entities
-      // (inventoryPurchase, inventoryAdjustmentLog, wasteLog, dishIngredient, etc.) can resolve
-      // their ingredientId to the actual stored id in the same batch.
       if (options?.idRemap && inventoryItemTargetId !== incomingInventoryItemId) {
         options.idRemap.set(incomingInventoryItemId, inventoryItemTargetId)
       }
@@ -568,43 +407,29 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       await db.inventoryItem.upsert({
         where: { id: inventoryItemTargetId },
         update: {
-          userId: userId,
           restaurantId: inventoryItemRestaurantId,
           branchId: inventoryItemBranchId,
           name: payload.name,
           description: payload.description ?? null,
           unit: payload.unit,
-          purchaseUnit: payload.purchaseUnit ?? null,
-          unitsPerPurchaseUnit: payload.unitsPerPurchaseUnit == null ? null : Number(payload.unitsPerPurchaseUnit),
-          unitCost: payload.unitCost == null ? null : Number(payload.unitCost),
-          unitPrice: payload.unitPrice == null ? null : Number(payload.unitPrice),
+          unitCost: payload.unitCost == null ? 0 : Number(payload.unitCost),
           quantity: Number(payload.quantity ?? 0),
           category: payload.category ?? null,
-          inventoryType: payload.inventoryType ?? 'resale',
           reorderLevel: Number(payload.reorderLevel ?? 0),
-          shelfLifeDays: payload.shelfLifeDays == null ? null : Number(payload.shelfLifeDays),
-          lastRestockedAt: asDate(payload.lastRestockedAt),
           createdAt: asDate(payload.createdAt) ?? undefined,
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
         create: {
           id: inventoryItemTargetId,
-          userId: userId,
           restaurantId: inventoryItemRestaurantId,
           branchId: inventoryItemBranchId,
           name: payload.name,
           description: payload.description ?? null,
           unit: payload.unit,
-          purchaseUnit: payload.purchaseUnit ?? null,
-          unitsPerPurchaseUnit: payload.unitsPerPurchaseUnit == null ? null : Number(payload.unitsPerPurchaseUnit),
-          unitCost: payload.unitCost == null ? null : Number(payload.unitCost),
-          unitPrice: payload.unitPrice == null ? null : Number(payload.unitPrice),
+          unitCost: payload.unitCost == null ? 0 : Number(payload.unitCost),
           quantity: Number(payload.quantity ?? 0),
           category: payload.category ?? null,
-          inventoryType: payload.inventoryType ?? 'resale',
           reorderLevel: Number(payload.reorderLevel ?? 0),
-          shelfLifeDays: payload.shelfLifeDays == null ? null : Number(payload.shelfLifeDays),
-          lastRestockedAt: asDate(payload.lastRestockedAt),
           createdAt: asDate(payload.createdAt) ?? new Date(),
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
@@ -624,45 +449,34 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
       if (!inventoryPurchaseBranchId) throw new Error(`[syncEngine] inventoryPurchase:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
 
-      // Resolve ingredientId via batch remap in case the parent inventoryItem was C1-displaced.
       const resolvedIngredientIdForPurchase = options?.idRemap?.get(String(payload.ingredientId)) ?? String(payload.ingredientId)
 
       await db.inventoryPurchase.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
-          userId: userId,
           restaurantId: inventoryPurchaseRestaurantId,
           branchId: inventoryPurchaseBranchId,
-          batchId: payload.batchId ?? null,
           ingredientId: resolvedIngredientIdForPurchase,
           supplier: payload.supplier ?? null,
-          purchaseQuantity: payload.purchaseQuantity == null ? null : Number(payload.purchaseQuantity),
-          purchaseUnit: payload.purchaseUnit ?? null,
-          unitsPerPurchaseUnit: payload.unitsPerPurchaseUnit == null ? null : Number(payload.unitsPerPurchaseUnit),
-          purchaseUnitCost: payload.purchaseUnitCost == null ? null : Number(payload.purchaseUnitCost),
           quantityPurchased: Number(payload.quantityPurchased),
           remainingQuantity: Number(payload.remainingQuantity),
           unitCost: Number(payload.unitCost),
           totalCost: Number(payload.totalCost),
+          paymentMethod: payload.paymentMethod ?? 'Cash',
           purchasedAt: asDate(payload.purchasedAt) ?? new Date(),
           createdAt: asDate(payload.createdAt) ?? undefined,
         },
         create: {
           id: String(payload.id || change.entityId),
-          userId: userId,
           restaurantId: inventoryPurchaseRestaurantId,
           branchId: inventoryPurchaseBranchId,
-          batchId: payload.batchId ?? null,
           ingredientId: resolvedIngredientIdForPurchase,
           supplier: payload.supplier ?? null,
-          purchaseQuantity: payload.purchaseQuantity == null ? null : Number(payload.purchaseQuantity),
-          purchaseUnit: payload.purchaseUnit ?? null,
-          unitsPerPurchaseUnit: payload.unitsPerPurchaseUnit == null ? null : Number(payload.unitsPerPurchaseUnit),
-          purchaseUnitCost: payload.purchaseUnitCost == null ? null : Number(payload.purchaseUnitCost),
           quantityPurchased: Number(payload.quantityPurchased),
           remainingQuantity: Number(payload.remainingQuantity),
           unitCost: Number(payload.unitCost),
           totalCost: Number(payload.totalCost),
+          paymentMethod: payload.paymentMethod ?? 'Cash',
           purchasedAt: asDate(payload.purchasedAt) ?? new Date(),
           createdAt: asDate(payload.createdAt) ?? new Date(),
         },
@@ -688,7 +502,6 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       await db.inventoryAdjustmentLog.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
-          userId: userId,
           restaurantId: adjustmentRestaurantId,
           branchId: adjustmentBranchId,
           ingredientId: resolvedIngredientIdForAdjustment,
@@ -696,14 +509,12 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           quantityDelta: Number(payload.quantityDelta),
           itemQuantityBefore: Number(payload.itemQuantityBefore),
           itemQuantityAfter: Number(payload.itemQuantityAfter),
-          batchId: payload.batchId ?? null,
           reason: payload.reason ?? null,
           createdAt: asDate(payload.createdAt) ?? undefined,
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
         create: {
           id: String(payload.id || change.entityId),
-          userId: userId,
           restaurantId: adjustmentRestaurantId,
           branchId: adjustmentBranchId,
           ingredientId: resolvedIngredientIdForAdjustment,
@@ -711,7 +522,6 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           quantityDelta: Number(payload.quantityDelta),
           itemQuantityBefore: Number(payload.itemQuantityBefore),
           itemQuantityAfter: Number(payload.itemQuantityAfter),
-          batchId: payload.batchId ?? null,
           reason: payload.reason ?? null,
           createdAt: asDate(payload.createdAt) ?? new Date(),
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
@@ -738,7 +548,6 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       await db.inventoryBatchUsageLedger.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
-          userId: userId,
           restaurantId: batchUsageRestaurantId,
           branchId: batchUsageBranchId,
           purchaseId: payload.purchaseId,
@@ -756,7 +565,6 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         },
         create: {
           id: String(payload.id || change.entityId),
-          userId: userId,
           restaurantId: batchUsageRestaurantId,
           branchId: batchUsageBranchId,
           purchaseId: payload.purchaseId,
@@ -794,7 +602,6 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       await db.wasteLog.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
-          userId: userId,
           restaurantId: wasteRestaurantId,
           branchId: wasteBranchId,
           ingredientId: resolvedIngredientIdForWaste,
@@ -804,10 +611,10 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           calculatedCost: Number(payload.calculatedCost ?? 0),
           notes: payload.notes ?? null,
           createdAt: asDate(payload.createdAt) ?? undefined,
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
         create: {
           id: String(payload.id || change.entityId),
-          userId: userId,
           restaurantId: wasteRestaurantId,
           branchId: wasteBranchId,
           ingredientId: resolvedIngredientIdForWaste,
@@ -817,47 +624,52 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           calculatedCost: Number(payload.calculatedCost ?? 0),
           notes: payload.notes ?? null,
           createdAt: asDate(payload.createdAt) ?? new Date(),
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
       })
       break
     }
-    case 'shift': {
+    case 'shift':
+    case 'employeeShift': {
       if (change.operation === 'delete') {
-        await db.shift.deleteMany({ where: { id: change.entityId } })
+        await db.employeeShift.deleteMany({ where: { id: change.entityId } })
         break
       }
 
       const shiftRestaurantId = String(payload.restaurantId ?? '').trim()
       const shiftBranchId = await resolveSyncBranchId(
-        db, payload.branchId, shiftRestaurantId, 'shift', change.entityId,
+        db, payload.branchId, shiftRestaurantId, 'employeeShift', change.entityId,
       )
-      // C-branchskip: throw so applyIncomingSyncChanges records to failedChanges.
-      if (!shiftBranchId) throw new Error(`[syncEngine] shift:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+      if (!shiftBranchId) throw new Error(`[syncEngine] employeeShift:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
 
-      await db.shift.upsert({
+      const shiftStaffId = String(payload.staffId || payload.employeeId || '')
+      const clockInAt = asDate(payload.clockInAt ?? payload.date) ?? new Date()
+      const durationMins = payload.durationMins != null
+        ? Number(payload.durationMins)
+        : payload.hoursWorked != null ? Math.round(Number(payload.hoursWorked) * 60) : null
+
+      await db.employeeShift.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
-          employeeId: payload.employeeId,
-          userId: userId,
           restaurantId: shiftRestaurantId,
           branchId: shiftBranchId,
-          date: asDate(payload.date) ?? new Date(),
-          hoursWorked: Number(payload.hoursWorked),
-          calculatedWage: Number(payload.calculatedWage),
+          staffId: shiftStaffId,
+          clockInAt,
+          durationMins,
           notes: payload.notes ?? null,
           createdAt: asDate(payload.createdAt) ?? undefined,
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
         create: {
           id: String(payload.id || change.entityId),
-          employeeId: payload.employeeId,
-          userId: userId,
           restaurantId: shiftRestaurantId,
           branchId: shiftBranchId,
-          date: asDate(payload.date) ?? new Date(),
-          hoursWorked: Number(payload.hoursWorked),
-          calculatedWage: Number(payload.calculatedWage),
+          staffId: shiftStaffId,
+          clockInAt,
+          durationMins,
           notes: payload.notes ?? null,
           createdAt: asDate(payload.createdAt) ?? new Date(),
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
       })
       break
@@ -881,31 +693,33 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       await db.dishSale.upsert({
         where: { id: String(payload.id || change.entityId) },
         update: {
-          userId: userId,
           restaurantId: dishSaleRestaurantId,
           branchId: dishSaleBranchId,
           orderId: payload.orderId ?? null,
           dishId: resolvedDishIdForSale,
+          dishName: String(payload.dishName ?? ''),
           quantitySold: Number(payload.quantitySold),
           saleDate: asDate(payload.saleDate) ?? new Date(),
           paymentMethod: payload.paymentMethod ?? 'Cash',
           totalSaleAmount: Number(payload.totalSaleAmount),
           calculatedFoodCost: Number(payload.calculatedFoodCost ?? 0),
           createdAt: asDate(payload.createdAt) ?? undefined,
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
         create: {
           id: String(payload.id || change.entityId),
-          userId: userId,
           restaurantId: dishSaleRestaurantId,
           branchId: dishSaleBranchId,
           orderId: payload.orderId ?? null,
           dishId: resolvedDishIdForSale,
+          dishName: String(payload.dishName ?? ''),
           quantitySold: Number(payload.quantitySold),
           saleDate: asDate(payload.saleDate) ?? new Date(),
           paymentMethod: payload.paymentMethod ?? 'Cash',
           totalSaleAmount: Number(payload.totalSaleAmount),
           calculatedFoodCost: Number(payload.calculatedFoodCost ?? 0),
           createdAt: asDate(payload.createdAt) ?? new Date(),
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
       })
 
@@ -944,27 +758,16 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         update: {
           restaurantId: orderRestaurantId,
           branchId: orderBranchId,
-          // tableId intentionally omitted — RestaurantTable may not exist on the cloud
           tableName: payload.tableName,
           orderNumber: payload.orderNumber,
-          status: payload.status ?? 'PENDING',
+          status: payload.status ?? 'OPEN',
           paymentMethod: payload.paymentMethod ?? null,
           subtotalAmount: Number(payload.subtotalAmount ?? 0),
           vatAmount: Number(payload.vatAmount ?? 0),
           totalAmount: Number(payload.totalAmount ?? 0),
-          createdById: userId,
-          createdByName: payload.createdByName,
-          servedById: payload.servedById ?? null,
-          servedByName: payload.servedByName ?? null,
-          paidById: payload.paidById ?? null,
-          paidByName: payload.paidByName ?? null,
-          canceledById: payload.canceledById ?? null,
-          canceledByName: payload.canceledByName ?? null,
-          cancellationApprovedByEmployeeId: payload.cancellationApprovedByEmployeeId ?? null,
-          cancellationApprovedByEmployeeName: payload.cancellationApprovedByEmployeeName ?? null,
-          cancellationApprovedAt: asDate(payload.cancellationApprovedAt),
+          staffId: payload.staffId ?? null,
+          createdByName: payload.createdByName ?? null,
           cancelReason: payload.cancelReason ?? null,
-          servedAt: asDate(payload.servedAt),
           paidAt: asDate(payload.paidAt),
           canceledAt: asDate(payload.canceledAt),
           createdAt: asDate(payload.createdAt) ?? undefined,
@@ -977,24 +780,14 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           tableId: null,
           tableName: payload.tableName,
           orderNumber: payload.orderNumber,
-          status: payload.status ?? 'PENDING',
+          status: payload.status ?? 'OPEN',
           paymentMethod: payload.paymentMethod ?? null,
           subtotalAmount: Number(payload.subtotalAmount ?? 0),
           vatAmount: Number(payload.vatAmount ?? 0),
           totalAmount: Number(payload.totalAmount ?? 0),
-          createdById: userId,
-          createdByName: payload.createdByName,
-          servedById: payload.servedById ?? null,
-          servedByName: payload.servedByName ?? null,
-          paidById: payload.paidById ?? null,
-          paidByName: payload.paidByName ?? null,
-          canceledById: payload.canceledById ?? null,
-          canceledByName: payload.canceledByName ?? null,
-          cancellationApprovedByEmployeeId: payload.cancellationApprovedByEmployeeId ?? null,
-          cancellationApprovedByEmployeeName: payload.cancellationApprovedByEmployeeName ?? null,
-          cancellationApprovedAt: asDate(payload.cancellationApprovedAt),
+          staffId: payload.staffId ?? null,
+          createdByName: payload.createdByName ?? null,
           cancelReason: payload.cancelReason ?? null,
-          servedAt: asDate(payload.servedAt),
           paidAt: asDate(payload.paidAt),
           canceledAt: asDate(payload.canceledAt),
           createdAt: asDate(payload.createdAt) ?? new Date(),
@@ -1020,29 +813,22 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           )
         }
         if (validItems.length > 0) {
-          await db.restaurantOrderItem.deleteMany({ where: { orderId } })
-          await db.restaurantOrderItem.createMany({
+          await db.orderItem.deleteMany({ where: { orderId } })
+          await db.orderItem.createMany({
             data: validItems.map((item: any) => ({
               id: String(item.id),
               orderId,
               dishId: String(item.dishId),
               dishName: String(item.dishName ?? ''),
               dishPrice: Number(item.dishPrice ?? 0),
+              totalPrice: Number(item.totalPrice ?? item.dishPrice ?? 0),
               qty: Number(item.qty ?? 1),
               kitchenStatus: String(item.kitchenStatus ?? 'new'),
               status: String(item.status ?? 'ACTIVE'),
-              canceledById: item.canceledById ?? null,
-              canceledByName: item.canceledByName ?? null,
-              cancellationApprovedByEmployeeId: item.cancellationApprovedByEmployeeId ?? null,
-              cancellationApprovedByEmployeeName: item.cancellationApprovedByEmployeeName ?? null,
               cancelReason: item.cancelReason ?? null,
-              wastedById: item.wastedById ?? null,
-              wastedByName: item.wastedByName ?? null,
-              wasteReason: item.wasteReason ?? null,
-              wasteAcknowledged: Boolean(item.wasteAcknowledged ?? false),
+              notes: item.notes ?? null,
               readyAt: asDate(item.readyAt),
               canceledAt: asDate(item.canceledAt),
-              wastedAt: asDate(item.wastedAt),
               createdAt: asDate(item.createdAt) ?? new Date(),
               updatedAt: asDate(item.updatedAt) ?? new Date(),
             })),

@@ -18,24 +18,15 @@ export type IngredientLayerTotal = {
 export async function getIngredientLayerSnapshotAsOf(
 	db: PrismaDb,
 	params: {
-		billingUserId: string
 		restaurantId?: string | null
 		branchId?: string | null
-		includeBranchlessRows?: boolean
 		endDate?: Date | null
 	},
 ) {
-	const branchScopeWhere = params.branchId
-		? params.includeBranchlessRows
-			? { OR: [{ branchId: params.branchId }, { branchId: null }] }
-			: { branchId: params.branchId }
-		: {}
-
 	const purchases = await db.inventoryPurchase.findMany({
 		where: {
-			userId: params.billingUserId,
 			...(params.restaurantId ? { restaurantId: params.restaurantId } : {}),
-			...branchScopeWhere,
+			...(params.branchId ? { branchId: params.branchId } : {}),
 			...(params.endDate ? { purchasedAt: { lte: params.endDate } } : {}),
 		},
 		select: {
@@ -59,9 +50,8 @@ export async function getIngredientLayerSnapshotAsOf(
 	const purchaseIds = purchases.map((purchase) => purchase.id)
 	const usageRows = await db.inventoryBatchUsageLedger.findMany({
 		where: {
-			userId: params.billingUserId,
 			...(params.restaurantId ? { restaurantId: params.restaurantId } : {}),
-			...branchScopeWhere,
+			...(params.branchId ? { branchId: params.branchId } : {}),
 			purchaseId: { in: purchaseIds },
 			...(params.endDate ? { consumedAt: { lte: params.endDate } } : {}),
 		},

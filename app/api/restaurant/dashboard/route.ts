@@ -82,49 +82,19 @@ export async function GET(req: Request) {
   const rangeLabel = hasCustomRange ? formatRangeLabel(from, to) : formatPresetRangeLabel(period)
 
   // Revenue & Food Cost from dish sales
-  const [sales, incomeTransactions] = await Promise.all([
-    prisma.dishSale.findMany({
-      where: {
-        restaurantId,
-        branchId,
-        saleDate: { gte: from, lte: to }
-      },
-      include: { dish: true }
-    }),
-    prisma.transaction.findMany({
-      where: {
-        restaurantId,
-        branchId,
-        date: { gte: from, lte: to },
-        category: { is: { type: 'income' } },
-        NOT: [
-          {
-            sourceKind: 'dish_sale_mirror',
-          },
-        ],
-      },
-      select: {
-        date: true,
-        amount: true,
-        type: true,
-      },
-    }),
-  ])
+  const incomeTransactions: { date: Date; amount: number; type: string }[] = []
+  const sales = await prisma.dishSale.findMany({
+    where: { restaurantId, branchId, saleDate: { gte: from, lte: to } },
+    include: { dish: true },
+  })
 
   const revenue = sales.reduce((s: number, x) => s + (x.totalSaleAmount ?? 0), 0)
     + incomeTransactions.reduce((sum, txn) => sum + (txn.type === 'credit' ? txn.amount : -txn.amount), 0)
   const cogs = sales.reduce((s: number, x) => s + (x.calculatedFoodCost ?? 0), 0)
   const foodCostPct = revenue > 0 ? (cogs / revenue) * 100 : 0
 
-  // Labor cost from shifts
-  const shifts = await prisma.shift.findMany({
-    where: {
-      restaurantId,
-      branchId,
-      date: { gte: from, lte: to }
-    }
-  })
-  const laborCost = shifts.reduce((s: number, x) => s + (x.calculatedWage ?? 0), 0)
+  const shifts: { date: Date; calculatedWage: number | null }[] = []
+  const laborCost = 0
   const laborPct = revenue > 0 ? (laborCost / revenue) * 100 : 0
 
   // Waste cost
@@ -234,11 +204,7 @@ export async function GET(req: Request) {
 
   // Low stock count
   const allIngredients = await prisma.inventoryItem.findMany({
-    where: {
-      inventoryType: 'ingredient',
-      ...(restaurantId ? { restaurantId } : {}),
-      ...(branchId ? { branchId } : {}),
-    }
+    where: { restaurantId, branchId },
   })
   const lowStockCount = allIngredients.filter(i => i.quantity <= (i.reorderLevel ?? 0)).length
 

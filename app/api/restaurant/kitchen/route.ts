@@ -26,36 +26,29 @@ function canProvisionToCloud() {
   return isLocalFirstDesktopMode() || Boolean(getCanonicalCloudAppUrl())
 }
 
-/** GET /api/restaurant/kitchen — list all kitchen accounts for this restaurant */
+/** GET /api/restaurant/kitchen — list all kitchen staff for this restaurant */
 export async function GET() {
   try {
     const admin = await requireAdmin()
-    // S1: Use getRestaurantContextForUser instead of ensureRestaurantForOwner to avoid
-    // creating a phantom restaurant when an admin (not owner) user hits this endpoint.
     const adminContext = await getRestaurantContextForUser(admin.id)
     const restaurant = adminContext?.restaurant
     if (!restaurant) return NextResponse.json({ error: 'No restaurant is linked to this account' }, { status: 409 })
-    if (!adminContext.branchId) {
-      return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
-    }
 
-    const kitchenUsers = await prisma.user.findMany({
-      where: { restaurantId: restaurant.id, branchId: adminContext.branchId, role: 'kitchen' },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
+    const kitchenStaff = await prisma.staff.findMany({
+      where: { restaurantId: restaurant.id, role: 'kitchen', deletedAt: null },
+      select: { id: true, name: true, username: true, role: true, createdAt: true },
     })
 
-    return NextResponse.json({ kitchenUsers, restaurant })
+    return NextResponse.json({ kitchenUsers: kitchenStaff, restaurant })
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: e.message === 'Unauthorized' ? 401 : 403 })
   }
 }
 
-/** POST /api/restaurant/kitchen — create a kitchen account */
+/** POST /api/restaurant/kitchen — create a kitchen staff account */
 export async function POST(req: Request) {
   try {
     const admin = await requireAdmin()
-    // S1: Use getRestaurantContextForUser instead of ensureRestaurantForOwner to avoid
-    // creating a phantom restaurant when an admin (not owner) user hits this endpoint.
     const adminContext = await getRestaurantContextForUser(admin.id)
     const restaurant = adminContext?.restaurant
     if (!restaurant) return NextResponse.json({ error: 'No restaurant is linked to this account' }, { status: 409 })
@@ -63,15 +56,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
     }
 
-    const { name, email, password, syncTargetUrl, syncEmail, syncPassword } = await req.json()
-    if (!name?.trim() || !email?.trim() || !password?.trim()) {
-      return NextResponse.json({ error: 'name, email, and password are required' }, { status: 400 })
+    const { name, username, password, syncTargetUrl, syncEmail, syncPassword } = await req.json()
+    if (!name?.trim() || !username?.trim() || !password?.trim()) {
+      return NextResponse.json({ error: 'name, username, and password are required' }, { status: 400 })
     }
     let cloudProvisionWarning: string | null = null
 
-    const existing = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } })
+    const existing = await prisma.staff.findFirst({
+      where: { restaurantId: restaurant.id, username: username.trim().toLowerCase() },
+    })
     if (existing) {
-      return NextResponse.json({ error: 'Email already in use' }, { status: 409 })
+      return NextResponse.json({ error: 'Username already in use' }, { status: 409 })
     }
 
     if (canProvisionToCloud()) {
@@ -79,7 +74,7 @@ export async function POST(req: Request) {
         restaurant,
         role: 'kitchen',
         name: name.trim(),
-        email: email.trim().toLowerCase(),
+        email: username.trim().toLowerCase(),
         password,
         branchId: adminContext.branchId,
         syncTargetUrl,
@@ -87,27 +82,27 @@ export async function POST(req: Request) {
         syncPassword,
         adminEmail: admin.email,
       })
-
       if (!remoteProvision.ok) {
         cloudProvisionWarning = remoteProvision.error
       }
     }
 
     const hashed = await hash(password, 12)
-    const kitchenUser = await prisma.user.create({
+    const kitchenStaff = await prisma.staff.create({
       data: {
+        restaurantId: restaurant.id,
         name: name.trim(),
-        email: email.trim().toLowerCase(),
+        username: username.trim().toLowerCase(),
         password: hashed,
         role: 'kitchen',
-        businessType: 'restaurant',
-        restaurantId: restaurant.id,
-        branchId: adminContext.branchId,
+        branches: {
+          create: { branchId: adminContext.branchId },
+        },
       },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
+      select: { id: true, name: true, username: true, role: true, createdAt: true },
     })
 
-    return NextResponse.json({ kitchenUser, cloudProvisionWarning }, { status: 201 })
+    return NextResponse.json({ kitchenUser: kitchenStaff, cloudProvisionWarning }, { status: 201 })
   } catch (e: any) {
     const status = e.message === 'Unauthorized' ? 401 : e.message === 'Admin only' ? 403 : 500
     return NextResponse.json({ error: e.message }, { status })

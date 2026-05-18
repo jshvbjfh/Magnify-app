@@ -19,7 +19,6 @@ export async function GET() {
     return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
   }
 
-  const billingUserId = context.billingUserId
   const restaurantId = context.restaurantId
   const branchId = context.branchId ?? null
 
@@ -38,23 +37,16 @@ export async function GET() {
 
   const [
     sales,
-    shifts,
     wasteLogs,
-    expenseTransactions,
-    transactions,
     ingredients,
     purchases,
     ingredientUsage,
-    activeOrders,
     latestSale,
-    latestTransaction,
-    latestPendingOrder,
     latestPurchase,
     latestWaste,
   ] = await Promise.all([
     prisma.dishSale.findMany({
       where: {
-        userId: billingUserId,
         restaurantId,
         ...(branchId ? { branchId } : {}),
         saleDate: { gte: lookbackStart },
@@ -62,66 +54,16 @@ export async function GET() {
       include: { dish: { select: { name: true } } },
       orderBy: { saleDate: 'desc' },
     }),
-    prisma.shift.findMany({
-      where: {
-        userId: billingUserId,
-        restaurantId,
-        ...(branchId ? { branchId } : {}),
-        date: { gte: lookbackStart },
-      },
-      orderBy: { date: 'desc' },
-    }),
     prisma.wasteLog.findMany({
       where: {
-        userId: billingUserId,
         restaurantId,
         ...(branchId ? { branchId } : {}),
         date: { gte: lookbackStart },
       },
       orderBy: { date: 'desc' },
-    }),
-    prisma.transaction.findMany({
-      where: {
-        userId: billingUserId,
-        restaurantId,
-        ...(branchId ? { branchId } : {}),
-        date: { gte: lookbackStart },
-        category: { is: { type: 'expense' } },
-        NOT: [
-          {
-            description: {
-              startsWith: 'COGS - ',
-            },
-          },
-          {
-            sourceKind: 'inventory_waste',
-          },
-        ],
-      },
-      include: {
-        account: { select: { name: true } },
-        category: { select: { name: true, type: true } },
-      },
-      orderBy: { date: 'desc' },
-    }),
-    prisma.transaction.findMany({
-      where: {
-        userId: billingUserId,
-        restaurantId,
-        ...(branchId ? { branchId } : {}),
-        date: { gte: lookbackStart },
-      },
-      include: {
-        account: { select: { name: true } },
-        category: { select: { name: true, type: true } },
-      },
-      orderBy: { date: 'desc' },
-      take: 300,
     }),
     prisma.inventoryItem.findMany({
       where: {
-        userId: billingUserId,
-        inventoryType: 'ingredient',
         restaurantId,
         ...(branchId ? { branchId } : {}),
       },
@@ -129,7 +71,6 @@ export async function GET() {
     }),
     prisma.inventoryPurchase.findMany({
       where: {
-        userId: billingUserId,
         restaurantId,
         ...(branchId ? { branchId } : {}),
         purchasedAt: { gte: lookbackStart },
@@ -139,7 +80,6 @@ export async function GET() {
     prisma.dishSaleIngredient.findMany({
       where: {
         dishSale: {
-          userId: billingUserId,
           restaurantId,
           ...(branchId ? { branchId } : {}),
           saleDate: { gte: lookbackStart },
@@ -147,32 +87,27 @@ export async function GET() {
       },
       include: { dishSale: { select: { saleDate: true } } },
     }),
-    prisma.pendingOrder.count({
-      where: { restaurantId: restaurant.id, ...(branchId ? { branchId } : {}), status: { in: ['new', 'in_kitchen'] } },
-    }),
-    prisma.dishSale.findFirst({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { saleDate: 'desc' }, select: { saleDate: true } }),
-    prisma.transaction.findFirst({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { date: 'desc' }, select: { date: true } }),
-    prisma.pendingOrder.findFirst({ where: { restaurantId: restaurant.id, ...(branchId ? { branchId } : {}) }, orderBy: { addedAt: 'desc' }, select: { addedAt: true } }),
-    prisma.inventoryPurchase.findFirst({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { purchasedAt: 'desc' }, select: { purchasedAt: true } }),
-    prisma.wasteLog.findFirst({ where: { userId: billingUserId, restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { date: 'desc' }, select: { date: true } }),
+    prisma.dishSale.findFirst({ where: { restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { saleDate: 'desc' }, select: { saleDate: true } }),
+    prisma.inventoryPurchase.findFirst({ where: { restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { purchasedAt: 'desc' }, select: { purchasedAt: true } }),
+    prisma.wasteLog.findFirst({ where: { restaurantId, ...(branchId ? { branchId } : {}) }, orderBy: { date: 'desc' }, select: { date: true } }),
   ])
 
   const snapshot = buildOwnerSyncSnapshot({
     restaurantId: restaurant.id,
     restaurantName: restaurant.name,
-    activeOrders,
+    activeOrders: 0,
     sales,
-    shifts,
+    shifts: [],
     wasteLogs,
-    expenseTransactions,
-    transactions,
+    expenseTransactions: [],
+    transactions: [],
     ingredients,
     purchases,
     ingredientUsage,
     activity: {
       lastSaleAt: latestSale?.saleDate ?? null,
-      lastTransactionAt: latestTransaction?.date ?? null,
-      lastPendingOrderAt: latestPendingOrder?.addedAt ?? null,
+      lastTransactionAt: null,
+      lastPendingOrderAt: null,
       lastPurchaseAt: latestPurchase?.purchasedAt ?? null,
       lastWasteAt: latestWaste?.date ?? null,
     },

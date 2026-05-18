@@ -4,46 +4,27 @@ import { authOptions } from '@/lib/auth'
 import { getIngredientLayerSnapshotAsOf } from '@/lib/inventoryLayerSnapshot'
 import { getRestaurantFifoEnabled } from '@/lib/inventoryConsumption'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser, isMainRestaurantBranch } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { getDishSaleUsageBreakdown } from '@/lib/restaurantReportUsage'
 
 function roundQty(value: number) {
   return Math.round((value + Number.EPSILON) * 1000) / 1000
 }
 
-// GET — inventory movement report
-// Returns: per ingredient — qty purchased, purchase cost, qty used, remaining qty
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = await getRestaurantContextForUser(session.user.id)
-  const billingUserId = context?.billingUserId ?? session.user.id
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
   if (!restaurantId || !branchId) {
     return NextResponse.json({
       items: [],
-      totals: {
-        purchasedQty: 0,
-        purchaseCost: 0,
-        usedCost: 0,
-        stockValue: 0,
-        totalPurchaseCost: 0,
-        totalUsedCost: 0,
-        totalStockValue: 0,
-      },
-      meta: {
-        fifoEnabled: false,
-        fifoCutoverAt: null,
-      },
+      totals: { purchasedQty: 0, purchaseCost: 0, usedCost: 0, stockValue: 0, totalPurchaseCost: 0, totalUsedCost: 0, totalStockValue: 0 },
+      meta: { fifoEnabled: false, fifoCutoverAt: null },
     })
   }
-
-  const includeBranchlessRows = await isMainRestaurantBranch(restaurantId, branchId)
-  const branchScopeWhere = includeBranchlessRows
-    ? { OR: [{ branchId }, { branchId: null }] }
-    : { branchId }
 
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
@@ -56,70 +37,25 @@ export async function GET(req: Request) {
   const endDate = to ? new Date(to + 'T23:59:59') : new Date()
   const startDate = from ? new Date(from + 'T00:00:00') : null
 
-  const [ingredients, purchases, layerSnapshot, dishSaleUsage, wasteLogsToEnd, restaurant, fifoEnabled] = await Promise.all([
-    // All ingredients
+  const [ingredients, purchases, layerSnapshot, dishSaleUsage, wasteLogsToEnd] = await Promise.all([
     prisma.inventoryItem.findMany({
-      where: {
-        userId: billingUserId,
-        inventoryType: 'ingredient',
-        ...(restaurantId ? { restaurantId } : {}),
-        ...branchScopeWhere,
-      },
-      select: { id: true, name: true, unit: true, quantity: true, unitCost: true, reorderLevel: true, createdAt: true, lastRestockedAt: true },
+      where: { restaurantId, branchId },
+      select: { id: true, name: true, unit: true, quantity: true, unitCost: true, reorderLevel: true, createdAt: true },
     }),
-
-    // All purchase batches (optionally date-filtered)
     prisma.inventoryPurchase.findMany({
-      where: {
-        userId: billingUserId,
-        ...(restaurantId ? { restaurantId } : {}),
-        ...branchScopeWhere,
-        ...dateFilter,
-      },
+      where: { restaurantId, branchId, ...dateFilter },
       select: { ingredientId: true, quantityPurchased: true, totalCost: true, purchasedAt: true },
     }),
-
-    getIngredientLayerSnapshotAsOf(prisma, {
-      billingUserId,
-      restaurantId,
-      branchId,
-      includeBranchlessRows,
-      endDate,
-    }),
-
-    getDishSaleUsageBreakdown(prisma, {
-      billingUserId,
-      restaurantId,
-      branchId,
-      includeBranchlessRows,
-      startDate,
-      endDate,
-    }),
-
+    getIngredientLayerSnapshotAsOf(prisma, { restaurantId, branchId, endDate }),
+    getDishSaleUsageBreakdown(prisma, { restaurantId, branchId, startDate, endDate }),
     prisma.wasteLog.findMany({
-      where: {
-        userId: billingUserId,
-        ...(restaurantId ? { restaurantId } : {}),
-        ...branchScopeWhere,
-        date: { lte: endDate },
-      },
+      where: { restaurantId, branchId, date: { lte: endDate } },
       select: { ingredientId: true, quantityWasted: true, date: true },
-    }),
-
-    restaurantId
-      ? prisma.restaurant.findUnique({
-          where: { id: restaurantId },
-          select: { fifoEnabled: true, fifoCutoverAt: true },
-        })
-      : Promise.resolve(null),
-
-    getRestaurantFifoEnabled(prisma, {
-      billingUserId,
-      restaurantId,
     }),
   ])
 
-  // Build lookup maps
+  const fifoEnabled = getRestaurantFifoEnabled()
+
   const purchaseMap = new Map<string, { qty: number; cost: number }>()
   for (const p of purchases) {
     const e = purchaseMap.get(p.ingredientId) ?? { qty: 0, cost: 0 }
@@ -158,7 +94,7 @@ export async function GET(req: Request) {
 
     if (!usesBatchRemaining && (ing.unitCost ?? 0) > 0) {
       const inferredOpeningQty = ing.quantity + (dishSaleUsage.totalUsageToEndMap.get(ing.id)?.qty ?? 0) + (totalWasteToEndMap.get(ing.id) ?? 0)
-      const baselineDate = ing.lastRestockedAt ?? ing.createdAt
+      const baselineDate = ing.createdAt
       const fallsInRange = !startDate || baselineDate >= startDate
       if (fallsInRange) {
         purchased = {
@@ -191,7 +127,7 @@ export async function GET(req: Request) {
   }).sort((a, b) => a.name.localeCompare(b.name))
 
   const totals = rows.reduce((acc, r) => ({
-    purchasedQty: acc.purchasedQty, // meaningless to sum across units
+    purchasedQty: acc.purchasedQty,
     purchaseCost: acc.purchaseCost + r.purchaseCost,
     usedCost: acc.usedCost + r.usedCost,
     stockValue: acc.stockValue + r.stockValue,
@@ -200,17 +136,11 @@ export async function GET(req: Request) {
   return NextResponse.json({
     items: rows,
     totals: {
-      purchasedQty: totals.purchasedQty,
-      purchaseCost: totals.purchaseCost,
-      usedCost: totals.usedCost,
-      stockValue: totals.stockValue,
+      ...totals,
       totalPurchaseCost: totals.purchaseCost,
       totalUsedCost: totals.usedCost,
       totalStockValue: totals.stockValue,
     },
-    meta: {
-      fifoEnabled,
-      fifoCutoverAt: restaurant?.fifoCutoverAt?.toISOString() ?? null,
-    },
+    meta: { fifoEnabled, fifoCutoverAt: null },
   })
 }

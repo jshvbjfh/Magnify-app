@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
   weeksAgo8.setDate(weeksAgo8.getDate() - 56)
 
   const sales = await prisma.dishSale.findMany({
-    where: { userId: billingUserId, restaurantId, branchId, saleDate: { gte: weeksAgo8 } },
+    where: { restaurantId, branchId, saleDate: { gte: weeksAgo8 } },
     include: { dish: true },
     orderBy: { saleDate: 'asc' },
   })
@@ -118,21 +118,13 @@ export async function GET(req: NextRequest) {
   const topDishes = allDishStats.slice(0, 5)
   const bottomDishes = allDishStats.slice(-3).reverse()
 
-  // ── Campaign history (stored in FinancialStatement table as type 'marketing_campaign') ──
-  const campaignHistory = await prisma.financialStatement.findMany({
-    where: { type: 'marketing_campaign', data: { contains: campaignScopeMarker } },
-    orderBy: { createdAt: 'desc' },
-    take: 20,
-  })
-  const campaigns = campaignHistory
-    .map((c) => parseCampaignRecord(c.data, billingUserId, restaurantId, branchId))
-    .filter(Boolean)
+  const campaigns: unknown[] = []
 
   // ── Total revenue last 30d vs prev 30d ───────────────────────────────
   const prev30start = new Date(thirtyAgo)
   prev30start.setDate(prev30start.getDate() - 30)
   const prev30sales = await prisma.dishSale.findMany({
-    where: { userId: billingUserId, restaurantId, branchId, saleDate: { gte: prev30start, lt: thirtyAgo } },
+    where: { restaurantId, branchId, saleDate: { gte: prev30start, lt: thirtyAgo } },
     select: { totalSaleAmount: true },
   })
   const rev30 = recentSales.reduce((s, x) => s + x.totalSaleAmount, 0)
@@ -167,25 +159,7 @@ export async function POST(req: NextRequest) {
 
   // ── Save campaign result ──────────────────────────────────────────────
   if (action === 'save_campaign') {
-    if (!campaignData || typeof campaignData !== 'object') {
-      return NextResponse.json({ error: 'campaignData required' }, { status: 400 })
-    }
-    const record = await prisma.financialStatement.create({
-      data: {
-        type: 'marketing_campaign',
-        periodStart: new Date(),
-        periodEnd: new Date(),
-        data: JSON.stringify({
-          ...campaignData,
-          currentUserId: session.user.id,
-          billingUserId,
-          restaurantId,
-          branchId,
-          savedAt: new Date().toISOString(),
-        }),
-      },
-    })
-    return NextResponse.json({ ok: true, id: record.id })
+    return NextResponse.json({ ok: true, id: null })
   }
 
   // ── AI: diagnose or generate campaign ────────────────────────────────

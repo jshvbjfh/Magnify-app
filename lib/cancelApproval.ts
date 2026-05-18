@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs'
 
 import { prisma } from '@/lib/prisma'
 
-const CANCELLATION_PIN_REGEX = /^\d{5}$/
+const CANCELLATION_PIN_REGEX = /^\d{4,6}$/
 
 export function isValidCancellationPin(pin: string) {
   return CANCELLATION_PIN_REGEX.test(pin)
@@ -12,31 +12,36 @@ export async function hashCancellationPin(pin: string) {
   return bcrypt.hash(pin, 10)
 }
 
-export async function resolveCancellationApprover(params: { billingUserId: string; restaurantId?: string | null; branchId?: string | null; pin: string }) {
+export async function resolveCancellationApprover(params: {
+  restaurantId?: string | null
+  branchId?: string | null
+  pin: string
+}) {
   const normalizedPin = String(params.pin || '').trim()
   if (!isValidCancellationPin(normalizedPin)) return null
 
-  const employees = await prisma.employee.findMany({
+  const staffList = await prisma.staff.findMany({
     where: {
-      userId: params.billingUserId,
       ...(params.restaurantId ? { restaurantId: params.restaurantId } : {}),
-      ...(params.branchId ? { branchId: params.branchId } : {}),
       isActive: true,
-      canApproveOrderCancellation: true,
-      cancellationPinHash: { not: null },
+      pin: { not: null },
+      ...(params.branchId ? { branches: { some: { branchId: params.branchId } } } : {}),
     },
     select: {
       id: true,
       name: true,
-      cancellationPinHash: true,
+      pin: true,
     },
   })
 
-  for (const employee of employees) {
-    if (!employee.cancellationPinHash) continue
-    const matches = await bcrypt.compare(normalizedPin, employee.cancellationPinHash)
-    if (matches) {
-      return { id: employee.id, name: employee.name }
+  for (const staff of staffList) {
+    if (!staff.pin) continue
+    try {
+      const matches = await bcrypt.compare(normalizedPin, staff.pin)
+      if (matches) return { id: staff.id, name: staff.name }
+    } catch {
+      // PIN is stored as plain text — compare directly
+      if (staff.pin === normalizedPin) return { id: staff.id, name: staff.name }
     }
   }
 

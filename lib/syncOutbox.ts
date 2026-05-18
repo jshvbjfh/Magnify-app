@@ -17,23 +17,22 @@ export const SYNC_OUTBOX_MAX_ATTEMPTS = 8
 // must derive from these sets — never define a parallel list elsewhere.
 export const RESTAURANT_WIDE_ENTITY_TYPES = new Set([
   'restaurant',
-  'restaurantBranch',
+  'branch',
   'pricingPlan',
 ])
 
 export const BRANCH_REQUIRED_ENTITY_TYPES = new Set([
   'dish',
   'inventoryItem',
-  'employee',
+  'staff',
   'restaurantTable',
   'restaurantOrder',
   'wasteLog',
   'inventoryPurchase',
   'inventoryBatchUsageLedger',
   'inventoryAdjustmentLog',
-  'shift',
+  'employeeShift',
   'dishSale',
-  'transaction',
   'dishIngredient',
 ])
 
@@ -134,7 +133,7 @@ export async function listPendingSyncOutboxChanges(
                 OR: [
                   { scopeId: GLOBAL_SYNC_SCOPE_ID },
                   { entityType: 'restaurant' },
-                  { entityType: 'restaurantBranch' },
+                  { entityType: 'branch' },
                   { branchId: params.branchId ?? null },
                 ],
               },
@@ -250,7 +249,7 @@ export async function resetSyncOutboxRowsForRetry(
             OR: [
               { scopeId: GLOBAL_SYNC_SCOPE_ID },
               { entityType: 'restaurant' },
-              { entityType: 'restaurantBranch' },
+              { entityType: 'branch' },
               { branchId: params.branchId ?? null },
             ],
           }
@@ -312,7 +311,6 @@ export async function updateSyncCursor(
     target?: string
     lastPulledAt?: Date | null
     lastPushedAt?: Date | null
-    lastMutationId?: string | null
   },
 ) {
   const target = params.target || CLOUD_SYNC_TARGET
@@ -329,13 +327,11 @@ export async function updateSyncCursor(
       restaurantId: params.restaurantId ?? null,
       lastPulledAt: params.lastPulledAt ?? null,
       lastPushedAt: params.lastPushedAt ?? null,
-      lastMutationId: params.lastMutationId ?? null,
     },
     update: {
       restaurantId: params.restaurantId ?? undefined,
       ...(params.lastPulledAt !== undefined ? { lastPulledAt: params.lastPulledAt } : {}),
       ...(params.lastPushedAt !== undefined ? { lastPushedAt: params.lastPushedAt } : {}),
-      ...(params.lastMutationId !== undefined ? { lastMutationId: params.lastMutationId } : {}),
     },
   })
 }
@@ -363,8 +359,6 @@ export async function logSyncConflict(
       entityType: params.entityType,
       entityId: params.entityId,
       reason: params.reason,
-      localMutationId: params.localMutationId ?? null,
-      remoteMutationId: params.remoteMutationId ?? null,
       localPayload: params.localPayload !== undefined ? serializeOutboxPayload(params.localPayload) : null,
       remotePayload: params.remotePayload !== undefined ? serializeOutboxPayload(params.remotePayload) : null,
     },

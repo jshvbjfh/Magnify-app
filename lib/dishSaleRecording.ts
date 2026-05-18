@@ -26,29 +26,21 @@ function roundQuantity(value: number) {
 
 function buildRestaurantScopedDishWhere(params: {
   requestedDishIds: string[]
-  billingUserId: string
-  restaurantId?: string | null
-  branchId?: string | null
-  includeBranchlessRows?: boolean
-}) {
+  restaurantId: string
+  branchId: string
+}): Prisma.DishWhereInput {
   return {
     id: { in: params.requestedDishIds },
-    ...(params.restaurantId
-      ? { restaurantId: params.restaurantId }
-      : { userId: params.billingUserId }),
-    // Dish.branchId is non-null in the schema, so dish lookups must always use a
-    // concrete branchId instead of OR-ing in branchless rows.
-    ...(params.branchId ? { branchId: params.branchId } : {}),
+    restaurantId: params.restaurantId,
+    branchId: params.branchId,
   }
 }
 
 export async function recordDishSalesForPaidOrder(
   db: PrismaDb,
   params: {
-    billingUserId: string
-    restaurantId?: string | null
-    branchId?: string | null
-    includeBranchlessRows?: boolean
+    restaurantId: string
+    branchId: string
     sourceDeviceId?: string | null
     orderId?: string | null
     paymentMethod?: string | null
@@ -57,26 +49,19 @@ export async function recordDishSalesForPaidOrder(
   }
 ) {
   if (params.items.length === 0) return
-  if (!params.restaurantId || !params.branchId) {
-    throw new Error('recordDishSalesForPaidOrder requires restaurantId and branchId')
-  }
-  const fifoEnabled = await getRestaurantFifoEnabled(db, {
-    billingUserId: params.billingUserId,
-    restaurantId: params.restaurantId,
-  })
+
+  const fifoEnabled = getRestaurantFifoEnabled()
   const requestedDishIds = Array.from(new Set(params.items.map((item) => item.dishId)))
   const dishes = await db.dish.findMany({
     where: buildRestaurantScopedDishWhere({
       requestedDishIds,
-      billingUserId: params.billingUserId,
       restaurantId: params.restaurantId,
       branchId: params.branchId,
-      includeBranchlessRows: params.includeBranchlessRows,
     }),
     include: {
       ingredients: {
         include: {
-          ingredient: true,
+          inventoryItem: true,
         },
       },
     },
@@ -111,11 +96,11 @@ export async function recordDishSalesForPaidOrder(
     const totalSaleAmount = Number(item.dishPrice) * quantitySold
     const dishSale = await db.dishSale.create({
       data: {
-        userId: params.billingUserId,
-        restaurantId: params.restaurantId ?? null,
-        branchId: params.branchId ?? null,
+        restaurantId: params.restaurantId,
+        branchId: params.branchId,
         orderId: params.orderId ?? null,
         dishId: item.dishId,
+        dishName: dish.name,
         quantitySold,
         saleDate: params.saleDate,
         paymentMethod: params.paymentMethod || 'Cash',
@@ -130,18 +115,16 @@ export async function recordDishSalesForPaidOrder(
     for (const row of dish.ingredients) {
       const quantityRequired = Number(row.quantityRequired || 0)
       if (!Number.isFinite(quantityRequired) || quantityRequired <= 0) {
-        console.warn(`[dishSale] ingredient ${row.ingredientId} has invalid quantityRequired=${row.quantityRequired} for dish ${dish.id} — skipping COGS for this ingredient (order: ${params.orderId ?? 'unknown'})`)
+        console.warn(`[dishSale] ingredient ${row.inventoryItemId} has invalid quantityRequired=${row.quantityRequired} for dish ${dish.id} — skipping COGS for this ingredient (order: ${params.orderId ?? 'unknown'})`)
         continue
       }
 
       const totalNeeded = roundQuantity(quantityRequired * quantitySold)
       try {
         const consumption = await consumeIngredientStock(db, {
-          billingUserId: params.billingUserId,
           restaurantId: params.restaurantId,
           branchId: params.branchId,
-          includeBranchlessRows: params.includeBranchlessRows,
-          ingredientId: row.ingredientId,
+          ingredientId: row.inventoryItemId,
           quantity: totalNeeded,
           fifoEnabled,
           sourceType: 'dishSale',
@@ -154,26 +137,25 @@ export async function recordDishSalesForPaidOrder(
 
         calculatedFoodCost = roundQuantity(calculatedFoodCost + consumption.totalCost)
         ingredientLines.push({
-          ingredientId: row.ingredientId,
+          ingredientId: row.inventoryItemId,
           quantityUsed: consumption.quantityConsumed,
           actualCost: consumption.totalCost,
         })
       } catch (stockError) {
         if (stockError instanceof InsufficientFifoStockError || stockError instanceof InsufficientInventoryStockError) {
-          // Skip this ingredient — insufficient stock should not block the sale
           continue
         }
         // Ingredient not found on cloud (not yet synced from local device) — skip COGS
         // for this ingredient rather than crashing the entire push transaction.
         const isIngredientNotFound = stockError instanceof Error && stockError.message.startsWith('Ingredient ')
         if (isIngredientNotFound) {
-          console.warn(`[dishSale] ingredient not found on cloud — skipping COGS for ingredient ${row.ingredientId} (order: ${params.orderId ?? 'unknown'})`)
+          console.warn(`[dishSale] ingredient not found on cloud — skipping COGS for ingredient ${row.inventoryItemId} (order: ${params.orderId ?? 'unknown'})`)
           continue
         }
 
         const isInvalidIngredientQuantity = stockError instanceof Error && stockError.message === 'Ingredient consumption quantity must be greater than 0.'
         if (isInvalidIngredientQuantity) {
-          console.warn(`[dishSale] ingredient ${row.ingredientId} resolved to non-positive consumption — skipping COGS for this ingredient (order: ${params.orderId ?? 'unknown'})`)
+          console.warn(`[dishSale] ingredient ${row.inventoryItemId} resolved to non-positive consumption — skipping COGS for this ingredient (order: ${params.orderId ?? 'unknown'})`)
           continue
         }
 
@@ -218,10 +200,8 @@ export async function recordDishSalesForPaidOrder(
 export async function recordDishWasteForOrderItems(
   db: PrismaDb,
   params: {
-    billingUserId: string
-    restaurantId?: string | null
-    branchId?: string | null
-    includeBranchlessRows?: boolean
+    restaurantId: string
+    branchId: string
     orderId?: string | null
     orderLabel?: string | null
     wasteDate: Date
@@ -230,26 +210,19 @@ export async function recordDishWasteForOrderItems(
   }
 ) {
   if (params.items.length === 0) return []
-  if (!params.restaurantId || !params.branchId) {
-    throw new Error('recordDishWasteForOrderItems requires restaurantId and branchId')
-  }
-  const fifoEnabled = await getRestaurantFifoEnabled(db, {
-    billingUserId: params.billingUserId,
-    restaurantId: params.restaurantId,
-  })
+
+  const fifoEnabled = getRestaurantFifoEnabled()
   const requestedDishIds = Array.from(new Set(params.items.map((item) => item.dishId)))
   const dishes = await db.dish.findMany({
     where: buildRestaurantScopedDishWhere({
       requestedDishIds,
-      billingUserId: params.billingUserId,
       restaurantId: params.restaurantId,
       branchId: params.branchId,
-      includeBranchlessRows: params.includeBranchlessRows,
     }),
     include: {
       ingredients: {
         include: {
-          ingredient: {
+          inventoryItem: {
             select: {
               id: true,
               name: true,
@@ -293,21 +266,21 @@ export async function recordDishWasteForOrderItems(
       const totalNeeded = roundQuantity(row.quantityRequired * quantityWasted)
       if (totalNeeded <= 0) continue
 
-      const existing = wasteByIngredient.get(row.ingredientId)
+      const existing = wasteByIngredient.get(row.inventoryItemId)
       if (existing) {
         existing.quantityWasted = roundQuantity(existing.quantityWasted + totalNeeded)
         continue
       }
 
-      wasteByIngredient.set(row.ingredientId, {
-        ingredientId: row.ingredientId,
-        ingredientName: row.ingredient.name,
+      wasteByIngredient.set(row.inventoryItemId, {
+        ingredientId: row.inventoryItemId,
+        ingredientName: row.inventoryItem.name,
         ingredientSnapshot: {
-          id: row.ingredient.id,
-          name: row.ingredient.name,
-          unit: row.ingredient.unit,
-          unitCost: row.ingredient.unitCost,
-          quantity: Number(row.ingredient.quantity || 0),
+          id: row.inventoryItem.id,
+          name: row.inventoryItem.name,
+          unit: row.inventoryItem.unit,
+          unitCost: row.inventoryItem.unitCost,
+          quantity: Number(row.inventoryItem.quantity || 0),
         },
         quantityWasted: totalNeeded,
       })
@@ -330,9 +303,8 @@ export async function recordDishWasteForOrderItems(
   for (const waste of wasteByIngredient.values()) {
     const createdLog = await db.wasteLog.create({
       data: {
-        userId: params.billingUserId,
-        restaurantId: params.restaurantId ?? null,
-        branchId: params.branchId ?? null,
+        restaurantId: params.restaurantId,
+        branchId: params.branchId,
         ingredientId: waste.ingredientId,
         quantityWasted: waste.quantityWasted,
         reason: wasteReason,
@@ -343,10 +315,8 @@ export async function recordDishWasteForOrderItems(
     })
 
     const consumption = await consumeIngredientStock(db, {
-      billingUserId: params.billingUserId,
       restaurantId: params.restaurantId,
       branchId: params.branchId,
-      includeBranchlessRows: params.includeBranchlessRows,
       ingredientId: waste.ingredientId,
       quantity: waste.quantityWasted,
       fifoEnabled,
@@ -358,7 +328,6 @@ export async function recordDishWasteForOrderItems(
     })
 
     await recordJournalEntry(db, {
-      userId: params.billingUserId,
       restaurantId: params.restaurantId,
       branchId: params.branchId,
       date: params.wasteDate,
@@ -371,15 +340,11 @@ export async function recordDishWasteForOrderItems(
       counterAccountName: 'Inventory',
       counterCategoryType: 'asset',
       counterAccountType: 'asset',
-      isManual: false,
-      sourceKind: 'inventory_waste',
     })
 
     const finalizedLog = await db.wasteLog.update({
       where: { id: createdLog.id },
-      data: {
-        calculatedCost: consumption.totalCost,
-      },
+      data: { calculatedCost: consumption.totalCost },
     })
 
     await enqueueSyncChange(db, {

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser, isMainRestaurantBranch } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { resolveCancellationApprover } from '@/lib/cancelApproval'
 import { InsufficientFifoStockError, InsufficientInventoryStockError, recordDishWasteForOrderItems } from '@/lib/dishSaleRecording'
 import { enqueueOrderSync, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
@@ -40,24 +40,22 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const context = await getRestaurantContextForUser(session.user.id)
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
-  // Narrowed consts so TypeScript preserves non-null type inside closures/callbacks
   const restaurantId = context.restaurantId
   const branchId = context.branchId
-  const includeBranchlessRows = await isMainRestaurantBranch(restaurantId, branchId)
 
   const { id } = await params
   const { action, cancelReason, paymentMethod, supervisorPin, actionKey } = await req.json()
   const normalizedActionKey = normalizeRestaurantActionKey(actionKey)
 
   const order = await prisma.restaurantOrder.findFirst({
-    where: { id, restaurantId: context.restaurantId, branchId: context.branchId },
+    where: { id, restaurantId, branchId },
     include: { items: { where: { status: 'ACTIVE' } } },
   })
   if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
 
   async function getCurrentOrderSnapshot() {
     return prisma.restaurantOrder.findFirst({
-      where: { id, restaurantId: restaurantId, branchId: branchId },
+      where: { id, restaurantId, branchId },
       include: { items: { where: { status: 'ACTIVE' } } },
     })
   }
@@ -72,21 +70,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (action === 'serve') {
     try {
       const updated = await prisma.$transaction(async (tx) => {
-        const servedOrder = await tx.restaurantOrder.update({
+        const servedOrder = await tx.restaurantOrder.findFirst({
           where: { id },
-          data: {
-            servedAt: order.servedAt ?? new Date(),
-            servedById: session.user.id,
-            servedByName: session.user.name ?? 'Staff',
-          },
-        })
+          include: { items: { where: { status: 'ACTIVE' } } },
+        }) ?? order
 
-        await enqueueOrderSync(tx, id, context.restaurantId, context.branchId)
+        await enqueueOrderSync(tx, id, restaurantId, branchId)
 
         if (normalizedActionKey) {
           await recordRestaurantAction(tx, {
-            restaurantId: context.restaurantId,
-            branchId: context.branchId,
+            restaurantId,
+            branchId,
             userId: session.user.id,
             actionKey: normalizedActionKey,
             actionType: 'order.serve',
@@ -114,20 +108,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     try {
       const updated = await prisma.$transaction(async (tx) => {
         const paidOrder = await finalizeRestaurantOrderPayment(tx, {
-          billingUserId: context.billingUserId,
-          restaurantId: context.restaurantId,
-          branchId: branchId,
-          includeBranchlessRows,
+          restaurantId,
+          branchId,
           orderId: id,
-          paidById: session.user.id,
-          paidByName: session.user.name ?? null,
           paymentMethod: normalizedPaymentMethod,
         })
 
         if (normalizedActionKey) {
           await recordRestaurantAction(tx, {
-            restaurantId: context.restaurantId,
-            branchId: context.branchId,
+            restaurantId,
+            branchId,
             userId: session.user.id,
             actionKey: normalizedActionKey,
             actionType: 'order.pay',
@@ -153,75 +143,62 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   if (action === 'cancel') {
     const approver = await resolveCancellationApprover({
-      billingUserId: context.billingUserId,
-      restaurantId: context.restaurantId,
-      branchId: context.branchId,
+      restaurantId,
+      branchId,
       pin: String(supervisorPin || ''),
     })
     if (!approver) {
-      return NextResponse.json({ error: 'A valid 5-digit supervisor PIN is required' }, { status: 403 })
+      return NextResponse.json({ error: 'A valid supervisor PIN is required' }, { status: 403 })
     }
 
     const reason = String(cancelReason || 'Canceled by staff').trim()
-    const cancellationRecorderId = approver.id
-    const cancellationRecorderName = approver.name
     try {
       const updated = await prisma.$transaction(async (tx) => {
-      await tx.restaurantOrderItem.updateMany({
-        where: { orderId: id, status: 'ACTIVE' },
-        data: {
-          status: 'CANCELED',
-          canceledById: cancellationRecorderId,
-          canceledByName: cancellationRecorderName,
-          cancellationApprovedByEmployeeId: approver.id,
-          cancellationApprovedByEmployeeName: approver.name,
-          cancelReason: reason,
-          canceledAt: new Date(),
-        },
-      })
-
-      const canceled = await tx.restaurantOrder.update({
-        where: { id },
-        data: {
-          status: 'CANCELED',
-          canceledAt: new Date(),
-          canceledById: cancellationRecorderId,
-          canceledByName: cancellationRecorderName,
-          cancellationApprovedByEmployeeId: approver.id,
-          cancellationApprovedByEmployeeName: approver.name,
-          cancellationApprovedAt: new Date(),
-          cancelReason: reason,
-          servedAt: order.servedAt,
-        },
-      })
-
-      if (order.tableId) {
-        await tx.restaurantTable.updateMany({
-          where: { id: order.tableId, restaurantId: context.restaurantId, branchId: branchId },
-          data: { status: 'available' },
+        await tx.orderItem.updateMany({
+          where: { orderId: id, status: 'ACTIVE' },
+          data: {
+            status: 'CANCELED',
+            cancelReason: reason,
+            canceledAt: new Date(),
+          },
         })
-        await enqueueRestaurantTableSync(tx, order.tableId, context.restaurantId)
-      }
 
-      if (normalizedActionKey) {
-        await recordRestaurantAction(tx, {
-          restaurantId: context.restaurantId,
-          branchId: context.branchId,
-          userId: session.user.id,
-          actionKey: normalizedActionKey,
-          actionType: 'order.cancel',
-          orderId: id,
-          tableId: order.tableId,
-          tableName: order.tableName,
+        const canceled = await tx.restaurantOrder.update({
+          where: { id },
+          data: {
+            status: 'CANCELED',
+            canceledAt: new Date(),
+            cancelReason: reason,
+          },
         })
-      }
 
-      await enqueueOrderSync(tx, id, context.restaurantId, context.branchId)
+        if (order.tableId) {
+          await tx.restaurantTable.updateMany({
+            where: { id: order.tableId, restaurantId, branchId },
+            data: { status: 'available' },
+          })
+          await enqueueRestaurantTableSync(tx, order.tableId, restaurantId)
+        }
 
-      return canceled
-    }, ORDER_TRANSACTION_OPTIONS)
+        if (normalizedActionKey) {
+          await recordRestaurantAction(tx, {
+            restaurantId,
+            branchId,
+            userId: session.user.id,
+            actionKey: normalizedActionKey,
+            actionType: 'order.cancel',
+            orderId: id,
+            tableId: order.tableId,
+            tableName: order.tableName,
+          })
+        }
 
-    return NextResponse.json(updated)
+        await enqueueOrderSync(tx, id, restaurantId, branchId)
+
+        return canceled
+      }, ORDER_TRANSACTION_OPTIONS)
+
+      return NextResponse.json(updated)
     } catch (error) {
       if (!normalizedActionKey || !isRestaurantActionConflict(error)) throw error
       return (await resolveDuplicateActionResponse()) ?? NextResponse.json(order)
@@ -230,13 +207,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   if (action === 'waste') {
     const approver = await resolveCancellationApprover({
-      billingUserId: context.billingUserId,
-      restaurantId: context.restaurantId,
-      branchId: context.branchId,
+      restaurantId,
+      branchId,
       pin: String(supervisorPin || ''),
     })
     if (!approver) {
-      return NextResponse.json({ error: 'A valid 5-digit supervisor PIN is required' }, { status: 403 })
+      return NextResponse.json({ error: 'A valid supervisor PIN is required' }, { status: 403 })
     }
 
     const reason = String(cancelReason || 'Marked as wasted').trim() || 'Marked as wasted'
@@ -247,74 +223,81 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     try {
       const updated = await prisma.$transaction(async (tx) => {
-      const wastedAt = new Date()
+        const wastedAt = new Date()
 
-      await tx.restaurantOrderItem.updateMany({
-        where: {
-          orderId: id,
-          status: 'ACTIVE',
-          kitchenStatus: { in: ['in_kitchen', 'ready'] },
-        },
-        data: {
-          status: 'WASTED',
-          wastedById: session.user.id,
-          wastedByName: session.user.name ?? 'Staff',
-          cancellationApprovedByEmployeeId: approver.id,
-          cancellationApprovedByEmployeeName: approver.name,
-          wasteReason: reason,
-          wasteAcknowledged: false,
-          wastedAt,
-        },
-      })
-
-      await recordDishWasteForOrderItems(tx, {
-        billingUserId: context.billingUserId,
-        restaurantId: context.restaurantId,
-        branchId: context.branchId,
-        includeBranchlessRows,
-        orderId: id,
-        orderLabel: `${order.orderNumber} · ${formatOrderLocation(order.tableId, order.tableName)}`,
-        wasteDate: wastedAt,
-        reason,
-        items: wasteableItems.map((item) => ({
-          dishId: item.dishId,
-          dishName: item.dishName,
-          qty: item.qty,
-        })),
-      })
-
-      const remainingActiveItems = await tx.restaurantOrderItem.count({
-        where: { orderId: id, status: 'ACTIVE' },
-      })
-
-      if (remainingActiveItems === 0) {
-        const canceledOrder = await tx.restaurantOrder.update({
-          where: { id },
+        await tx.orderItem.updateMany({
+          where: {
+            orderId: id,
+            status: 'ACTIVE',
+            kitchenStatus: { in: ['in_kitchen', 'ready'] },
+          },
           data: {
-            status: 'CANCELED',
+            status: 'WASTED',
+            cancelReason: reason,
             canceledAt: wastedAt,
-            canceledById: session.user.id,
-            canceledByName: session.user.name ?? 'Staff',
-            cancellationApprovedByEmployeeId: approver.id,
-            cancellationApprovedByEmployeeName: approver.name,
-            cancellationApprovedAt: wastedAt,
-            cancelReason: 'All items were marked as wasted',
-            servedAt: order.servedAt,
           },
         })
 
-        if (order.tableId) {
-          await tx.restaurantTable.updateMany({
-            where: { id: order.tableId, restaurantId: context.restaurantId, branchId: branchId },
-            data: { status: 'available' },
+        await recordDishWasteForOrderItems(tx, {
+          restaurantId,
+          branchId,
+          orderId: id,
+          orderLabel: `${order.orderNumber} · ${formatOrderLocation(order.tableId, order.tableName)}`,
+          wasteDate: wastedAt,
+          reason,
+          items: wasteableItems.map((item) => ({
+            dishId: item.dishId,
+            dishName: item.dishName,
+            qty: item.qty,
+          })),
+        })
+
+        const remainingActiveItems = await tx.orderItem.count({
+          where: { orderId: id, status: 'ACTIVE' },
+        })
+
+        if (remainingActiveItems === 0) {
+          const canceledOrder = await tx.restaurantOrder.update({
+            where: { id },
+            data: {
+              status: 'CANCELED',
+              canceledAt: wastedAt,
+              cancelReason: 'All items were marked as wasted',
+            },
           })
-          await enqueueRestaurantTableSync(tx, order.tableId, context.restaurantId)
+
+          if (order.tableId) {
+            await tx.restaurantTable.updateMany({
+              where: { id: order.tableId, restaurantId, branchId },
+              data: { status: 'available' },
+            })
+            await enqueueRestaurantTableSync(tx, order.tableId, restaurantId)
+          }
+
+          if (normalizedActionKey) {
+            await recordRestaurantAction(tx, {
+              restaurantId,
+              branchId,
+              userId: session.user.id,
+              actionKey: normalizedActionKey,
+              actionType: 'order.waste',
+              orderId: id,
+              tableId: order.tableId,
+              tableName: order.tableName,
+            })
+          }
+
+          await enqueueOrderSync(tx, id, restaurantId, branchId)
+
+          return canceledOrder
         }
+
+        const currentOrder = await syncRestaurantOrderTotals(tx, id)
 
         if (normalizedActionKey) {
           await recordRestaurantAction(tx, {
-            restaurantId: context.restaurantId,
-            branchId: context.branchId,
+            restaurantId,
+            branchId,
             userId: session.user.id,
             actionKey: normalizedActionKey,
             actionType: 'order.waste',
@@ -324,32 +307,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
           })
         }
 
-        await enqueueOrderSync(tx, id, context.restaurantId, context.branchId)
+        await enqueueOrderSync(tx, id, restaurantId, branchId)
 
-        return canceledOrder
-      }
+        return currentOrder
+      }, ORDER_TRANSACTION_OPTIONS)
 
-      const currentOrder = await syncRestaurantOrderTotals(tx, id)
-
-      if (normalizedActionKey) {
-        await recordRestaurantAction(tx, {
-          restaurantId: context.restaurantId,
-          branchId: context.branchId,
-          userId: session.user.id,
-          actionKey: normalizedActionKey,
-          actionType: 'order.waste',
-          orderId: id,
-          tableId: order.tableId,
-          tableName: order.tableName,
-        })
-      }
-
-      await enqueueOrderSync(tx, id, context.restaurantId, context.branchId)
-
-      return currentOrder
-    }, ORDER_TRANSACTION_OPTIONS)
-
-    return NextResponse.json(updated)
+      return NextResponse.json(updated)
     } catch (error) {
       if (error instanceof InsufficientFifoStockError || error instanceof InsufficientInventoryStockError) {
         return buildStockShortageResponse(error)

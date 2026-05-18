@@ -11,11 +11,9 @@ const settingsRestaurantSelect = {
   id: true,
   name: true,
   billHeader: true,
-  qrOrderingMode: true,
   fifoEnabled: true,
   fifoConfiguredAt: true,
-  fifoCutoverAt: true,
-  syncRestaurantId: true,
+  joinCode: true,
 } as const
 
 /** GET — fetch the admin's restaurant (creates one if missing) */
@@ -48,13 +46,14 @@ export async function GET() {
 
   const activeBranchId = context?.restaurantId === restaurant.id ? context.branchId : null
   const waiters = activeBranchId
-    ? await prisma.user.findMany({
+    ? await prisma.staff.findMany({
         where: {
           restaurantId: restaurant.id,
-          branchId: activeBranchId,
+          branches: { some: { branchId: activeBranchId } },
           role: { in: ['waiter', 'kitchen'] },
+          deletedAt: null,
         },
-        select: { id: true, name: true, email: true, role: true, createdAt: true }
+        select: { id: true, name: true, username: true, role: true, createdAt: true },
       })
     : []
 
@@ -66,7 +65,7 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const userId = session.user.id
-  const { name, billHeader, qrOrderingMode, fifoEnabled } = await req.json()
+  const { name, billHeader, fifoEnabled } = await req.json()
 
   const context = await getRestaurantContextForUser(userId)
   let targetRestaurantId = context?.restaurantId
@@ -81,23 +80,16 @@ export async function POST(req: Request) {
   if (!targetRestaurantId) return NextResponse.json({ error: 'No restaurant found' }, { status: 404 })
   const currentRestaurant = context?.restaurant ?? await prisma.restaurant.findUnique({
     where: { id: targetRestaurantId },
-    select: {
-      id: true,
-      syncRestaurantId: true,
-      fifoEnabled: true,
-      fifoConfiguredAt: true,
-      fifoCutoverAt: true,
-    },
+    select: { id: true, fifoEnabled: true, fifoConfiguredAt: true, joinCode: true },
   })
 
   if (!currentRestaurant) {
     return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
   }
 
-  const updateData: { name?: string; billHeader?: string; qrOrderingMode?: string; fifoEnabled?: boolean; fifoConfiguredAt?: Date; fifoCutoverAt?: Date } = {}
-  if (name      !== undefined) updateData.name       = name      || 'My Restaurant'
+  const updateData: { name?: string; billHeader?: string; fifoEnabled?: boolean; fifoConfiguredAt?: Date } = {}
+  if (name       !== undefined) updateData.name       = name      || 'My Restaurant'
   if (billHeader !== undefined) updateData.billHeader = billHeader ?? ''
-  if (qrOrderingMode === 'order' || qrOrderingMode === 'view_only' || qrOrderingMode === 'disabled') updateData.qrOrderingMode = qrOrderingMode
   if (typeof fifoEnabled === 'boolean') {
     if (!fifoEnabled) {
       return NextResponse.json({ error: 'This app now enforces strict FIFO. Average Cost is no longer supported.' }, { status: 409 })
@@ -105,26 +97,19 @@ export async function POST(req: Request) {
 
     const fifoAvailable = getRestaurantFifoAvailability(currentRestaurant)
 
-    if (currentRestaurant.fifoCutoverAt) {
-      updateData.fifoEnabled = true
-    } else {
-      if (!fifoAvailable) {
-        return NextResponse.json({ error: 'FIFO is not available for this restaurant in the current build.' }, { status: 409 })
-      }
-
-      const integrity = await getRestaurantInventoryIntegrity(prisma, {
-        billingUserId: context?.billingUserId ?? userId,
-        restaurantId: targetRestaurantId,
-      })
-
-      if (integrity.summary.mismatchCount > 0) {
-        return NextResponse.json({ error: 'This app uses strict FIFO. Preview and apply FIFO reconciliation before recording cutover for this restaurant.' }, { status: 409 })
-      }
-
-      updateData.fifoEnabled = true
-      updateData.fifoCutoverAt = new Date()
+    if (!fifoAvailable) {
+      return NextResponse.json({ error: 'FIFO is not available for this restaurant in the current build.' }, { status: 409 })
     }
 
+    const integrity = await getRestaurantInventoryIntegrity(prisma, {
+      restaurantId: targetRestaurantId,
+    })
+
+    if (integrity.summary.mismatchCount > 0) {
+      return NextResponse.json({ error: 'This app uses strict FIFO. Preview and apply FIFO reconciliation before recording cutover for this restaurant.' }, { status: 409 })
+    }
+
+    updateData.fifoEnabled = true
     updateData.fifoConfiguredAt = new Date()
   }
 

@@ -4,7 +4,6 @@ import { FIFO_FEATURE_AVAILABLE } from '@/lib/fifoFeature'
 
 type FifoRestaurantTarget = {
 	id?: string | null
-	syncRestaurantId?: string | null
 	fifoCutoverAt?: Date | null
 }
 
@@ -24,9 +23,7 @@ export function getRestaurantFifoAvailability(restaurant: FifoRestaurantTarget |
 	const configuredTokens = getConfiguredPilotTokens()
 	if (configuredTokens.size === 0) return false
 
-	return [restaurant.id, restaurant.syncRestaurantId].some(
-		(value) => typeof value === 'string' && configuredTokens.has(value),
-	)
+	return typeof restaurant.id === 'string' && configuredTokens.has(restaurant.id)
 }
 
 export function getRestaurantFifoRuntimeAvailability(restaurant: FifoRestaurantTarget | null | undefined) {

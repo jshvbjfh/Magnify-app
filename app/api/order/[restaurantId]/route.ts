@@ -2,37 +2,19 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { ensureMainBranchForRestaurant, normalizeLegacyAutoRestaurantName } from '@/lib/restaurantAccess'
 
-// Public — no auth required. Returns restaurant info + active menu for guest table access.
 export async function GET(req: Request, { params }: { params: Promise<{ restaurantId: string }> }) {
   const { restaurantId } = await params
 
-  // Try primary ID first, then fall back to syncRestaurantId (QR from a different device)
-  let restaurant = await prisma.restaurant.findUnique({
+  const restaurant = await prisma.restaurant.findUnique({
     where: { id: restaurantId },
     select: {
       id: true,
       name: true,
       ownerId: true,
-      qrOrderingMode: true,
       owner: { select: { name: true } },
     },
   })
-  if (!restaurant) {
-    restaurant = await prisma.restaurant.findUnique({
-      where: { syncRestaurantId: restaurantId },
-      select: {
-        id: true,
-        name: true,
-        ownerId: true,
-        qrOrderingMode: true,
-        owner: { select: { name: true } },
-      },
-    })
-  }
   if (!restaurant) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
-  if (restaurant.qrOrderingMode === 'disabled') {
-    return NextResponse.json({ error: 'Guest menu is not enabled for this restaurant.' }, { status: 403 })
-  }
 
   const { searchParams } = new URL(req.url)
   const requestedTableId = String(searchParams.get('tableId') ?? '').trim()
@@ -53,7 +35,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
 
   const dishes = await prisma.dish.findMany({
     where: {
-      userId: restaurant.ownerId,
       restaurantId: restaurant.id,
       ...(resolvedBranchId ? { branchId: resolvedBranchId } : {}),
       isActive: true,
@@ -66,7 +47,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
     restaurant: {
       id: restaurant.id,
       name: normalizeLegacyAutoRestaurantName(restaurant.name, restaurant.owner?.name),
-      qrOrderingMode: restaurant.qrOrderingMode,
+      qrOrderingMode: 'order',
     },
     dishes,
   })

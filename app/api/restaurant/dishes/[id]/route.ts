@@ -31,7 +31,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const { id } = await params
   const data = await req.json()
   const dish = await prisma.dish.updateMany({
-    where: { id, userId: context.billingUserId, restaurantId: context.restaurantId, branchId },
+    where: { id, restaurantId: context.restaurantId, branchId },
     data: {
       ...(data.name !== undefined && { name: data.name }),
       ...(data.sellingPrice !== undefined && { sellingPrice: Number(data.sellingPrice) }),
@@ -40,7 +40,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     }
   })
 
-  const updatedDish = await prisma.dish.findFirst({ where: { id, userId: context.billingUserId, restaurantId: context.restaurantId, branchId } })
+  const updatedDish = await prisma.dish.findFirst({ where: { id, restaurantId: context.restaurantId, branchId } })
   if (updatedDish) {
     await enqueueSyncChange(prisma, {
       restaurantId: context.restaurantId,
@@ -66,8 +66,8 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (!branchId) return NextResponse.json({ error: 'No branch configured for this restaurant' }, { status: 400 })
 
   const { id } = await params
-  const existingDish = await prisma.dish.findFirst({ where: { id, userId: context.billingUserId, restaurantId: context.restaurantId, branchId } })
-  await prisma.dish.deleteMany({ where: { id, userId: context.billingUserId, restaurantId: context.restaurantId, branchId } })
+  const existingDish = await prisma.dish.findFirst({ where: { id, restaurantId: context.restaurantId, branchId } })
+  await prisma.dish.deleteMany({ where: { id, restaurantId: context.restaurantId, branchId } })
 
   await enqueueSyncChange(prisma, {
     restaurantId: context.restaurantId,

@@ -4,29 +4,13 @@ import { calculateRestaurantOrderTotals, enqueueOrderSync, generateRestaurantOrd
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
 import { ensureMainBranchForRestaurant } from '@/lib/restaurantAccess'
 
-// Public — no auth required. Customer submits order from the table menu page.
 export async function POST(req: Request, { params }: { params: Promise<{ restaurantId: string }> }) {
   try {
     const { restaurantId } = await params
 
-    // Try primary ID first, then fall back to syncRestaurantId (QR from a different device)
-    let restaurantRecord = await prisma.restaurant.findUnique({
-      where: { id: restaurantId },
-    })
-    if (!restaurantRecord) {
-      restaurantRecord = await prisma.restaurant.findUnique({
-        where: { syncRestaurantId: restaurantId },
-      })
-    }
-    const restaurant = restaurantRecord as ({ id: string; ownerId: string; qrOrderingMode?: string | null } | null)
-    if (!restaurant) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
-    const resolvedRestaurantId = restaurant.id
-    if ((restaurant.qrOrderingMode ?? 'disabled') === 'disabled') {
-      return NextResponse.json({ error: 'Guest ordering is disabled for this restaurant.' }, { status: 403 })
-    }
-    if ((restaurant.qrOrderingMode ?? 'order') !== 'order') {
-      return NextResponse.json({ error: 'This menu is in view-only mode. Guests can browse the menu but cannot place orders.' }, { status: 403 })
-    }
+    const restaurantRecord = await prisma.restaurant.findUnique({ where: { id: restaurantId } })
+    if (!restaurantRecord) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
+    const resolvedRestaurantId = restaurantRecord.id
 
     const body = await req.json()
     const { tableId, tableName, items, customerName } = body
@@ -52,15 +36,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
       resolvedBranchId = mainBranch?.id ?? null
     }
 
+    if (!resolvedBranchId) return NextResponse.json({ error: 'No branch found for this restaurant' }, { status: 400 })
+    const branchId: string = resolvedBranchId
+
     const requestedDishIds = Array.from(new Set(items.map((item: { dishId: string }) => String(item?.dishId || '')).filter(Boolean)))
     const dishes = await prisma.dish.findMany({
-      where: {
-        id: { in: requestedDishIds },
-        userId: restaurant.ownerId,
-        restaurantId: resolvedRestaurantId,
-        ...(resolvedBranchId ? { branchId: resolvedBranchId } : {}),
-        isActive: true,
-      },
+      where: { id: { in: requestedDishIds }, restaurantId: resolvedRestaurantId, branchId, isActive: true },
       select: { id: true, name: true, sellingPrice: true },
     })
 
@@ -69,12 +50,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
       const dish = dishMap.get(String(item.dishId))
       const qty = Number(item.qty) || 1
       if (!dish || qty <= 0) return null
-      return {
-        dishId: dish.id,
-        dishName: dish.name,
-        dishPrice: dish.sellingPrice,
-        qty,
-      }
+      return { dishId: dish.id, dishName: dish.name, dishPrice: dish.sellingPrice, qty }
     }).filter(Boolean) as Array<{ dishId: string; dishName: string; dishPrice: number; qty: number }>
 
     if (normalizedItems.length === 0 || normalizedItems.length !== items.length) {
@@ -93,11 +69,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
           const order = await txDb.restaurantOrder.create({
             data: {
               restaurantId: resolvedRestaurantId,
-              branchId: resolvedBranchId,
+              branchId,
               tableId: tableId || null,
               tableName: resolvedTableName,
               orderNumber: await generateRestaurantOrderNumber(txDb, resolvedRestaurantId),
-              createdById: restaurant.ownerId,
               createdByName: customerName ? `Guest - ${String(customerName).trim()}` : 'Guest QR Order',
               subtotalAmount: totals.subtotalAmount,
               vatAmount: totals.vatAmount,
@@ -105,7 +80,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
             },
           })
 
-          await txDb.restaurantOrderItem.createMany({
+          await txDb.orderItem.createMany({
             data: normalizedItems.map((item) => ({
               orderId: order.id,
               dishId: item.dishId,
@@ -116,22 +91,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
           })
 
           if (tableId) {
-            await txDb.restaurantTable.update({
-              where: { id: tableId },
-              data: { status: 'occupied' },
-            })
+            await txDb.restaurantTable.update({ where: { id: tableId }, data: { status: 'occupied' } })
             await enqueueRestaurantTableSync(txDb, tableId, resolvedRestaurantId)
           }
 
-          // Capture order ID before transaction closes — `order` is not visible outside
           createdOrderId = order.id
         })
         created = true
-        // F4 FIX: QR-submitted orders were not enqueued in the sync outbox.
-        // enqueueOrderSync runs OUTSIDE the retry transaction so it always sees the
-        // committed order row and its items.
         if (createdOrderId) {
-          await enqueueOrderSync(prisma, createdOrderId, resolvedRestaurantId, resolvedBranchId)
+          await enqueueOrderSync(prisma, createdOrderId, resolvedRestaurantId, branchId)
         }
         break
       } catch (error) {
@@ -139,10 +107,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
       }
     }
 
-    if (!created) {
-      return NextResponse.json({ error: 'Failed to place order. Please try again.' }, { status: 500 })
-    }
-
+    if (!created) return NextResponse.json({ error: 'Failed to place order. Please try again.' }, { status: 500 })
     return NextResponse.json({ success: true }, { status: 201 })
   } catch (error) {
     console.error('QR order submit failed:', error)

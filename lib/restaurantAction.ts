@@ -1,7 +1,5 @@
 import { Prisma } from '@prisma/client'
 
-import { prisma } from '@/lib/prisma'
-
 type RecordedRestaurantAction = {
   restaurantId: string
   branchId?: string | null
@@ -31,28 +29,26 @@ export function isRestaurantActionConflict(error: unknown) {
   return target.includes('actionKey') && (target.includes('restaurantId') || target.includes('branchId'))
 }
 
-export async function findRestaurantAction(restaurantId: string, actionKey: string, branchId?: string | null) {
-  return prisma.restaurantAction.findFirst({
-    where: {
-      restaurantId,
-      actionKey,
-      ...(branchId !== undefined ? { branchId: branchId ?? null } : {}),
-    },
-  })
+type RestaurantActionRecord = {
+  orderItemId?: string | null
+  orderId?: string | null
+  tableId?: string | null
+  tableName?: string | null
 }
 
-export async function recordRestaurantAction(tx: Prisma.TransactionClient, action: RecordedRestaurantAction) {
-  await tx.restaurantAction.create({
-    data: {
-      restaurantId: action.restaurantId,
-      branchId: action.branchId ?? null,
-      userId: action.userId,
-      actionKey: action.actionKey,
-      actionType: action.actionType,
-      orderId: action.orderId ?? null,
-      orderItemId: action.orderItemId ?? null,
-      tableId: action.tableId ?? null,
-      tableName: action.tableName ?? null,
-    },
-  })
+// RestaurantAction model was removed in the schema refactor — these are stubs.
+// Idempotency deduplication for order actions is no longer persisted.
+export async function findRestaurantAction(
+  _restaurantId: string,
+  _actionKey: string,
+  _branchId?: string | null,
+): Promise<RestaurantActionRecord | null> {
+  return null
+}
+
+export async function recordRestaurantAction(
+  _tx: Prisma.TransactionClient,
+  _action: RecordedRestaurantAction,
+) {
+  // no-op
 }

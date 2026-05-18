@@ -5,7 +5,6 @@ import { prisma } from '@/lib/prisma'
 import fs from 'fs'
 import path from 'path'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
-import { generateInventoryBatchId } from '@/lib/inventoryBatch'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 const isProduction = process.env.NODE_ENV === 'production'
@@ -50,7 +49,6 @@ function logInventoryError(action: 'GET' | 'POST' | 'PUT' | 'DELETE', error: any
 	}
 }
 
-// GET all inventory items for the user
 export async function GET(req: NextRequest) {
 	try {
 		const session = await getServerSession(authOptions)
@@ -59,18 +57,13 @@ export async function GET(req: NextRequest) {
 		}
 
 		const context = await getRestaurantContextForUser(session.user.id)
-		const billingUserId = context?.billingUserId ?? session.user.id
 		const restaurantId = context?.restaurantId ?? null
 		const branchId = context?.branchId ?? null
 
-		if (restaurantId && !branchId) return NextResponse.json({ items: [] })
+		if (!restaurantId || !branchId) return NextResponse.json({ items: [] })
 
 		const items = await prisma.inventoryItem.findMany({
-			where: {
-				userId: billingUserId,
-				...(restaurantId ? { restaurantId } : {}),
-				...(branchId ? { branchId } : {}),
-			},
+			where: { restaurantId, branchId },
 			orderBy: { name: 'asc' }
 		})
 
@@ -85,7 +78,6 @@ export async function GET(req: NextRequest) {
 	}
 }
 
-// POST create a new inventory item
 export async function POST(req: NextRequest) {
 	try {
 		const session = await getServerSession(authOptions)
@@ -95,20 +87,18 @@ export async function POST(req: NextRequest) {
 
 		const body = await req.json()
 		const context = await getRestaurantContextForUser(session.user.id)
-		const billingUserId = context?.billingUserId ?? session.user.id
 		const restaurantId = context?.restaurantId ?? null
 		const branchId = context?.branchId ?? null
-		const { name, description, unit, unitCost, unitPrice, quantity, category, reorderLevel, inventoryType, skipOpeningPurchase } = body
+		const { name, description, unit, unitCost, unitPrice, quantity, category, reorderLevel, skipOpeningPurchase } = body
 
-		if (restaurantId && !branchId) {
+		if (!restaurantId || !branchId) {
 			return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 		}
 
-		// Validate required fields with specific messages
 		const missingFields = []
 		if (!name) missingFields.push('name (item name)')
 		if (!unit) missingFields.push('unit (e.g., kg, liter, bunch, piece)')
-		
+
 		if (missingFields.length > 0) {
 			return NextResponse.json(
 				{ error: `Missing required fields: ${missingFields.join(', ')}` },
@@ -135,34 +125,25 @@ export async function POST(req: NextRequest) {
 
 		const item = await prisma.$transaction(async (tx) => {
 			const openingPurchaseDate = new Date()
-			const openingBatchId = !skipOpeningPurchase && parsedQuantity > 0 && parsedUnitCost !== null && parsedUnitCost >= 0
-				? generateInventoryBatchId(openingPurchaseDate)
-				: null
 			const createdItem = await tx.inventoryItem.create({
 				data: {
-					userId: billingUserId,
 					restaurantId,
 					branchId,
 					name,
 					description,
 					unit,
-					unitCost: parsedUnitCost,
-					unitPrice: unitPrice !== undefined && unitPrice !== null && unitPrice !== '' ? parseFloat(String(unitPrice)) : null,
+					unitCost: parsedUnitCost ?? 0,
 					quantity: parsedQuantity,
 					category: category || null,
 					reorderLevel: reorderLevel !== undefined && reorderLevel !== null && reorderLevel !== '' ? parseFloat(String(reorderLevel)) : 0,
-					inventoryType: inventoryType || 'resale',
-					...(parsedQuantity > 0 ? { lastRestockedAt: openingPurchaseDate } : {}),
-				} as any
+				}
 			})
 
 			if (!skipOpeningPurchase && parsedQuantity > 0 && parsedUnitCost !== null && parsedUnitCost >= 0) {
 				await tx.inventoryPurchase.create({
 					data: {
-						userId: billingUserId,
 						restaurantId,
 						branchId,
-						batchId: openingBatchId,
 						ingredientId: createdItem.id,
 						supplier: 'Opening Stock',
 						quantityPurchased: parsedQuantity,
@@ -177,7 +158,6 @@ export async function POST(req: NextRequest) {
 			if (parsedQuantity > 0) {
 				await tx.inventoryAdjustmentLog.create({
 					data: {
-						userId: billingUserId,
 						restaurantId,
 						branchId,
 						ingredientId: createdItem.id,
@@ -185,7 +165,6 @@ export async function POST(req: NextRequest) {
 						quantityDelta: parsedQuantity,
 						itemQuantityBefore: 0,
 						itemQuantityAfter: parsedQuantity,
-						batchId: openingBatchId,
 						reason: 'Opening stock seeded for inventory item.',
 					},
 				})
@@ -207,7 +186,7 @@ export async function POST(req: NextRequest) {
 	} catch (error: any) {
 		logServerError('Error creating inventory item:', error)
 		logInventoryError('POST', error)
-		
+
 		if (error.code === 'P2002') {
 			return NextResponse.json(
 				{ error: 'An item with this name already exists' },
@@ -236,7 +215,6 @@ export async function POST(req: NextRequest) {
 	}
 }
 
-// PUT update an inventory item
 export async function PUT(req: NextRequest) {
 	try {
 		const session = await getServerSession(authOptions)
@@ -246,10 +224,9 @@ export async function PUT(req: NextRequest) {
 
 		const body = await req.json()
 		const context = await getRestaurantContextForUser(session.user.id)
-		const billingUserId = context?.billingUserId ?? session.user.id
 		const restaurantId = context?.restaurantId ?? null
 		const branchId = context?.branchId ?? null
-		const { id, name, description, unit, unitCost, unitPrice, quantity, category, reorderLevel, inventoryType } = body
+		const { id, name, description, unit, unitCost, unitPrice, quantity, category, reorderLevel } = body
 
 		if (!id) {
 			return NextResponse.json(
@@ -261,7 +238,6 @@ export async function PUT(req: NextRequest) {
 		const existingItem = await prisma.inventoryItem.findFirst({
 			where: {
 				id,
-				userId: billingUserId,
 				...(restaurantId ? { restaurantId } : {}),
 				...(branchId ? { branchId } : {}),
 			},
@@ -275,9 +251,6 @@ export async function PUT(req: NextRequest) {
 		}
 
 		const parsedQuantity = quantity !== undefined && quantity !== null && quantity !== '' ? parseFloat(String(quantity)) : existingItem.quantity
-		const parsedUnitCost = unitCost !== undefined && unitCost !== null && unitCost !== ''
-			? parseFloat(String(unitCost))
-			: existingItem.unitCost
 		const quantityIncrease = parsedQuantity - existingItem.quantity
 
 		if (quantity !== undefined && Math.abs(quantityIncrease) > Number.EPSILON) {
@@ -304,33 +277,25 @@ export async function PUT(req: NextRequest) {
 					...(description !== undefined && { description }),
 					...(unit && { unit }),
 					...(unitCost !== undefined && { unitCost: unitCost !== null && unitCost !== '' ? parseFloat(String(unitCost)) : null }),
-					...(unitPrice !== undefined && { unitPrice: unitPrice !== null && unitPrice !== '' ? parseFloat(String(unitPrice)) : null }),
 					...(quantity !== undefined && { quantity: parsedQuantity }),
 					...(category !== undefined && { category }),
 					...(reorderLevel !== undefined && { reorderLevel: reorderLevel !== null && reorderLevel !== '' ? parseFloat(String(reorderLevel)) : 0 }),
-					...(inventoryType !== undefined && { inventoryType })
-				} as any
+				}
 			})
 
-			// Cascade name / unit-cost changes to linked purchase batches and their transaction pairs
-			if (nameActuallyChanged || unitCostActuallyChanged) {
+			if (unitCostActuallyChanged && newUnitCostValue !== null) {
 				const batches = await tx.inventoryPurchase.findMany({
 					where: {
 						ingredientId: id,
-						userId: billingUserId,
 						...(restaurantId ? { restaurantId } : {}),
 						...(branchId ? { branchId } : {}),
 					},
 					select: {
 						id: true,
-						journalPairId: true,
 						quantityPurchased: true,
 						remainingQuantity: true,
 						unitCost: true,
 						totalCost: true,
-						purchaseQuantity: true,
-						purchaseUnit: true,
-						supplier: true,
 					},
 				})
 
@@ -338,49 +303,15 @@ export async function PUT(req: NextRequest) {
 					const isUnconsumed =
 						batch.quantityPurchased - batch.remainingQuantity <= PURCHASE_CONSUME_EPSILON
 
-					// Recost unconsumed batches when unit cost changed
-					let newBatchTotalCost: number | null = null
-					if (unitCostActuallyChanged && isUnconsumed && newUnitCostValue !== null) {
-						newBatchTotalCost = batch.quantityPurchased * newUnitCostValue
-						const newPurchaseUnitCost =
-							batch.purchaseQuantity && batch.purchaseQuantity > 0
-								? newBatchTotalCost / batch.purchaseQuantity
-								: null
+					if (isUnconsumed) {
+						const newBatchTotalCost = batch.quantityPurchased * newUnitCostValue
 						await tx.inventoryPurchase.update({
 							where: { id: batch.id },
 							data: {
 								unitCost: newUnitCostValue,
 								totalCost: newBatchTotalCost,
-								...(newPurchaseUnitCost !== null ? { purchaseUnitCost: newPurchaseUnitCost } : {}),
 							},
 						})
-					}
-
-					// Update linked accounting transaction pair
-					if (batch.journalPairId) {
-						const txPatch: Record<string, unknown> = {}
-
-						if (nameActuallyChanged) {
-							const descQty = Number(batch.purchaseQuantity ?? batch.quantityPurchased)
-							const descUnit = String(batch.purchaseUnit ?? '').trim() || updatedItem.unit
-							const descSupplier = batch.supplier
-							txPatch.description = `Purchase: ${updatedItem.name} (${descQty.toLocaleString('en-RW', { maximumFractionDigits: 3 })} ${descUnit}${descSupplier ? ` from ${descSupplier}` : ''})`
-						}
-
-						if (unitCostActuallyChanged && isUnconsumed && newBatchTotalCost !== null) {
-							txPatch.amount = newBatchTotalCost
-						}
-
-						if (Object.keys(txPatch).length > 0) {
-							await tx.transaction.updateMany({
-								where: {
-									userId: billingUserId,
-									pairId: batch.journalPairId,
-									sourceKind: { in: ['inventory_purchase', 'ai_inventory_purchase'] },
-								},
-								data: txPatch,
-							})
-						}
 					}
 				}
 			}
@@ -423,7 +354,6 @@ export async function PUT(req: NextRequest) {
 	}
 }
 
-// DELETE an inventory item
 export async function DELETE(req: NextRequest) {
 	try {
 		const session = await getServerSession(authOptions)
@@ -433,7 +363,6 @@ export async function DELETE(req: NextRequest) {
 
 		const { searchParams } = new URL(req.url)
 		const context = await getRestaurantContextForUser(session.user.id)
-		const billingUserId = context?.billingUserId ?? session.user.id
 		const restaurantId = context?.restaurantId ?? null
 		const branchId = context?.branchId ?? null
 		const id = searchParams.get('id')
@@ -448,7 +377,6 @@ export async function DELETE(req: NextRequest) {
 		const existingItem = await prisma.inventoryItem.findFirst({
 			where: {
 				id,
-				userId: billingUserId,
 				...(restaurantId ? { restaurantId } : {}),
 				...(branchId ? { branchId } : {}),
 			},

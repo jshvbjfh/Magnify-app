@@ -19,24 +19,26 @@ export async function GET() {
 		return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 	}
 
+	const branchWhere = { restaurantId: context.restaurantId, branchId: context.branchId }
+
 	const [
 		totalOrders,
 		paidOrders,
 		pendingOrders,
-		totalTransactionCount,
-		restaurantScopedTransactionCount,
+		totalJournalEntryCount,
+		restaurantScopedJournalEntryCount,
 		lastOrder,
 		lastPaidOrder,
-		lastTransaction,
+		lastJournalEntry,
 	] = await Promise.all([
-		prisma.restaurantOrder.count({ where: { restaurantId: context.restaurantId, branchId: context.branchId } }),
-		prisma.restaurantOrder.count({ where: { restaurantId: context.restaurantId, branchId: context.branchId, status: 'PAID' } }),
-		prisma.restaurantOrder.count({ where: { restaurantId: context.restaurantId, branchId: context.branchId, status: 'PENDING' } }),
-		prisma.transaction.count({ where: { userId: context.billingUserId } }),
-		prisma.transaction.count({ where: { userId: context.billingUserId, restaurantId: context.restaurantId, branchId: context.branchId } }),
-		prisma.restaurantOrder.findFirst({ where: { restaurantId: context.restaurantId, branchId: context.branchId }, orderBy: { createdAt: 'desc' }, select: { id: true, orderNumber: true, createdAt: true, status: true } }),
-		prisma.restaurantOrder.findFirst({ where: { restaurantId: context.restaurantId, branchId: context.branchId, status: 'PAID' }, orderBy: { paidAt: 'desc' }, select: { id: true, orderNumber: true, paidAt: true, totalAmount: true, paymentMethod: true } }),
-		prisma.transaction.findFirst({ where: { userId: context.billingUserId }, orderBy: { createdAt: 'desc' }, select: { id: true, description: true, amount: true, createdAt: true, paymentMethod: true, restaurantId: true } }),
+		prisma.restaurantOrder.count({ where: branchWhere }),
+		prisma.restaurantOrder.count({ where: { ...branchWhere, status: 'PAID' } }),
+		prisma.restaurantOrder.count({ where: { ...branchWhere, status: 'PENDING' } }),
+		prisma.journalEntry.count({ where: { restaurantId: context.restaurantId } }),
+		prisma.journalEntry.count({ where: { restaurantId: context.restaurantId, branchId: context.branchId } }),
+		prisma.restaurantOrder.findFirst({ where: branchWhere, orderBy: { createdAt: 'desc' }, select: { id: true, orderNumber: true, createdAt: true, status: true } }),
+		prisma.restaurantOrder.findFirst({ where: { ...branchWhere, status: 'PAID' }, orderBy: { paidAt: 'desc' }, select: { id: true, orderNumber: true, paidAt: true, totalAmount: true, paymentMethod: true } }),
+		prisma.journalEntry.findFirst({ where: { restaurantId: context.restaurantId }, orderBy: { createdAt: 'desc' }, select: { id: true, description: true, entryDate: true, branchId: true } }),
 	])
 
 	const databaseUrl = String(process.env.DATABASE_URL || '')
@@ -57,11 +59,11 @@ export async function GET() {
 			orderCount: totalOrders,
 			paidOrderCount: paidOrders,
 			pendingOrderCount: pendingOrders,
-			accountingTransactionCount: totalTransactionCount,
-			restaurantScopedTransactionCount,
+			accountingTransactionCount: totalJournalEntryCount,
+			restaurantScopedTransactionCount: restaurantScopedJournalEntryCount,
 		},
 		lastOrder,
 		lastPaidOrder,
-		lastTransaction,
+		lastTransaction: lastJournalEntry,
 	})
 }

@@ -10,20 +10,24 @@ export async function GET() {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = await getRestaurantContextForUser(session.user.id)
-  const billingUserId = context?.billingUserId ?? session.user.id
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
 
-  if (!restaurantId || !branchId) return NextResponse.json([])
+  if (!restaurantId || !branchId) {
+    return NextResponse.json(
+      { error: 'No restaurant branch found for this account. Ask your administrator to check your account configuration.' },
+      { status: 400 },
+    )
+  }
 
   const dishes = await prisma.dish.findMany({
-    where: { userId: billingUserId, restaurantId, branchId },
+    where: { restaurantId, branchId, deletedAt: null },
     include: {
       ingredients: {
-        include: { ingredient: true }
-      }
+        include: { inventoryItem: true },
+      },
     },
-    orderBy: { createdAt: 'desc' }
+    orderBy: { createdAt: 'desc' },
   })
   return NextResponse.json(dishes)
 }
@@ -37,25 +41,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'No restaurant found for this account' }, { status: 400 })
   }
 
-  // Explicit branchId resolution — never silently insert a dish with a null
-  // branchId, as that makes it invisible to all waiter pull queries.
-  // If the user's context already carries a branchId, use it.
-  // Otherwise resolve the main branch explicitly and log the fallback so it is
-  // auditable in server logs.
-  let resolvedBranchId = context.branchId
+  let resolvedBranchId: string | null = context.branchId
   if (!resolvedBranchId) {
     console.warn('[dishes/POST] context.branchId is null for user %s (restaurant %s) — resolving to main branch',
       session.user.id, context.restaurantId)
     const mainBranch = await ensureMainBranchForRestaurant(context.restaurantId)
     resolvedBranchId = mainBranch?.id ?? null
-    if (resolvedBranchId) {
-      console.warn('[dishes/POST] resolved to main branch %s', resolvedBranchId)
-    }
   }
 
   if (!resolvedBranchId) {
-    // No branch exists at all — this restaurant is in a broken state.
-    console.error('[dishes/POST] no branch available for restaurant %s — refusing dish create', context.restaurantId)
     return NextResponse.json({ error: 'No branch configured for this restaurant. Contact support.' }, { status: 400 })
   }
 
@@ -66,13 +60,12 @@ export async function POST(req: Request) {
 
   const dish = await prisma.dish.create({
     data: {
-      userId: context.billingUserId,
       restaurantId: context.restaurantId,
       branchId: resolvedBranchId,
       name,
       sellingPrice: Number(sellingPrice),
       category: category || null,
-    }
+    },
   })
 
   await enqueueSyncChange(prisma, {

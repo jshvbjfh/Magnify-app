@@ -24,34 +24,23 @@ function buildDishSaleTransactionDescription(order: {
   return `DishSale: ${dishSummary} · ${formatOrderLocation(order.tableId, order.tableName)}`
 }
 
-function buildRestaurantOrderLookupWhere(params: { orderId: string; restaurantId: string; branchId: string }) {
-  return {
-    id: params.orderId,
-    restaurantId: params.restaurantId,
-    OR: [
-      { branchId: params.branchId },
-      { branchId: null },
-    ],
-  }
-}
-
 export async function finalizeRestaurantOrderPayment(
   db: PrismaDb,
   params: {
-    billingUserId: string
     restaurantId: string
     branchId: string
-    includeBranchlessRows: boolean
     sourceDeviceId?: string | null
     orderId: string
-    paidById: string
-    paidByName?: string | null
     paymentMethod?: string | null
     paidAt?: Date
   },
 ) {
   const currentOrder = await db.restaurantOrder.findFirst({
-    where: buildRestaurantOrderLookupWhere(params),
+    where: {
+      id: params.orderId,
+      restaurantId: params.restaurantId,
+      branchId: params.branchId,
+    },
     include: { items: { where: { status: 'ACTIVE' } } },
   })
 
@@ -62,24 +51,12 @@ export async function finalizeRestaurantOrderPayment(
   }
 
   if (currentOrder.status === 'PAID') {
-    if (!currentOrder.branchId) {
-      await db.restaurantOrder.update({
-        where: { id: params.orderId },
-        data: { branchId: params.branchId },
-      })
-    }
-
-    // Order is already PAID — but dish sales may have been missed (e.g. a prior
-    // transaction timed out after committing the status update).  Run the
-    // recording step; it has per-dish idempotency guards so double-recording
-    // is safe.
+    // Order is already PAID — backfill any missing dish sales (idempotent per-dish guard).
     console.log('[finalize] order already PAID — backfilling any missing dish sales, items:', currentOrder.items.length)
     if (currentOrder.items.length > 0) {
       await recordDishSalesForPaidOrder(db, {
-        billingUserId: params.billingUserId,
         restaurantId: params.restaurantId,
         branchId: params.branchId,
-        includeBranchlessRows: params.includeBranchlessRows,
         sourceDeviceId: params.sourceDeviceId,
         orderId: params.orderId,
         paymentMethod: params.paymentMethod || currentOrder.paymentMethod || 'Cash',
@@ -98,7 +75,6 @@ export async function finalizeRestaurantOrderPayment(
 
   const paidAt = params.paidAt ?? new Date()
   const normalizedPaymentMethod = params.paymentMethod || currentOrder.paymentMethod || 'Cash'
-  const paymentRecordedByName = currentOrder.createdByName.trim() || params.paidByName?.trim() || 'Staff'
   const transactionDescription = buildDishSaleTransactionDescription({
     items: currentOrder.items.map((item) => ({
       dishId: item.dishId,
@@ -111,39 +87,29 @@ export async function finalizeRestaurantOrderPayment(
 
   const paymentUpdate = await db.restaurantOrder.updateMany({
     where: {
-      ...buildRestaurantOrderLookupWhere(params),
+      id: params.orderId,
+      restaurantId: params.restaurantId,
+      branchId: params.branchId,
       status: 'PENDING',
     },
     data: {
-      branchId: params.branchId,
       status: 'PAID',
       paymentMethod: normalizedPaymentMethod,
       paidAt,
-      paidById: params.paidById,
-      paidByName: paymentRecordedByName,
       canceledAt: null,
-      canceledById: null,
-      canceledByName: null,
-      cancellationApprovedByEmployeeId: null,
-      cancellationApprovedByEmployeeName: null,
-      cancellationApprovedAt: null,
       cancelReason: null,
     },
   })
 
   if (paymentUpdate.count === 0) {
     return (await db.restaurantOrder.findFirst({
-      where: buildRestaurantOrderLookupWhere(params),
+      where: { id: params.orderId, restaurantId: params.restaurantId, branchId: params.branchId },
       include: { items: { where: { status: 'ACTIVE' } } },
     })) ?? currentOrder
   }
 
   const paidOrder = await db.restaurantOrder.findFirst({
-    where: {
-      id: params.orderId,
-      restaurantId: params.restaurantId,
-      branchId: params.branchId,
-    },
+    where: { id: params.orderId, restaurantId: params.restaurantId, branchId: params.branchId },
     include: { items: { where: { status: 'ACTIVE' } } },
   })
 
@@ -151,12 +117,9 @@ export async function finalizeRestaurantOrderPayment(
     throw new Error('Order not found after payment update')
   }
 
-  console.log('[finalize] calling recordDishSales billingUser:', params.billingUserId, 'items:', currentOrder.items.length)
   await recordDishSalesForPaidOrder(db, {
-    billingUserId: params.billingUserId,
     restaurantId: params.restaurantId,
     branchId: params.branchId,
-    includeBranchlessRows: params.includeBranchlessRows,
     sourceDeviceId: params.sourceDeviceId,
     orderId: params.orderId,
     paymentMethod: normalizedPaymentMethod,
@@ -173,7 +136,6 @@ export async function finalizeRestaurantOrderPayment(
   ).totalAmount
 
   await recordJournalEntry(db, {
-    userId: params.billingUserId,
     restaurantId: params.restaurantId,
     branchId: params.branchId,
     date: paidOrder.paidAt ?? paidAt,
@@ -183,11 +145,6 @@ export async function finalizeRestaurantOrderPayment(
     accountName: 'DishSale',
     categoryType: 'income',
     paymentMethod: normalizedPaymentMethod,
-    isManual: false,
-    sourceKind: 'dish_sale_mirror',
-    authoritativeForRevenue: false,
-    synced: true,
-    sourceDeviceId: params.sourceDeviceId,
   })
 
   if (currentOrder.tableId) {

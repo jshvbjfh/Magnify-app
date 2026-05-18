@@ -1,5 +1,5 @@
 {
   "framework": "nextjs",
   "installCommand": "npm install",
-  "buildCommand": "npm run build:vercel"
+  "buildCommand": "npm run prisma:postgres:migrate:deploy && npm run build:web"
 }

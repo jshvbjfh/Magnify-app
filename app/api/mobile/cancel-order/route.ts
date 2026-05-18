@@ -82,18 +82,13 @@ export async function POST(req: Request) {
       return jsonNoStore({ error: 'Paid orders cannot be canceled' }, { status: 409 })
     }
 
-    // Idempotent — if already canceled, return success with the recorded approver
+    // Idempotent — if already canceled, return success
     if (order.status === 'CANCELED') {
-      return jsonNoStore({
-        ok: true,
-        alreadyCanceled: true,
-        approvedBy: order.cancellationApprovedByEmployeeName ?? 'Supervisor',
-      })
+      return jsonNoStore({ ok: true, alreadyCanceled: true, approvedBy: 'Supervisor' })
     }
 
     // Validate PIN against all employees who can approve cancellations in this branch
     const approver = await resolveCancellationApprover({
-      billingUserId: context.billingUserId,
       restaurantId,
       branchId: effectiveBranchId,
       pin: supervisorPin,
@@ -112,31 +107,14 @@ export async function POST(req: Request) {
     //  2. prisma.restaurantOrder.findUnique inside enqueueOrderSync is
     //     guaranteed to read the committed CANCELED row (not a tx-local view).
     await prisma.$transaction(async (tx) => {
-      await tx.restaurantOrderItem.updateMany({
+      await tx.orderItem.updateMany({
         where: { orderId, status: 'ACTIVE' },
-        data: {
-          status:                                   'CANCELED',
-          canceledById:                             approver.id,
-          canceledByName:                           approver.name,
-          cancellationApprovedByEmployeeId:         approver.id,
-          cancellationApprovedByEmployeeName:       approver.name,
-          cancelReason:                             reason,
-          canceledAt:                               now,
-        },
+        data: { status: 'CANCELED', cancelReason: reason, canceledAt: now },
       })
 
       await tx.restaurantOrder.update({
         where: { id: orderId },
-        data: {
-          status:                                   'CANCELED',
-          canceledAt:                               now,
-          canceledById:                             approver.id,
-          canceledByName:                           approver.name,
-          cancellationApprovedByEmployeeId:         approver.id,
-          cancellationApprovedByEmployeeName:       approver.name,
-          cancellationApprovedAt:                   now,
-          cancelReason:                             reason,
-        },
+        data: { status: 'CANCELED', canceledAt: now, cancelReason: reason },
       })
     })
 

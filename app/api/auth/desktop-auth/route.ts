@@ -4,9 +4,9 @@ import { compare } from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
 import { findOwnedRestaurant } from '@/lib/restaurantAccess'
 
-async function resolveLinkedRestaurant(user: { id: string; role: string; restaurantId: string | null }) {
-  if (user.role === 'admin' || user.role === 'owner') {
-    const linkedRestaurant = await findOwnedRestaurant(user.id)
+async function resolveLinkedRestaurant(userId: string, role: string) {
+  if (role === 'admin' || role === 'owner') {
+    const linkedRestaurant = await findOwnedRestaurant(userId)
     if (linkedRestaurant) {
       return prisma.restaurant.findUnique({
         where: { id: linkedRestaurant.id },
@@ -14,18 +14,13 @@ async function resolveLinkedRestaurant(user: { id: string; role: string; restaur
           id: true,
           name: true,
           joinCode: true,
-          qrOrderingMode: true,
           licenseActive: true,
           licenseExpiry: true,
-          syncRestaurantId: true,
-          syncToken: true,
           owner: {
             select: {
               name: true,
               email: true,
               role: true,
-              businessType: true,
-              trackingMode: true,
               isActive: true,
             },
           },
@@ -34,31 +29,7 @@ async function resolveLinkedRestaurant(user: { id: string; role: string; restaur
     }
   }
 
-  if (!user.restaurantId) return null
-
-  return prisma.restaurant.findUnique({
-    where: { id: user.restaurantId },
-    select: {
-      id: true,
-      name: true,
-      joinCode: true,
-      qrOrderingMode: true,
-      licenseActive: true,
-      licenseExpiry: true,
-      syncRestaurantId: true,
-      syncToken: true,
-      owner: {
-        select: {
-          name: true,
-          email: true,
-          role: true,
-          businessType: true,
-          trackingMode: true,
-          isActive: true,
-        },
-      },
-    },
-  })
+  return null
 }
 
 export async function POST(request: NextRequest) {
@@ -84,11 +55,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'AccountInactive' }, { status: 403 })
   }
 
-  const restaurant = await resolveLinkedRestaurant({
-    id: user.id,
-    role: user.role,
-    restaurantId: user.restaurantId ?? null,
-  })
+  const restaurant = await resolveLinkedRestaurant(user.id, user.role)
 
   return NextResponse.json({
     user: {
@@ -96,29 +63,19 @@ export async function POST(request: NextRequest) {
       name: user.name,
       email: user.email,
       role: user.role,
-      businessType: user.businessType ?? 'restaurant',
-      trackingMode: (user as any).trackingMode ?? 'simple',
       isActive: user.isActive,
       isSuperAdmin: user.isSuperAdmin,
-      subscriptionPlan: user.subscriptionPlan,
-      subscriptionActivatedAt: user.subscriptionActivatedAt?.toISOString() ?? null,
-      subscriptionExpiry: user.subscriptionExpiry?.toISOString() ?? null,
     },
     restaurant: restaurant ? {
       id: restaurant.id,
       name: restaurant.name,
       joinCode: restaurant.joinCode,
-      qrOrderingMode: restaurant.qrOrderingMode,
       licenseActive: restaurant.licenseActive,
       licenseExpiry: restaurant.licenseExpiry?.toISOString() ?? null,
-      syncRestaurantId: restaurant.syncRestaurantId ?? null,
-      syncToken: restaurant.syncToken ?? null,
       owner: restaurant.owner ? {
         name: restaurant.owner.name,
         email: restaurant.owner.email,
         role: restaurant.owner.role,
-        businessType: restaurant.owner.businessType ?? 'restaurant',
-        trackingMode: restaurant.owner.trackingMode ?? 'simple',
         isActive: restaurant.owner.isActive,
       } : null,
     } : null,

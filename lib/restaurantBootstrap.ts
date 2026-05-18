@@ -24,29 +24,23 @@ export function isLocalFirstDesktopMode() {
 async function hasLocalRestaurantData(params: {
   restaurantId: string
   branchId: string | null
-  billingUserId: string
 }) {
-  const branchScopedWhere = {
-    userId: params.billingUserId,
-    restaurantId: params.restaurantId,
-    ...(params.branchId ? { branchId: params.branchId } : {}),
-  }
-  const restaurantScopedWhere = {
+  const scopeWhere = {
     restaurantId: params.restaurantId,
     ...(params.branchId ? { branchId: params.branchId } : {}),
   }
 
   const counts = await Promise.all([
-    prisma.transaction.count({ where: branchScopedWhere }),
-    prisma.dish.count({ where: branchScopedWhere }),
-    prisma.inventoryItem.count({ where: branchScopedWhere }),
-    prisma.employee.count({ where: branchScopedWhere }),
-    prisma.restaurantOrder.count({ where: restaurantScopedWhere }),
-    prisma.restaurantTable.count({ where: restaurantScopedWhere }),
-    prisma.dishSale.count({ where: branchScopedWhere }),
-    prisma.inventoryPurchase.count({ where: branchScopedWhere }),
-    prisma.wasteLog.count({ where: branchScopedWhere }),
-    prisma.shift.count({ where: branchScopedWhere }),
+    prisma.journalEntry.count({ where: scopeWhere }),
+    prisma.dish.count({ where: scopeWhere }),
+    prisma.inventoryItem.count({ where: scopeWhere }),
+    prisma.staff.count({ where: { restaurantId: params.restaurantId } }),
+    prisma.restaurantOrder.count({ where: scopeWhere }),
+    prisma.restaurantTable.count({ where: scopeWhere }),
+    prisma.dishSale.count({ where: scopeWhere }),
+    prisma.inventoryPurchase.count({ where: scopeWhere }),
+    prisma.wasteLog.count({ where: scopeWhere }),
+    prisma.employeeShift.count({ where: scopeWhere }),
   ])
 
   return counts.some((count) => count > 0)
@@ -81,26 +75,19 @@ export async function getRestaurantBootstrapStatus(userId: string): Promise<Rest
     }
   }
 
-  const [hasLocalData, syncState] = await Promise.all([
-    hasLocalRestaurantData({
-      restaurantId: context.restaurantId,
-      branchId: context.branchId,
-      billingUserId: context.billingUserId,
-    }),
-    prisma.restaurantSyncState.findUnique({
-      where: { restaurantId: context.restaurantId },
-      select: { lastSuccessAt: true, lastErrorMessage: true },
-    }),
-  ])
+  const hasLocalData = await hasLocalRestaurantData({
+    restaurantId: context.restaurantId,
+    branchId: context.branchId,
+  })
 
-  if (hasLocalData || syncState?.lastSuccessAt) {
+  if (hasLocalData) {
     return {
       ready: true,
       required: false,
       isLocalFirst,
       hasCloudBridge,
       hasLocalData,
-      lastSuccessfulSyncAt: syncState?.lastSuccessAt?.toISOString() ?? null,
+      lastSuccessfulSyncAt: null,
       message: null,
     }
   }
@@ -112,8 +99,6 @@ export async function getRestaurantBootstrapStatus(userId: string): Promise<Rest
     hasCloudBridge,
     hasLocalData: false,
     lastSuccessfulSyncAt: null,
-    message: syncState?.lastErrorMessage
-      ? `Unable to load restaurant data on this device yet. ${syncState.lastErrorMessage}`
-      : 'Unable to load restaurant data on this device yet. Connect to the internet and retry sync before continuing.',
+    message: 'Unable to load restaurant data on this device yet. Connect to the internet and retry sync before continuing.',
   }
 }

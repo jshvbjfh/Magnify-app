@@ -52,7 +52,6 @@ export async function previewRestaurantInventoryReconciliation(
 	const effectiveAt = resolveEffectiveAt(params.effectiveAt)
 	const ingredientIds = normalizeIngredientIds(params.ingredientIds)
 	const integrity = await getRestaurantInventoryIntegrity(db, {
-		billingUserId: params.billingUserId,
 		restaurantId: params.restaurantId,
 		branchId: params.branchId ?? null,
 	})
@@ -99,6 +98,8 @@ export async function applyRestaurantInventoryReconciliation(
 		throw new Error('applyRestaurantInventoryReconciliation requires branchId')
 	}
 
+	const branchId = params.branchId
+
 	const preview = await previewRestaurantInventoryReconciliation(db, params)
 	const effectiveAt = new Date(preview.effectiveAt)
 	const restaurant = await db.restaurant.findFirst({
@@ -112,31 +113,13 @@ export async function applyRestaurantInventoryReconciliation(
 		throw new Error('Restaurant not found for reconciliation.')
 	}
 
-	if (
-		restaurant.fifoCutoverAt &&
-		restaurant.fifoCutoverAt.toISOString() !== effectiveAt.toISOString()
-	) {
-		throw new Error(
-			`FIFO cutover is already recorded for ${restaurant.fifoCutoverAt.toISOString()}. Reconciliation apply expects the same effectiveAt once a branch has been cut over.`,
-		)
-	}
-
-	const updatedRestaurant = await db.restaurant.update({
-		where: { id: restaurant.id },
-		data: {
-			fifoEnabled: true,
-			fifoConfiguredAt: restaurant.fifoConfiguredAt ?? new Date(),
-			fifoCutoverAt: restaurant.fifoCutoverAt ?? effectiveAt,
-		},
-	})
-
 	await enqueueSyncChange(db, {
 		restaurantId: params.restaurantId,
-		branchId: params.branchId ?? null,
+		branchId,
 		entityType: 'restaurant',
-		entityId: updatedRestaurant.id,
+		entityId: restaurant.id,
 		operation: 'upsert',
-		payload: updatedRestaurant,
+		payload: restaurant,
 	})
 
 	const appliedActions: Array<ReconciliationAction & { adjustmentLogId: string; usageLedgerIds: string[] }> = []
@@ -147,10 +130,8 @@ export async function applyRestaurantInventoryReconciliation(
 			const unitCost = Number(action.unitCost ?? 0)
 			const purchase = await db.inventoryPurchase.create({
 				data: {
-					userId: params.billingUserId,
 					restaurantId: params.restaurantId,
-					branchId: params.branchId ?? null,
-					batchId: action.batchId,
+					branchId,
 					ingredientId: action.ingredientId,
 					supplier: 'FIFO Opening Balance Reconciliation',
 					quantityPurchased: quantityDelta,
@@ -163,22 +144,20 @@ export async function applyRestaurantInventoryReconciliation(
 
 			const adjustmentLog = await db.inventoryAdjustmentLog.create({
 				data: {
-					userId: params.billingUserId,
 					restaurantId: params.restaurantId,
-					branchId: params.branchId ?? null,
+					branchId,
 					ingredientId: action.ingredientId,
 					adjustmentType: 'opening_balance',
 					quantityDelta,
 					itemQuantityBefore: action.itemQuantity,
 					itemQuantityAfter: action.itemQuantity,
-					batchId: action.batchId,
 					reason: 'Layer reconciliation created a synthetic opening balance without changing the ingredient master quantity.',
 				},
 			})
 
 			await enqueueSyncChange(db, {
 				restaurantId: params.restaurantId,
-				branchId: params.branchId ?? null,
+				branchId,
 				entityType: 'inventoryPurchase',
 				entityId: purchase.id,
 				operation: 'upsert',
@@ -187,7 +166,7 @@ export async function applyRestaurantInventoryReconciliation(
 
 			await enqueueSyncChange(db, {
 				restaurantId: params.restaurantId,
-				branchId: params.branchId ?? null,
+				branchId,
 				entityType: 'inventoryAdjustmentLog',
 				entityId: adjustmentLog.id,
 				operation: 'upsert',
@@ -205,22 +184,20 @@ export async function applyRestaurantInventoryReconciliation(
 		let remainingToReduce = Math.abs(action.driftQuantity)
 		const adjustmentLog = await db.inventoryAdjustmentLog.create({
 			data: {
-				userId: params.billingUserId,
 				restaurantId: params.restaurantId,
-				branchId: params.branchId ?? null,
+				branchId,
 				ingredientId: action.ingredientId,
 				adjustmentType: 'correction',
 				quantityDelta: -remainingToReduce,
 				itemQuantityBefore: action.itemQuantity,
 				itemQuantityAfter: action.itemQuantity,
-				batchId: null,
 				reason: 'Layer reconciliation reduced open purchase layers oldest-first without changing the ingredient master quantity.',
 			},
 		})
 
 		await enqueueSyncChange(db, {
 			restaurantId: params.restaurantId,
-			branchId: params.branchId ?? null,
+			branchId,
 			entityType: 'inventoryAdjustmentLog',
 			entityId: adjustmentLog.id,
 			operation: 'upsert',
@@ -230,7 +207,6 @@ export async function applyRestaurantInventoryReconciliation(
 		const usageLedgerIds: string[] = []
 		const layers = await db.inventoryPurchase.findMany({
 			where: {
-				userId: params.billingUserId,
 				restaurantId: params.restaurantId,
 				...(params.branchId ? { branchId: params.branchId } : {}),
 				ingredientId: action.ingredientId,
@@ -257,14 +233,13 @@ export async function applyRestaurantInventoryReconciliation(
 
 			const usage = await db.inventoryBatchUsageLedger.create({
 				data: {
-					userId: params.billingUserId,
 					restaurantId: params.restaurantId,
-					branchId: params.branchId ?? null,
+					branchId,
 					purchaseId: layer.id,
 					ingredientId: action.ingredientId,
 					sourceType: 'adjustment',
 					sourceId: adjustmentLog.id,
-					batchId: layer.batchId ?? layer.id,
+					batchId: layer.id,
 					quantityConsumed,
 					unitCost: Number(layer.unitCost),
 					totalCost: roundQuantity(quantityConsumed * Number(layer.unitCost)),
@@ -275,7 +250,7 @@ export async function applyRestaurantInventoryReconciliation(
 
 			await enqueueSyncChange(db, {
 				restaurantId: params.restaurantId,
-				branchId: params.branchId ?? null,
+				branchId,
 				entityType: 'inventoryPurchase',
 				entityId: updatedLayer.id,
 				operation: 'upsert',
@@ -284,7 +259,7 @@ export async function applyRestaurantInventoryReconciliation(
 
 			await enqueueSyncChange(db, {
 				restaurantId: params.restaurantId,
-				branchId: params.branchId ?? null,
+				branchId,
 				entityType: 'inventoryBatchUsageLedger',
 				entityId: usage.id,
 				operation: 'upsert',
@@ -308,10 +283,7 @@ export async function applyRestaurantInventoryReconciliation(
 	return {
 		...preview,
 		restaurant: {
-			id: updatedRestaurant.id,
-			fifoEnabled: updatedRestaurant.fifoEnabled,
-			fifoConfiguredAt: updatedRestaurant.fifoConfiguredAt?.toISOString() ?? null,
-			fifoCutoverAt: updatedRestaurant.fifoCutoverAt?.toISOString() ?? null,
+			id: restaurant.id,
 		},
 		appliedAt: new Date().toISOString(),
 		appliedActions,

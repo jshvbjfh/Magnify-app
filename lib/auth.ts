@@ -1,60 +1,58 @@
 import type { NextAuthOptions } from 'next-auth'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { compare, hash } from 'bcryptjs'
-import { randomUUID } from 'crypto'
 import type { User } from '@prisma/client'
-import { isLocalFirstDesktopAuthBridgeEnabled, verifyCloudCredentials, type RemoteVerifiedRestaurant } from '@/lib/cloudAuthBridge'
+import {
+  isLocalFirstDesktopAuthBridgeEnabled,
+  verifyCloudCredentials,
+  type RemoteVerifiedRestaurant,
+} from '@/lib/cloudAuthBridge'
 import { prisma } from '@/lib/prisma'
-import { findOwnedRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import {
+  ensureMainBranchForRestaurant,
+  findOwnedRestaurant,
+  getRestaurantContextForUser,
+} from '@/lib/restaurantAccess'
 
 function isStaleJwtSessionError(metadata: unknown) {
   const error = (metadata as { error?: { name?: string; message?: string } } | undefined)?.error
   const name = String(error?.name ?? '')
   const message = String(error?.message ?? '').toLowerCase()
-
   return name === 'JWEDecryptionFailed' || message.includes('decryption operation failed')
 }
 
-async function ensureLocalRestaurantOwnerFromCloud(remoteRestaurant: RemoteVerifiedRestaurant, fallbackUser: {
-  id: string
-  email: string
-  name: string | null
-  role: string
-  businessType: string | null
-  trackingMode: string | null
-  isActive: boolean
-}) {
+// Ensure the restaurant owner exists locally when syncing from cloud.
+async function ensureLocalRestaurantOwnerFromCloud(
+  remoteRestaurant: RemoteVerifiedRestaurant,
+  fallbackUser: { id: string; email: string; name: string | null; role: string; isActive: boolean },
+) {
   const remoteOwner = remoteRestaurant.owner
   if (!remoteOwner) return fallbackUser.id
 
   const sameUser = remoteOwner.email.trim().toLowerCase() === fallbackUser.email.trim().toLowerCase()
   if (sameUser) return fallbackUser.id
 
-  const existing = await prisma.user.findUnique({ where: { email: remoteOwner.email.trim().toLowerCase() } })
+  const existing = await prisma.user.findUnique({
+    where: { email: remoteOwner.email.trim().toLowerCase() },
+  })
   if (existing) {
-    const updated = await prisma.user.update({
+    await prisma.user.update({
       where: { id: existing.id },
-      data: {
-        name: remoteOwner.name,
-        role: remoteOwner.role,
-        businessType: remoteOwner.businessType ?? 'restaurant',
-        trackingMode: remoteOwner.trackingMode === 'dish_tracking' ? 'dish_tracking' : 'simple',
-        isActive: remoteOwner.isActive,
-      },
-      select: { id: true },
+      data: { name: remoteOwner.name, role: remoteOwner.role, isActive: remoteOwner.isActive },
     })
-    return updated.id
+    return existing.id
   }
 
-  const placeholderPassword = await hash(`cloud-owner-stub:${remoteOwner.email}:${randomUUID()}`, 12)
+  const placeholderPassword = await hash(
+    `cloud-owner-stub:${remoteOwner.email}:${Math.random()}`,
+    12,
+  )
   const created = await prisma.user.create({
     data: {
       name: remoteOwner.name,
       email: remoteOwner.email.trim().toLowerCase(),
       password: placeholderPassword,
       role: remoteOwner.role,
-      businessType: remoteOwner.businessType ?? 'restaurant',
-      trackingMode: remoteOwner.trackingMode === 'dish_tracking' ? 'dish_tracking' : 'simple',
       isActive: remoteOwner.isActive,
     },
     select: { id: true },
@@ -62,86 +60,32 @@ async function ensureLocalRestaurantOwnerFromCloud(remoteRestaurant: RemoteVerif
   return created.id
 }
 
-async function attachLocalRestaurantFromCloud(user: {
-  id: string
-  email: string
-  name: string | null
-  role: string
-  businessType: string | null
-  trackingMode: string | null
-  isActive: boolean
-}, remoteRestaurant: RemoteVerifiedRestaurant) {
+async function attachLocalRestaurantFromCloud(
+  user: { id: string; email: string; name: string | null; role: string; isActive: boolean },
+  remoteRestaurant: RemoteVerifiedRestaurant,
+) {
   const ownerId = await ensureLocalRestaurantOwnerFromCloud(remoteRestaurant, user)
-  const existingBySyncId = remoteRestaurant.syncRestaurantId
-    ? await prisma.restaurant.findUnique({ where: { syncRestaurantId: remoteRestaurant.syncRestaurantId } })
-    : null
-  const linkedRestaurant = user.role === 'admin' || user.role === 'owner'
-    ? await findOwnedRestaurant(user.id)
-    : user.id
-      ? await prisma.restaurant.findUnique({ where: { id: (await prisma.user.findUnique({ where: { id: user.id }, select: { restaurantId: true } }))?.restaurantId ?? '' } }).catch(() => null)
-      : null
+  const existingRestaurant = await findOwnedRestaurant(ownerId)
 
-  // Step 3: if the cloud owner id differs from the logged-in user (e.g. admin linked
-  // to a restaurant owned by a different cloud user), findOwnedRestaurant(user.id)
-  // won't find it. Look up directly by ownerId to avoid creating a ghost restaurant.
-  const existingByOwnerId =
-    !existingBySyncId && !linkedRestaurant && ownerId !== user.id
-      ? await prisma.restaurant.findFirst({ where: { ownerId }, orderBy: { createdAt: 'asc' } })
-      : null
-
-  const baseTarget = existingBySyncId ?? linkedRestaurant ?? existingByOwnerId
-
-  function buildRestaurantUpdate(base: { id: string; name: string; joinCode: string; syncRestaurantId: string | null; syncToken: string | null }) {
-    return {
-      ownerId,
-      name: remoteRestaurant.name || base.name,
-      joinCode: remoteRestaurant.joinCode || base.joinCode,
-      qrOrderingMode: remoteRestaurant.qrOrderingMode === 'view_only'
-        ? 'view_only'
-        : remoteRestaurant.qrOrderingMode === 'disabled'
-          ? 'disabled'
-          : 'order',
-      licenseActive: remoteRestaurant.licenseActive,
-      licenseExpiry: remoteRestaurant.licenseExpiry ? new Date(remoteRestaurant.licenseExpiry) : null,
-      syncRestaurantId: remoteRestaurant.syncRestaurantId ?? base.syncRestaurantId,
-      syncToken: remoteRestaurant.syncToken ?? base.syncToken,
-    }
+  const restaurantData = {
+    ownerId,
+    name: remoteRestaurant.name || 'My Restaurant',
+    licenseActive: remoteRestaurant.licenseActive,
+    licenseExpiry: remoteRestaurant.licenseExpiry ? new Date(remoteRestaurant.licenseExpiry) : null,
   }
 
-  const restaurant = baseTarget
-    ? await prisma.restaurant.update({
-        where: { id: baseTarget.id },
-        data: buildRestaurantUpdate(baseTarget),
-      })
+  const restaurant = existingRestaurant
+    ? await prisma.restaurant.update({ where: { id: existingRestaurant.id }, data: restaurantData })
     : await prisma.restaurant.create({
         data: {
-          ownerId,
-          name: remoteRestaurant.name || 'My Restaurant',
-          joinCode: remoteRestaurant.joinCode || `SYNC${randomUUID().slice(0, 6).toUpperCase()}`,
-          qrOrderingMode: remoteRestaurant.qrOrderingMode === 'view_only'
-            ? 'view_only'
-            : remoteRestaurant.qrOrderingMode === 'disabled'
-              ? 'disabled'
-              : 'order',
-          licenseActive: remoteRestaurant.licenseActive,
-          licenseExpiry: remoteRestaurant.licenseExpiry ? new Date(remoteRestaurant.licenseExpiry) : null,
-          syncRestaurantId: remoteRestaurant.syncRestaurantId,
-          syncToken: remoteRestaurant.syncToken,
+          ...restaurantData,
+          joinCode:
+            remoteRestaurant.joinCode ||
+            `SYNC${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
         },
       })
 
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { restaurantId: restaurant.id },
-  })
-
-  if (ownerId !== user.id) {
-    await prisma.user.update({
-      where: { id: ownerId },
-      data: { restaurantId: restaurant.id },
-    }).catch(() => undefined)
-  }
-
+  await ensureMainBranchForRestaurant(restaurant.id)
   return restaurant
 }
 
@@ -150,10 +94,7 @@ async function syncLocalUserFromCloud(email: string, password: string) {
 
   const remote = await verifyCloudCredentials(email, password)
   if (remote.ok === false) {
-    if (remote.error === 'AccountInactive') {
-      throw new Error('AccountInactive')
-    }
-
+    if (remote.error === 'AccountInactive') throw new Error('AccountInactive')
     return null
   }
 
@@ -165,26 +106,15 @@ async function syncLocalUserFromCloud(email: string, password: string) {
       email: remote.user.email,
       password: hashedPassword,
       role: remote.user.role,
-      businessType: remote.user.businessType ?? 'restaurant',
-      trackingMode: remote.user.trackingMode === 'dish_tracking' ? 'dish_tracking' : 'simple',
       isActive: remote.user.isActive,
       isSuperAdmin: remote.user.isSuperAdmin,
-      subscriptionPlan: remote.user.subscriptionPlan,
-      subscriptionActivatedAt: remote.user.subscriptionActivatedAt ? new Date(remote.user.subscriptionActivatedAt) : null,
-      subscriptionExpiry: remote.user.subscriptionExpiry ? new Date(remote.user.subscriptionExpiry) : null,
-      restaurantId: null,
     },
     update: {
       name: remote.user.name,
       password: hashedPassword,
       role: remote.user.role,
-      businessType: remote.user.businessType ?? 'restaurant',
-      trackingMode: remote.user.trackingMode === 'dish_tracking' ? 'dish_tracking' : 'simple',
       isActive: remote.user.isActive,
       isSuperAdmin: remote.user.isSuperAdmin,
-      subscriptionPlan: remote.user.subscriptionPlan,
-      subscriptionActivatedAt: remote.user.subscriptionActivatedAt ? new Date(remote.user.subscriptionActivatedAt) : null,
-      subscriptionExpiry: remote.user.subscriptionExpiry ? new Date(remote.user.subscriptionExpiry) : null,
     },
   })
 
@@ -195,17 +125,18 @@ async function syncLocalUserFromCloud(email: string, password: string) {
   return prisma.user.findUnique({ where: { email } })
 }
 
-async function refreshLocalUserFromCloudAfterPasswordMatch(user: User, email: string, password: string): Promise<User> {
+async function refreshLocalUserFromCloudAfterPasswordMatch(
+  user: User,
+  email: string,
+  password: string,
+): Promise<User> {
   if (!isLocalFirstDesktopAuthBridgeEnabled()) return user
 
   try {
     const syncedUser = await syncLocalUserFromCloud(email, password)
     return syncedUser ?? user
   } catch (error) {
-    if (error instanceof Error && error.message === 'AccountInactive') {
-      throw error
-    }
-
+    if (error instanceof Error && error.message === 'AccountInactive') throw error
     return user
   }
 }
@@ -215,26 +146,17 @@ async function buildAuthorizedUser(user: {
   email: string
   name: string | null
   role: string
-  businessType: string | null
   isActive: boolean
   isSuperAdmin: boolean
-  trackingMode?: string | null
-  restaurantId?: string | null
-  branchId?: string | null
 }) {
   const context = await getRestaurantContextForUser(user.id)
-  const restaurantId = context?.restaurantId ?? (user as any).restaurantId ?? null
-  const branchId = context?.branchId ?? (user as any).branchId ?? null
-
   return {
     id: user.id,
     email: user.email,
     name: user.name,
     role: user.role,
-    businessType: user.businessType ?? 'general',
-    trackingMode: (user as any).trackingMode ?? 'simple',
-    restaurantId,
-    branchId,
+    restaurantId: context?.restaurantId ?? null,
+    branchId: context?.branchId ?? null,
     isActive: user.isActive,
     isSuperAdmin: user.isSuperAdmin,
   }
@@ -246,84 +168,70 @@ export const authOptions: NextAuthOptions = {
       name: 'Credentials',
       credentials: {
         email: { label: 'Email', type: 'email' },
-        password: { label: 'Password', type: 'password' }
+        password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
         const email = credentials?.email?.trim().toLowerCase()
         const password = credentials?.password
         if (!email || !password) return null
 
-    let user = await prisma.user.findUnique({ where: { email } })
-    if (user) {
-      const ok = await compare(password, user.password)
-      if (ok) {
-      user = await refreshLocalUserFromCloudAfterPasswordMatch(user, email, password)
-      if (!user.isActive && !user.isSuperAdmin) {
-        throw new Error('AccountInactive')
-      }
+        let user = await prisma.user.findUnique({ where: { email } })
+        if (user) {
+          const ok = await compare(password, user.password)
+          if (ok) {
+            user = await refreshLocalUserFromCloudAfterPasswordMatch(user, email, password)
+            if (!user.isActive && !user.isSuperAdmin) throw new Error('AccountInactive')
+            return buildAuthorizedUser(user)
+          }
+        }
 
-      return buildAuthorizedUser(user)
-      }
-    }
-
-    const syncedUser = await syncLocalUserFromCloud(email, password)
-    if (!syncedUser) return null
-    if (!syncedUser.isActive && !syncedUser.isSuperAdmin) {
-      throw new Error('AccountInactive')
-    }
-
-    return buildAuthorizedUser(syncedUser)
-      }
-    })
+        const syncedUser = await syncLocalUserFromCloud(email, password)
+        if (!syncedUser) return null
+        if (!syncedUser.isActive && !syncedUser.isSuperAdmin) throw new Error('AccountInactive')
+        return buildAuthorizedUser(syncedUser)
+      },
+    }),
   ],
   session: { strategy: 'jwt' as const },
   pages: { signIn: '/login' },
   logger: {
     error(code, metadata) {
-      // Old session cookies become undecryptable after NEXTAUTH_SECRET changes.
-      // Treat that state as signed out instead of filling the dev log with noise.
-      if (code === 'JWT_SESSION_ERROR' && isStaleJwtSessionError(metadata)) {
-        return
-      }
-
+      if (code === 'JWT_SESSION_ERROR' && isStaleJwtSessionError(metadata)) return
       console.error(`[next-auth][error][${code}]`, metadata)
     },
   },
   callbacks: {
     async jwt({ token, user, trigger, session }) {
       if (user) {
-		;(token as any).id = (user as any).id
-		;(token as any).role = (user as any).role
-		;(token as any).businessType = (user as any).businessType ?? 'general'
-		;(token as any).trackingMode = (user as any).trackingMode ?? 'simple'
-		;(token as any).restaurantId = (user as any).restaurantId ?? null
-    ;(token as any).branchId = (user as any).branchId ?? null
-		;(token as any).isActive = (user as any).isActive ?? true
-		;(token as any).isSuperAdmin = (user as any).isSuperAdmin ?? false
+        ;(token as any).id = (user as any).id
+        ;(token as any).role = (user as any).role
+        ;(token as any).restaurantId = (user as any).restaurantId ?? null
+        ;(token as any).branchId = (user as any).branchId ?? null
+        ;(token as any).isActive = (user as any).isActive ?? true
+        ;(token as any).isSuperAdmin = (user as any).isSuperAdmin ?? false
       }
 
-    if (trigger === 'update' && session) {
-    if (Object.prototype.hasOwnProperty.call(session, 'restaurantId')) {
-      ;(token as any).restaurantId = (session as any).restaurantId ?? null
-    }
-    if (Object.prototype.hasOwnProperty.call(session, 'branchId')) {
-      ;(token as any).branchId = (session as any).branchId ?? null
-    }
-    }
+      if (trigger === 'update' && session) {
+        if (Object.prototype.hasOwnProperty.call(session, 'restaurantId')) {
+          ;(token as any).restaurantId = (session as any).restaurantId ?? null
+        }
+        if (Object.prototype.hasOwnProperty.call(session, 'branchId')) {
+          ;(token as any).branchId = (session as any).branchId ?? null
+        }
+      }
+
       return token
     },
     async session({ session, token }) {
       if (session.user) {
-		;(session.user as any).id = (token as any).id
-		;(session.user as any).role = (token as any).role
-		;(session.user as any).businessType = (token as any).businessType ?? 'general'
-		;(session.user as any).trackingMode = (token as any).trackingMode ?? 'simple'
-		;(session.user as any).restaurantId = (token as any).restaurantId ?? null
-    ;(session.user as any).branchId = (token as any).branchId ?? null
-		;(session.user as any).isActive = (token as any).isActive ?? true
-		;(session.user as any).isSuperAdmin = (token as any).isSuperAdmin ?? false
+        ;(session.user as any).id = (token as any).id
+        ;(session.user as any).role = (token as any).role
+        ;(session.user as any).restaurantId = (token as any).restaurantId ?? null
+        ;(session.user as any).branchId = (token as any).branchId ?? null
+        ;(session.user as any).isActive = (token as any).isActive ?? true
+        ;(session.user as any).isSuperAdmin = (token as any).isSuperAdmin ?? false
       }
       return session
-    }
-  }
+    },
+  },
 }

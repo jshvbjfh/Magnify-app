@@ -3,7 +3,6 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 type PrismaDb = PrismaClient | Prisma.TransactionClient
 
 type InventoryIntegrityInput = {
-	billingUserId: string
 	restaurantId: string
 	branchId?: string | null
 }
@@ -31,10 +30,8 @@ export async function getRestaurantInventoryIntegrity(
 	const [items, layerGroups] = await Promise.all([
 		db.inventoryItem.findMany({
 			where: {
-				userId: params.billingUserId,
 				restaurantId: params.restaurantId,
 				...(params.branchId ? { branchId: params.branchId } : {}),
-				inventoryType: 'ingredient',
 			},
 			select: {
 				id: true,
@@ -48,12 +45,11 @@ export async function getRestaurantInventoryIntegrity(
 		db.inventoryPurchase.groupBy({
 			by: ['ingredientId'],
 			where: {
-				userId: params.billingUserId,
 				restaurantId: params.restaurantId,
 				...(params.branchId ? { branchId: params.branchId } : {}),
 			},
 			_sum: { remainingQuantity: true },
-			_count: { _all: true },
+			_count: { ingredientId: true },
 		}),
 	])
 
@@ -61,8 +57,8 @@ export async function getRestaurantInventoryIntegrity(
 		layerGroups.map((group) => [
 			group.ingredientId,
 			{
-				layerQuantity: Number(group._sum.remainingQuantity ?? 0),
-				openLayerCount: group._count._all,
+				layerQuantity: Number(group._sum?.remainingQuantity ?? 0),
+				openLayerCount: group._count?.ingredientId ?? 0,
 			},
 		])
 	)

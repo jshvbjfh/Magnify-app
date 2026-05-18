@@ -22,12 +22,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   const { id } = await params
-  const orderItem = await prisma.restaurantOrderItem.findFirst({
+  const orderItem = await prisma.orderItem.findFirst({
     where: { id, order: { restaurantId: context.restaurantId, branchId: context.branchId, status: 'PENDING' }, status: 'ACTIVE' },
   })
   if (!orderItem) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
 
-  const updated = await prisma.restaurantOrderItem.update({
+  const updated = await prisma.orderItem.update({
     where: { id },
     data: {
       kitchenStatus: status,

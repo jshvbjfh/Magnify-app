@@ -13,78 +13,73 @@ export async function GET() {
 		}
 
 		const context = await getRestaurantContextForUser(session.user.id)
-		const billingUserId = context?.billingUserId ?? session.user.id
-		const restaurantId = context?.restaurantId ?? null
-		const branchId = context?.branchId ?? null
-
-		// Fetch all sales transactions
-		const salesTxns = await prisma.transaction.findMany({
-			where: {
-				userId: billingUserId,
-				...(restaurantId ? { restaurantId } : {}),
-				...(branchId ? { branchId } : {}),
-				type: 'credit',
-				account: { name: { in: ['Sales Revenue', 'Restaurant Sales'] } }
-			},
-			include: { account: true },
-			orderBy: { date: 'desc' }
-		})
-
-		// Fetch all inventory items
-		const inventoryItems = await prisma.inventoryItem.findMany({
-			where: { userId: billingUserId, ...(restaurantId ? { restaurantId } : {}), ...(branchId ? { branchId } : {}) }
-		})
-
-		// ── 1. TOP SELLING PRODUCTS ──────────────────────────────────────────
-		const productMap: Record<string, { name: string; totalQty: number; totalRevenue: number; unit: string }> = {}
-
-		for (const txn of salesTxns) {
-			const match = (txn.description || '').match(/Sale:\s*(.+?)\s*\(([0-9.]+)\s*(.+?)\)/)
-			if (!match) continue
-			const name = match[1].trim()
-			const qty = parseFloat(match[2])
-			const unit = match[3].trim()
-			if (!productMap[name]) productMap[name] = { name, totalQty: 0, totalRevenue: 0, unit }
-			productMap[name].totalQty += qty
-			productMap[name].totalRevenue += Number(txn.amount)
+		if (!context?.restaurantId) {
+			return NextResponse.json({ topProducts: [], slowMoving: [], bestDays: [] })
 		}
 
+		const restaurantId = context.restaurantId
+		const branchId = context.branchId
+
+		const branchWhere = branchId ? { restaurantId, branchId } : { restaurantId }
+
+		const [dishSales, inventoryItems] = await Promise.all([
+			prisma.dishSale.findMany({
+				where: { ...branchWhere, deletedAt: null },
+				select: {
+					dishId: true,
+					dishName: true,
+					quantitySold: true,
+					totalSaleAmount: true,
+					paymentMethod: true,
+					saleDate: true,
+				},
+				orderBy: { saleDate: 'desc' },
+			}),
+			prisma.inventoryItem.findMany({
+				where: { ...branchWhere, deletedAt: null },
+				select: { id: true, name: true, unit: true, unitCost: true, quantity: true },
+			}),
+		])
+
+		// ── 1. TOP SELLING PRODUCTS ──────────────────────────────────────────
+		const productMap: Record<string, { name: string; totalQty: number; totalRevenue: number }> = {}
+		for (const sale of dishSales) {
+			if (!productMap[sale.dishId]) {
+				productMap[sale.dishId] = { name: sale.dishName, totalQty: 0, totalRevenue: 0 }
+			}
+			productMap[sale.dishId].totalQty += sale.quantitySold
+			productMap[sale.dishId].totalRevenue += sale.totalSaleAmount
+		}
 		const topProducts = Object.values(productMap)
 			.sort((a, b) => b.totalRevenue - a.totalRevenue)
 			.slice(0, 10)
 
 		// ── 2. SLOW-MOVING INVENTORY ─────────────────────────────────────────
-		const thirtyDaysAgo = new Date()
-		thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-
-		// Build map of last sale date per product
-		const lastSaleMap: Record<string, Date> = {}
-		for (const txn of salesTxns) {
-			const match = (txn.description || '').match(/Sale:\s*(.+?)\s*\(/)
-			if (!match) continue
-			const name = match[1].trim().toLowerCase()
-			if (!lastSaleMap[name] || txn.date > lastSaleMap[name]) {
-				lastSaleMap[name] = txn.date
+		const lastSaleByDishName: Record<string, Date> = {}
+		for (const sale of dishSales) {
+			const key = sale.dishName.toLowerCase()
+			if (!lastSaleByDishName[key] || sale.saleDate > lastSaleByDishName[key]) {
+				lastSaleByDishName[key] = sale.saleDate
 			}
 		}
 
 		const slowMoving = inventoryItems
-			.map((item: any) => {
-				const lastSale = lastSaleMap[item.name.toLowerCase()] || null
+			.map((item) => {
+				const lastSale = lastSaleByDishName[item.name.toLowerCase()] ?? null
 				const daysSinceLastSale = lastSale
 					? Math.floor((Date.now() - new Date(lastSale).getTime()) / (1000 * 60 * 60 * 24))
 					: null
 				return {
 					name: item.name,
 					unit: item.unit,
-					unitPrice: item.unitPrice,
+					unitCost: item.unitCost,
 					lastSale: lastSale ? new Date(lastSale).toISOString().split('T')[0] : null,
 					daysSinceLastSale,
-					neverSold: lastSale === null
+					neverSold: lastSale === null,
 				}
 			})
-			.filter((item: any) => item.neverSold || (item.daysSinceLastSale !== null && item.daysSinceLastSale > 30))
-			.sort((a: any, b: any) => {
+			.filter((item) => item.neverSold || (item.daysSinceLastSale !== null && item.daysSinceLastSale > 30))
+			.sort((a, b) => {
 				if (a.neverSold && !b.neverSold) return -1
 				if (!a.neverSold && b.neverSold) return 1
 				return (b.daysSinceLastSale ?? 0) - (a.daysSinceLastSale ?? 0)
@@ -93,17 +88,14 @@ export async function GET() {
 		// ── 3. BEST DAY TO SELL ───────────────────────────────────────────────
 		const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 		const dayMap: Record<number, { day: string; totalRevenue: number; salesCount: number }> = {}
-
 		for (let i = 0; i < 7; i++) {
 			dayMap[i] = { day: dayNames[i], totalRevenue: 0, salesCount: 0 }
 		}
-
-		for (const txn of salesTxns) {
-			const dow = new Date(txn.date).getDay()
-			dayMap[dow].totalRevenue += Number(txn.amount)
+		for (const sale of dishSales) {
+			const dow = new Date(sale.saleDate).getDay()
+			dayMap[dow].totalRevenue += sale.totalSaleAmount
 			dayMap[dow].salesCount += 1
 		}
-
 		const bestDays = Object.values(dayMap).sort((a, b) => b.totalRevenue - a.totalRevenue)
 
 		return NextResponse.json({ topProducts, slowMoving, bestDays })

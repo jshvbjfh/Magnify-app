@@ -30,7 +30,7 @@ export async function GET() {
     return NextResponse.json({ status: 'active', daysLeft, licenseExpiry: restaurant.licenseExpiry, trialDays: TRIAL_DAYS })
   }
 
-  const trialEnd = restaurant.trialStartAt.getTime() + TRIAL_DAYS * 86400000
+  const trialEnd = restaurant.createdAt.getTime() + TRIAL_DAYS * 86400000
   if (now.getTime() <= trialEnd) {
     const daysLeft = Math.ceil((trialEnd - now.getTime()) / 86400000)
     return NextResponse.json({ status: 'trial', daysLeft, trialDays: TRIAL_DAYS })

@@ -13,16 +13,11 @@ export async function GET() {
 
   const context = await getRestaurantContextForUser(session.user.id)
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
-  const billingUserId = context?.billingUserId ?? session.user.id
   const restaurantId = context.restaurantId
   const branchId = context.branchId
 
   const logs = await prisma.wasteLog.findMany({
-    where: {
-      userId: billingUserId,
-      restaurantId,
-      branchId,
-    },
+    where: { restaurantId, branchId },
     include: { ingredient: true },
     orderBy: { date: 'desc' }
   })
@@ -36,7 +31,6 @@ export async function POST(req: Request) {
 
     const context = await getRestaurantContextForUser(session.user.id)
     if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
-    const billingUserId = context?.billingUserId ?? session.user.id
     const restaurantId = context.restaurantId
     const branchId = context.branchId
 
@@ -56,13 +50,7 @@ export async function POST(req: Request) {
     }
 
     const ingredient = await prisma.inventoryItem.findFirst({
-      where: {
-        id: ingredientId,
-        userId: billingUserId,
-        inventoryType: 'ingredient',
-        restaurantId,
-        branchId,
-      },
+      where: { id: ingredientId, restaurantId, branchId },
       select: {
         id: true,
         name: true,
@@ -76,7 +64,6 @@ export async function POST(req: Request) {
     const logResult = await prisma.$transaction(async (tx) => {
       const createdLog = await tx.wasteLog.create({
         data: {
-          userId: billingUserId,
           restaurantId,
           branchId,
           ingredientId,
@@ -89,7 +76,6 @@ export async function POST(req: Request) {
       })
 
       const consumption = await consumeIngredientStock(tx, {
-        billingUserId,
         restaurantId,
         branchId,
         ingredientId,
@@ -103,7 +89,6 @@ export async function POST(req: Request) {
       })
 
       await recordJournalEntry(tx, {
-        userId: billingUserId,
         restaurantId,
         branchId,
         date: entryDate,
@@ -116,8 +101,6 @@ export async function POST(req: Request) {
         counterAccountName: 'Inventory',
         counterCategoryType: 'asset',
         counterAccountType: 'asset',
-        isManual: false,
-        sourceKind: 'inventory_waste',
       })
 
       const finalizedLog = await tx.wasteLog.update({

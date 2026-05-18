@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { hashCancellationPin, isValidCancellationPin } from '@/lib/cancelApproval'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
@@ -19,48 +18,24 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const updateData: Record<string, unknown> = {
     ...(data.name !== undefined && { name: data.name }),
     ...(data.role !== undefined && { role: data.role }),
-    ...(data.payType !== undefined && { payType: data.payType }),
-    ...(data.payRate !== undefined && { payRate: Number(data.payRate) }),
     ...(data.phone !== undefined && { phone: data.phone }),
     ...(data.isActive !== undefined && { isActive: data.isActive }),
   }
 
-  if (data.canApproveOrderCancellation !== undefined) {
-    const canApprove = Boolean(data.canApproveOrderCancellation)
-    updateData.canApproveOrderCancellation = canApprove
-    if (!canApprove) {
-      updateData.cancellationPinHash = null
-    }
-  }
-
-  if (data.cancellationPin !== undefined) {
-    const normalizedPin = String(data.cancellationPin || '').trim()
-    if (!normalizedPin) {
-      updateData.cancellationPinHash = null
-      updateData.canApproveOrderCancellation = false
-    } else {
-      if (!isValidCancellationPin(normalizedPin)) {
-        return NextResponse.json({ error: 'Cancellation PIN must be exactly 5 digits' }, { status: 400 })
-      }
-      updateData.cancellationPinHash = await hashCancellationPin(normalizedPin)
-      updateData.canApproveOrderCancellation = true
-    }
-  }
-
-  await prisma.employee.updateMany({
-    where: { id, userId: context.billingUserId, restaurantId: context.restaurantId, branchId: context.branchId },
+  await prisma.staff.updateMany({
+    where: { id, restaurantId: context.restaurantId },
     data: updateData,
   })
 
-  const employee = await prisma.employee.findFirst({ where: { id, userId: context.billingUserId, restaurantId: context.restaurantId, branchId: context.branchId } })
-  if (employee) {
+  const staff = await prisma.staff.findFirst({ where: { id, restaurantId: context.restaurantId } })
+  if (staff) {
     await enqueueSyncChange(prisma, {
       restaurantId: context.restaurantId,
       branchId: context.branchId,
-      entityType: 'employee',
-      entityId: employee.id,
+      entityType: 'staff',
+      entityId: staff.id,
       operation: 'upsert',
-      payload: employee,
+      payload: staff,
     })
   }
 
@@ -75,16 +50,15 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const { id } = await params
-  const employee = await prisma.employee.findFirst({ where: { id, userId: context.billingUserId, restaurantId: context.restaurantId, branchId: context.branchId } })
-  await prisma.employee.deleteMany({ where: { id, userId: context.billingUserId, restaurantId: context.restaurantId, branchId: context.branchId } })
+  await prisma.staff.deleteMany({ where: { id, restaurantId: context.restaurantId } })
 
   await enqueueSyncChange(prisma, {
     restaurantId: context.restaurantId,
     branchId: context.branchId,
-    entityType: 'employee',
+    entityType: 'staff',
     entityId: id,
     operation: 'delete',
-    payload: employee ? { id: employee.id } : { id },
+    payload: { id },
   })
 
   return NextResponse.json({ success: true })

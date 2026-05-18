@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getIngredientLayerSnapshotAsOf } from '@/lib/inventoryLayerSnapshot'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser, isMainRestaurantBranch } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { getDishSaleUsageBreakdown } from '@/lib/restaurantReportUsage'
 
 function roundQty(value: number) {
@@ -29,14 +29,11 @@ function addQtyCost(map: Map<string, QtyCost>, ingredientId: string, qty: number
   map.set(ingredientId, current)
 }
 
-// GET — theoretical inventory report
-// Returns: opening, purchases, theoretical usage, waste, theoretical closing, actual on hand, variance
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = await getRestaurantContextForUser(session.user.id)
-  const billingUserId = context?.billingUserId ?? session.user.id
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
   if (!restaurantId || !branchId) {
@@ -52,17 +49,9 @@ export async function GET(req: Request) {
         matchedCount: 0,
         varianceCount: 0,
       },
-      meta: {
-        fifoEnabled: false,
-        fifoCutoverAt: null,
-      },
+      meta: { fifoEnabled: true, fifoCutoverAt: null },
     })
   }
-
-  const includeBranchlessRows = await isMainRestaurantBranch(restaurantId, branchId)
-  const branchScopeWhere = includeBranchlessRows
-    ? { OR: [{ branchId }, { branchId: null }] }
-    : { branchId }
 
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
@@ -72,59 +61,30 @@ export async function GET(req: Request) {
   const endDate = to ? new Date(`${to}T23:59:59.999`) : null
   const effectiveEndDate = endDate ?? new Date()
 
-  const [ingredients, purchases, wasteLogs, layerSnapshot, dishSaleUsage, restaurant] = await Promise.all([
+  const [ingredients, purchases, wasteLogs, layerSnapshot, dishSaleUsage] = await Promise.all([
     prisma.inventoryItem.findMany({
-      where: {
-        userId: billingUserId,
-        inventoryType: 'ingredient',
-        ...(restaurantId ? { restaurantId } : {}),
-        ...branchScopeWhere,
-      },
-      select: { id: true, name: true, unit: true, quantity: true, unitCost: true, reorderLevel: true, createdAt: true, lastRestockedAt: true },
+      where: { restaurantId, branchId },
+      select: { id: true, name: true, unit: true, quantity: true, unitCost: true, reorderLevel: true, createdAt: true },
       orderBy: { name: 'asc' },
     }),
     prisma.inventoryPurchase.findMany({
       where: {
-        userId: billingUserId,
-        ...(restaurantId ? { restaurantId } : {}),
-        ...branchScopeWhere,
+        restaurantId,
+        branchId,
         ...(endDate ? { purchasedAt: { lte: endDate } } : {}),
       },
       select: { ingredientId: true, quantityPurchased: true, totalCost: true, purchasedAt: true },
     }),
     prisma.wasteLog.findMany({
       where: {
-        userId: billingUserId,
-        ...(restaurantId ? { restaurantId } : {}),
-        ...branchScopeWhere,
+        restaurantId,
+        branchId,
         ...(endDate ? { date: { lte: endDate } } : {}),
       },
       select: { ingredientId: true, quantityWasted: true, calculatedCost: true, date: true },
     }),
-
-    getIngredientLayerSnapshotAsOf(prisma, {
-      billingUserId,
-      restaurantId,
-      branchId,
-      includeBranchlessRows,
-      endDate: effectiveEndDate,
-    }),
-
-    getDishSaleUsageBreakdown(prisma, {
-      billingUserId,
-      restaurantId,
-      branchId,
-      includeBranchlessRows,
-      startDate,
-      endDate,
-    }),
-
-    restaurantId
-      ? prisma.restaurant.findUnique({
-          where: { id: restaurantId },
-          select: { fifoEnabled: true, fifoCutoverAt: true },
-        })
-      : Promise.resolve(null),
+    getIngredientLayerSnapshotAsOf(prisma, { restaurantId, branchId, endDate: effectiveEndDate }),
+    getDishSaleUsageBreakdown(prisma, { restaurantId, branchId, startDate, endDate }),
   ])
 
   const beforePurchases = new Map<string, QtyCost>()
@@ -165,7 +125,7 @@ export async function GET(req: Request) {
     if (!hasPurchaseHistory && (ingredient.unitCost ?? 0) > 0) {
       const inferredBaselineQty = roundQty(ingredient.quantity + beforeUsage.qty + periodUsage.qty + beforeWasteQty.qty + periodWasteQty.qty)
       const baselineCost = roundQty(inferredBaselineQty * (ingredient.unitCost ?? 0))
-      const baselineDate = ingredient.lastRestockedAt ?? ingredient.createdAt
+      const baselineDate = ingredient.createdAt
       if (isBeforeRange(baselineDate, startDate)) {
         beforePurchase = { qty: inferredBaselineQty, cost: baselineCost }
       } else if (isInRange(baselineDate, startDate, endDate)) {
@@ -245,9 +205,6 @@ export async function GET(req: Request) {
       totalActualStockValue: roundQty(totals.totalActualStockValue),
       totalVarianceCost: roundQty(totals.totalVarianceCost),
     },
-    meta: {
-      fifoEnabled: restaurant?.fifoEnabled ?? false,
-      fifoCutoverAt: restaurant?.fifoCutoverAt?.toISOString() ?? null,
-    },
+    meta: { fifoEnabled: true, fifoCutoverAt: null },
   })
 }

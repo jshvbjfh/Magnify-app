@@ -37,8 +37,6 @@ export function mapSyncConflictRecord(conflict: SyncConflictLog) {
     entityType: conflict.entityType,
     entityId: conflict.entityId,
     reason: conflict.reason,
-    localMutationId: conflict.localMutationId,
-    remoteMutationId: conflict.remoteMutationId,
     localChange: parseSyncConflictSide(conflict.localPayload),
     remoteChange: parseSyncConflictSide(conflict.remotePayload),
     createdAt: conflict.createdAt.toISOString(),
@@ -50,9 +48,7 @@ export function buildSyncChangeFromConflict(conflict: SyncConflictLog, side: 'lo
   if (!parsed) return null
 
   return {
-    mutationId: side === 'local'
-      ? conflict.localMutationId || `conflict-local-${conflict.id}`
-      : conflict.remoteMutationId || `conflict-remote-${conflict.id}`,
+    mutationId: `conflict-${side}-${conflict.id}`,
     scopeId: conflict.scopeId,
     restaurantId: conflict.restaurantId,
     branchId: conflict.branchId,

@@ -14,7 +14,9 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch' }, { status: 400 })
 
   const { id } = await params
-  const staffAccount = await prisma.user.findFirst({ where: { id, restaurantId: context.restaurantId } })
+  const staffAccount = await prisma.user.findFirst({
+    where: { id, restaurants: { some: { ownerId: id } } },
+  }) ?? await prisma.user.findFirst({ where: { id, role: { in: ['waiter', 'kitchen'] } } })
   if (!staffAccount) return NextResponse.json({ error: 'Staff account not found' }, { status: 404 })
 
   if (staffAccount.role === 'admin') {
@@ -23,10 +25,6 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
 
   if (!['waiter', 'kitchen', 'owner'].includes(staffAccount.role)) {
     return NextResponse.json({ error: 'Unsupported staff account role' }, { status: 403 })
-  }
-
-  if (staffAccount.role !== 'owner' && staffAccount.branchId !== context.branchId) {
-    return NextResponse.json({ error: 'Staff account not found' }, { status: 404 })
   }
 
   await prisma.user.delete({ where: { id } })

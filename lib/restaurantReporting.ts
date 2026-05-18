@@ -2,427 +2,432 @@ import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 type DateRange = {
-	start?: Date
-	end?: Date
+  start?: Date
+  end?: Date
 }
 
 type ReportingContext = NonNullable<Awaited<ReturnType<typeof getRestaurantContextForUser>>>
 
 type ExpenseTransaction = {
-	id: string
-	date: Date
-	amount: number
-	type: string
-	description: string
-	sourceKind: string | null
-	account: { name: string } | null
-	category: { name: string; type: string } | null
+  id: string
+  date: Date
+  amount: number
+  type: string
+  description: string
+  sourceKind: string | null
+  account: { name: string } | null
+  category: { name: string; type: string } | null
 }
 
 type SaleRow = {
-	id: string
-	saleDate: Date
-	dishId: string
-	quantitySold: number
-	totalSaleAmount: number
-	calculatedFoodCost: number
-	paymentMethod: string
-	dish: { name: string }
+  id: string
+  saleDate: Date
+  dishId: string
+  quantitySold: number
+  totalSaleAmount: number
+  calculatedFoodCost: number
+  paymentMethod: string
+  dish: { name: string }
 }
 
 type ShiftRow = {
-	id: string
-	date: Date
-	calculatedWage: number
+  id: string
+  date: Date
+  calculatedWage: number
 }
 
 type WasteRow = {
-	id: string
-	date: Date
-	calculatedCost: number
+  id: string
+  date: Date
+  calculatedCost: number
 }
 
 export type SalesProfitRow = {
-	id: string
-	date: string
-	itemName: string
-	quantity: number
-	unit: string
-	unitCost: number
-	unitPrice: number
-	revenue: number
-	cost: number
-	profit: number
-	profitMargin: string
+  id: string
+  date: string
+  itemName: string
+  quantity: number
+  unit: string
+  unitCost: number
+  unitPrice: number
+  revenue: number
+  cost: number
+  profit: number
+  profitMargin: string
 }
 
 export function isCashEquivalentAccountName(name?: string) {
-	const normalized = (name || '').trim().toLowerCase()
-	return normalized === 'cash'
-		|| normalized.includes('cash')
-		|| normalized === 'current account'
-		|| normalized.includes('bank')
-		|| normalized === 'mobile money'
-		|| normalized.includes('momo')
-}
-
-function isSupplementalIncomeTransaction(sourceKind?: string | null) {
-	return String(sourceKind || '').trim().toLowerCase() !== 'dish_sale_mirror'
+  const normalized = (name || '').trim().toLowerCase()
+  return normalized === 'cash'
+    || normalized.includes('cash')
+    || normalized === 'current account'
+    || normalized.includes('bank')
+    || normalized === 'mobile money'
+    || normalized.includes('momo')
 }
 
 export async function requireReportingContext(userId: string): Promise<ReportingContext> {
-	const context = await getRestaurantContextForUser(userId)
-	if (!context) {
-		throw new Error('User not found')
-	}
+  const context = await getRestaurantContextForUser(userId)
+  if (!context) {
+    throw new Error('User not found')
+  }
 
-	return context
+  if (!context.restaurantId) {
+    throw new Error(
+      'No restaurant is linked to this account. ' +
+      'Ask your administrator to ensure your account has a restaurant assigned.',
+    )
+  }
+
+  return context
 }
 
 export function buildRestaurantScopeCondition(restaurantId: string | null, fieldName = 'restaurantId') {
-	if (!restaurantId) {
-		return {}
-	}
+  if (!restaurantId) {
+    throw new Error(
+      'buildRestaurantScopeCondition called with null restaurantId — ' +
+      'this would produce an unscoped query across all restaurants. ' +
+      'Ensure requireReportingContext() is called first.',
+    )
+  }
 
-	return { [fieldName]: restaurantId }
+  return { [fieldName]: restaurantId }
 }
 
 export function buildBranchScopeCondition(branchId: string | null, fieldName = 'branchId') {
-	if (!branchId) {
-		return {}
-	}
-
-	return {
-		[fieldName]: branchId,
-	}
+  if (!branchId) return {}
+  return { [fieldName]: branchId }
 }
 
 export function buildDateRangeCondition(fieldName: string, range: DateRange) {
-	const condition: { gte?: Date; lte?: Date } = {}
-
-	if (range.start) {
-		condition.gte = range.start
-	}
-
-	if (range.end) {
-		condition.lte = range.end
-	}
-
-	if (!condition.gte && !condition.lte) {
-		return {}
-	}
-
-	return {
-		[fieldName]: condition,
-	}
+  const condition: { gte?: Date; lte?: Date } = {}
+  if (range.start) condition.gte = range.start
+  if (range.end) condition.lte = range.end
+  if (!condition.gte && !condition.lte) return {}
+  return { [fieldName]: condition }
 }
 
 function toDateKey(date: Date) {
-	// Africa/Kigali = UTC+2; prevents early-morning sales being pushed to the previous UTC day
-	return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(date)
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali' }).format(date)
 }
 
 function toMonthKey(date: Date) {
-	// Africa/Kigali = UTC+2
-	const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Kigali', year: 'numeric', month: '2-digit' }).formatToParts(date)
-	const year = parts.find(p => p.type === 'year')?.value ?? ''
-	const month = parts.find(p => p.type === 'month')?.value ?? ''
-	return `${year}-${month}`
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Kigali',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(date)
+  const year = parts.find((p) => p.type === 'year')?.value ?? ''
+  const month = parts.find((p) => p.type === 'month')?.value ?? ''
+  return `${year}-${month}`
 }
 
-function addSeriesEntry(map: Map<string, { revenue: number; expenses: number }>, key: string, revenue: number, expenses: number) {
-	const current = map.get(key) ?? { revenue: 0, expenses: 0 }
-	current.revenue += revenue
-	current.expenses += expenses
-	map.set(key, current)
+function addSeriesEntry(
+  map: Map<string, { revenue: number; expenses: number }>,
+  key: string,
+  revenue: number,
+  expenses: number,
+) {
+  const current = map.get(key) ?? { revenue: 0, expenses: 0 }
+  current.revenue += revenue
+  current.expenses += expenses
+  map.set(key, current)
 }
 
 function roundCurrency(value: number) {
-	return Math.round(value * 100) / 100
+  return Math.round(value * 100) / 100
+}
+
+function isAutoGeneratedExpenseDescription(description: string) {
+  const desc = description.trim().toLowerCase()
+  return (
+    desc.startsWith('waste:') ||
+    desc.startsWith('cogs') ||
+    desc.startsWith('dishsale:') ||
+    desc.startsWith('inventory adjustment') ||
+    desc.startsWith('inventory purchase')
+  )
+}
+
+function isDishSaleDescription(description: string) {
+  return description.trim().toLowerCase().startsWith('dishsale:')
 }
 
 export async function getOperationalReportMetrics(context: ReportingContext, range: DateRange = {}) {
-	const restaurantScope = buildRestaurantScopeCondition(context.restaurantId) as any
-	const branchScope = buildBranchScopeCondition(context.branchId) as any
-	const [sales, shifts, wasteLogs, expenseTransactions, incomeTransactions] = await Promise.all([
-		prisma.dishSale.findMany({
-			where: {
-				...restaurantScope,
-				...branchScope,
-				...buildDateRangeCondition('saleDate', range),
-			},
-			select: {
-				id: true,
-				saleDate: true,
-				dishId: true,
-				quantitySold: true,
-				totalSaleAmount: true,
-				calculatedFoodCost: true,
-				paymentMethod: true,
-				dish: { select: { name: true } },
-			},
-			orderBy: { saleDate: 'asc' },
-		}),
-		prisma.shift.findMany({
-			where: {
-				...restaurantScope,
-				...branchScope,
-				...buildDateRangeCondition('date', range),
-			},
-			select: { id: true, date: true, calculatedWage: true },
-			orderBy: { date: 'asc' },
-		}),
-		prisma.wasteLog.findMany({
-			where: {
-				...restaurantScope,
-				...branchScope,
-				...buildDateRangeCondition('date', range),
-			},
-			select: { id: true, date: true, calculatedCost: true },
-			orderBy: { date: 'asc' },
-		}),
-		prisma.transaction.findMany({
-			where: {
-				...restaurantScope,
-				...branchScope,
-				...buildDateRangeCondition('date', range),
-				category: { is: { type: 'expense' } },
-				NOT: [
-					{
-						description: {
-							startsWith: 'COGS - ',
-						},
-					},
-					{
-						sourceKind: {
-							in: ['inventory_purchase', 'ai_inventory_purchase', 'inventory_waste'],
-						},
-					},
-				],
-			},
-			select: {
-				id: true,
-				date: true,
-				amount: true,
-				type: true,
-				description: true,
-				sourceKind: true,
-				account: { select: { name: true } },
-				category: { select: { name: true, type: true } },
-			},
-			orderBy: { date: 'asc' },
-		}),
-		prisma.transaction.findMany({
-			where: {
-				...restaurantScope,
-				...branchScope,
-				...buildDateRangeCondition('date', range),
-				category: { is: { type: 'income' } },
-				NOT: [
-					{
-						sourceKind: 'dish_sale_mirror',
-					},
-				],
-			},
-			select: {
-				id: true,
-				date: true,
-				amount: true,
-				type: true,
-				description: true,
-				sourceKind: true,
-				account: { select: { name: true } },
-				category: { select: { name: true, type: true } },
-			},
-			orderBy: { date: 'asc' },
-		}),
-	])
+  const restaurantScope = buildRestaurantScopeCondition(context.restaurantId) as any
+  const branchScope = buildBranchScopeCondition(context.branchId) as any
 
-	const typedSales = sales as SaleRow[]
-	const typedShifts = shifts as ShiftRow[]
-	const typedWasteLogs = wasteLogs as WasteRow[]
-	const typedExpenseTransactions = expenseTransactions as ExpenseTransaction[]
-	const typedIncomeTransactions = incomeTransactions as ExpenseTransaction[]
+  const [sales, employeeShifts, wasteLogs, journalEntries] = await Promise.all([
+    prisma.dishSale.findMany({
+      where: {
+        ...restaurantScope,
+        ...branchScope,
+        ...buildDateRangeCondition('saleDate', range),
+      },
+      select: {
+        id: true,
+        saleDate: true,
+        dishId: true,
+        quantitySold: true,
+        totalSaleAmount: true,
+        calculatedFoodCost: true,
+        paymentMethod: true,
+        dish: { select: { name: true } },
+      },
+      orderBy: { saleDate: 'asc' },
+    }),
+    prisma.employeeShift.findMany({
+      where: {
+        ...restaurantScope,
+        ...branchScope,
+        ...buildDateRangeCondition('clockInAt', range),
+      },
+      select: { id: true, clockInAt: true },
+      orderBy: { clockInAt: 'asc' },
+    }),
+    prisma.wasteLog.findMany({
+      where: {
+        ...restaurantScope,
+        ...branchScope,
+        ...buildDateRangeCondition('date', range),
+      },
+      select: { id: true, date: true, calculatedCost: true },
+      orderBy: { date: 'asc' },
+    }),
+    prisma.journalEntry.findMany({
+      where: {
+        restaurantId: context.restaurantId!,
+        ...(context.branchId ? { branchId: context.branchId } : {}),
+        ...buildDateRangeCondition('entryDate', range),
+      },
+      include: {
+        lines: {
+          include: { account: { include: { category: true } } },
+        },
+      },
+      orderBy: { entryDate: 'asc' },
+    }),
+  ])
 
-	const supplementalRevenue = typedIncomeTransactions.reduce((sum, txn) => {
-		if (!isSupplementalIncomeTransaction(txn.sourceKind)) return sum
-		return sum + (txn.type === 'credit' ? txn.amount : -txn.amount)
-	}, 0)
-	const revenue = typedSales.reduce((sum, sale) => sum + sale.totalSaleAmount, 0) + supplementalRevenue
-	const cogs = typedSales.reduce((sum, sale) => sum + sale.calculatedFoodCost, 0)
-	const laborCost = typedShifts.reduce((sum, shift) => sum + shift.calculatedWage, 0)
-	const wasteCost = typedWasteLogs.reduce((sum, waste) => sum + waste.calculatedCost, 0)
-	const recordedExpenses = typedExpenseTransactions.reduce((sum, txn) => {
-		return sum + (txn.type === 'debit' ? txn.amount : -txn.amount)
-	}, 0)
-	const expenses = cogs + laborCost + recordedExpenses
-	const profit = revenue - expenses
+  // Map EmployeeShift → ShiftRow (no wage data in new schema — laborCost will be 0)
+  const typedShifts: ShiftRow[] = employeeShifts.map((s) => ({
+    id: s.id,
+    date: s.clockInAt,
+    calculatedWage: 0,
+  }))
 
-	const dailyMap = new Map<string, { revenue: number; expenses: number }>()
-	const monthlyMap = new Map<string, { revenue: number; expenses: number }>()
+  const typedSales = sales as SaleRow[]
+  const typedWasteLogs = wasteLogs as WasteRow[]
 
-	for (const sale of typedSales) {
-		const dayKey = toDateKey(sale.saleDate)
-		const monthKey = toMonthKey(sale.saleDate)
-		addSeriesEntry(dailyMap, dayKey, sale.totalSaleAmount, sale.calculatedFoodCost)
-		addSeriesEntry(monthlyMap, monthKey, sale.totalSaleAmount, sale.calculatedFoodCost)
-	}
+  // Derive ExpenseTransaction and income rows from JournalEntry
+  const typedExpenseTransactions: ExpenseTransaction[] = []
+  const typedIncomeTransactions: ExpenseTransaction[] = []
 
-	for (const txn of typedIncomeTransactions) {
-		if (!isSupplementalIncomeTransaction(txn.sourceKind)) continue
-		const signedAmount = txn.type === 'credit' ? txn.amount : -txn.amount
-		const dayKey = toDateKey(txn.date)
-		const monthKey = toMonthKey(txn.date)
-		addSeriesEntry(dailyMap, dayKey, signedAmount, 0)
-		addSeriesEntry(monthlyMap, monthKey, signedAmount, 0)
-	}
+  for (const entry of journalEntries) {
+    // Find the main debit line (expense entries: DR expense account; income entries: DR asset)
+    const expenseLine = entry.lines.find(
+      (l) => l.debit > 0 && l.account?.category?.type === 'expense',
+    )
+    const incomeLine = entry.lines.find(
+      (l) => l.credit > 0 && l.account?.category?.type === 'income',
+    )
 
-	for (const shift of typedShifts) {
-		const dayKey = toDateKey(shift.date)
-		const monthKey = toMonthKey(shift.date)
-		addSeriesEntry(dailyMap, dayKey, 0, shift.calculatedWage)
-		addSeriesEntry(monthlyMap, monthKey, 0, shift.calculatedWage)
-	}
+    if (expenseLine && !isAutoGeneratedExpenseDescription(entry.description ?? '')) {
+      typedExpenseTransactions.push({
+        id: entry.id,
+        date: entry.entryDate,
+        amount: expenseLine.debit,
+        type: 'debit',
+        description: entry.description ?? '',
+        sourceKind: null,
+        account: expenseLine.account ? { name: expenseLine.account.name } : null,
+        category: expenseLine.account?.category
+          ? { name: expenseLine.account.category.name, type: expenseLine.account.category.type }
+          : null,
+      })
+    }
 
-	for (const txn of typedExpenseTransactions) {
-		const signedAmount = txn.type === 'debit' ? txn.amount : -txn.amount
-		const dayKey = toDateKey(txn.date)
-		const monthKey = toMonthKey(txn.date)
-		addSeriesEntry(dailyMap, dayKey, 0, signedAmount)
-		addSeriesEntry(monthlyMap, monthKey, 0, signedAmount)
-	}
+    if (incomeLine && !isDishSaleDescription(entry.description ?? '')) {
+      typedIncomeTransactions.push({
+        id: entry.id,
+        date: entry.entryDate,
+        amount: incomeLine.credit,
+        type: 'credit',
+        description: entry.description ?? '',
+        sourceKind: null,
+        account: incomeLine.account ? { name: incomeLine.account.name } : null,
+        category: incomeLine.account?.category
+          ? { name: incomeLine.account.category.name, type: incomeLine.account.category.type }
+          : null,
+      })
+    }
+  }
 
-	const dailyHistory = Array.from(dailyMap.entries())
-		.map(([date, totals]) => ({
-			date,
-			revenue: roundCurrency(totals.revenue),
-			expenses: roundCurrency(totals.expenses),
-			profit: roundCurrency(totals.revenue - totals.expenses),
-		}))
-		.sort((a, b) => a.date.localeCompare(b.date))
+  const supplementalRevenue = typedIncomeTransactions.reduce((sum, txn) => sum + txn.amount, 0)
+  const revenue = typedSales.reduce((sum, sale) => sum + sale.totalSaleAmount, 0) + supplementalRevenue
+  const cogs = typedSales.reduce((sum, sale) => sum + sale.calculatedFoodCost, 0)
+  const laborCost = typedShifts.reduce((sum, shift) => sum + shift.calculatedWage, 0)
+  const wasteCost = typedWasteLogs.reduce((sum, waste) => sum + waste.calculatedCost, 0)
+  const recordedExpenses = typedExpenseTransactions.reduce((sum, txn) => sum + txn.amount, 0)
+  const expenses = cogs + laborCost + recordedExpenses
+  const profit = revenue - expenses
 
-	const monthlyHistory = Array.from(monthlyMap.entries())
-		.map(([month, totals]) => ({
-			month,
-			revenue: roundCurrency(totals.revenue),
-			expenses: roundCurrency(totals.expenses),
-			profit: roundCurrency(totals.revenue - totals.expenses),
-		}))
-		.sort((a, b) => a.month.localeCompare(b.month))
+  const dailyMap = new Map<string, { revenue: number; expenses: number }>()
+  const monthlyMap = new Map<string, { revenue: number; expenses: number }>()
 
-	const salesWithProfit: SalesProfitRow[] = typedSales
-		.slice()
-		.sort((a, b) => b.saleDate.getTime() - a.saleDate.getTime())
-		.map((sale) => {
-			const revenueAmount = sale.totalSaleAmount
-			const costAmount = sale.calculatedFoodCost
-			const quantity = sale.quantitySold || 0
-			const unitCost = quantity > 0 ? costAmount / quantity : 0
-			const unitPrice = quantity > 0 ? revenueAmount / quantity : 0
-			const profitAmount = revenueAmount - costAmount
-			const profitMargin = revenueAmount > 0 ? ((profitAmount / revenueAmount) * 100).toFixed(1) : '0.0'
+  for (const sale of typedSales) {
+    const dayKey = toDateKey(sale.saleDate)
+    const monthKey = toMonthKey(sale.saleDate)
+    addSeriesEntry(dailyMap, dayKey, sale.totalSaleAmount, sale.calculatedFoodCost)
+    addSeriesEntry(monthlyMap, monthKey, sale.totalSaleAmount, sale.calculatedFoodCost)
+  }
 
-			return {
-				id: sale.id,
-				date: sale.saleDate.toISOString(),
-				itemName: sale.dish.name,
-				quantity,
-				unit: 'dish',
-				unitCost: roundCurrency(unitCost),
-				unitPrice: roundCurrency(unitPrice),
-				revenue: roundCurrency(revenueAmount),
-				cost: roundCurrency(costAmount),
-				profit: roundCurrency(profitAmount),
-				profitMargin,
-			}
-		})
+  for (const txn of typedIncomeTransactions) {
+    const dayKey = toDateKey(txn.date)
+    const monthKey = toMonthKey(txn.date)
+    addSeriesEntry(dailyMap, dayKey, txn.amount, 0)
+    addSeriesEntry(monthlyMap, monthKey, txn.amount, 0)
+  }
 
-	const recordedExpenseAccounts = typedExpenseTransactions.reduce<Record<string, number>>((acc, txn) => {
-		const signedAmount = txn.type === 'debit' ? txn.amount : -txn.amount
-		const accountName = txn.account?.name || txn.category?.name || 'Recorded Expense'
-		acc[accountName] = (acc[accountName] || 0) + signedAmount
-		return acc
-	}, {})
+  for (const txn of typedExpenseTransactions) {
+    const dayKey = toDateKey(txn.date)
+    const monthKey = toMonthKey(txn.date)
+    addSeriesEntry(dailyMap, dayKey, 0, txn.amount)
+    addSeriesEntry(monthlyMap, monthKey, 0, txn.amount)
+  }
 
-	return {
-		context,
-		sales: typedSales,
-		shifts: typedShifts,
-		wasteLogs: typedWasteLogs,
-		expenseTransactions: typedExpenseTransactions,
-		summary: {
-			revenue: roundCurrency(revenue),
-			cogs: roundCurrency(cogs),
-			laborCost: roundCurrency(laborCost),
-			wasteCost: roundCurrency(wasteCost),
-			recordedExpenses: roundCurrency(recordedExpenses),
-			recordedExpenseAccounts: Object.fromEntries(
-				Object.entries(recordedExpenseAccounts)
-					.map(([name, amount]) => [name, roundCurrency(amount)])
-					.filter(([, amount]) => amount !== 0)
-			),
-			expenses: roundCurrency(expenses),
-			profit: roundCurrency(profit),
-			salesCount: typedSales.length,
-		},
-		dailyHistory,
-		monthlyHistory,
-		salesWithProfit,
-	}
+  const dailyHistory = Array.from(dailyMap.entries())
+    .map(([date, totals]) => ({
+      date,
+      revenue: roundCurrency(totals.revenue),
+      expenses: roundCurrency(totals.expenses),
+      profit: roundCurrency(totals.revenue - totals.expenses),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  const monthlyHistory = Array.from(monthlyMap.entries())
+    .map(([month, totals]) => ({
+      month,
+      revenue: roundCurrency(totals.revenue),
+      expenses: roundCurrency(totals.expenses),
+      profit: roundCurrency(totals.revenue - totals.expenses),
+    }))
+    .sort((a, b) => a.month.localeCompare(b.month))
+
+  const salesWithProfit: SalesProfitRow[] = typedSales
+    .slice()
+    .sort((a, b) => b.saleDate.getTime() - a.saleDate.getTime())
+    .map((sale) => {
+      const revenueAmount = sale.totalSaleAmount
+      const costAmount = sale.calculatedFoodCost
+      const quantity = sale.quantitySold || 0
+      const unitCost = quantity > 0 ? costAmount / quantity : 0
+      const unitPrice = quantity > 0 ? revenueAmount / quantity : 0
+      const profitAmount = revenueAmount - costAmount
+      const profitMargin = revenueAmount > 0 ? ((profitAmount / revenueAmount) * 100).toFixed(1) : '0.0'
+
+      return {
+        id: sale.id,
+        date: sale.saleDate.toISOString(),
+        itemName: sale.dish.name,
+        quantity,
+        unit: 'dish',
+        unitCost: roundCurrency(unitCost),
+        unitPrice: roundCurrency(unitPrice),
+        revenue: roundCurrency(revenueAmount),
+        cost: roundCurrency(costAmount),
+        profit: roundCurrency(profitAmount),
+        profitMargin,
+      }
+    })
+
+  const recordedExpenseAccounts = typedExpenseTransactions.reduce<Record<string, number>>((acc, txn) => {
+    const accountName = txn.account?.name || txn.category?.name || 'Recorded Expense'
+    acc[accountName] = (acc[accountName] || 0) + txn.amount
+    return acc
+  }, {})
+
+  return {
+    context,
+    sales: typedSales,
+    shifts: typedShifts,
+    wasteLogs: typedWasteLogs,
+    expenseTransactions: typedExpenseTransactions,
+    summary: {
+      revenue: roundCurrency(revenue),
+      cogs: roundCurrency(cogs),
+      laborCost: roundCurrency(laborCost),
+      wasteCost: roundCurrency(wasteCost),
+      recordedExpenses: roundCurrency(recordedExpenses),
+      recordedExpenseAccounts: Object.fromEntries(
+        Object.entries(recordedExpenseAccounts)
+          .map(([name, amount]) => [name, roundCurrency(amount)])
+          .filter(([, amount]) => amount !== 0)
+      ),
+      expenses: roundCurrency(expenses),
+      profit: roundCurrency(profit),
+      salesCount: typedSales.length,
+    },
+    dailyHistory,
+    monthlyHistory,
+    salesWithProfit,
+  }
 }
 
 export function buildOperationalIncomeStatement(metrics: Awaited<ReturnType<typeof getOperationalReportMetrics>>) {
-	const expenseAccounts: Record<string, number> = {}
+  const expenseAccounts: Record<string, number> = {}
 
-	if (metrics.summary.cogs !== 0) {
-		expenseAccounts['Food Cost'] = metrics.summary.cogs
-	}
+  if (metrics.summary.cogs !== 0) {
+    expenseAccounts['Food Cost'] = metrics.summary.cogs
+  }
 
-	if (metrics.summary.laborCost !== 0) {
-		expenseAccounts['Labor Cost'] = metrics.summary.laborCost
-	}
+  if (metrics.summary.laborCost !== 0) {
+    expenseAccounts['Labor Cost'] = metrics.summary.laborCost
+  }
 
-	for (const [name, amount] of Object.entries(metrics.summary.recordedExpenseAccounts)) {
-		const numericAmount = Number(amount)
-		if (numericAmount !== 0) {
-			expenseAccounts[name] = numericAmount
-		}
-	}
+  for (const [name, amount] of Object.entries(metrics.summary.recordedExpenseAccounts)) {
+    const numericAmount = Number(amount)
+    if (numericAmount !== 0) {
+      expenseAccounts[name] = numericAmount
+    }
+  }
 
-	return {
-		income: {
-			total: metrics.summary.revenue,
-			accounts: metrics.summary.revenue === 0 ? {} as Record<string, number> : { 'Restaurant Sales': metrics.summary.revenue },
-		},
-		expenses: {
-			total: metrics.summary.expenses,
-			accounts: expenseAccounts,
-		},
-		netProfit: metrics.summary.profit,
-	}
+  return {
+    income: {
+      total: metrics.summary.revenue,
+      accounts: metrics.summary.revenue === 0 ? {} as Record<string, number> : { 'Restaurant Sales': metrics.summary.revenue },
+    },
+    expenses: {
+      total: metrics.summary.expenses,
+      accounts: expenseAccounts,
+    },
+    netProfit: metrics.summary.profit,
+  }
 }
 
 export async function getScopedCashBalance(context: ReportingContext, endDate?: Date) {
-	const restaurantScope = buildRestaurantScopeCondition(context.restaurantId) as any
-	const branchScope = buildBranchScopeCondition(context.branchId) as any
-	const transactions = await prisma.transaction.findMany({
-		where: {
-			...restaurantScope,
-			...branchScope,
-			...buildDateRangeCondition('date', { end: endDate }),
-		},
-		select: {
-			amount: true,
-			type: true,
-			account: { select: { name: true } },
-		},
-	})
+  const journalLines = await prisma.journalLine.findMany({
+    where: {
+      journalEntry: {
+        restaurantId: context.restaurantId!,
+        ...(context.branchId ? { branchId: context.branchId } : {}),
+        ...(endDate ? { entryDate: { lte: endDate } } : {}),
+      },
+      account: {
+        category: { type: { in: ['asset'] } },
+      },
+    },
+    select: {
+      debit: true,
+      credit: true,
+      account: { select: { name: true } },
+    },
+  })
 
-	return roundCurrency(transactions.reduce((total, txn) => {
-		if (!isCashEquivalentAccountName(txn.account?.name)) {
-			return total
-		}
-
-		return total + (txn.type === 'debit' ? txn.amount : -txn.amount)
-	}, 0))
+  return roundCurrency(
+    journalLines.reduce((total, line) => {
+      if (!isCashEquivalentAccountName(line.account?.name)) return total
+      return total + line.debit - line.credit
+    }, 0),
+  )
 }

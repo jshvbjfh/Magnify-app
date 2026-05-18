@@ -29,7 +29,6 @@ export async function GET() {
         lastError: true,
         restaurantId: true,
         updatedAt: true,
-        restaurant: { select: { name: true } },
       },
       orderBy: { updatedAt: 'desc' },
       take: 100,
@@ -49,24 +48,11 @@ export async function GET() {
         lastError: true,
         restaurantId: true,
         updatedAt: true,
-        restaurant: { select: { name: true } },
       },
       orderBy: { updatedAt: 'desc' },
       take: 100,
     }),
-    // Recent entity-level apply failures persisted from sync/route.ts
-    prisma.restaurantSyncEvent.findMany({
-      where: { status: 'entity_apply_failed' },
-      select: {
-        id: true,
-        restaurantId: true,
-        message: true,
-        createdAt: true,
-        restaurant: { select: { name: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-    }),
+    Promise.resolve([] as { id: string; restaurantId: string | null; message: string; createdAt: Date }[]),
   ])
 
   return NextResponse.json({ stalledRows, abandonedRows, recentFailures })

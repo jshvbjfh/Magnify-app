@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
-// PATCH: Update inventory item (quantity or other fields)
 export async function PATCH(
 	request: NextRequest,
 	{ params }: { params: Promise<{ id: string }> }
@@ -14,45 +14,40 @@ export async function PATCH(
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
+		const context = await getRestaurantContextForUser(session.user.id)
+		if (!context?.restaurantId || !context.branchId) {
+			return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+		}
+
 		const { id } = await params
 		const body = await request.json()
-		const { quantity, itemName, unit, pricePerUnit, category, reorderLevel } = body
+		const { quantity, name, unit, unitCost, category, reorderLevel } = body
 
-		// Get current item
-		const currentItem = await prisma.inventoryItem.findUnique({
-			where: { id, userId: session.user.id }
+		const currentItem = await prisma.inventoryItem.findFirst({
+			where: { id, restaurantId: context.restaurantId, branchId: context.branchId },
 		})
 
 		if (!currentItem) {
 			return NextResponse.json({ error: 'Item not found' }, { status: 404 })
 		}
 
-		// Prepare update data
-		const updateData: any = {}
+		const updateData: Record<string, unknown> = {}
 
-		// Handle quantity update (can be incremental)
 		if (quantity !== undefined) {
-			const qtyChange = parseFloat(quantity)
-			updateData.quantity = currentItem.quantity + qtyChange
+			updateData.quantity = currentItem.quantity + parseFloat(quantity)
 		}
-
-		// Handle other field updates
-		if (itemName !== undefined) updateData.itemName = itemName
+		if (name !== undefined) updateData.name = name
 		if (unit !== undefined) updateData.unit = unit
-		if (pricePerUnit !== undefined) updateData.pricePerUnit = parseFloat(pricePerUnit)
+		if (unitCost !== undefined) updateData.unitCost = parseFloat(unitCost)
 		if (category !== undefined) updateData.category = category
 		if (reorderLevel !== undefined) updateData.reorderLevel = parseFloat(reorderLevel)
 
-		// Update the item
 		const updatedItem = await prisma.inventoryItem.update({
 			where: { id },
-			data: updateData
+			data: updateData,
 		})
 
-		return NextResponse.json({
-			success: true,
-			item: updatedItem
-		})
+		return NextResponse.json({ success: true, item: updatedItem })
 	} catch (error: any) {
 		console.error('Inventory update error:', error)
 		return NextResponse.json(
@@ -62,7 +57,6 @@ export async function PATCH(
 	}
 }
 
-// DELETE: Remove inventory item
 export async function DELETE(
 	request: NextRequest,
 	{ params }: { params: Promise<{ id: string }> }
@@ -73,20 +67,22 @@ export async function DELETE(
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
+		const context = await getRestaurantContextForUser(session.user.id)
+		if (!context?.restaurantId || !context.branchId) {
+			return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+		}
+
 		const { id } = await params
-		// Verify ownership
-		const item = await prisma.inventoryItem.findUnique({
-			where: { id, userId: session.user.id }
+
+		const item = await prisma.inventoryItem.findFirst({
+			where: { id, restaurantId: context.restaurantId, branchId: context.branchId },
 		})
 
 		if (!item) {
 			return NextResponse.json({ error: 'Item not found' }, { status: 404 })
 		}
 
-		// Delete the item
-		await prisma.inventoryItem.delete({
-			where: { id }
-		})
+		await prisma.inventoryItem.delete({ where: { id } })
 
 		return NextResponse.json({ success: true })
 	} catch (error: any) {

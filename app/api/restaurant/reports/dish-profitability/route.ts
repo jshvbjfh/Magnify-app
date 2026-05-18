@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser, isMainRestaurantBranch } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { getRestaurantOrderDisplayStatus } from '@/lib/restaurantOrders'
 
 function parseDateParam(value: string | null, endOfDay = false) {
@@ -20,18 +20,11 @@ export async function GET(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = await getRestaurantContextForUser(session.user.id)
-  const billingUserId = context?.billingUserId ?? session.user.id
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
   if (!restaurantId || !branchId) {
     return NextResponse.json({ rows: [], dishes: [], orders: [], totals: { qtySold: 0, totalQtySold: 0, totalRevenue: 0, totalCost: 0, totalPrice: 0, totalProfit: 0, avgMargin: 0 } })
   }
-
-  const includeBranchlessRows = await isMainRestaurantBranch(restaurantId, branchId)
-  const branchScopeWhere = includeBranchlessRows
-    ? { OR: [{ branchId }, { branchId: null }] }
-    : { branchId }
-  const dishBranchScopeWhere = { branchId }
 
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
@@ -42,7 +35,7 @@ export async function GET(req: Request) {
   const orders = await prisma.restaurantOrder.findMany({
     where: {
       restaurantId,
-      ...branchScopeWhere,
+      branchId,
       status: 'PAID',
       ...(fromDate || toDate
         ? {
@@ -70,10 +63,9 @@ export async function GET(req: Request) {
     orderIds.length > 0
       ? prisma.dishSale.findMany({
           where: {
-            userId: billingUserId,
             orderId: { in: orderIds },
-            ...(restaurantId ? { restaurantId } : {}),
-            ...branchScopeWhere,
+            restaurantId,
+            branchId,
           },
           select: {
             orderId: true,
@@ -86,14 +78,13 @@ export async function GET(req: Request) {
       ? prisma.dish.findMany({
           where: {
             id: { in: dishIds },
-            userId: billingUserId,
-            ...(restaurantId ? { restaurantId } : {}),
-            ...dishBranchScopeWhere,
+            restaurantId,
+            branchId,
           },
           include: {
             ingredients: {
               include: {
-                ingredient: {
+                inventoryItem: {
                   select: { unitCost: true },
                 },
               },
@@ -116,7 +107,7 @@ export async function GET(req: Request) {
     dishes.map((dish) => [
       dish.id,
       dish.ingredients.reduce((sum, ingredientRow) => (
-        sum + (Number(ingredientRow.quantityRequired ?? 0) * Number(ingredientRow.ingredient.unitCost ?? 0))
+        sum + (Number(ingredientRow.quantityRequired ?? 0) * Number(ingredientRow.inventoryItem.unitCost ?? 0))
       ), 0),
     ])
   )

@@ -72,15 +72,22 @@ export async function GET(req: Request) {
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
 
-  if (!restaurantId || !branchId) return NextResponse.json([], { status: 200 })
+  if (!restaurantId || !branchId) {
+    return NextResponse.json(
+      { error: 'No restaurant branch found for this account. Ask your administrator to check your account configuration.' },
+      { status: 400 },
+    )
+  }
 
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
   const to = searchParams.get('to')
 
+  // F2-1: Removed redundant `userId: billingUserId` filter.
+  // restaurantId + branchId is the correct scope. The userId filter could
+  // silently exclude synced dish sales created under a different billing user.
   const sales = await prisma.dishSale.findMany({
     where: {
-      userId: billingUserId,
       restaurantId,
       branchId,
       ...(from && to && { saleDate: { gte: new Date(from), lte: new Date(to) } }),

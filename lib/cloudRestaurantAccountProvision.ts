@@ -3,8 +3,8 @@ import { normalizeTargetUrl } from '@/lib/minimalSync'
 
 type ProvisionedRestaurantSummary = {
   name: string
-  syncRestaurantId: string | null
-  syncToken: string | null
+  syncRestaurantId?: string | null
+  syncToken?: string | null
 }
 
 function pickFirstNonEmpty(...values: Array<string | null | undefined>) {

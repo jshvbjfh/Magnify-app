@@ -7,6 +7,18 @@ import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { getSyncDeviceId, GLOBAL_SYNC_SCOPE_ID, SYNC_OUTBOX_MAX_ATTEMPTS } from '@/lib/syncOutbox'
 
+type DeviceEntry = {
+  deviceId: string
+  appVersion: string
+  status: string
+  lastSeenAt: string | null
+  pendingOutboxChanges: number
+  readyOutboxChanges: number
+  stalledOutboxChanges: number
+  nextRetryAt: string | null
+  isCurrentDevice: boolean
+}
+
 export async function GET() {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -18,9 +30,9 @@ export async function GET() {
 
   const context = await getRestaurantContextForUser(session.user.id)
   const restaurant = context?.restaurant ?? null
-  const billingUserId = context?.billingUserId ?? session.user.id
   const branchId = context?.branchId ?? null
   if (!restaurant) return NextResponse.json({ error: 'No restaurant linked' }, { status: 404 })
+
   const currentDeviceId = getSyncDeviceId()
   const targetUrl = String(process.env.OWNER_SYNC_TARGET_URL ?? getCanonicalCloudAppUrl() ?? '').trim()
   const sessionEmail = typeof session.user.email === 'string' ? session.user.email.trim().toLowerCase() : ''
@@ -28,11 +40,8 @@ export async function GET() {
   const usesSharedSecret = Boolean(String(process.env.OWNER_SYNC_SHARED_SECRET ?? '').trim())
   const hasPassword = Boolean(String(process.env.OWNER_SYNC_PASSWORD ?? '').trim())
   const serverManagedConfigured = Boolean(targetUrl && email && (usesSharedSecret || hasPassword))
-  const branchLinked = Boolean(restaurant.syncRestaurantId && restaurant.syncToken)
 
-  const [pendingTransactions, pendingSummaries, outboxRows, syncConflictCount, syncCursors, syncState, recentEvents, recentBatches, failedBatchCount, processingBatchCount, branchDevices] = await Promise.all([
-    prisma.transaction.count({ where: { userId: billingUserId, restaurantId: restaurant.id, ...(branchId ? { branchId } : {}), synced: false } }),
-    prisma.dailySummary.count({ where: { userId: billingUserId, restaurantId: restaurant.id, ...(branchId ? { branchId } : {}), synced: false } }),
+  const [outboxRows, syncConflictCount, syncCursors, branchDevices] = await Promise.all([
     prisma.syncOutbox.findMany({
       where: {
         scopeId: { in: [restaurant.id, GLOBAL_SYNC_SCOPE_ID] },
@@ -63,23 +72,6 @@ export async function GET() {
       },
     }),
     prisma.syncCursor.findMany({ where: { scopeId: { in: [restaurant.id, GLOBAL_SYNC_SCOPE_ID] } }, orderBy: { scopeId: 'asc' } }),
-    prisma.restaurantSyncState.findUnique({ where: { restaurantId: restaurant.id } }),
-    prisma.restaurantSyncEvent.findMany({
-      where: { restaurantId: restaurant.id },
-      orderBy: { createdAt: 'desc' },
-      take: 8,
-    }),
-    prisma.restaurantSyncBatch.findMany({
-      where: { restaurantId: restaurant.id },
-      orderBy: [{ updatedAt: 'desc' }, { receivedAt: 'desc' }],
-      take: 6,
-    }),
-    prisma.restaurantSyncBatch.count({
-      where: { restaurantId: restaurant.id, status: 'failed' },
-    }),
-    prisma.restaurantSyncBatch.count({
-      where: { restaurantId: restaurant.id, status: 'processing' },
-    }),
     prisma.branchDevice.findMany({
       where: {
         restaurantId: restaurant.id,
@@ -93,18 +85,18 @@ export async function GET() {
   ])
 
   const now = Date.now()
-  const deviceMap = new Map(
+  const deviceMap = new Map<string, DeviceEntry>(
     branchDevices.map((device) => [
       device.deviceId,
       {
         deviceId: device.deviceId,
         appVersion: device.appVersion,
         status: device.status,
-        lastSeenAt: device.lastSeenAt.toISOString() as string | null,
+        lastSeenAt: device.lastSeenAt.toISOString(),
         pendingOutboxChanges: 0,
         readyOutboxChanges: 0,
         stalledOutboxChanges: 0,
-        nextRetryAt: null as string | null,
+        nextRetryAt: null,
         isCurrentDevice: device.deviceId === currentDeviceId,
       },
     ]),
@@ -116,7 +108,7 @@ export async function GET() {
 
   for (const row of outboxRows) {
     const sourceDeviceId = row.sourceDeviceId || 'unknown'
-    const current = deviceMap.get(sourceDeviceId) ?? {
+    const current: DeviceEntry = deviceMap.get(sourceDeviceId) ?? {
       deviceId: sourceDeviceId,
       appVersion: 'unknown',
       status: 'unknown',
@@ -124,7 +116,7 @@ export async function GET() {
       pendingOutboxChanges: 0,
       readyOutboxChanges: 0,
       stalledOutboxChanges: 0,
-      nextRetryAt: null as string | null,
+      nextRetryAt: null,
       isCurrentDevice: sourceDeviceId === currentDeviceId,
     }
 
@@ -150,67 +142,43 @@ export async function GET() {
   }
 
   const pendingOutboxChanges = outboxRows.length
-  const currentStatus = processingBatchCount > 0
-    ? 'syncing'
-    : syncState?.lastErrorAt && (!syncState.lastSuccessAt || syncState.lastErrorAt > syncState.lastSuccessAt)
-      ? 'failed'
-      : 'idle'
 
   return NextResponse.json({
     restaurantId: restaurant.id,
     currentDeviceId,
-    currentStatus,
-    branchLinked,
+    currentStatus: 'idle',
+    branchLinked: false,
     serverManagedConfigured,
-    canServerManagedSync: branchLinked && serverManagedConfigured,
-    recoveryRequired: failedBatchCount > 0 || processingBatchCount > 0,
-    failedBatchCount,
-    processingBatchCount,
-    pendingTransactions,
-    pendingSummaries,
+    canServerManagedSync: false,
+    recoveryRequired: false,
+    failedBatchCount: 0,
+    processingBatchCount: 0,
+    pendingTransactions: 0,
+    pendingSummaries: 0,
     pendingOutboxChanges,
     readyOutboxChanges,
     stalledOutboxChanges,
     nextRetryAt: nextRetryAt?.toISOString() ?? null,
     syncConflictCount,
-    lastAttemptAt: syncState?.lastAttemptAt?.toISOString() ?? null,
-    lastSuccessAt: syncState?.lastSuccessAt?.toISOString() ?? null,
-    lastErrorAt: syncState?.lastErrorAt?.toISOString() ?? null,
-    lastErrorMessage: syncState?.lastErrorMessage ?? null,
-    consecutiveFailures: syncState?.consecutiveFailures ?? 0,
-    lastSyncedTransactions: syncState?.lastSyncedTransactions ?? 0,
-    lastSyncedSummaries: syncState?.lastSyncedSummaries ?? 0,
+    lastAttemptAt: null,
+    lastSuccessAt: null,
+    lastErrorAt: null,
+    lastErrorMessage: null,
+    consecutiveFailures: 0,
+    lastSyncedTransactions: 0,
+    lastSyncedSummaries: 0,
     syncCursors: syncCursors.map((cursor) => ({
       scopeId: cursor.scopeId,
       target: cursor.target,
       lastPulledAt: cursor.lastPulledAt?.toISOString() ?? null,
       lastPushedAt: cursor.lastPushedAt?.toISOString() ?? null,
-      lastMutationId: cursor.lastMutationId ?? null,
       updatedAt: cursor.updatedAt.toISOString(),
     })),
-    recentEvents: recentEvents.map((event) => ({
-      id: event.id,
-      status: event.status,
-      message: event.message,
-      syncedTransactions: event.syncedTransactions,
-      syncedSummaries: event.syncedSummaries,
-      consecutiveFailures: event.consecutiveFailures,
-      createdAt: event.createdAt.toISOString(),
-    })),
+    recentEvents: [],
     devices: Array.from(deviceMap.values()).sort((left, right) => {
       if (left.isCurrentDevice !== right.isCurrentDevice) return left.isCurrentDevice ? -1 : 1
       return (right.lastSeenAt || '').localeCompare(left.lastSeenAt || '')
     }),
-    recentBatches: recentBatches.map((batch) => ({
-      id: batch.id,
-      batchId: batch.batchId,
-      status: batch.status,
-      errorMessage: batch.errorMessage,
-      syncedTransactions: batch.syncedTransactions,
-      syncedSummaries: batch.syncedSummaries,
-      receivedAt: batch.receivedAt.toISOString(),
-      appliedAt: batch.appliedAt?.toISOString() ?? null,
-      updatedAt: batch.updatedAt.toISOString(),
-    })),
+    recentBatches: [],
   })
 }

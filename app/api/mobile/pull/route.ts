@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,17 +35,20 @@ export async function GET(req: Request) {
   try {
     const claims = await verifyToken(req)
     const { restaurantId } = claims
-    const context = await getRestaurantContextForUser(claims.sub)
 
-    if (!context?.restaurantId || context.restaurantId !== restaurantId) {
+    // Validate staff identity directly from the Staff table using the JWT subject.
+    // claims.sub is a Staff ID (not a User ID), so we never use getRestaurantContextForUser here.
+    const staff = await prisma.staff.findUnique({
+      where: { id: claims.sub },
+      select: { id: true, restaurantId: true, isActive: true, deletedAt: true },
+    })
+
+    if (!staff || !staff.isActive || staff.deletedAt || staff.restaurantId !== restaurantId) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const userBranchId = context.branchId ?? null
+    const userBranchId = claims.branchId ?? null
 
-    // A waiter with no branch assigned must not receive another branch's data.
-    // Return 403 so the app shows a clear "account not configured" message rather
-    // than silently returning the entire restaurant's menu.
     if (!userBranchId) {
       return jsonNoStore(
         { error: 'Your account has no branch assigned. Ask your manager to assign a branch before using the waiter app.' },
@@ -61,7 +63,7 @@ export async function GET(req: Request) {
     let effectiveBranchId = userBranchId
 
     if (requestedBranchId && requestedBranchId !== userBranchId) {
-      const validBranch = await prisma.restaurantBranch.findFirst({
+      const validBranch = await prisma.branch.findFirst({
         where: { id: requestedBranchId, restaurantId, isActive: true },
         select: { id: true },
       })
@@ -99,24 +101,22 @@ export async function GET(req: Request) {
         select: { id: true, name: true },
       }),
 
-      // Only employees with cancellation permission AND a stored PIN hash.
-      // We send the hash so the waiter app can validate offline with bcrypt.
+      // Staff with a stored PIN can approve order cancellations offline.
       // PINs themselves are never sent — only the stored bcrypt hash.
-      prisma.employee.findMany({
+      prisma.staff.findMany({
         where: {
           restaurantId,
-          branchId: effectiveBranchId,
+          branches: { some: { branchId: effectiveBranchId } },
           isActive: true,
-          canApproveOrderCancellation: true,
-          cancellationPinHash: { not: null },
+          pin: { not: null },
         },
-        select: { id: true, name: true, cancellationPinHash: true },
+        select: { id: true, name: true, pin: true },
       }),
 
-      prisma.restaurantBranch.findMany({
+      prisma.branch.findMany({
         where: { restaurantId, isActive: true },
         select: { id: true, name: true, code: true, isMain: true },
-        orderBy: { sortOrder: 'asc' },
+        orderBy: { name: 'asc' },
       }),
     ])
 
@@ -158,7 +158,7 @@ export async function GET(req: Request) {
       cancellationApprovers: approverEmployees.map(e => ({
         id: e.id,
         name: e.name,
-        pin_hash: e.cancellationPinHash as string,
+        pin_hash: e.pin as string,
       })),
     })
   } catch (err: any) {

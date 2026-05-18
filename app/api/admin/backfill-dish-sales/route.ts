@@ -17,14 +17,6 @@ export const dynamic = 'force-dynamic'
 
 const REPAIR_SOURCE_DEVICE_ID = 'mobile:backfill'
 
-async function getBillingUserId(restaurantId: string, ownerId: string) {
-  const dish = await prisma.dish.findFirst({ where: { restaurantId }, select: { userId: true } })
-  if (dish?.userId) return dish.userId
-  const inv = await prisma.inventoryItem.findFirst({ where: { restaurantId }, select: { userId: true } })
-  if (inv?.userId) return inv.userId
-  return ownerId
-}
-
 export async function POST(req: Request) {
   const { secret, restaurantId } = (await req.json()) as { secret?: string; restaurantId?: string }
 
@@ -42,8 +34,6 @@ export async function POST(req: Request) {
   if (!restaurant) {
     return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
   }
-
-  const billingUserId = await getBillingUserId(restaurant.id, restaurant.ownerId)
 
   // Find PAID orders with zero dish sales
   const paidOrders = await prisma.restaurantOrder.findMany({
@@ -66,10 +56,8 @@ export async function POST(req: Request) {
   for (const order of missing) {
     try {
       await recordDishSalesForPaidOrder(prisma, {
-        billingUserId,
         restaurantId,
         branchId: order.branchId ?? '',
-        includeBranchlessRows: false,
         orderId: order.id,
         paymentMethod: order.paymentMethod ?? 'Cash',
         saleDate: order.paidAt ?? order.updatedAt,
@@ -85,43 +73,14 @@ export async function POST(req: Request) {
     }
   }
 
-  // Fix existing transactions from mobile-push orders that were created with synced=false
-  const fixedTransactions = await prisma.transaction.updateMany({
-    where: { restaurantId, synced: false, sourceKind: 'dish_sale_mirror' },
-    data: { synced: true },
-  })
-
-  const [repairTransactions, repairDishSales, repairInventoryItems, repairInventoryPurchases] = await Promise.all([
-    prisma.transaction.findMany({
-      where: { restaurantId, sourceKind: 'dish_sale_mirror' },
-      include: { category: { select: { type: true } } },
-    }),
+  const [repairDishSales, repairInventoryItems, repairInventoryPurchases] = await Promise.all([
     prisma.dishSale.findMany({
-      where: { restaurantId, userId: billingUserId },
+      where: { restaurantId },
       include: { saleIngredients: true },
     }),
-    prisma.inventoryItem.findMany({
-      where: { restaurantId, userId: billingUserId },
-    }),
-    prisma.inventoryPurchase.findMany({
-      where: { restaurantId, userId: billingUserId },
-    }),
+    prisma.inventoryItem.findMany({ where: { restaurantId } }),
+    prisma.inventoryPurchase.findMany({ where: { restaurantId } }),
   ])
-
-  for (const transaction of repairTransactions) {
-    await enqueueSyncChange(prisma, {
-      restaurantId,
-      branchId: transaction.branchId ?? null,
-      entityType: 'transaction',
-      entityId: transaction.id,
-      operation: 'upsert',
-      sourceDeviceId: REPAIR_SOURCE_DEVICE_ID,
-      payload: {
-        ...transaction,
-        categoryType: transaction.category?.type ?? null,
-      },
-    })
-  }
 
   for (const sale of repairDishSales) {
     await enqueueSyncChange(prisma, {
@@ -131,10 +90,7 @@ export async function POST(req: Request) {
       entityId: sale.id,
       operation: 'upsert',
       sourceDeviceId: REPAIR_SOURCE_DEVICE_ID,
-      payload: {
-        ...sale,
-        saleIngredients: sale.saleIngredients,
-      },
+      payload: { ...sale, saleIngredients: sale.saleIngredients },
     })
   }
 
@@ -166,9 +122,7 @@ export async function POST(req: Request) {
     totalPaid: paidOrders.length,
     missingDishSales: missing.length,
     results,
-    fixedTransactions: fixedTransactions.count,
     replayedChanges: {
-      transactions: repairTransactions.length,
       dishSales: repairDishSales.length,
       inventoryItems: repairInventoryItems.length,
       inventoryPurchases: repairInventoryPurchases.length,

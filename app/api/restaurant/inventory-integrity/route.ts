@@ -21,9 +21,7 @@ export async function GET() {
 		return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 	}
 
-	const billingUserId = context.billingUserId ?? session.user.id
 	const integrity = await getRestaurantInventoryIntegrity(prisma, {
-		billingUserId,
 		restaurantId: context.restaurantId,
 		branchId: context.branchId,
 	})

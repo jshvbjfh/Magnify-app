@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { createRestaurantBranch, ensureMainBranchForRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { createBranch, ensureMainBranchForRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 const branchTabSelect = {
@@ -12,15 +12,13 @@ const branchTabSelect = {
   code: true,
   isMain: true,
   isActive: true,
-  sortOrder: true,
 } as const
 
 async function listActiveBranches(restaurantId: string) {
-  return prisma.restaurantBranch.findMany({
+  return prisma.branch.findMany({
     where: { restaurantId, isActive: true },
     orderBy: [
       { isMain: 'desc' },
-      { sortOrder: 'asc' },
       { name: 'asc' },
     ],
     select: branchTabSelect,
@@ -40,7 +38,7 @@ async function getAuthorizedBranchContext() {
       session,
       context,
       restaurantId: null,
-      branches: [] as Array<{ id: string; name: string; code: string; isMain: boolean; isActive: boolean; sortOrder: number }>,
+      branches: [] as Array<{ id: string; name: string; code: string; isMain: boolean; isActive: boolean }>,
       activeBranchId: null as string | null,
     }
   }
@@ -54,10 +52,7 @@ async function getAuthorizedBranchContext() {
     : branches[0]?.id ?? null
 
   if (activeBranchId && activeBranchId !== context?.branchId) {
-    await prisma.user.update({
-      where: { id: session.user.id },
-      data: { branchId: activeBranchId },
-    })
+    // branchId no longer on User model — branch selection is handled via session/context
   }
 
   return {
@@ -98,7 +93,7 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: 'branchId is required' }, { status: 400 })
   }
 
-  const branch = await prisma.restaurantBranch.findFirst({
+  const branch = await prisma.branch.findFirst({
     where: {
       id: branchId,
       restaurantId: result.restaurantId,
@@ -115,11 +110,6 @@ export async function PATCH(req: Request) {
   if (!branch) {
     return NextResponse.json({ error: 'Branch not found' }, { status: 404 })
   }
-
-  await prisma.user.update({
-    where: { id: result.session.user.id },
-    data: { branchId: branch.id },
-  })
 
   return NextResponse.json({
     ok: true,
@@ -151,7 +141,7 @@ export async function POST(req: Request) {
 
   try {
     const branch = await prisma.$transaction(async (tx) => {
-      const createdBranch = await createRestaurantBranch({
+      const createdBranch = await createBranch({
         restaurantId: result.restaurantId,
         name,
         code,
@@ -159,7 +149,7 @@ export async function POST(req: Request) {
 
       await enqueueSyncChange(tx, {
         restaurantId: result.restaurantId,
-        entityType: 'restaurantBranch',
+        entityType: 'branch',
         entityId: createdBranch.id,
         operation: 'upsert',
         payload: createdBranch,
