@@ -25,6 +25,11 @@ const prismaMock = vi.hoisted(() => ({
     findFirst: vi.fn(),
     count: vi.fn(),
   },
+  journalEntry: {
+    findMany: vi.fn(),
+    findFirst: vi.fn(),
+    count: vi.fn(),
+  },
   inventoryItem: {
     findMany: vi.fn(),
   },
@@ -198,7 +203,7 @@ describe('owner-enabled restaurant routes', () => {
       .mockResolvedValueOnce(12)
       .mockResolvedValueOnce(7)
       .mockResolvedValueOnce(5)
-    prismaMock.transaction.count
+    prismaMock.journalEntry.count
       .mockResolvedValueOnce(40)
       .mockResolvedValueOnce(33)
     prismaMock.restaurantOrder.findFirst
@@ -215,13 +220,11 @@ describe('owner-enabled restaurant routes', () => {
         totalAmount: 25,
         paymentMethod: 'Cash',
       })
-    prismaMock.transaction.findFirst.mockResolvedValue({
+    prismaMock.journalEntry.findFirst.mockResolvedValue({
       id: 'txn-1',
       description: 'Sale',
-      amount: 25,
-      createdAt: new Date('2026-05-01T11:05:00.000Z'),
-      paymentMethod: 'Cash',
-      restaurantId: 'rest-1',
+      entryDate: new Date('2026-05-01T11:05:00.000Z'),
+      branchId: 'branch-1',
     })
 
     const response = await getDebugRoute()

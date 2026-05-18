@@ -44,7 +44,7 @@ function makeMockDb(overrides: Record<string, any> = {}): any {
       upsert: vi.fn().mockResolvedValue({ id: 'rest-1' }),
       update: vi.fn().mockResolvedValue({ id: 'rest-1' }),
     },
-    restaurantBranch: {
+    branch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch-1' }),
       findMany: vi.fn().mockResolvedValue([]),
       deleteMany: vi.fn().mockResolvedValue({}),
@@ -107,7 +107,7 @@ function makeMockDb(overrides: Record<string, any> = {}): any {
       upsert: vi.fn().mockResolvedValue({ id: 'order-1' }),
       deleteMany: vi.fn().mockResolvedValue({}),
     },
-    restaurantOrderItem: {
+    orderItem: {
       deleteMany: vi.fn().mockResolvedValue({}),
       createMany: vi.fn().mockResolvedValue({}),
     },
@@ -287,7 +287,7 @@ describe('applyResolvedSyncChange', () => {
 
     it('throws when no branchId can be resolved (C-branchskip)', async () => {
       const db = makeMockDb({
-        restaurantBranch: {
+        branch: {
           findFirst: vi.fn().mockResolvedValue(null), // DB has no branches
           findMany: vi.fn().mockResolvedValue([]),
           deleteMany: vi.fn().mockResolvedValue({}),
@@ -363,7 +363,7 @@ describe('applyResolvedSyncChange', () => {
       await applyResolvedSyncChange(db, change)
 
       expect(db.dishIngredient.deleteMany).toHaveBeenCalledWith({
-        where: { dishId: 'dish-abc', ingredientId: 'ingredient-xyz' },
+        where: { dishId: 'dish-abc', inventoryItemId: 'ingredient-xyz' },
       })
     })
 
@@ -380,7 +380,7 @@ describe('applyResolvedSyncChange', () => {
       await applyResolvedSyncChange(db, change)
 
       expect(db.dishIngredient.deleteMany).toHaveBeenCalledWith({
-        where: { dishId: 'payload-dish', ingredientId: 'payload-ing' },
+        where: { dishId: 'payload-dish', inventoryItemId: 'payload-ing' },
       })
     })
 
@@ -392,7 +392,7 @@ describe('applyResolvedSyncChange', () => {
       })
 
       await expect(applyResolvedSyncChange(db, change)).rejects.toThrow(
-        /cannot resolve dishId\/ingredientId/,
+        /cannot resolve dishId\/inventoryItemId/,
       )
     })
   })
@@ -461,16 +461,16 @@ describe('applyResolvedSyncChange', () => {
       await applyResolvedSyncChange(db, change)
 
       // deleteMany must have run (validItems.length > 0)
-      expect(db.restaurantOrderItem.deleteMany).toHaveBeenCalled()
+      expect(db.orderItem.deleteMany).toHaveBeenCalled()
 
       // createMany must only contain the valid item
-      expect(db.restaurantOrderItem.createMany).toHaveBeenCalledWith(
+      expect(db.orderItem.createMany).toHaveBeenCalledWith(
         expect.objectContaining({
           data: [expect.objectContaining({ id: 'item-good' })],
         }),
       )
 
-      const [createManyArg] = db.restaurantOrderItem.createMany.mock.calls[0]
+      const [createManyArg] = db.orderItem.createMany.mock.calls[0]
       expect(createManyArg.data).toHaveLength(1)
     })
 
@@ -487,8 +487,8 @@ describe('applyResolvedSyncChange', () => {
       await applyResolvedSyncChange(db, change)
 
       // Neither should have been called
-      expect(db.restaurantOrderItem.deleteMany).not.toHaveBeenCalled()
-      expect(db.restaurantOrderItem.createMany).not.toHaveBeenCalled()
+      expect(db.orderItem.deleteMany).not.toHaveBeenCalled()
+      expect(db.orderItem.createMany).not.toHaveBeenCalled()
     })
 
     it('runs deleteMany and createMany normally when all items have valid ids', async () => {
@@ -504,8 +504,8 @@ describe('applyResolvedSyncChange', () => {
 
       await applyResolvedSyncChange(db, change)
 
-      expect(db.restaurantOrderItem.deleteMany).toHaveBeenCalled()
-      const [createManyArg] = db.restaurantOrderItem.createMany.mock.calls[0]
+      expect(db.orderItem.deleteMany).toHaveBeenCalled()
+      const [createManyArg] = db.orderItem.createMany.mock.calls[0]
       expect(createManyArg.data).toHaveLength(2)
     })
   })
@@ -726,7 +726,7 @@ describe('applyIncomingSyncChanges', () => {
       }),
       makeChange('dishIngredient', 'upsert', {
         dishId: 'incoming-dish-id',   // displaced id — must be remapped
-        ingredientId: 'ingredient-1',
+        inventoryItemId: 'ingredient-1',
         quantityRequired: 0.5,
       }),
     ]
@@ -741,7 +741,7 @@ describe('applyIncomingSyncChanges', () => {
 
     // dishIngredient must resolve dishId to the existing (target) id
     const diCall = dishIngredientUpsert.mock.calls[0][0]
-    expect(diCall.where.dishId_ingredientId.dishId).toBe('existing-dish-id')
+    expect(diCall.where.dishId_inventoryItemId.dishId).toBe('existing-dish-id')
     expect(diCall.create.dishId).toBe('existing-dish-id')
   })
 

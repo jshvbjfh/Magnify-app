@@ -48,7 +48,7 @@ describe('backup restore route', () => {
       restaurant: {
         findUnique: vi.fn().mockResolvedValue({ id: 'rest-1' }),
       },
-      restaurantBranch: {
+      branch: {
         findFirst: vi.fn().mockResolvedValue(null),
       },
     }))
@@ -65,7 +65,7 @@ describe('backup restore route', () => {
       restaurant: {
         findUnique: vi.fn().mockResolvedValue({ id: 'rest-1' }),
       },
-      restaurantBranch: {
+      branch: {
         findFirst: vi.fn().mockResolvedValue(null),
       },
     }))
