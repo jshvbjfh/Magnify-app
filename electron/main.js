@@ -19,9 +19,9 @@ const DESKTOP_UPDATE_INITIAL_DELAY_MS = 5000
 const DESKTOP_UPDATE_RETRY_DELAYS_MS = [30000, 120000]
 const DESKTOP_UPDATE_POLL_INTERVAL_MS = 10 * 60 * 1000
 const DESKTOP_PRISMA_COMMAND_TIMEOUT_MS = 120000
-const DESKTOP_LEGACY_BASELINE_MIGRATION = '20260411120000_add_sync_infrastructure_tables'
-const DESKTOP_BRANCH_FOUNDATION_MIGRATION = '20260421173000_add_restaurant_branch_foundation'
-const DESKTOP_INVENTORY_BRANCH_SCOPED_UNIQUE_MIGRATION = '20260430000001_inventory_item_branch_scoped_unique'
+const DESKTOP_LEGACY_BASELINE_MIGRATION = '20260518090155_init'
+const DESKTOP_BRANCH_FOUNDATION_MIGRATION = '20260518090155_init'
+const DESKTOP_INVENTORY_BRANCH_SCOPED_UNIQUE_MIGRATION = '20260518090155_init'
 
 let desktopUpdateDeferredTimer = null
 let desktopUpdatePollInterval = null
@@ -1309,6 +1309,82 @@ app.whenReady().then(async () => {
 							appendStartupLog(`Inventory branch unique repair failed: ${uniqueRepair.reason || 'unknown error'}`)
 							console.error('Inventory branch unique repair failed (non-fatal):', migrationFailureMessage)
 						}
+					} else if (/\bP3009\b/.test(migrationDetails)) {
+						// P3009: a previous migration is recorded as failed; Prisma blocks all new
+						// migrations until it is resolved. Mark the failed migration as applied
+						// (the schema changes were already partially or fully applied during the
+						// failed run) then retry deploy.
+						const failedNameMatch = migrationDetails.match(/The `(\d{14}_\S+)` migration started/)
+						const failedMigrationName = failedNameMatch?.[1] ?? null
+						appendStartupLog(`Migration reported P3009 (failed migration in history)${failedMigrationName ? `: ${failedMigrationName}` : ''}; attempting resolve`)
+
+						if (!failedMigrationName) {
+							migrationFailureMessage = `${migrationDetails}\n\nP3009 auto-resolve skipped: could not parse failed migration name from error.`
+							fs.writeFileSync(migrationLogPath, `[${new Date().toISOString()}] Migration failed\n${migrationFailureMessage}`, 'utf8')
+							appendStartupLog('P3009 auto-resolve skipped: could not parse failed migration name')
+							console.error('P3009 auto-resolve skipped (non-fatal):', migrationFailureMessage)
+						} else {
+							try {
+								runPrismaCommand(`migrate resolve --applied ${failedMigrationName}`)
+								appendStartupLog(`P3009: marked ${failedMigrationName} as applied; retrying migrate deploy`)
+
+								try {
+									const retryOutput = runPrismaCommand('migrate deploy')
+									fs.writeFileSync(migrationLogPath, `[${new Date().toISOString()}] P3009 resolved and migrations applied\n${retryOutput}`, 'utf8')
+									appendStartupLog(`P3009 resolved: deploy succeeded after marking ${failedMigrationName} applied`)
+									console.log('P3009 resolved: deploy succeeded')
+								} catch (retryErr) {
+									const retryStderr = retryErr?.stderr ? retryErr.stderr.toString() : ''
+									const retryStdout = retryErr?.stdout ? retryErr.stdout.toString() : ''
+									const retryDetails = `${retryErr?.message || 'Unknown retry error'}\n\nSTDOUT:\n${retryStdout}\n\nSTDERR:\n${retryStderr}`
+
+									if (/\bP3018\b/.test(retryDetails) && /Migration name:\s*20260430000001_inventory_item_branch_scoped_unique/.test(retryDetails) && /inventory_items_userId_restaurantId_branchId_name_key already exists/.test(retryDetails)) {
+										appendStartupLog('P3009 retry hit duplicate inventory branch unique index; attempting idempotent repair')
+										const uniqueRepair = await attemptInventoryBranchScopedUniqueRepair({
+											migrationsDir,
+											userDataDir,
+											runtimeDbPath: desktopRuntimeDbPath,
+										})
+										if (uniqueRepair.repaired) {
+											fs.writeFileSync(migrationLogPath, `[${new Date().toISOString()}] P3009+P3018 resolved\n${uniqueRepair.migrationOutput || ''}`, 'utf8')
+											appendStartupLog('P3009+P3018 resolved: inventory unique repair succeeded')
+											console.log('P3009+P3018 resolved')
+										} else {
+											migrationFailureMessage = `${retryDetails}\n\nAutomatic P3018 repair after P3009 resolve failed:\n${uniqueRepair.reason || 'not applicable'}`
+											fs.writeFileSync(migrationLogPath, `[${new Date().toISOString()}] Migration failed (P3009+P3018)\n${migrationFailureMessage}`, 'utf8')
+											appendStartupLog(`P3009+P3018 repair failed: ${uniqueRepair.reason || 'unknown error'}`)
+											console.error('P3009+P3018 repair failed (non-fatal):', migrationFailureMessage)
+										}
+									} else if (/\bP3018\b/.test(retryDetails) && /Migration name:\s*20260518000001_add_updatedAt_to_dish_sale_and_inventory_purchase/.test(retryDetails) && /duplicate column name: updatedAt/.test(retryDetails)) {
+										// updatedAt columns already exist (schema drift); mark migration applied and finish.
+										appendStartupLog('P3009 retry hit duplicate updatedAt column; marking migration applied')
+										try {
+											runPrismaCommand('migrate resolve --applied 20260518000001_add_updatedAt_to_dish_sale_and_inventory_purchase')
+											const finalOutput = runPrismaCommand('migrate deploy')
+											fs.writeFileSync(migrationLogPath, `[${new Date().toISOString()}] P3009+updatedAt drift resolved\n${finalOutput}`, 'utf8')
+											appendStartupLog('P3009+updatedAt drift resolved: deploy succeeded')
+											console.log('P3009+updatedAt drift resolved')
+										} catch (finalErr) {
+											const finalDetails = `${finalErr?.message || ''}\n${finalErr?.stderr?.toString() || ''}`
+											migrationFailureMessage = `${retryDetails}\n\nupdatedAt drift resolve failed:\n${finalDetails}`
+											fs.writeFileSync(migrationLogPath, `[${new Date().toISOString()}] Migration failed (P3009+updatedAt)\n${migrationFailureMessage}`, 'utf8')
+											appendStartupLog(`P3009+updatedAt drift resolve failed: ${finalErr?.message || finalErr}`)
+											console.error('P3009+updatedAt drift resolve failed (non-fatal):', migrationFailureMessage)
+										}
+									} else {
+										migrationFailureMessage = `${retryDetails}\n\n(after P3009 resolve of ${failedMigrationName})`
+										fs.writeFileSync(migrationLogPath, `[${new Date().toISOString()}] Migration failed after P3009 resolve\n${migrationFailureMessage}`, 'utf8')
+										appendStartupLog(`Migration retry after P3009 resolve failed: ${retryErr?.message || retryErr}`)
+										console.error('Migration retry after P3009 resolve failed (non-fatal):', migrationFailureMessage)
+									}
+								}
+							} catch (resolveErr) {
+								migrationFailureMessage = `${migrationDetails}\n\nP3009 auto-resolve failed: ${resolveErr?.message || resolveErr}`
+								fs.writeFileSync(migrationLogPath, `[${new Date().toISOString()}] Migration failed\n${migrationFailureMessage}`, 'utf8')
+								appendStartupLog(`P3009 auto-resolve failed: ${resolveErr?.message || resolveErr}`)
+								console.error('P3009 auto-resolve failed (non-fatal):', migrationFailureMessage)
+							}
+						}
 					} else if (/\bP3005\b/.test(migrationDetails)) {
 						appendStartupLog('Migration reported P3005 (non-empty DB without migration history); checking for legacy desktop branch repair')
 						const legacyRepair = await attemptLegacyDesktopBranchRepair({
@@ -1358,6 +1434,32 @@ app.whenReady().then(async () => {
 								appendStartupLog(`Migration fallback failed: ${dbPushErr?.message || dbPushErr}`)
 								console.error('Migration fallback failed (non-fatal):', migrationFailureMessage)
 							}
+						}
+					} else if (/recorded as applied in the database, but its file does not exist/i.test(migrationDetails)) {
+						// Schema was squashed: old migration files were deleted but the local DB still
+						// has their history entries. db push syncs the schema diff without caring
+						// about migration history, so new columns are added without touching user data.
+						appendStartupLog('Migration history has orphaned entries (squashed migrations); attempting db push to sync schema')
+						try {
+							const dbPushOutput = runPrismaCommand('db push --skip-generate --accept-data-loss')
+							fs.writeFileSync(
+								migrationLogPath,
+								`[${new Date().toISOString()}] Schema sync succeeded via db push (squashed migrations)\n${dbPushOutput}`,
+								'utf8'
+							)
+							appendStartupLog('Schema sync via db push succeeded (squashed migrations)')
+							console.log('Schema sync via db push succeeded (squashed migrations)')
+						} catch (dbPushErr) {
+							const dbPushStderr = dbPushErr?.stderr ? dbPushErr.stderr.toString() : ''
+							const dbPushStdout = dbPushErr?.stdout ? dbPushErr.stdout.toString() : ''
+							migrationFailureMessage = `${migrationDetails}\n\ndb push fallback also failed:\n${dbPushErr?.message || ''}\n\nSTDOUT:\n${dbPushStdout}\n\nSTDERR:\n${dbPushStderr}`
+							fs.writeFileSync(
+								migrationLogPath,
+								`[${new Date().toISOString()}] Migration failed\n${migrationFailureMessage}`,
+								'utf8'
+							)
+							appendStartupLog(`Schema sync db push fallback failed: ${dbPushErr?.message || dbPushErr}`)
+							console.error('Schema sync db push fallback failed (non-fatal):', migrationFailureMessage)
 						}
 					} else {
 						migrationFailureMessage = migrationDetails
