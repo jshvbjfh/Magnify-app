@@ -443,6 +443,12 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 
 	let r
 
+	// users
+	r = dbExecute(`ALTER TABLE "users" ADD COLUMN "isActive" INTEGER NOT NULL DEFAULT 1;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added users.isActive')
+	r = dbExecute(`ALTER TABLE "users" ADD COLUMN "isSuperAdmin" INTEGER NOT NULL DEFAULT 0;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added users.isSuperAdmin')
+
 	// restaurants
 	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "managerId" TEXT;`, SKIP_DUP)
 	if (r.ok && !r.skipped) actions.push('Added restaurants.managerId')
