@@ -13,7 +13,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const { id } = await params
+  const ALLOWED_ROLES = ['waiter', 'kitchen']
+
   const data = await req.json()
+
+  if (data.role !== undefined && !ALLOWED_ROLES.includes(String(data.role).toLowerCase())) {
+    return NextResponse.json({ error: `Invalid role. Allowed roles: ${ALLOWED_ROLES.join(', ')}` }, { status: 400 })
+  }
 
   const updateData: Record<string, unknown> = {
     ...(data.name !== undefined && { name: data.name }),
