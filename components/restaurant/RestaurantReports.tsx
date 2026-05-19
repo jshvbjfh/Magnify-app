@@ -4,8 +4,29 @@ import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, Ba
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
-type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory'
+type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory'
 type Period = 'today' | 'week' | 'month' | 'quarter' | 'year'
+
+type PaymentMethodEvent = {
+  key: string
+  pairId: string | null
+  date: string
+  createdAt: string | null
+  paymentMethod: string
+  amount: number
+  description: string
+  clientLabel: string
+  itemLabel: string
+}
+
+type PaymentMethodSummary = {
+  key: string
+  label: string
+  buttonLabel: string
+  totalAmount: number
+  count: number
+  events: PaymentMethodEvent[]
+}
 
 function statusLabel(value: string | null | undefined) {
   if (!value) return 'PAID'
@@ -19,6 +40,7 @@ const TABS: { id: ReportTab; label: string; short: string; icon: React.ElementTy
   { id:'cashflow',   label:'Cash Flow Statement',    short:'Cash Flow', icon:ArrowLeftRight, desc:'Cash inflows and outflows analysis' },
   { id:'balance',    label:'Balance Sheet',          short:'Balance',   icon:BarChart3,      desc:'Assets, liabilities and equity snapshot' },
   { id:'income',            label:'Income Statement (P&L)', short:'P&L',       icon:FileText,   desc:'Revenue, expenses and net profit' },
+  { id:'payment_methods',   label:'Payment Methods',        short:'Payments',  icon:CreditCard, desc:'Track how much has been collected by each payment method and review the full payment history with date and time.' },
   { id:'dish_profit',       label:'Orders Report',          short:'Orders',      icon:Utensils,   desc:'Orders, waiter, status, quantity sold, cost, price, total price, revenue and profit' },
   { id:'inventory_movement', label:'Inventory Movement',    short:'Inventory',   icon:Package,    desc:'Opening stock, in-period purchases, usage, remaining quantity and stock value' },
   { id:'theoretical_inventory', label:'Theoretical Inventory', short:'Theory Inv', icon:Package, desc:'Opening stock, expected usage, waste, theoretical closing and variance versus actual stock' },
@@ -85,6 +107,7 @@ function fmt(n: number) { return n.toLocaleString('en-RW',{maximumFractionDigits
 function normalizeTransactions(rows: any[]) {
   return rows.map((row) => ({
     ...row,
+    type: row.type ?? (row.direction === 'in' ? 'credit' : 'debit'),
     account: row.account ?? {
       name: row.accountName ?? '',
       category: {
@@ -140,6 +163,181 @@ function getIncomeEffect(tx: any) {
 
 function getExpenseEffect(tx: any) {
   return tx.type === 'debit' ? tx.amount : -tx.amount
+}
+
+const PAYMENT_METHOD_SORT_ORDER: Record<string, number> = {
+  Cash: 1,
+  'Mobile Money': 2,
+  'Owner Momo': 3,
+  Credit: 4,
+  Bank: 5,
+  'Notes Payable': 6,
+  Unknown: 99,
+}
+
+function toTitleCase(value: string) {
+  return value
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ')
+}
+
+function normalizePaymentMethodName(value: string | null | undefined) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return 'Unknown'
+
+  const normalized = raw.toLowerCase()
+  if (normalized === 'cash') return 'Cash'
+  if (normalized === 'momo' || normalized === 'mobile money') return 'Mobile Money'
+  if (normalized === 'owner momo' || normalized === 'owner mobile money') return 'Owner Momo'
+  if (normalized === 'credit') return 'Credit'
+  if (normalized === 'bank' || normalized === 'current account' || normalized === 'transfer') return 'Bank'
+  if (normalized === 'note payable' || normalized === 'notes payable') return 'Notes Payable'
+
+  return toTitleCase(raw)
+}
+
+function paymentMethodButtonLabel(value: string) {
+  if (value === 'Mobile Money') return 'MoMo'
+  return value
+}
+
+function getTransactionTimestamp(tx: { date?: string | null; createdAt?: string | null }) {
+  const candidate = tx.date || tx.createdAt || ''
+  const timestamp = new Date(candidate).getTime()
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function formatReportDateTime(value: string | null | undefined) {
+  const timestamp = new Date(String(value ?? '')).getTime()
+  if (!Number.isFinite(timestamp)) return 'Unknown time'
+
+  return `${new Date(timestamp).toLocaleString('en-RW', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })} UTC+2`
+}
+
+function extractPaymentClientLabel(description: string) {
+  const normalized = String(description ?? '').trim()
+  if (!normalized) return 'Walk-in customer'
+
+  const customerMatch = normalized.match(/\bto\s+(.+)$/i)
+  if (customerMatch?.[1]) return customerMatch[1].trim()
+
+  const locationMatch = normalized.match(/·\s*(.+)$/)
+  if (locationMatch?.[1]) return locationMatch[1].trim()
+
+  return 'Walk-in customer'
+}
+
+function extractPaymentItemLabel(description: string) {
+  const normalized = String(description ?? '').trim()
+  if (!normalized) return 'Payment recorded'
+
+  const withoutPrefixes = normalized
+    .replace(/^DishSale:\s*/i, '')
+    .replace(/^Sale of\s*/i, '')
+
+  const [beforeLocation] = withoutPrefixes.split('·')
+  const withoutCustomer = beforeLocation.replace(/\s+to\s+.+$/i, '').replace(/\s*\[[^\]]+\]/g, '').trim()
+
+  return withoutCustomer || normalized
+}
+
+function buildPaymentMethodEvents(txs: any[]): PaymentMethodEvent[] {
+  const groups = new Map<string, any[]>()
+
+  txs.forEach((tx) => {
+    const key = String(tx.pairId ?? tx.id ?? `${tx.date ?? tx.createdAt ?? 'payment'}-${tx.amount ?? 0}`)
+    const existing = groups.get(key)
+    if (existing) {
+      existing.push(tx)
+      return
+    }
+    groups.set(key, [tx])
+  })
+
+  const events: PaymentMethodEvent[] = []
+
+  groups.forEach((rows, groupKey) => {
+    const isCollectedSale = rows.some((row) => isIncomeTransaction(row) && row.type === 'credit')
+    if (!isCollectedSale) return
+
+    const orderedRows = [...rows].sort((left, right) => getTransactionTimestamp(right) - getTransactionTimestamp(left))
+    const representative = orderedRows[0]
+    const description = String(representative.description ?? '').trim() || 'Payment recorded'
+
+    events.push({
+      key: groupKey,
+      pairId: representative.pairId ?? null,
+      date: representative.date ?? representative.createdAt ?? '',
+      createdAt: representative.createdAt ?? null,
+      paymentMethod: normalizePaymentMethodName(representative.paymentMethod),
+      amount: Number(representative.amount ?? 0),
+      description,
+      clientLabel: extractPaymentClientLabel(description),
+      itemLabel: extractPaymentItemLabel(description),
+    })
+  })
+
+  return events.sort((left, right) => getTransactionTimestamp(right) - getTransactionTimestamp(left))
+}
+
+function buildPaymentMethodSummaries(txs: any[]) {
+  const events = buildPaymentMethodEvents(txs)
+  const grouped = new Map<string, PaymentMethodSummary>()
+
+  events.forEach((event) => {
+    const key = event.paymentMethod.toLowerCase()
+    const existing = grouped.get(key)
+
+    if (!existing) {
+      grouped.set(key, {
+        key,
+        label: event.paymentMethod,
+        buttonLabel: paymentMethodButtonLabel(event.paymentMethod),
+        totalAmount: event.amount,
+        count: 1,
+        events: [event],
+      })
+      return
+    }
+
+    existing.totalAmount += event.amount
+    existing.count += 1
+    existing.events.push(event)
+  })
+
+  const methods = [...grouped.values()].sort((left, right) => {
+    const leftOrder = PAYMENT_METHOD_SORT_ORDER[left.label] ?? 50
+    const rightOrder = PAYMENT_METHOD_SORT_ORDER[right.label] ?? 50
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder
+    if (left.totalAmount !== right.totalAmount) return right.totalAmount - left.totalAmount
+    return left.label.localeCompare(right.label)
+  })
+
+  return {
+    events,
+    methods,
+    totalAmount: events.reduce((sum, event) => sum + event.amount, 0),
+    totalCount: events.length,
+  }
+}
+
+function buildHistoryDateRows(activeTab: ReportTab, txs: any[] | null) {
+  if (activeTab !== 'payment_methods') return txs ?? []
+
+  return buildPaymentMethodEvents(txs ?? []).map((event) => ({
+    key: event.key,
+    date: event.date || event.createdAt || '',
+  }))
 }
 
 //  SHARED TABLE COMPONENT 
@@ -337,6 +535,121 @@ function IncomeTable({ txs }: { txs: any[] }) {
         <>
           <SectionTitle>Expense Detail</SectionTitle>
           <DataTable head={['Date','Account','Description','Effect (RWF)']} rows={exp.map(t=>[t.date?.slice(0,10)??'',t.account?.name??'',(t.description??'').slice(0,44),`${getExpenseEffect(t)>=0?'+':'-'}${fmt(Math.abs(getExpenseEffect(t)))}`])} foot={['','','TOTAL EXPENSES',fmt(tExp)]} />
+        </>
+      )}
+    </>
+  )
+}
+
+function PaymentHistoryTable({ events }: { events: PaymentMethodEvent[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="border-y border-gray-200 bg-white text-gray-500">
+            <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide whitespace-nowrap">Date / Time</th>
+            <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide whitespace-nowrap">Client</th>
+            <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wide">Payment History</th>
+            <th className="px-4 py-3 text-right text-xs font-bold uppercase tracking-wide whitespace-nowrap">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((event, index) => (
+            <tr key={event.key} className={index % 2 === 0 ? 'bg-white' : 'bg-white'}>
+              <td className="px-4 py-5 text-xs text-gray-500 whitespace-nowrap border-t border-gray-100">{formatReportDateTime(event.date || event.createdAt)}</td>
+              <td className="px-4 py-5 text-sm font-semibold text-gray-900 whitespace-nowrap border-t border-gray-100">{event.clientLabel}</td>
+              <td className="px-4 py-5 border-t border-gray-100">
+                <p className="text-sm font-semibold text-gray-900">{event.itemLabel}</p>
+                <p className="mt-1 text-xs text-gray-500">{event.description}</p>
+              </td>
+              <td className="px-4 py-5 text-right text-sm font-semibold text-gray-900 whitespace-nowrap border-t border-gray-100">{fmt(event.amount)} RWF</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function PaymentSummaryCard({
+  label,
+  value,
+  emphasized = false,
+}: {
+  label: string
+  value: string
+  emphasized?: boolean
+}) {
+  return (
+    <div className={`rounded-xl border px-5 py-4 ${emphasized ? 'border-blue-200 bg-blue-50/70' : 'border-gray-200 bg-white'}`}>
+      <p className={`text-sm font-semibold ${emphasized ? 'text-blue-600' : 'text-gray-700'}`}>{label}</p>
+      <p className="mt-3 text-[2rem] font-semibold leading-none text-gray-900">{value}</p>
+    </div>
+  )
+}
+
+function PaymentMethodsTable({ txs }: { txs: any[] }) {
+  const { methods, totalAmount, totalCount } = buildPaymentMethodSummaries(txs)
+  const [selectedMethodKey, setSelectedMethodKey] = useState('')
+
+  useEffect(() => {
+    if (methods.length === 0) {
+      if (selectedMethodKey) setSelectedMethodKey('')
+      return
+    }
+
+    if (!methods.some((method) => method.key === selectedMethodKey)) {
+      setSelectedMethodKey(methods[0].key)
+    }
+  }, [methods, selectedMethodKey])
+
+  const activeMethod = methods.find((method) => method.key === selectedMethodKey) ?? methods[0] ?? null
+
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3 mb-6">
+        <PaymentSummaryCard label="Total Collected" value={`${fmt(totalAmount)} RWF`} emphasized />
+        <PaymentSummaryCard label="Methods Used" value={methods.length.toString()} />
+        <PaymentSummaryCard label="Recorded Sales" value={totalCount.toString()} />
+      </div>
+
+      {methods.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-10 text-center text-sm text-gray-500">
+          No collected sales were found for this period.
+        </div>
+      ) : (
+        <>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {methods.map((method) => {
+              const isActive = method.key === activeMethod?.key
+
+              return (
+                <button
+                  key={method.key}
+                  onClick={() => setSelectedMethodKey(method.key)}
+                  className={`min-w-[102px] rounded-lg border px-4 py-4 text-left transition-all ${
+                    isActive
+                      ? 'border-blue-300 bg-blue-50 shadow-sm'
+                      : 'border-gray-200 bg-white hover:bg-gray-50'
+                  }`}
+                >
+                  <p className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-900'}`}>{method.buttonLabel}</p>
+                  <p className={`mt-1 text-xs ${isActive ? 'text-blue-600' : 'text-gray-500'}`}>{method.count} {method.count === 1 ? 'sale' : 'sales'}</p>
+                  <p className={`mt-3 text-[1.35rem] font-semibold leading-none ${isActive ? 'text-blue-700' : 'text-gray-900'}`}>{fmt(method.totalAmount)} RWF</p>
+                </button>
+              )
+            })}
+          </div>
+
+          {activeMethod && (
+            <div className="mt-6 overflow-hidden rounded-xl border border-gray-200 bg-white">
+              <div className="border-b border-gray-100 px-5 py-5">
+                <h4 className="text-[1.85rem] font-semibold leading-none text-gray-900">{activeMethod.buttonLabel} History</h4>
+                <p className="mt-2 text-sm text-gray-500">{activeMethod.count} {activeMethod.count === 1 ? 'sale' : 'sales'} recorded with {activeMethod.buttonLabel}.</p>
+              </div>
+              <PaymentHistoryTable events={activeMethod.events} />
+            </div>
+          )}
         </>
       )}
     </>
@@ -616,7 +929,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
       doc.text(`Generated: ${new Date().toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'})}`,pw/2,125,{align:'center'})
       doc.setFontSize(10); doc.setFont('helvetica','bold'); doc.text('CONTENTS',pw/2,148,{align:'center'})
       doc.setFont('helvetica','normal'); doc.setFontSize(9)
-      ;['1. Profit Margin Dashboard','2. Journal Ledger','3. Accounts Receivable','4. Accounts Payable','5. Cash Flow Statement','6. Balance Sheet','7. Income Statement (P&L)','8. Dish Profitability','9. Inventory Movement','10. Theoretical Inventory']
+      ;['1. Profit Margin Dashboard','2. Journal Ledger','3. Accounts Receivable','4. Accounts Payable','5. Cash Flow Statement','6. Balance Sheet','7. Income Statement (P&L)','8. Payment Methods','9. Orders Report','10. Inventory Movement','11. Theoretical Inventory']
         .forEach((c,i)=>doc.text(c,pw/2,157+i*8,{align:'center'}))
       doc.setFontSize(8); doc.text('Prepared by Jesse AI  Your Restaurant Financial Intelligence System',pw/2,ph-15,{align:'center'})
 
@@ -632,6 +945,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
 
       const totalDr=txs.filter(t=>t.type==='debit').reduce((s,t)=>s+t.amount,0)
       const totalCr=txs.filter(t=>t.type==='credit').reduce((s,t)=>s+t.amount,0)
+      const paymentCollections = buildPaymentMethodSummaries(txs)
 
       // 1. Dashboard
       let y=section('Profit Margin Dashboard',`Key performance indicators  ${label}`)
@@ -703,7 +1017,18 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
       if(revT.length>0){ y=sub('Revenue Detail',y); autoTable(doc,{...td,startY:y,head:[['Date','Account','Description','Effect (RWF)']],body:revT.map(t=>[t.date?.slice(0,10)??'',t.account?.name??'',(t.description??'').slice(0,40),`${getIncomeEffect(t)>=0?'+':'-'}${fmt(Math.abs(getIncomeEffect(t)))}`])}); y=(doc as any).lastAutoTable.finalY+6 }
       if(expT.length>0){ y=sub('Expense Detail',y); autoTable(doc,{...td,startY:y,head:[['Date','Account','Description','Effect (RWF)']],body:expT.map(t=>[t.date?.slice(0,10)??'',t.account?.name??'',(t.description??'').slice(0,40),`${getExpenseEffect(t)>=0?'+':'-'}${fmt(Math.abs(getExpenseEffect(t)))}`])}) }
 
-      // 8. Orders Report
+      // 8. Payment Methods
+      y=section('Payment Methods',`Collected sales by payment method  ${label}`)
+      if(paymentCollections.methods.length>0){
+        autoTable(doc,{...td,startY:y,head:[['Method','Sales','Collected (RWF)']],body:paymentCollections.methods.map((method)=>[method.label,method.count,fmt(method.totalAmount)])})
+        y=(doc as any).lastAutoTable.finalY+4; doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...ORANGE)
+        doc.text(`Totals  Sales: ${paymentCollections.totalCount}  |  Collected: ${fmt(paymentCollections.totalAmount)} RWF`,14,y)
+        y+=6
+        y=sub('Payment History',y)
+        autoTable(doc,{...td,startY:y,head:[['Date / Time','Method','Client','What Was Bought','Amount (RWF)']],body:paymentCollections.events.map((event)=>[formatReportDateTime(event.date || event.createdAt),paymentMethodButtonLabel(event.paymentMethod),event.clientLabel,event.itemLabel,fmt(event.amount)])})
+      } else { doc.setFontSize(9); doc.setTextColor(107,114,128); doc.text('No collected sales were found for this period.',14,y) }
+
+      // 9. Orders Report
       y=section('Orders Report',`Orders, status and profitability  ${label}`)
       if((dishProfit?.orders ?? dishProfit?.dishes)?.length>0){
         const dp=dishProfit.orders ?? dishProfit.dishes; const dt=dishProfit.totals??{}
@@ -713,7 +1038,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         doc.text(`Totals  Revenue: ${fmt(dt.totalRevenue??0)} RWF  |  Profit: ${fmt(dt.totalProfit??0)} RWF`,14,y)
       } else { doc.setFontSize(9); doc.setTextColor(107,114,128); doc.text('No paid orders recorded for this period.',14,y) }
 
-      // 9. Inventory Movement
+      // 10. Inventory Movement
       y=section('Inventory Movement',`Stock purchased vs used  ${label}`)
       if(invMovement?.items?.length>0){
         const im=invMovement.items; const it=invMovement.totals??{}
@@ -723,7 +1048,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         doc.text(`Totals  Purchased: ${fmt(it.totalPurchaseCost??0)} RWF  |  Used: ${fmt(it.totalUsedCost??0)} RWF  |  Stock Value: ${fmt(it.totalStockValue??0)} RWF`,14,y)
       } else { doc.setFontSize(9); doc.setTextColor(107,114,128); doc.text('No inventory data found. Add ingredients and record purchases.',14,y) }
 
-      // 10. Theoretical Inventory
+      // 11. Theoretical Inventory
       y=section('Theoretical Inventory',`Expected stock vs actual on hand  ${label}`)
       if(theoreticalInv?.items?.length>0){
         const ti=theoreticalInv.items; const tt=theoreticalInv.totals??{}
@@ -744,19 +1069,19 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
 
   useEffect(() => {
     // Use periodTxData (full period) so auto-selection is stable when a day card is clicked
-    const chipSource = periodTxData ?? txData
+    const chipSource = buildHistoryDateRows(activeTab, periodTxData ?? txData)
     const dates = Array.from(new Set((chipSource ?? []).map((row: any) => String(row.date ?? '').slice(0, 10)).filter(Boolean))).sort()
     if (dates.length === 0) {
       setSelectedHistoryDate(today)
       return
     }
     setSelectedHistoryDate((current) => dates.includes(current) ? current : dates[dates.length - 1])
-  }, [periodTxData, txData, today])
+  }, [activeTab, periodTxData, txData, today])
 
   // Date chips: show every calendar day for week/month/custom (≤31 days) so the
   // user can browse any day even if it had no transactions. For longer ranges
   // (quarter, year) only show days that actually had activity to avoid clutter.
-  const chipSource = periodTxData ?? txData
+  const chipSource = buildHistoryDateRows(activeTab, periodTxData ?? txData)
   const activityDates = new Set(
     (chipSource ?? []).map((row: any) => String(row.date ?? '').slice(0, 10)).filter(Boolean)
   )
@@ -870,7 +1195,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         {/* Content area */}
         <div className="p-5">
 
-          {dailyRows.length > 0 ? (
+          {activeTab !== 'payment_methods' && dailyRows.length > 0 ? (
             <div className="mb-4 space-y-2">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-gray-500">{rangeMode === 'custom' ? `Custom range: ${draftFrom} - ${draftTo}` : loadedPeriod}</p>
@@ -949,6 +1274,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
               {activeTab==='cashflow'   &&<CashFlowTable    txs={txData??[]}/>}
               {activeTab==='balance'    &&<BalanceSheetTable txs={txData??[]}/>}
               {activeTab==='income'     &&<IncomeTable      txs={txData??[]}/>}
+              {activeTab==='payment_methods' &&<PaymentMethodsTable txs={txData??[]}/>} 
               {activeTab==='dish_profit'        &&<DishProfitTable        data={dishProfitData}/>}
               {activeTab==='inventory_movement' &&<InventoryMovementTable data={invMovementData}/>}
               {activeTab==='theoretical_inventory' &&<TheoreticalInventoryTable data={theoreticalInvData}/>}

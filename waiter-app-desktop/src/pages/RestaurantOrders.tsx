@@ -4,11 +4,11 @@ import {
   ArrowLeft, Trash2, X, Receipt, ShieldAlert,
 } from 'lucide-react'
 import {
-  getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig, setConfig,
+  getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
-import { pushSync, pullSync, cancelOrderOnServer, validateCancellationPinOffline, type BranchInfo } from '../services/sync'
+import { pushSync, cancelOrderOnServer, validateCancellationPinOffline } from '../services/sync'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -85,11 +85,12 @@ function getDisplayStatus(order: Order) {
 interface Props {
   mode?: 'pos' | 'history'
   waiterName: string
+  activeBranchId?: string | null
   onPendingCountChange?: (count: number) => void
   syncVersion?: number
 }
 
-export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCountChange, syncVersion }: Props) {
+export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId = null, onPendingCountChange, syncVersion }: Props) {
   // ── Shared state ──
   const [dishes,        setDishes]        = useState<Dish[]>([])
   const [tables,        setTables]        = useState<RestaurantTable[]>([])
@@ -99,9 +100,6 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   const [loading,       setLoading]       = useState(true)
   const [restaurantId,  setRestaurantId]  = useState<string | null>(null)
   const [branchId,      setBranchId]      = useState<string | null>(null)
-  const [branches,        setBranches]        = useState<BranchInfo[]>([])
-  const [activeBranchId,  setActiveBranchId]  = useState<string | null>(null)
-  const [branchSwitching, setBranchSwitching] = useState(false)
 
   // ── POS-only state ──
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
@@ -114,7 +112,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   const [confirmingOrder,  setConfirmingOrder]  = useState(false)
   const [submitError,      setSubmitError]      = useState<string | null>(null)
   const [confirmSuccess,   setConfirmSuccess]   = useState<string | null>(null)
-  const [takenBy,          setTakenBy]          = useState(waiterName)
+  const [draftWaiterNames, setDraftWaiterNames] = useState<Record<string, string>>({})
   const [payingTableKey,    setPayingTableKey]    = useState<string | null>(null)
   const [payMethod,         setPayMethod]         = useState('Cash')
   const [payingSaving,      setPayingSaving]      = useState(false)
@@ -123,39 +121,22 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   const orderSubmitLockRef = useRef(false)
   const paymentLockRef     = useRef(false)
 
-  const handleBranchSwitch = useCallback(async (id: string) => {
-    if (branchSwitching || id === activeBranchId) return
-    setBranchSwitching(true)
-    try {
-      await setConfig('activeBranchId', id)
-      await pullSync(id)
-      setActiveBranchId(id)
-      await loadPOS()
-    } catch { /* ignore */ } finally {
-      setBranchSwitching(false)
-    }
-  }, [branchSwitching, activeBranchId])
-
   // ── Data loaders ──
 
   const loadPOS = useCallback(async () => {
     try {
-      const [d, t, orders, rId, bId, branchesRaw, activeBId] = await Promise.all([
+      const [d, t, orders, rId, bId] = await Promise.all([
         getDishes(),
         getTables(),
-        getOrders({ status: 'PENDING' }),
+        getOrders({ status: 'PENDING', branchId: activeBranchId }),
         getConfig('restaurantId'),
         getConfig('branchId'),
-        getConfig('branches'),
-        getConfig('activeBranchId'),
       ])
       setDishes(d)
       setTables(t)
       setPendingOrders(orders)
       setRestaurantId(rId)
       setBranchId(bId)
-      try { setBranches(branchesRaw ? JSON.parse(branchesRaw) : []) } catch { setBranches([]) }
-      setActiveBranchId(activeBId ?? bId)
 
       if (!rId) {
         void logWarn('order', 'POS loaded without restaurant configuration', {
@@ -173,14 +154,14 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
       setOrderItemsMap(itemsMap)
     } catch { /* DB not ready on first render — will retry */ }
     setLoading(false)
-  }, [])
+  }, [activeBranchId])
 
   const loadHistory = useCallback(async () => {
     try {
-      setAllOrders(await getOrders())
+      setAllOrders(await getOrders({ branchId: activeBranchId }))
     } catch {}
     setLoading(false)
-  }, [])
+  }, [activeBranchId])
 
   useEffect(() => {
     if (mode === 'pos') loadPOS()
@@ -193,9 +174,6 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
     const activeKeys = new Set(pendingOrders.map(o => o.table_id ?? 'takeaway'))
     onPendingCountChange?.(activeKeys.size)
   }, [pendingOrders, mode, onPendingCountChange])
-
-  // Pre-fill takenBy with the session waiter name; keep in sync when prop changes
-  useEffect(() => { setTakenBy(waiterName) }, [waiterName])
 
   // ── Cart actions ──
 
@@ -325,6 +303,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
       // ── Reload BEFORE clearing cart so the panel never flashes empty ──────
       await loadPOS()
       setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+      setDraftWaiterNames(prev => {
+        const next = { ...prev }
+        delete next[selectedTableKey]
+        return next
+      })
       setShowPanel('order')
       setConfirmSuccess(`${orderNumber} confirmed for ${tableName}`)
       setTimeout(() => setConfirmSuccess(null), 4000)
@@ -395,6 +378,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   })
 
   const cartItems      = localCart[selectedTableKey] ?? []
+  const takenBy        = draftWaiterNames[selectedTableKey] ?? ''
+  const hasTypedWaiterName = Object.prototype.hasOwnProperty.call(draftWaiterNames, selectedTableKey)
   const currentOrder   = pendingOrders.find(o => (o.table_id ?? 'takeaway') === selectedTableKey) ?? null
   const confirmedItems = currentOrder ? (orderItemsMap[currentOrder.id] ?? []) : []
   const isBuilding     = cartItems.length > 0
@@ -503,6 +488,14 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
           <div className="space-y-3">
             {allOrders.map(order => {
               const ds = getDisplayStatus(order)
+              const orderMeta = [
+                order.table_name ?? 'Takeaway',
+                order.created_by_name?.trim() || null,
+                new Date(order.created_at).toLocaleString('en-RW', {
+                  day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+                }),
+              ].filter(Boolean).join(' · ')
+
               return (
                 <div key={order.id} className="bg-white rounded-xl border border-gray-200 p-4 space-y-1.5">
                   <div className="flex items-start justify-between gap-2">
@@ -523,12 +516,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {order.table_name ?? 'Takeaway'} · {order.created_by_name ?? waiterName} ·{' '}
-                        {new Date(order.created_at).toLocaleString('en-RW', {
-                          day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
-                        })}
-                      </p>
+                      <p className="text-xs text-gray-500 mt-1">{orderMeta}</p>
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className="text-sm font-bold text-gray-900">{fmtRWF(order.total_amount)} RWF</p>
@@ -599,31 +587,6 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             </div>
           </div>
 
-          {/* Branch chip bar */}
-          {branches.length > 1 && (
-            <div className="flex items-center gap-2 pb-2 overflow-x-auto" style={{scrollbarWidth:'none'}}>
-              <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400 flex-shrink-0">BRANCH</span>
-              {branches.map(b => {
-                const isActive = (activeBranchId ?? branchId) === b.id
-                return (
-                  <button
-                    key={b.id}
-                    onClick={() => void handleBranchSwitch(b.id)}
-                    disabled={branchSwitching}
-                    className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-all ${
-                      isActive
-                        ? 'bg-orange-500 border-orange-500 text-white'
-                        : 'bg-white border-gray-300 text-gray-600 hover:border-orange-300 hover:text-orange-500'
-                    }`}>
-                    {isActive && <span className="h-1.5 w-1.5 rounded-full bg-white inline-block flex-shrink-0" />}
-                    {b.name}
-                    {branchSwitching && isActive && <RefreshCw className="h-3 w-3 animate-spin ml-0.5" />}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-
           {/* Row 2: compact table chips directly under Afternoon */}
           {tables.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 pb-2">
@@ -636,7 +599,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                 return (
                   <button key={key}
                     onClick={() => { setSelectedTableKey(key); setShowPanel('order') }}
-                    className={`relative flex-shrink-0 flex flex-col items-start px-5 py-3 rounded-xl text-left transition-all border-2 min-w-[80px] ${
+                    className={`relative flex-shrink-0 flex flex-col items-start px-3 py-1.5 rounded-xl text-left transition-all border ${
                       isSelected && isServed  ? 'bg-green-500  text-white border-green-500  shadow-sm' :
                       isSelected && hasOrder  ? 'bg-orange-500 text-white border-orange-500 shadow-sm' :
                       isSelected              ? 'bg-gray-900   text-white border-gray-900   shadow-sm' :
@@ -652,7 +615,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                     {hasOrder && !isServed && (
                       <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white" />
                     )}
-                    <span className="text-[16px] font-bold leading-tight">{table.name}</span>
+                    <span className="text-[13px] font-bold leading-tight">{table.name}</span>
                     {isServed
                       ? <span className={`text-[10px] font-semibold ${isSelected ? 'text-green-100' : 'text-green-600'}`}>Served</span>
                       : hasOrder
@@ -670,13 +633,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
         <div className="flex-shrink-0 px-4 py-2 flex items-center gap-2 overflow-x-auto" style={{scrollbarWidth:'none'}}>
           <button
             onClick={() => setSelectedCategory(null)}
-            className={`flex-shrink-0 rounded-lg px-4 py-2.5 text-left transition-all ${
+            className={`flex-shrink-0 rounded-lg px-3 py-1.5 text-left transition-all ${
               selectedCategory === null
                 ? 'bg-gray-800 text-white shadow'
                 : 'bg-white text-gray-700 border border-gray-200 hover:border-gray-300'
             }`}>
-            <span className="block text-sm font-bold">All items</span>
-            <span className="text-[12px] opacity-70">{dishes.length} items</span>
+            <span className="block text-xs font-bold">All items</span>
+            <span className="text-[10px] opacity-70">{dishes.length} items</span>
           </button>
           {categories.map((cat, idx) => {
             const [bg, fg] = COLOR_POOL[idx % COLOR_POOL.length]
@@ -684,11 +647,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             const isActive = selectedCategory === cat
             return (
               <button key={cat} onClick={() => setSelectedCategory(isActive ? null : cat)}
-                className={`flex-shrink-0 rounded-lg px-4 py-2.5 text-left transition-all ${bg} ${fg} ${
+                className={`flex-shrink-0 rounded-lg px-3 py-1.5 text-left transition-all ${bg} ${fg} ${
                   isActive ? 'ring-2 ring-gray-900 ring-offset-1' : 'hover:shadow-md'
                 }`}>
-                <span className="block text-sm font-bold">{cat}</span>
-                <span className="text-[12px] opacity-90">{count} items</span>
+                <span className="block text-xs font-bold">{cat}</span>
+                <span className="text-[10px] opacity-90">{count} items</span>
               </button>
             )
           })}
@@ -706,7 +669,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
           ) : filteredDishes.length === 0 ? (
             <div className="py-12 text-center text-gray-400 text-sm">No dishes found</div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2">
               {filteredDishes.map(dish => {
                 const qtyInCart = cartItems.filter(i => i.dishId === dish.id).reduce((s, i) => s + i.qty, 0)
                 const catIdx    = categories.indexOf(dish.category ?? '')
@@ -716,13 +679,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                 const initials = dish.name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
                 return (
                   <button key={dish.id} onClick={() => addDishToOrder(dish)}
-                    className="relative rounded-2xl overflow-hidden hover:shadow-lg hover:scale-[1.03] active:scale-[0.97] transition-all text-left flex flex-col h-full">
-                    <div className={`${bgTop} h-[130px] w-full flex items-center justify-center`}>
-                      <span className="text-white font-black text-4xl tracking-tight select-none drop-shadow">{initials}</span>
+                    className="relative rounded-xl overflow-hidden hover:shadow-md hover:scale-[1.02] active:scale-[0.97] transition-all text-left flex flex-col h-full">
+                    <div className={`${bgTop} h-[52px] w-full flex items-center justify-center`}>
+                      <span className="text-white font-black text-xl tracking-tight select-none drop-shadow">{initials}</span>
                     </div>
-                    <div className={`${bgBottom} px-3 py-3 flex-1 w-full`}>
-                      <p className="text-white text-[14px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
-                      <p className="text-white/70 font-medium text-[12px] mt-1.5">
+                    <div className={`${bgBottom} px-2 py-1.5 flex-1 w-full`}>
+                      <p className="text-white text-[11px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
+                      <p className="text-white/70 font-medium text-[10px] mt-0.5">
                         {fmtRWF(Math.round(dish.selling_price * (1 + VAT_RATE)))} RWF incl. VAT
                       </p>
                     </div>
@@ -848,21 +811,45 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                 <div className="pt-1">
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Taken by</label>
                   <input
+                    key={`taken-by-${selectedTableKey}`}
                     type="text"
+                    name={`taken-by-${selectedTableKey}`}
                     value={takenBy}
-                    onChange={e => { setTakenBy(e.target.value); setSubmitError(null) }}
-                    placeholder="Enter your name"
+                    autoComplete="new-password"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    onChange={e => {
+                      const nextName = e.target.value
+                      setDraftWaiterNames(prev => ({ ...prev, [selectedTableKey]: nextName }))
+                      setSubmitError(null)
+                    }}
+                    onFocus={e => {
+                      if (hasTypedWaiterName || !e.currentTarget.value) return
+                      e.currentTarget.value = ''
+                    }}
                     disabled={confirmingOrder}
                     className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-60"
                   />
+                  <p className="mt-1 text-[11px] text-gray-400">This starts blank for each new order and only the typed waiter name is saved.</p>
                 </div>
 
-                <button onClick={confirmOrder} disabled={confirmingOrder}
+                <button onClick={confirmOrder} disabled={confirmingOrder || !takenBy.trim()}
                   className="w-full bg-orange-500 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm">
                   {confirmingOrder ? 'Confirming…' : 'Confirm Order'}
                 </button>
                 <button
-                  onClick={() => { setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] })); setSubmitError(null) }}
+                  onClick={() => {
+                    setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+                    setDraftWaiterNames(prev => {
+                      const next = { ...prev }
+                      delete next[selectedTableKey]
+                      return next
+                    })
+                    setSubmitError(null)
+                  }}
                   disabled={confirmingOrder}
                   className="w-full text-xs text-gray-400 hover:text-red-500 py-1 transition-colors">
                   Clear cart
@@ -1034,4 +1021,3 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
     )
   }
 }
-

@@ -68,10 +68,10 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
     if (isOnline) runSync()
   }, [isOnline]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-sync every 30 seconds
+  // Auto-sync every 10 seconds
   useEffect(() => {
     if (!isOnline) return
-    const interval = setInterval(runSync, 30_000)
+    const interval = setInterval(runSync, 10_000)
     return () => clearInterval(interval)
   }, [isOnline, runSync])
 

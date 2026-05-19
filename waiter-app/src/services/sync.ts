@@ -123,7 +123,7 @@ export async function pullSync(): Promise<PullResult> {
 
   if (payload.dishes.length === 0) {
     if (existingDishes.length > 0) {
-      warnings.push('Live menu pull returned no dishes for your branch, so the waiter app is still using the cached menu. Ask your manager to verify branch assignment and menu sync health.')
+      warnings.push('No menu received for this branch yet — using cached menu.')
     }
   } else {
     await replaceDishes(payload.dishes)
@@ -132,7 +132,7 @@ export async function pullSync(): Promise<PullResult> {
 
   if (payload.tables.length === 0) {
     if (existingTables.length > 0) {
-      warnings.push('Live table pull returned no tables for your branch, so the waiter app is still using the cached table list. Ask your manager to verify branch assignment and table sync health.')
+      warnings.push('No tables received for this branch yet — using cached tables.')
     }
   } else {
     await replaceTables(payload.tables)

@@ -183,7 +183,9 @@ export async function login(email: string, password: string): Promise<WaiterUser
 
   // Cache restaurant + branch in config for offline reads
   await setConfig('restaurantId', user.restaurantId)
-  if (user.branchId) await setConfig('branchId', user.branchId)
+  await setConfig('branchId', user.branchId ?? '')
+  await setConfig('activeBranchId', user.branchId ?? '')
+  await setConfig('branches', '')
   await setConfig('waiterName', user.name)
 
   await logInfo('auth', 'Login succeeded', {
@@ -219,5 +221,10 @@ export async function getToken(): Promise<string | null> {
 
 export async function logout(): Promise<void> {
   await clearSession()
+  await setConfig('restaurantId', '')
+  await setConfig('branchId', '')
+  await setConfig('activeBranchId', '')
+  await setConfig('branches', '')
+  await setConfig('waiterName', '')
   await logInfo('auth', 'Session cleared by logout')
 }

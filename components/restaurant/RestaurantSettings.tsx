@@ -135,7 +135,6 @@ type FifoValidationResponse = {
   restaurant: {
     id: string
     name: string
-    syncRestaurantId: string | null
     fifoEnabled: boolean
     fifoConfiguredAt: string | null
     fifoCutoverAt: string | null
@@ -172,7 +171,6 @@ export default function RestaurantSettings() {
   const [qrOrderingMode, setQrOrderingMode] = useState<'order' | 'view_only' | 'disabled'>('disabled')
   const [trackingMode, setTrackingMode] = useState<'simple' | 'dish_tracking'>('simple')
   const [restaurantIdValue, setRestaurantIdValue] = useState<string | null>(null)
-  const [restaurantSyncId, setRestaurantSyncId] = useState<string | null>(null)
   const [fifoEnabled, setFifoEnabled] = useState(true)
   const [fifoAvailable, setFifoAvailable] = useState(FIFO_FEATURE_AVAILABLE)
   const [fifoConfiguredAt, setFifoConfiguredAt] = useState<string | null>(null)
@@ -222,7 +220,7 @@ export default function RestaurantSettings() {
   const [restoring, setRestoring] = useState(false)
   const [restoreMessage, setRestoreMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const lowerSettingsRef = useRef<HTMLDivElement>(null)
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false)
 
   async function refreshStartupLog(options?: { silent?: boolean }) {
     const silent = options?.silent === true
@@ -388,7 +386,6 @@ export default function RestaurantSettings() {
 
         if (setupData) {
           setRestaurantIdValue(typeof setupData.restaurant?.id === 'string' ? setupData.restaurant.id : null)
-          setRestaurantSyncId(typeof setupData.restaurant?.syncRestaurantId === 'string' ? setupData.restaurant.syncRestaurantId : null)
           setRestaurantName(setupData.restaurant?.name ?? '')
           const template = parseRestaurantBillTemplate(setupData.restaurant?.billHeader)
           setBillTopText(template.topText)
@@ -500,7 +497,6 @@ export default function RestaurantSettings() {
       const savedRestaurant = data?.restaurant
       if (savedRestaurant) {
         setRestaurantIdValue(typeof savedRestaurant.id === 'string' ? savedRestaurant.id : restaurantIdValue)
-        setRestaurantSyncId(typeof savedRestaurant.syncRestaurantId === 'string' ? savedRestaurant.syncRestaurantId : restaurantSyncId)
         setRestaurantName(savedRestaurant.name ?? '')
         const template = parseRestaurantBillTemplate(savedRestaurant.billHeader)
         setBillTopText(template.topText)
@@ -1227,15 +1223,17 @@ export default function RestaurantSettings() {
       <div className="xl:col-span-2">
         <button
           type="button"
-          onClick={() => lowerSettingsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          onClick={() => setShowAdvancedSettings(v => !v)}
           className="flex w-full items-center justify-center gap-3 rounded-2xl border border-dashed border-orange-200 bg-orange-50 px-4 py-3 text-sm font-medium text-orange-700 transition-colors hover:bg-orange-100"
         >
-          <ChevronDown className="h-4 w-4 animate-bounce" />
-          More settings below: cloud sync, startup logs, and backup
+          <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${showAdvancedSettings ? 'rotate-180' : 'animate-bounce'}`} />
+          {showAdvancedSettings ? 'Hide advanced settings' : 'More settings: cloud sync, startup logs, and backup'}
         </button>
       </div>
 
-      <div ref={lowerSettingsRef} className="bg-white rounded-2xl border border-gray-200 p-6 space-y-4 xl:col-span-2">
+      {showAdvancedSettings && <>
+
+      <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-4 xl:col-span-2">
         <div className="flex items-center gap-2">
           <Cloud className="h-5 w-5 text-orange-500" />
           <h2 className="text-base font-bold text-gray-900">Owner cloud sync</h2>
@@ -1783,6 +1781,8 @@ export default function RestaurantSettings() {
           Tip: Download a backup before making big changes. The file includes all transactions, dishes, inventory, employees, and sales — but not uploaded images or chat history.
         </p>
       </div>
+
+      </>}
 
     </div>
   )

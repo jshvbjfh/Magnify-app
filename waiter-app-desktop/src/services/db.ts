@@ -257,13 +257,24 @@ export async function updateOrder(
   await db.run(`UPDATE orders SET ${setClauses} WHERE id = ?`, [...values, orderId])
 }
 
-export async function getOrders(filter?: { status?: string }): Promise<Order[]> {
+export async function getOrders(filter?: { status?: string; branchId?: string | null }): Promise<Order[]> {
   const db = getDB()
+  const clauses: string[] = []
+  const values: unknown[] = []
+
   if (filter?.status) {
-    const rows = await db.query('SELECT * FROM orders WHERE status = ? ORDER BY created_at DESC', [filter.status])
-    return (rows ?? []) as unknown as Order[]
+    clauses.push('status = ?')
+    values.push(filter.status)
   }
-  const rows = await db.query('SELECT * FROM orders ORDER BY created_at DESC', [])
+
+  const normalizedBranchId = typeof filter?.branchId === 'string' ? filter.branchId.trim() : ''
+  if (normalizedBranchId) {
+    clauses.push('branch_id = ?')
+    values.push(normalizedBranchId)
+  }
+
+  const whereClause = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : ''
+  const rows = await db.query(`SELECT * FROM orders${whereClause} ORDER BY created_at DESC`, values)
   return (rows ?? []) as unknown as Order[]
 }
 

@@ -35,9 +35,10 @@ function fmtRWF(n: number) {
 
 interface Props {
   waiterName: string
+  activeBranchId?: string | null
 }
 
-export default function RestaurantTables({ waiterName: _waiterName }: Props) {
+export default function RestaurantTables({ waiterName: _waiterName, activeBranchId = null }: Props) {
   const [tables,        setTables]        = useState<RestaurantTable[]>([])
   const [pendingOrders, setPendingOrders] = useState<Order[]>([])
   const [loading,       setLoading]       = useState(true)
@@ -47,13 +48,13 @@ export default function RestaurantTables({ waiterName: _waiterName }: Props) {
     try {
       const [t, o] = await Promise.all([
         getTables(),
-        getOrders({ status: 'PENDING' }),
+        getOrders({ status: 'PENDING', branchId: activeBranchId }),
       ])
       setTables(t)
       setPendingOrders(o)
     } catch {}
     setLoading(false)
-  }, [])
+  }, [activeBranchId])
 
   useEffect(() => { load() }, [load])
 

@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { UtensilsCrossed, ArrowLeftRight, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText } from 'lucide-react'
 import { useOnline } from '../hooks/useOnline'
 import { isOfflineLikeErrorMessage } from '../services/http'
+import { getConfig, setConfig } from '../services/db'
 import { logInfo } from '../services/logger'
-import { syncAll } from '../services/sync'
+import { syncAll, type BranchInfo } from '../services/sync'
 import type { WaiterUser } from '../services/auth'
 import RestaurantOrders from './RestaurantOrders'
 import RestaurantTables from './RestaurantTables'
@@ -26,52 +27,96 @@ interface WaiterShellProps {
 export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   const { isOnline } = useOnline()
   const [activeTab, setActiveTab] = useState<TabId>('menu')
+  const [branches, setBranches] = useState<BranchInfo[]>([])
+  const [activeBranchId, setActiveBranchId] = useState<string | null>(user?.branchId ?? null)
+  const [branchSwitchingId, setBranchSwitchingId] = useState<string | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
   const [syncing, setSyncing] = useState(false)
   const [transportOfflineMode, setTransportOfflineMode] = useState(false)
   const [lastSyncError, setLastSyncError] = useState<string | null>(null)
   const [lastSyncWarning, setLastSyncWarning] = useState<string | null>(null)
   const [syncVersion, setSyncVersion] = useState(0)
+  const syncingRef = useRef(false)
 
   const waiterName = user?.name ?? ''
   const initials = waiterName
     ? waiterName.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
     : 'W'
 
-  const runSync = useCallback(async () => {
-    if (!isOnline || syncing) return
+  const loadStoredBranchState = useCallback(async () => {
+    try {
+      const [rawBranches, rawActiveBranchId, rawBranchId] = await Promise.all([
+        getConfig('branches'),
+        getConfig('activeBranchId'),
+        getConfig('branchId'),
+      ])
+
+      const parsedBranches = rawBranches
+        ? JSON.parse(rawBranches) as BranchInfo[]
+        : []
+
+      setBranches(Array.isArray(parsedBranches) ? parsedBranches : [])
+
+      const normalizedActiveBranchId = typeof rawActiveBranchId === 'string' && rawActiveBranchId.trim()
+        ? rawActiveBranchId.trim()
+        : typeof rawBranchId === 'string' && rawBranchId.trim()
+          ? rawBranchId.trim()
+          : parsedBranches[0]?.id ?? null
+
+      setActiveBranchId(normalizedActiveBranchId)
+    } catch {
+      setBranches([])
+    }
+  }, [])
+
+  const runSync = useCallback(async (options?: { branchId?: string; persistBranch?: boolean }) => {
+    if (!isOnline || syncingRef.current) return
+    syncingRef.current = true
     setSyncing(true)
     setLastSyncError(null)
-    const result = await syncAll()
-    if (result.authFailed) {
+    try {
+      const result = await syncAll(options?.branchId)
+      if (result.authFailed) {
+        return
+      }
+
+      if (result.error && isOfflineLikeErrorMessage(result.error)) {
+        setTransportOfflineMode(true)
+        setLastSyncError(null)
+        setLastSyncWarning(null)
+      } else if (result.error) {
+        setTransportOfflineMode(false)
+        setLastSyncError(result.error)
+        setLastSyncWarning(null)
+      } else {
+        if (options?.persistBranch && options.branchId && !result.warning) {
+          await setConfig('activeBranchId', options.branchId)
+          await setConfig('branchId', options.branchId)
+        }
+        await loadStoredBranchState()
+        setTransportOfflineMode(false)
+        setLastSyncWarning(result.warning ?? null)
+        setSyncVersion(v => v + 1)
+      }
+    } finally {
+      syncingRef.current = false
       setSyncing(false)
-      return
     }
-    if (result.error && isOfflineLikeErrorMessage(result.error)) {
-      setTransportOfflineMode(true)
-      setLastSyncError(null)
-      setLastSyncWarning(null)
-    } else if (result.error) {
-      setTransportOfflineMode(false)
-      setLastSyncError(result.error)
-      setLastSyncWarning(null)
-    } else {
-      setTransportOfflineMode(false)
-      setLastSyncWarning(result.warning ?? null)
-      setSyncVersion(v => v + 1)
-    }
-    setSyncing(false)
-  }, [isOnline, syncing])
+  }, [isOnline, loadStoredBranchState])
+
+  useEffect(() => {
+    void loadStoredBranchState()
+  }, [loadStoredBranchState])
 
   // Auto-sync when app comes online
   useEffect(() => {
-    if (isOnline) runSync()
-  }, [isOnline]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (isOnline) void runSync()
+  }, [isOnline, runSync])
 
-  // Auto-sync every 30 seconds
+  // Auto-sync every 10 seconds
   useEffect(() => {
     if (!isOnline) return
-    const interval = setInterval(runSync, 30_000)
+    const interval = setInterval(runSync, 10_000)
     return () => clearInterval(interval)
   }, [isOnline, runSync])
 
@@ -81,6 +126,27 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
 
   const isPOS = activeTab === 'menu'
   const showOfflineBanner = !isOnline || transportOfflineMode
+
+  const handleBranchSelect = async (branchId: string) => {
+    if (branchId === activeBranchId || branchSwitchingId) return
+    if (!isOnline) {
+      setLastSyncWarning('Connect to the internet to switch branches.')
+      return
+    }
+
+    setBranchSwitchingId(branchId)
+    try {
+      // If a background sync is in progress, wait up to 10 s for it to finish
+      // so the branch-switch sync is not silently dropped by the runSync guard.
+      const deadline = Date.now() + 10_000
+      while (syncingRef.current && Date.now() < deadline) {
+        await new Promise<void>(r => setTimeout(r, 150))
+      }
+      await runSync({ branchId, persistBranch: true })
+    } finally {
+      setBranchSwitchingId(null)
+    }
+  }
 
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
@@ -147,7 +213,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
           <div className="flex items-center gap-1 flex-shrink-0">
             {isOnline ? (
               <button
-                onClick={runSync}
+                onClick={() => { void runSync() }}
                 disabled={syncing}
                 title="Sync now"
                 className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-2 py-1.5 rounded-lg hover:bg-white/5 transition-colors"
@@ -169,24 +235,50 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
         </div>
       </header>
 
+      {branches.length > 0 && (
+        <div className="border-b border-orange-100 bg-white px-4 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar flex-shrink-0">
+          {branches.map((branch) => {
+            const isActive = branch.id === activeBranchId
+            const isSwitching = branch.id === branchSwitchingId
+            return (
+              <button
+                key={branch.id}
+                type="button"
+                onClick={() => { void handleBranchSelect(branch.id) }}
+                disabled={isSwitching}
+                title={branch.name}
+                className={`flex-shrink-0 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                  isActive
+                    ? 'border-orange-500 bg-orange-500 text-white'
+                    : 'border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100'
+                } ${isSwitching ? 'cursor-wait opacity-70' : ''}`}
+              >
+                {branch.code?.trim() || branch.name}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {/* ── Content ── */}
       <main className={isPOS ? 'flex-1 overflow-hidden' : 'flex-1 overflow-y-auto'}>
         {activeTab === 'menu' && (
           <RestaurantOrders
             mode="pos"
             waiterName={waiterName}
+            activeBranchId={activeBranchId}
             onPendingCountChange={setPendingCount}
             syncVersion={syncVersion}
           />
         )}
         {activeTab === 'transactions' && (
           <div className="max-w-5xl mx-auto px-4 py-6">
-            <RestaurantOrders mode="history" waiterName={waiterName} />
+            <RestaurantOrders mode="history" waiterName={waiterName} activeBranchId={activeBranchId} />
           </div>
         )}
         {activeTab === 'tables' && (
           <div className="max-w-5xl mx-auto px-4 py-6">
-            <RestaurantTables waiterName={waiterName} />
+            <RestaurantTables waiterName={waiterName} activeBranchId={activeBranchId} />
           </div>
         )}
         {activeTab === 'logs' && (

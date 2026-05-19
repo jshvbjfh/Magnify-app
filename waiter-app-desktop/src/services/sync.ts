@@ -36,6 +36,11 @@ export interface PullResult {
   warning?: string
 }
 
+function normalizeConfigId(value: string | null | undefined): string | undefined {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  return normalized || undefined
+}
+
 async function requireValidToken(): Promise<string> {
   const token = await getToken()
   if (!token) {
@@ -50,9 +55,11 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   const token = await requireValidToken()
   const method = 'GET'
 
-  // Use explicit branchId arg, or fall back to any stored active branch override.
-  const activeBranch = branchId ?? (await getConfig('activeBranchId')) ?? undefined
-  const pullUrl = activeBranch ? `${API.pull}?branchId=${encodeURIComponent(activeBranch)}` : API.pull
+  const requestedBranchId = normalizeConfigId(branchId)
+  const assignedBranchId = normalizeConfigId(await getConfig('branchId'))
+  const activeBranchId = normalizeConfigId(await getConfig('activeBranchId'))
+  const effectiveBranchId = requestedBranchId ?? activeBranchId ?? assignedBranchId
+  const pullUrl = effectiveBranchId ? `${API.pull}?branchId=${encodeURIComponent(effectiveBranchId)}` : API.pull
 
   const response = await sendRequest({
     scope: 'sync',
@@ -65,7 +72,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
     const httpError = new Error(`HTTP ${response.status}`)
 
     await logWarn('sync', 'Pull sync unauthorized', {
-      endpoint: API.pull,
+      endpoint: pullUrl,
       method,
       status: response.status,
       error: httpError.message,
@@ -78,9 +85,10 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
     const httpError = new Error(`HTTP ${response.status}`)
 
     await logError('sync', 'Pull sync failed', {
-      endpoint: API.pull,
+      endpoint: pullUrl,
       method,
       status: response.status,
+      branchId: effectiveBranchId ?? null,
       error: httpError.message,
     })
 
@@ -89,7 +97,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
 
     if (!parsedFromJson && rawBody) {
       await logError('sync', 'Pull response was not JSON', {
-        endpoint: API.pull,
+        endpoint: pullUrl,
         method,
         status: response.status,
         contentType: getResponseHeader(response.headers, 'content-type'),
@@ -109,7 +117,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
 
   if (!parsedFromJson) {
     await logError('sync', 'Pull response was not JSON', {
-      endpoint: API.pull,
+      endpoint: pullUrl,
       method,
       status: response.status,
       contentType: getResponseHeader(response.headers, 'content-type'),
@@ -136,7 +144,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
 
   if (payload.dishes.length === 0) {
     if (existingDishes.length > 0) {
-      warnings.push('Live menu pull returned no dishes for your branch, so the waiter app is still using the cached menu. Ask your manager to verify branch assignment and menu sync health.')
+      warnings.push('No menu received for this branch yet — using cached menu.')
     }
   } else {
     await replaceDishes(payload.dishes)
@@ -145,7 +153,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
 
   if (payload.tables.length === 0) {
     if (existingTables.length > 0) {
-      warnings.push('Live table pull returned no tables for your branch, so the waiter app is still using the cached table list. Ask your manager to verify branch assignment and table sync health.')
+      warnings.push('No tables received for this branch yet — using cached tables.')
     }
   } else {
     await replaceTables(payload.tables)
@@ -290,12 +298,12 @@ export async function pushSync(): Promise<number> {
 
 // ─── Full sync cycle ─────────────────────────────────────────────────────────
 
-export async function syncAll(): Promise<{ pushed: number; pulled: boolean; warning?: string; error?: string; authFailed?: boolean }> {
+export async function syncAll(branchId?: string): Promise<{ pushed: number; pulled: boolean; warning?: string; error?: string; authFailed?: boolean }> {
   let pushed = 0
 
   try {
     pushed = await pushSync()
-    const pullResult = await pullSync()
+    const pullResult = await pullSync(branchId)
     return { pushed, pulled: true, warning: pullResult.warning }
   } catch (err) {
     const error = (err as Error).message

@@ -225,16 +225,36 @@ export async function replaceDishes(dishes: Dish[]): Promise<void> {
     console.warn('[replaceDishes] received empty dishes array — skipping replace to preserve local data')
     return
   }
+
+  // F1-3: Branch-scoped delete instead of full table wipe.
+  // All dishes in a single pull share one branch_id (mobile/pull L74 filters
+  // by a single effectiveBranchId). Deleting only that branch's dishes preserves
+  // other branches' menus for offline use when the waiter switches branches.
+  const pullBranchId = dishes[0].branch_id
   const d = getDB()
-  await d.executeSet([
-    { statement: 'BEGIN', values: [] },
-    { statement: 'DELETE FROM dishes', values: [] },
-    ...dishes.map(dish => ({
-      statement: 'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      values: [dish.id, dish.name, dish.selling_price, dish.category, dish.is_active ? 1 : 0, dish.branch_id, dish.restaurant_id],
-    })),
-    { statement: 'COMMIT', values: [] },
-  ])
+
+  if (pullBranchId) {
+    await d.executeSet([
+      { statement: 'BEGIN', values: [] },
+      { statement: 'DELETE FROM dishes WHERE branch_id = ?', values: [pullBranchId] },
+      ...dishes.map(dish => ({
+        statement: 'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        values: [dish.id, dish.name, dish.selling_price, dish.category, dish.is_active ? 1 : 0, dish.branch_id, dish.restaurant_id],
+      })),
+      { statement: 'COMMIT', values: [] },
+    ])
+  } else {
+    // Fallback: if branch_id is null (legacy data), do a full replace
+    await d.executeSet([
+      { statement: 'BEGIN', values: [] },
+      { statement: 'DELETE FROM dishes', values: [] },
+      ...dishes.map(dish => ({
+        statement: 'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        values: [dish.id, dish.name, dish.selling_price, dish.category, dish.is_active ? 1 : 0, dish.branch_id, dish.restaurant_id],
+      })),
+      { statement: 'COMMIT', values: [] },
+    ])
+  }
 }
 
 export async function getDishes(): Promise<Dish[]> {
