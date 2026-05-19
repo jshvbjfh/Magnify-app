@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell, screen } = require('electron')
+﻿const { app, BrowserWindow, dialog, ipcMain, shell, screen } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const http = require('http')
@@ -304,6 +304,281 @@ async function sqliteTableHasColumn(prisma, tableName, columnName) {
 
 	const columns = await prisma.$queryRawUnsafe(`PRAGMA table_info("${escapeSqliteIdentifier(tableName)}")`)
 	return columns.some((column) => column.name === columnName)
+}
+
+async function getDesktopBranchTableContext(prisma) {
+	const tableCandidates = ['branches', 'restaurant_branches']
+
+	for (const tableName of tableCandidates) {
+		if (!await sqliteTableExists(prisma, tableName)) continue
+
+		return {
+			tableName,
+			quotedName: `"${escapeSqliteIdentifier(tableName)}"`,
+			hasRestaurantId: await sqliteTableHasColumn(prisma, tableName, 'restaurantId'),
+			hasIsMain: await sqliteTableHasColumn(prisma, tableName, 'isMain'),
+			hasIsActive: await sqliteTableHasColumn(prisma, tableName, 'isActive'),
+			hasSortOrder: await sqliteTableHasColumn(prisma, tableName, 'sortOrder'),
+			hasCreatedAt: await sqliteTableHasColumn(prisma, tableName, 'createdAt'),
+		}
+	}
+
+	return null
+}
+
+function buildDesktopSingleRestaurantLookupSql() {
+	return `(SELECT CASE WHEN COUNT(*) = 1 THEN MIN("id") END FROM "restaurants")`
+}
+
+function buildDesktopRestaurantLookupByUserSql(tableName, userColumnName) {
+	const tableRef = `"${escapeSqliteIdentifier(tableName)}"`
+	const userColumnRef = `"${escapeSqliteIdentifier(userColumnName)}"`
+
+	return `(SELECT "id"
+		FROM "restaurants"
+		WHERE "ownerId" = ${tableRef}.${userColumnRef}
+		   OR "managerId" = ${tableRef}.${userColumnRef}
+		ORDER BY "id" ASC
+		LIMIT 1)`
+}
+
+function buildDesktopBranchLookupSql(branchContext, restaurantIdExpression, { preferMain = false } = {}) {
+	if (!branchContext?.hasRestaurantId) return null
+
+	const filters = [`${branchContext.quotedName}."restaurantId" = ${restaurantIdExpression}`]
+	if (preferMain && branchContext.hasIsMain) {
+		filters.push(`${branchContext.quotedName}."isMain" = 1`)
+	}
+	if (branchContext.hasIsActive) {
+		filters.push(`${branchContext.quotedName}."isActive" = 1`)
+	}
+
+	const orderBy = []
+	if (branchContext.hasSortOrder) {
+		orderBy.push(`${branchContext.quotedName}."sortOrder" ASC`)
+	}
+	if (branchContext.hasCreatedAt) {
+		orderBy.push(`${branchContext.quotedName}."createdAt" ASC`)
+	}
+	orderBy.push(`${branchContext.quotedName}."id" ASC`)
+
+	return `(SELECT ${branchContext.quotedName}."id"
+		FROM ${branchContext.quotedName}
+		WHERE ${filters.join(' AND ')}
+		ORDER BY ${orderBy.join(', ')}
+		LIMIT 1)`
+}
+
+async function querySqliteCount(prisma, sql) {
+	const rows = await prisma.$queryRawUnsafe(sql)
+	return Number(rows?.[0]?.count ?? 0)
+}
+
+function isDesktopSchemaCompatibilityRepairCandidate(details) {
+	const message = String(details || '')
+	// Prisma's "cannot be executed" phrase appears in multiple message formats:
+	//   "These changes cannot be executed"  (older Prisma versions)
+	//   "We found changes that cannot be executed"  (Prisma 5.x)
+	// Match either format. Table names confirm this is a legacy-upgrade compatibility error,
+	// not a schema change we should silently skip.
+	return /cannot be executed/i.test(message)
+		&& /(branch_devices|dish_ingredients|dish_sale_ingredients|dish_sales|inventory_items|restaurants)/i.test(message)
+}
+
+async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbPath, nodePath, prismaCli, schemaPath, migrationEnv }) {
+	if (!runtimeDbPath || !fs.existsSync(runtimeDbPath)) {
+		return {
+			attempted: false,
+			repaired: false,
+			reason: 'Runtime desktop database is unavailable for schema compatibility repair',
+			backupPath: null,
+			actions: [],
+			branchTableName: null,
+		}
+	}
+
+	let backupPath = null
+	const actions = []
+
+	try {
+		backupPath = createDesktopDatabaseBackup(runtimeDbPath, userDataDir, 'schema-compat')
+	} catch (backupErr) {
+		return {
+			attempted: true,
+			repaired: false,
+			reason: `Database backup failed before repair: ${backupErr?.message || backupErr}`,
+			backupPath: null,
+			actions: [],
+			branchTableName: null,
+		}
+	}
+
+	// Run individual SQL statements via the Prisma CLI (prisma db execute --stdin).
+	// This avoids any dependency on @prisma/client or the generated .prisma/client/default
+	// module, which is NOT present in the packaged build because electron-builder runs a
+	// clean production `npm install` without `prisma generate`.
+	const { execFileSync: execFileSyncRepair } = require('child_process')
+
+	function dbExecute(sql, benignPatterns) {
+		try {
+			execFileSyncRepair(nodePath, [prismaCli, 'db', 'execute', '--stdin', '--schema', schemaPath], {
+				input: sql,
+				env: migrationEnv,
+				timeout: 30000,
+				stdio: ['pipe', 'pipe', 'pipe'],
+			})
+			return { ok: true }
+		} catch (e) {
+			const msg = `${e.message || ''} ${e.stderr?.toString() || ''} ${e.stdout?.toString() || ''}`
+			for (const pattern of (benignPatterns || [])) {
+				if (msg.toLowerCase().includes(pattern.toLowerCase())) return { ok: true, skipped: pattern }
+			}
+			return { ok: false, error: msg.slice(0, 500) }
+		}
+	}
+
+	const SKIP_DUP = ['duplicate column name']
+	const SKIP_TABLE = ['duplicate column name', 'no such table']
+	const SKIP_SOFT = ['duplicate column name', 'no such table', 'no such column']
+
+	let r
+
+	// restaurants
+	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "managerId" TEXT;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added restaurants.managerId')
+	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "fifoEnabled" INTEGER NOT NULL DEFAULT 1;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added restaurants.fifoEnabled')
+	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "fifoConfiguredAt" DATETIME;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added restaurants.fifoConfiguredAt')
+	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "syncRestaurantId" TEXT;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added restaurants.syncRestaurantId')
+	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "deletedAt" DATETIME;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added restaurants.deletedAt')
+
+	// branches: create the table if this is a pre-branch-era DB (table never existed)
+	r = dbExecute(`
+		CREATE TABLE IF NOT EXISTS "branches" (
+			"id" TEXT NOT NULL PRIMARY KEY,
+			"restaurantId" TEXT NOT NULL,
+			"name" TEXT NOT NULL DEFAULT 'Main Branch',
+			"code" TEXT NOT NULL DEFAULT 'MAIN',
+			"isMain" INTEGER NOT NULL DEFAULT 1,
+			"isActive" INTEGER NOT NULL DEFAULT 1,
+			"address" TEXT,
+			"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			"updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			"deletedAt" DATETIME
+		);
+	`, SKIP_SOFT)
+	if (r.ok && !r.skipped) actions.push('Created branches table')
+	// Seed one default main branch per restaurant that has no branch yet
+	dbExecute(`
+		INSERT INTO "branches" ("id", "restaurantId", "name", "code", "isMain", "isActive", "createdAt", "updatedAt")
+		SELECT
+			'branch-' || r."id",
+			r."id",
+			'Main Branch',
+			'MAIN',
+			1,
+			1,
+			CURRENT_TIMESTAMP,
+			CURRENT_TIMESTAMP
+		FROM "restaurants" r
+		WHERE NOT EXISTS (SELECT 1 FROM "branches" WHERE "restaurantId" = r."id");
+	`, SKIP_SOFT)
+	r = dbExecute(`ALTER TABLE "branches" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added branches.deletedAt')
+
+	// dish_ingredients
+	r = dbExecute(`ALTER TABLE "dish_ingredients" ADD COLUMN "inventoryItemId" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added dish_ingredients.inventoryItemId')
+	dbExecute(
+		`UPDATE "dish_ingredients" SET "inventoryItemId" = COALESCE("inventoryItemId", "ingredientId") WHERE ("inventoryItemId" IS NULL OR TRIM("inventoryItemId") = '') AND "ingredientId" IS NOT NULL;`,
+		SKIP_SOFT
+	)
+	r = dbExecute(`ALTER TABLE "dish_ingredients" ADD COLUMN "updatedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added dish_ingredients.updatedAt')
+	dbExecute(
+		`UPDATE "dish_ingredients" SET "updatedAt" = COALESCE("updatedAt", "createdAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;`,
+		SKIP_SOFT
+	)
+
+	// dish_sale_ingredients
+	r = dbExecute(`ALTER TABLE "dish_sale_ingredients" ADD COLUMN "updatedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added dish_sale_ingredients.updatedAt')
+	dbExecute(
+		`UPDATE "dish_sale_ingredients" SET "updatedAt" = COALESCE("updatedAt", "createdAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;`,
+		SKIP_SOFT
+	)
+
+	// dish_sales
+	r = dbExecute(`ALTER TABLE "dish_sales" ADD COLUMN "restaurantId" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added dish_sales.restaurantId')
+	r = dbExecute(`ALTER TABLE "dish_sales" ADD COLUMN "branchId" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added dish_sales.branchId')
+	r = dbExecute(`ALTER TABLE "dish_sales" ADD COLUMN "dishName" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added dish_sales.dishName')
+	r = dbExecute(`ALTER TABLE "dish_sales" ADD COLUMN "updatedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added dish_sales.updatedAt')
+	dbExecute(
+		`UPDATE "dish_sales" SET "restaurantId" = COALESCE("restaurantId", (SELECT "restaurantId" FROM "restaurant_orders" WHERE "id" = "dish_sales"."orderId" LIMIT 1), (SELECT "restaurantId" FROM "dishes" WHERE "id" = "dish_sales"."dishId" LIMIT 1), (SELECT "id" FROM "restaurants" LIMIT 1)) WHERE "restaurantId" IS NULL;`,
+		SKIP_SOFT
+	)
+	dbExecute(
+		`UPDATE "dish_sales" SET "branchId" = COALESCE("branchId", (SELECT "branchId" FROM "restaurant_orders" WHERE "id" = "dish_sales"."orderId" LIMIT 1), (SELECT "id" FROM "branches" WHERE "restaurantId" = "dish_sales"."restaurantId" AND "isMain" = 1 LIMIT 1), (SELECT "id" FROM "branches" WHERE "restaurantId" = "dish_sales"."restaurantId" LIMIT 1)) WHERE "branchId" IS NULL AND "restaurantId" IS NOT NULL;`,
+		SKIP_SOFT
+	)
+	dbExecute(
+		`UPDATE "dish_sales" SET "dishName" = COALESCE("dishName", (SELECT "name" FROM "dishes" WHERE "id" = "dish_sales"."dishId" LIMIT 1), "dishId", 'Dish') WHERE "dishName" IS NULL OR TRIM("dishName") = '';`,
+		SKIP_SOFT
+	)
+	dbExecute(
+		`UPDATE "dish_sales" SET "updatedAt" = COALESCE("updatedAt", "saleDate", "createdAt", CURRENT_TIMESTAMP) WHERE "updatedAt" IS NULL;`,
+		SKIP_SOFT
+	)
+	// last-resort fallbacks: only reference stable core columns, cannot fail with "no such column"
+	dbExecute(`UPDATE "dish_sales" SET "restaurantId" = (SELECT "id" FROM "restaurants" LIMIT 1) WHERE "restaurantId" IS NULL;`, SKIP_SOFT)
+	dbExecute(`UPDATE "dish_sales" SET "branchId" = (SELECT "id" FROM "branches" LIMIT 1) WHERE "branchId" IS NULL;`, SKIP_SOFT)
+	dbExecute(`UPDATE "dish_sales" SET "dishName" = 'Dish' WHERE "dishName" IS NULL OR TRIM("dishName") = '';`, SKIP_SOFT)
+	dbExecute(`UPDATE "dish_sales" SET "updatedAt" = CURRENT_TIMESTAMP WHERE "updatedAt" IS NULL;`, SKIP_SOFT)
+
+	// inventory_items
+	r = dbExecute(`ALTER TABLE "inventory_items" ADD COLUMN "restaurantId" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_items.restaurantId')
+	r = dbExecute(`ALTER TABLE "inventory_items" ADD COLUMN "branchId" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_items.branchId')
+	dbExecute(
+		`UPDATE "inventory_items" SET "restaurantId" = COALESCE("restaurantId", (SELECT "id" FROM "restaurants" LIMIT 1)) WHERE "restaurantId" IS NULL;`,
+		SKIP_SOFT
+	)
+	dbExecute(
+		`UPDATE "inventory_items" SET "branchId" = COALESCE("branchId", (SELECT "id" FROM "branches" WHERE "restaurantId" = "inventory_items"."restaurantId" AND "isMain" = 1 LIMIT 1), (SELECT "id" FROM "branches" WHERE "restaurantId" = "inventory_items"."restaurantId" LIMIT 1)) WHERE "branchId" IS NULL AND "restaurantId" IS NOT NULL;`,
+		SKIP_SOFT
+	)
+	// last-resort fallbacks
+	dbExecute(`UPDATE "inventory_items" SET "restaurantId" = (SELECT "id" FROM "restaurants" LIMIT 1) WHERE "restaurantId" IS NULL;`, SKIP_SOFT)
+	dbExecute(`UPDATE "inventory_items" SET "branchId" = (SELECT "id" FROM "branches" LIMIT 1) WHERE "branchId" IS NULL;`, SKIP_SOFT)
+
+	// branch_devices
+	r = dbExecute(`ALTER TABLE "branch_devices" ADD COLUMN "restaurantId" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added branch_devices.restaurantId')
+	dbExecute(
+		`UPDATE "branch_devices" SET "restaurantId" = COALESCE("restaurantId", (SELECT "restaurantId" FROM "branches" WHERE "id" = "branch_devices"."branchId" LIMIT 1), (SELECT "id" FROM "restaurants" LIMIT 1)) WHERE "restaurantId" IS NULL;`,
+		SKIP_SOFT
+	)
+	// last-resort fallback
+	dbExecute(`UPDATE "branch_devices" SET "restaurantId" = (SELECT "id" FROM "restaurants" LIMIT 1) WHERE "restaurantId" IS NULL;`, SKIP_SOFT)
+
+	return {
+		attempted: true,
+		repaired: actions.length > 0,
+		reason: actions.length > 0
+			? `Applied compatibility repair: ${actions.join('; ')}`
+			: 'No schema changes needed (all columns already present)',
+		backupPath,
+		actions,
+		branchTableName: null,
+	}
 }
 
 async function getLegacyDesktopBranchDuplicateGroups(prisma) {
@@ -1213,6 +1488,7 @@ app.whenReady().then(async () => {
 	// Run local database migrations for packaged desktop installs.
 	if (shouldUseLocalDatabase) {
 		let migrationFailureMessage = null
+		let migrationFailureShouldBlockStartup = false
 
 		try {
 			const { execFileSync } = require('child_process')
@@ -1237,6 +1513,7 @@ app.whenReady().then(async () => {
 
 			if (missingAssets.length > 0) {
 				migrationFailureMessage = `Desktop migrations cannot run because required packaged assets are missing: ${missingAssets.join(', ')}`
+				migrationFailureShouldBlockStartup = true
 				fs.writeFileSync(
 					migrationLogPath,
 					`[${new Date().toISOString()}] Migration skipped\n${migrationFailureMessage}`,
@@ -1264,17 +1541,19 @@ app.whenReady().then(async () => {
 					}).toString()
 				}
 				runDesktopPrismaCommand = runPrismaCommand
+				const primaryDesktopSchemaCommand = 'db push --skip-generate --accept-data-loss'
 
 				try {
-					const migrationOutput = runPrismaCommand('migrate deploy')
+					appendStartupLog(`Running desktop SQLite schema sync via ${primaryDesktopSchemaCommand}`)
+					const migrationOutput = runPrismaCommand(primaryDesktopSchemaCommand)
 
 					fs.writeFileSync(
 						migrationLogPath,
-						`[${new Date().toISOString()}] Migration succeeded\n${migrationOutput}`,
+						`[${new Date().toISOString()}] Schema sync succeeded\nCommand: ${primaryDesktopSchemaCommand}\n${migrationOutput}`,
 						'utf8'
 					)
-					appendStartupLog('Database migrations applied successfully')
-					console.log('Database migrations applied successfully')
+					appendStartupLog('Database schema synchronized successfully')
+					console.log('Database schema synchronized successfully')
 				} catch (migrationErr) {
 					const migrationStderr = migrationErr?.stderr ? migrationErr.stderr.toString() : ''
 					const migrationStdout = migrationErr?.stdout ? migrationErr.stdout.toString() : ''
@@ -1461,6 +1740,55 @@ app.whenReady().then(async () => {
 							appendStartupLog(`Schema sync db push fallback failed: ${dbPushErr?.message || dbPushErr}`)
 							console.error('Schema sync db push fallback failed (non-fatal):', migrationFailureMessage)
 						}
+					} else if (isDesktopSchemaCompatibilityRepairCandidate(migrationDetails)) {
+						appendStartupLog('Migration reported non-executable SQLite drift; attempting targeted compatibility repair')
+						const compatibilityRepair = await attemptDesktopSchemaCompatibilityRepair({
+							userDataDir,
+							runtimeDbPath: desktopRuntimeDbPath,
+							nodePath: process.execPath,
+							prismaCli: prismaJsEntrypoint,
+							schemaPath,
+							migrationEnv,
+						})
+
+						if (compatibilityRepair.repaired) {
+							try {
+								const retryOutput = runPrismaCommand(primaryDesktopSchemaCommand)
+								const repairLogLines = [
+									`[${new Date().toISOString()}] Compatibility repair succeeded`,
+									compatibilityRepair.backupPath ? `Backup: ${compatibilityRepair.backupPath}` : null,
+									compatibilityRepair.branchTableName ? `Branch table: ${compatibilityRepair.branchTableName}` : null,
+									compatibilityRepair.actions?.length ? `Actions: ${compatibilityRepair.actions.join('; ')}` : null,
+									`Retry command: ${primaryDesktopSchemaCommand}`,
+									retryOutput,
+								].filter(Boolean)
+
+								fs.writeFileSync(migrationLogPath, `${repairLogLines.join('\n')}\n`, 'utf8')
+								appendStartupLog('Compatibility repair succeeded; schema sync retry completed')
+								console.log('Compatibility repair succeeded; schema sync retry completed')
+							} catch (retryErr) {
+								const retryStderr = retryErr?.stderr ? retryErr.stderr.toString() : ''
+								const retryStdout = retryErr?.stdout ? retryErr.stdout.toString() : ''
+								const retryDetails = `${retryErr?.message || 'Unknown db push retry error'}\n\nSTDOUT:\n${retryStdout}\n\nSTDERR:\n${retryStderr}`
+								migrationFailureMessage = `${migrationDetails}\n\nCompatibility repair succeeded${compatibilityRepair.actions?.length ? ` (${compatibilityRepair.actions.join('; ')})` : ''}.\n\nRetry failed:\n${retryDetails}`
+								fs.writeFileSync(
+									migrationLogPath,
+									`[${new Date().toISOString()}] Compatibility repair retry failed\n${migrationFailureMessage}`,
+									'utf8'
+								)
+								appendStartupLog(`Compatibility repair retry failed: ${retryErr?.message || retryErr}`)
+								console.error('Compatibility repair retry failed (non-fatal):', migrationFailureMessage)
+							}
+						} else {
+							migrationFailureMessage = `${migrationDetails}\n\nCompatibility repair failed:\n${compatibilityRepair.reason || 'unknown error'}`
+							fs.writeFileSync(
+								migrationLogPath,
+								`[${new Date().toISOString()}] Compatibility repair failed\n${migrationFailureMessage}`,
+								'utf8'
+							)
+							appendStartupLog(`Compatibility repair failed: ${String(compatibilityRepair.reason || 'unknown error').split('\n')[0]}`)
+							console.error('Compatibility repair failed (non-fatal):', migrationFailureMessage)
+						}
 					} else {
 						migrationFailureMessage = migrationDetails
 						fs.writeFileSync(
@@ -1489,6 +1817,14 @@ app.whenReady().then(async () => {
 		}
 
 		if (migrationFailureMessage) {
+			appendStartupLog(
+				migrationFailureShouldBlockStartup
+					? 'Desktop schema sync failure is blocking startup before the server can recover.'
+					: 'Desktop schema sync failed during startup, but the app will continue booting so runtime bootstrap can attempt repair.'
+			)
+		}
+
+		if (migrationFailureMessage && migrationFailureShouldBlockStartup) {
 			dialog.showErrorBox(
 				'Database Update Failed',
 				'Magnify could not upgrade the local desktop database for this app version. Please reinstall the latest build or check the migration log in your app data folder.'
