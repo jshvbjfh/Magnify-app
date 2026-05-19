@@ -114,15 +114,24 @@ export async function POST(req: Request) {
     const syncedOrderIds: string[] = []
     const failedOrders: Array<{ orderId: string; error: string }> = []
 
+    // Pre-fetch all valid branch IDs for this restaurant once, outside the order loop.
+    const validBranchIds = new Set(
+      (await prisma.branch.findMany({
+        where: { restaurantId, isActive: true },
+        select: { id: true },
+      })).map((b) => b.id),
+    )
+
     for (const order of orders) {
       if (order.restaurant_id !== restaurantId) continue
 
-      if (order.branch_id && order.branch_id !== branchId) {
-        console.warn(
-          '[mobile/push] Order %s has branch_id %s but staff %s is now on branch %s — overriding to server-side branch.',
-          order.id, order.branch_id, claims.sub, branchId,
-        )
-      }
+      // Use the order's own branch_id if it's a valid branch for this restaurant
+      // (covers branch-switching: waiter switches branch → new orders store new branch_id locally).
+      // Fall back to the JWT branchId only when the order carries no valid branch.
+      const resolvedBranchId =
+        order.branch_id && validBranchIds.has(order.branch_id)
+          ? order.branch_id
+          : branchId
 
       const items = orderItems.filter((i) => i.order_id === order.id)
       const normalizedOrderNumber = normalizeRequiredText(order.order_number, buildFallbackOrderNumber(order.id))
@@ -159,7 +168,7 @@ export async function POST(req: Request) {
             create: {
               id: order.id,
               restaurantId,
-              branchId,
+              branchId: resolvedBranchId,
               tableId: order.table_id,
               tableName: normalizedTableName,
               orderNumber: normalizedOrderNumber,
@@ -177,7 +186,7 @@ export async function POST(req: Request) {
               updatedAt: normalizedUpdatedAt,
             },
             update: {
-              branchId,
+              branchId: resolvedBranchId,
               tableId: order.table_id,
               tableName: normalizedTableName,
               orderNumber: normalizedOrderNumber,
@@ -223,7 +232,7 @@ export async function POST(req: Request) {
           if (shouldFinalizePaidOrder) {
             await finalizeRestaurantOrderPayment(tx, {
               restaurantId,
-              branchId,
+              branchId: resolvedBranchId,
               sourceDeviceId: mobileSourceDeviceId,
               orderId: order.id,
               paymentMethod: order.payment_method,
@@ -237,7 +246,7 @@ export async function POST(req: Request) {
 
         if (needsPostTxEnqueue) {
           try {
-            await enqueueOrderSync(prisma, order.id, restaurantId, branchId, mobileSourceDeviceId)
+            await enqueueOrderSync(prisma, order.id, restaurantId, resolvedBranchId, mobileSourceDeviceId)
           } catch (enqueueErr) {
             console.error('[mobile/push] enqueueOrderSync failed for order', order.id, enqueueErr)
           }

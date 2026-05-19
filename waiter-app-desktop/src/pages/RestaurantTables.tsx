@@ -47,7 +47,7 @@ export default function RestaurantTables({ waiterName: _waiterName, activeBranch
   const load = useCallback(async () => {
     try {
       const [t, o] = await Promise.all([
-        getTables(),
+        getTables(activeBranchId),
         getOrders({ status: 'PENDING', branchId: activeBranchId }),
       ])
       setTables(t)

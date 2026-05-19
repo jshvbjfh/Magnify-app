@@ -126,8 +126,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const loadPOS = useCallback(async () => {
     try {
       const [d, t, orders, rId, bId] = await Promise.all([
-        getDishes(),
-        getTables(),
+        getDishes(activeBranchId),
+        getTables(activeBranchId),
         getOrders({ status: 'PENDING', branchId: activeBranchId }),
         getConfig('restaurantId'),
         getConfig('branchId'),

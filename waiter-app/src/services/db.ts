@@ -278,16 +278,31 @@ export async function replaceTables(tables: RestaurantTable[]): Promise<void> {
     console.warn('[replaceTables] received empty tables array — skipping replace to preserve local data')
     return
   }
+  // Branch-scoped: only wipe tables for the pulled branch so other branches
+  // retain their cached floor plan when the waiter switches branches.
+  const pullBranchId = tables[0].branch_id
   const d = getDB()
-  await d.executeSet([
-    { statement: 'BEGIN', values: [] },
-    { statement: 'DELETE FROM restaurant_tables', values: [] },
-    ...tables.map(table => ({
-      statement: 'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
-      values: [table.id, table.name, table.seats, table.status ?? 'available', table.branch_id, table.restaurant_id],
-    })),
-    { statement: 'COMMIT', values: [] },
-  ])
+  if (pullBranchId) {
+    await d.executeSet([
+      { statement: 'BEGIN', values: [] },
+      { statement: 'DELETE FROM restaurant_tables WHERE branch_id = ?', values: [pullBranchId] },
+      ...tables.map(table => ({
+        statement: 'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
+        values: [table.id, table.name, table.seats, table.status ?? 'available', table.branch_id, table.restaurant_id],
+      })),
+      { statement: 'COMMIT', values: [] },
+    ])
+  } else {
+    await d.executeSet([
+      { statement: 'BEGIN', values: [] },
+      { statement: 'DELETE FROM restaurant_tables', values: [] },
+      ...tables.map(table => ({
+        statement: 'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
+        values: [table.id, table.name, table.seats, table.status ?? 'available', table.branch_id, table.restaurant_id],
+      })),
+      { statement: 'COMMIT', values: [] },
+    ])
+  }
 }
 
 export async function getTables(): Promise<RestaurantTable[]> {

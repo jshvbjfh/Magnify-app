@@ -126,20 +126,41 @@ export async function replaceDishes(dishes: Dish[]): Promise<void> {
     console.warn('[replaceDishes] received empty dishes array — skipping replace to preserve local data')
     return
   }
+  // Branch-scoped: only wipe dishes for the branch being replaced so other
+  // branches' menus survive a branch switch in offline mode.
+  const pullBranchId = dishes[0].branch_id
   const db = getDB()
-  const statements: StatementSet = [
-    { statement: 'DELETE FROM dishes', values: [] },
-    ...dishes.map((d) => ({
-      statement:
-        'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      values: [d.id, d.name, d.selling_price, d.category, d.is_active ? 1 : 0, d.branch_id, d.restaurant_id],
-    })),
-  ]
-  await db.executeSet(statements)
+  if (pullBranchId) {
+    await db.executeSet([
+      { statement: 'DELETE FROM dishes WHERE branch_id = ?', values: [pullBranchId] },
+      ...dishes.map((d) => ({
+        statement:
+          'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        values: [d.id, d.name, d.selling_price, d.category, d.is_active ? 1 : 0, d.branch_id, d.restaurant_id],
+      })),
+    ])
+  } else {
+    await db.executeSet([
+      { statement: 'DELETE FROM dishes', values: [] },
+      ...dishes.map((d) => ({
+        statement:
+          'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        values: [d.id, d.name, d.selling_price, d.category, d.is_active ? 1 : 0, d.branch_id, d.restaurant_id],
+      })),
+    ])
+  }
 }
 
-export async function getDishes(): Promise<Dish[]> {
+export async function getDishes(branchId?: string | null): Promise<Dish[]> {
   const db = getDB()
+  const normalized = typeof branchId === 'string' ? branchId.trim() : ''
+  if (normalized) {
+    const rows = await db.query(
+      'SELECT * FROM dishes WHERE is_active = 1 AND branch_id = ? ORDER BY name',
+      [normalized],
+    )
+    return (rows ?? []) as unknown as Dish[]
+  }
   const rows = await db.query('SELECT * FROM dishes WHERE is_active = 1 ORDER BY name', [])
   return (rows ?? []) as unknown as Dish[]
 }
@@ -160,20 +181,40 @@ export async function replaceTables(tables: RestaurantTable[]): Promise<void> {
     console.warn('[replaceTables] received empty tables array — skipping replace to preserve local data')
     return
   }
+  // Branch-scoped: only wipe tables for the pulled branch, same pattern as replaceDishes.
+  const pullBranchId = tables[0].branch_id
   const db = getDB()
-  const statements: StatementSet = [
-    { statement: 'DELETE FROM restaurant_tables', values: [] },
-    ...tables.map((t) => ({
-      statement:
-        'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
-      values: [t.id, t.name, t.seats, t.status ?? 'available', t.branch_id, t.restaurant_id],
-    })),
-  ]
-  await db.executeSet(statements)
+  if (pullBranchId) {
+    await db.executeSet([
+      { statement: 'DELETE FROM restaurant_tables WHERE branch_id = ?', values: [pullBranchId] },
+      ...tables.map((t) => ({
+        statement:
+          'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
+        values: [t.id, t.name, t.seats, t.status ?? 'available', t.branch_id, t.restaurant_id],
+      })),
+    ])
+  } else {
+    await db.executeSet([
+      { statement: 'DELETE FROM restaurant_tables', values: [] },
+      ...tables.map((t) => ({
+        statement:
+          'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
+        values: [t.id, t.name, t.seats, t.status ?? 'available', t.branch_id, t.restaurant_id],
+      })),
+    ])
+  }
 }
 
-export async function getTables(): Promise<RestaurantTable[]> {
+export async function getTables(branchId?: string | null): Promise<RestaurantTable[]> {
   const db = getDB()
+  const normalized = typeof branchId === 'string' ? branchId.trim() : ''
+  if (normalized) {
+    const rows = await db.query(
+      'SELECT * FROM restaurant_tables WHERE branch_id = ? ORDER BY name',
+      [normalized],
+    )
+    return (rows ?? []) as unknown as RestaurantTable[]
+  }
   const rows = await db.query('SELECT * FROM restaurant_tables ORDER BY name', [])
   return (rows ?? []) as unknown as RestaurantTable[]
 }
