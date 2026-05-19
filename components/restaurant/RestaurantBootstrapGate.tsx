@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, RefreshCw } from 'lucide-react'
 import { signOut } from 'next-auth/react'
-import { loadOwnerSyncConfig } from '@/lib/ownerSyncBrowser'
 
 type RestaurantBootstrapGateProps = {
   initialMessage?: string | null
@@ -22,26 +21,23 @@ export default function RestaurantBootstrapGate({ initialMessage }: RestaurantBo
     setSyncing(true)
     setMessage('Loading restaurant data on this device. Keep this screen open while bootstrap runs.')
 
-    // Include credentials from localStorage so sync/local can authenticate against the cloud.
-    const storedConfig = loadOwnerSyncConfig()
-    const syncBody: Record<string, string> = {}
-    if (storedConfig.targetUrl) syncBody.targetUrl = storedConfig.targetUrl
-    if (storedConfig.email) syncBody.email = storedConfig.email
-    if (storedConfig.password) syncBody.password = storedConfig.password
-
     try {
-      const res = await fetch('/api/sync/local', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch('/api/restaurant/bootstrap-status', {
+        method: 'GET',
         credentials: 'include',
-        body: JSON.stringify(syncBody),
       })
       const payload = await res.json().catch(() => null)
-      if (!res.ok || payload?.ok === false) {
-        throw new Error(payload?.message || payload?.error || 'Unable to load restaurant data right now.')
+      if (!res.ok) {
+        throw new Error(payload?.error || 'Unable to check bootstrap status.')
       }
-
-      router.refresh()
+      if (payload?.ready) {
+        router.refresh()
+        return
+      }
+      throw new Error(
+        payload?.message ||
+        'Restaurant data is not ready on this device yet. Ensure you have set up your restaurant through the portal and try again.'
+      )
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to load restaurant data right now.')
       setSyncing(false)

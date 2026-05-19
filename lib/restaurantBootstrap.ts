@@ -23,24 +23,22 @@ export function isLocalFirstDesktopMode() {
 
 async function hasLocalRestaurantData(params: {
   restaurantId: string
-  branchId: string | null
 }) {
-  const scopeWhere = {
-    restaurantId: params.restaurantId,
-    ...(params.branchId ? { branchId: params.branchId } : {}),
-  }
-
+  // Check restaurant-level only — not branch-scoped. Old DBs may have data under
+  // a different branchId than the newly seeded one; branch-scoping would always
+  // return 0 for legacy installs and incorrectly trigger the bootstrap gate.
+  const r = params.restaurantId
   const counts = await Promise.all([
-    prisma.journalEntry.count({ where: scopeWhere }),
-    prisma.dish.count({ where: scopeWhere }),
-    prisma.inventoryItem.count({ where: scopeWhere }),
-    prisma.staff.count({ where: { restaurantId: params.restaurantId } }),
-    prisma.restaurantOrder.count({ where: scopeWhere }),
-    prisma.restaurantTable.count({ where: scopeWhere }),
-    prisma.dishSale.count({ where: scopeWhere }),
-    prisma.inventoryPurchase.count({ where: scopeWhere }),
-    prisma.wasteLog.count({ where: scopeWhere }),
-    prisma.employeeShift.count({ where: scopeWhere }),
+    prisma.dish.count({ where: { restaurantId: r } }),
+    prisma.inventoryItem.count({ where: { restaurantId: r } }),
+    prisma.staff.count({ where: { restaurantId: r } }),
+    prisma.restaurantOrder.count({ where: { restaurantId: r } }),
+    prisma.restaurantTable.count({ where: { restaurantId: r } }),
+    prisma.dishSale.count({ where: { restaurantId: r } }),
+    prisma.inventoryPurchase.count({ where: { restaurantId: r } }),
+    prisma.wasteLog.count({ where: { restaurantId: r } }),
+    prisma.journalEntry.count({ where: { restaurantId: r } }),
+    prisma.employeeShift.count({ where: { restaurantId: r } }),
   ])
 
   return counts.some((count) => count > 0)
@@ -77,7 +75,6 @@ export async function getRestaurantBootstrapStatus(userId: string): Promise<Rest
 
   const hasLocalData = await hasLocalRestaurantData({
     restaurantId: context.restaurantId,
-    branchId: context.branchId,
   })
 
   if (hasLocalData) {
