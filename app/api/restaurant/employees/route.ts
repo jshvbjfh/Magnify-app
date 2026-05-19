@@ -20,6 +20,7 @@ export async function GET() {
       restaurantId,
       branches: { some: { branchId } },
       deletedAt: null,
+      username: null, // exclude waiter/kitchen login accounts; employees have no login credentials
     },
     orderBy: { name: 'asc' },
     select: {
@@ -42,13 +43,13 @@ export async function POST(req: Request) {
   const context = await getRestaurantContextForUser(session.user.id)
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
-  const ALLOWED_ROLES = ['waiter', 'kitchen']
+  const ALLOWED_ROLES = ['Chef', 'Sous Chef', 'Waiter', 'Cashier', 'Manager', 'Host', 'Dishwasher', 'Bartender']
 
   const { name, role, phone } = await req.json()
   if (!name || !role) {
     return NextResponse.json({ error: 'name and role are required' }, { status: 400 })
   }
-  if (!ALLOWED_ROLES.includes(String(role).toLowerCase())) {
+  if (!ALLOWED_ROLES.some(r => r.toLowerCase() === String(role).toLowerCase())) {
     return NextResponse.json({ error: `Invalid role. Allowed roles: ${ALLOWED_ROLES.join(', ')}` }, { status: 400 })
   }
 

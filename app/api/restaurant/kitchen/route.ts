@@ -39,7 +39,15 @@ export async function GET() {
       select: { id: true, name: true, username: true, role: true, createdAt: true },
     })
 
-    return NextResponse.json({ kitchenUsers: kitchenStaff, restaurant })
+    // Map username → email so the UI Waiter type is satisfied
+    const kitchenUsers = kitchenStaff.map(s => ({
+      id: s.id,
+      name: s.name,
+      email: s.username ?? '',
+      createdAt: s.createdAt,
+    }))
+
+    return NextResponse.json({ kitchenUsers, restaurant })
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: e.message === 'Unauthorized' ? 401 : 403 })
   }
@@ -56,14 +64,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
     }
 
-    const { name, username, password, syncTargetUrl, syncEmail, syncPassword } = await req.json()
-    if (!name?.trim() || !username?.trim() || !password?.trim()) {
-      return NextResponse.json({ error: 'name, username, and password are required' }, { status: 400 })
+    // UI sends 'email' field; accept that as the username (with 'username' as fallback)
+    const { name, email, username: usernameField, password, syncTargetUrl, syncEmail, syncPassword } = await req.json()
+    const username = (email || usernameField || '').trim().toLowerCase()
+    if (!name?.trim() || !username || !password?.trim()) {
+      return NextResponse.json({ error: 'name, email, and password are required' }, { status: 400 })
     }
     let cloudProvisionWarning: string | null = null
 
     const existing = await prisma.staff.findFirst({
-      where: { restaurantId: restaurant.id, username: username.trim().toLowerCase() },
+      where: { restaurantId: restaurant.id, username },
     })
     if (existing) {
       return NextResponse.json({ error: 'Username already in use' }, { status: 409 })
@@ -74,7 +84,7 @@ export async function POST(req: Request) {
         restaurant,
         role: 'kitchen',
         name: name.trim(),
-        email: username.trim().toLowerCase(),
+        email: username,
         password,
         branchId: adminContext.branchId,
         syncTargetUrl,
@@ -92,7 +102,7 @@ export async function POST(req: Request) {
       data: {
         restaurantId: restaurant.id,
         name: name.trim(),
-        username: username.trim().toLowerCase(),
+        username,
         password: hashed,
         role: 'kitchen',
         branches: {

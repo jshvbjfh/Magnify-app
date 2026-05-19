@@ -13,11 +13,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const { id } = await params
-  const ALLOWED_ROLES = ['waiter', 'kitchen']
+  const ALLOWED_ROLES = ['Chef', 'Sous Chef', 'Waiter', 'Cashier', 'Manager', 'Host', 'Dishwasher', 'Bartender']
 
   const data = await req.json()
 
-  if (data.role !== undefined && !ALLOWED_ROLES.includes(String(data.role).toLowerCase())) {
+  if (data.role !== undefined && !ALLOWED_ROLES.some(r => r.toLowerCase() === String(data.role).toLowerCase())) {
     return NextResponse.json({ error: `Invalid role. Allowed roles: ${ALLOWED_ROLES.join(', ')}` }, { status: 400 })
   }
 
@@ -28,12 +28,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     ...(data.isActive !== undefined && { isActive: data.isActive }),
   }
 
+  // username: null ensures waiter/kitchen login accounts can't be patched via this endpoint
   await prisma.staff.updateMany({
-    where: { id, restaurantId: context.restaurantId },
+    where: { id, restaurantId: context.restaurantId, username: null },
     data: updateData,
   })
 
-  const staff = await prisma.staff.findFirst({ where: { id, restaurantId: context.restaurantId } })
+  const staff = await prisma.staff.findFirst({ where: { id, restaurantId: context.restaurantId, username: null } })
   if (staff) {
     await enqueueSyncChange(prisma, {
       restaurantId: context.restaurantId,
@@ -56,7 +57,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const { id } = await params
-  await prisma.staff.deleteMany({ where: { id, restaurantId: context.restaurantId } })
+  await prisma.staff.deleteMany({ where: { id, restaurantId: context.restaurantId, username: null } })
 
   await enqueueSyncChange(prisma, {
     restaurantId: context.restaurantId,
