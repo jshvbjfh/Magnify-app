@@ -6,6 +6,7 @@ import { recordJournalEntry } from '@/lib/accounting'
 import { getActiveFifoUnitCost } from '@/lib/fifoCosting'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
+import { toUsageQuantity, toUsageUnitCost, normalizeUnitsPerPurchaseUnit } from '@/lib/inventoryUnits'
 import type { Prisma } from '@prisma/client'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
@@ -198,19 +199,24 @@ export async function POST(req: Request) {
     if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
     const body = await req.json()
-    const { ingredientId, itemName, unit, supplier, paymentMethod } = body
-    const quantityPurchased = Number(body.quantityPurchased)
-    const unitCost = Number(body.unitCost)
+    const { ingredientId, itemName, unit, supplier, paymentMethod, purchaseUnit } = body
+    // Frontend sends purchaseQuantity (in purchase units) + purchaseUnitCost (per purchase unit).
+    // Convert to usage-unit values for storage using the unitsPerPurchaseUnit ratio.
+    const purchaseQuantity = Number(body.purchaseQuantity)
+    const purchaseUnitCost = Number(body.purchaseUnitCost)
+    const unitsPerPurchaseUnit = normalizeUnitsPerPurchaseUnit(body.unitsPerPurchaseUnit, 1)
+    const quantityPurchased = toUsageQuantity(purchaseQuantity, unitsPerPurchaseUnit)
+    const unitCost = toUsageUnitCost(purchaseUnitCost, unitsPerPurchaseUnit)
     const purchasedAt = body.purchasedAt ? new Date(body.purchasedAt) : new Date()
 
     if (!ingredientId && !(typeof itemName === 'string' && itemName.trim())) {
       return NextResponse.json({ error: 'itemName or ingredientId is required' }, { status: 400 })
     }
-    if (!Number.isFinite(quantityPurchased) || quantityPurchased <= 0) {
-      return NextResponse.json({ error: 'quantityPurchased must be a valid number greater than 0' }, { status: 400 })
+    if (!Number.isFinite(purchaseQuantity) || purchaseQuantity <= 0) {
+      return NextResponse.json({ error: 'Quantity must be a valid number greater than 0' }, { status: 400 })
     }
-    if (!Number.isFinite(unitCost) || unitCost < 0) {
-      return NextResponse.json({ error: 'unitCost must be a valid number >= 0' }, { status: 400 })
+    if (!Number.isFinite(purchaseUnitCost) || purchaseUnitCost < 0) {
+      return NextResponse.json({ error: 'Cost per unit must be a valid number >= 0' }, { status: 400 })
     }
     if (Number.isNaN(purchasedAt.getTime())) {
       return NextResponse.json({ error: 'purchasedAt must be a valid date' }, { status: 400 })
@@ -248,6 +254,10 @@ export async function POST(req: Request) {
           journalEntryId: journalEntry?.id ?? null,
           ingredientId: ingredient.id,
           supplier: supplier || null,
+          purchaseQuantity,
+          purchaseUnit: purchaseUnit || unit || null,
+          unitsPerPurchaseUnit,
+          purchaseUnitCost,
           quantityPurchased,
           remainingQuantity: quantityPurchased,
           unitCost,
@@ -292,19 +302,22 @@ export async function PUT(req: Request) {
     if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
     const body = await req.json()
-    const { id, ingredientId, itemName, unit, supplier, paymentMethod } = body
-    const quantityPurchased = Number(body.quantityPurchased)
-    const unitCost = Number(body.unitCost)
+    const { id, ingredientId, itemName, unit, supplier, paymentMethod, purchaseUnit } = body
+    const purchaseQuantity = Number(body.purchaseQuantity)
+    const purchaseUnitCost = Number(body.purchaseUnitCost)
+    const unitsPerPurchaseUnit = normalizeUnitsPerPurchaseUnit(body.unitsPerPurchaseUnit, 1)
+    const quantityPurchased = toUsageQuantity(purchaseQuantity, unitsPerPurchaseUnit)
+    const unitCost = toUsageUnitCost(purchaseUnitCost, unitsPerPurchaseUnit)
     const purchasedAt = body.purchasedAt ? new Date(body.purchasedAt) : new Date()
 
     if (!id || (!ingredientId && !(typeof itemName === 'string' && itemName.trim()))) {
       return NextResponse.json({ error: 'id and itemName or ingredientId are required' }, { status: 400 })
     }
-    if (!Number.isFinite(quantityPurchased) || quantityPurchased <= 0) {
-      return NextResponse.json({ error: 'quantityPurchased must be a valid number greater than 0' }, { status: 400 })
+    if (!Number.isFinite(purchaseQuantity) || purchaseQuantity <= 0) {
+      return NextResponse.json({ error: 'Quantity must be a valid number greater than 0' }, { status: 400 })
     }
-    if (!Number.isFinite(unitCost) || unitCost < 0) {
-      return NextResponse.json({ error: 'unitCost must be a valid number >= 0' }, { status: 400 })
+    if (!Number.isFinite(purchaseUnitCost) || purchaseUnitCost < 0) {
+      return NextResponse.json({ error: 'Cost per unit must be a valid number >= 0' }, { status: 400 })
     }
     if (Number.isNaN(purchasedAt.getTime())) {
       return NextResponse.json({ error: 'purchasedAt must be a valid date' }, { status: 400 })
@@ -359,6 +372,10 @@ export async function PUT(req: Request) {
         data: {
           ingredientId: nextIngredient.id,
           supplier: supplier || null,
+          purchaseQuantity,
+          purchaseUnit: purchaseUnit || unit || null,
+          unitsPerPurchaseUnit,
+          purchaseUnitCost,
           quantityPurchased,
           remainingQuantity: quantityPurchased,
           unitCost,

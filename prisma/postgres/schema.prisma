@@ -311,16 +311,20 @@ model InventoryPurchase {
   branch            Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
   ingredientId      String
   ingredient        InventoryItem @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
-  supplier          String?
-  quantityPurchased Float
-  remainingQuantity Float
-  unitCost          Float
-  totalCost         Float
-  paymentMethod     String        @default("Cash")
-  purchasedAt       DateTime      @default(now())
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
-  deletedAt         DateTime?
+  supplier             String?
+  purchaseQuantity     Float?
+  purchaseUnit         String?
+  unitsPerPurchaseUnit Float?
+  purchaseUnitCost     Float?
+  quantityPurchased    Float
+  remainingQuantity    Float
+  unitCost             Float
+  totalCost            Float
+  paymentMethod        String        @default("Cash")
+  purchasedAt          DateTime      @default(now())
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  deletedAt            DateTime?
 
   journalEntryId    String?
   journalEntry      JournalEntry? @relation(fields: [journalEntryId], references: [id])
