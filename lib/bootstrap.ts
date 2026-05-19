@@ -30,22 +30,51 @@ function resolveDatabaseKind() {
 async function upsertSchemaState(db: PrismaDb, params: { lastError?: string | null }) {
   const now = new Date()
 
-  return db.appSchemaState.upsert({
-    where: { key: APP_SCHEMA_STATE_KEY },
-    create: {
-      key: APP_SCHEMA_STATE_KEY,
-      databaseKind: resolveDatabaseKind(),
-      schemaVersion: APP_SCHEMA_VERSION,
-      lastMigratedAt: now,
-      lastError: params.lastError ?? null,
-    },
-    update: {
-      databaseKind: resolveDatabaseKind(),
-      schemaVersion: APP_SCHEMA_VERSION,
-      lastMigratedAt: now,
-      lastError: params.lastError ?? null,
-    },
-  })
+  try {
+    return await db.appSchemaState.upsert({
+      where: { key: APP_SCHEMA_STATE_KEY },
+      create: {
+        key: APP_SCHEMA_STATE_KEY,
+        databaseKind: resolveDatabaseKind(),
+        schemaVersion: APP_SCHEMA_VERSION,
+        lastMigratedAt: now,
+        lastError: params.lastError ?? null,
+      },
+      update: {
+        databaseKind: resolveDatabaseKind(),
+        schemaVersion: APP_SCHEMA_VERSION,
+        lastMigratedAt: now,
+        lastError: params.lastError ?? null,
+      },
+    })
+  } catch (err: unknown) {
+    // Legacy SQLite databases carry NOT NULL columns (syncProtocolVersion, bootstrapVersion,
+    // migrationState) that were removed from the schema. SQLite db push cannot drop columns,
+    // so they persist. Fall back to a raw upsert that supplies those legacy fields.
+    const msg = String((err as any)?.message ?? '')
+    if (/syncProtocolVersion|bootstrapVersion|migrationState/i.test(msg)) {
+      await (db as any).$executeRawUnsafe(
+        `INSERT INTO app_schema_state
+           (key, databaseKind, schemaVersion, syncProtocolVersion, bootstrapVersion, migrationState, lastMigratedAt, lastError, createdAt, updatedAt)
+         VALUES (?, ?, ?, 2, 1, 'ready', ?, ?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           databaseKind    = excluded.databaseKind,
+           schemaVersion   = excluded.schemaVersion,
+           lastMigratedAt  = excluded.lastMigratedAt,
+           lastError       = excluded.lastError,
+           updatedAt       = excluded.updatedAt`,
+        APP_SCHEMA_STATE_KEY,
+        resolveDatabaseKind(),
+        APP_SCHEMA_VERSION,
+        now.toISOString(),
+        params.lastError ?? null,
+        now.toISOString(),
+        now.toISOString(),
+      )
+      return await db.appSchemaState.findUnique({ where: { key: APP_SCHEMA_STATE_KEY } }) ?? null
+    }
+    throw err
+  }
 }
 
 async function registerBranchDevice(db: PrismaDb, params: { deviceId?: string | null; appVersion?: string | null; restaurantId?: string | null }) {
@@ -88,13 +117,13 @@ export async function ensureAppBootstrap(
       return {
         ok: true,
         state: 'ready' as const,
-        schemaVersion: state.schemaVersion,
+        schemaVersion: state?.schemaVersion ?? APP_SCHEMA_VERSION,
         syncProtocolVersion: SYNC_PROTOCOL_VERSION,
         bootstrapVersion: BOOTSTRAP_VERSION,
         activePricingPlans: 0,
         seededPricingPlans: 0,
         backfilledRestaurants: 0,
-        lastError: state.lastError,
+        lastError: state?.lastError ?? null,
       } satisfies BootstrapResult
     })
 
