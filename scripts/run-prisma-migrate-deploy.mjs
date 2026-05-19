@@ -75,6 +75,18 @@ const cliArgs = provider === 'postgresql'
 	? ['migrate', 'deploy', '--schema', schemaPath]
 	: ['db', 'push', '--schema', schemaPath, '--accept-data-loss', '--skip-generate']
 
+// If the add_missing_tables_v2 migration is in a failed state (P3009), mark it
+// rolled-back so migrate deploy can re-apply the now-idempotent SQL.
+// We ignore errors here: if the migration doesn't exist or is already resolved, that's fine.
+if (provider === 'postgresql') {
+	spawnSync(process.execPath, [
+		prismaCliEntrypoint,
+		'migrate', 'resolve',
+		'--rolled-back', '20260519100000_add_missing_tables_v2',
+		'--schema', schemaPath,
+	], { stdio: 'pipe', env })
+}
+
 console.log(`Running prisma ${provider === 'postgresql' ? 'migrate deploy' : 'db push'} for ${provider} using ${schemaPath}`)
 
 const result = spawnSync(process.execPath, [prismaCliEntrypoint, ...cliArgs], {
