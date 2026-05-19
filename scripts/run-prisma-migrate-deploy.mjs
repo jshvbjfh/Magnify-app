@@ -75,14 +75,15 @@ const cliArgs = provider === 'postgresql'
 	? ['migrate', 'deploy', '--schema', schemaPath]
 	: ['db', 'push', '--schema', schemaPath, '--accept-data-loss', '--skip-generate']
 
-// If the add_missing_tables_v2 migration is in a failed state (P3009), mark it
-// rolled-back so migrate deploy can re-apply the now-idempotent SQL.
-// We ignore errors here: if the migration doesn't exist or is already resolved, that's fine.
+// Migration 20260519100000_add_missing_tables_v2 kept failing due to unknown Neon DB
+// state. Mark it as applied (skip it) so migrate deploy never tries to run it again.
+// Migration 20260519200000_ensure_schema replaces it with defensive DDL.
+// Error is silently ignored: if the migration is already applied or doesn't exist, that's fine.
 if (provider === 'postgresql') {
 	spawnSync(process.execPath, [
 		prismaCliEntrypoint,
 		'migrate', 'resolve',
-		'--rolled-back', '20260519100000_add_missing_tables_v2',
+		'--applied', '20260519100000_add_missing_tables_v2',
 		'--schema', schemaPath,
 	], { stdio: 'pipe', env })
 }
