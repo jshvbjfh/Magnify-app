@@ -24,8 +24,10 @@ function isLocalFirstDesktopMode() {
 }
 
 function canProvisionToCloud() {
-  const { getCanonicalCloudAppUrl } = require('@/lib/cloudAuthBridge')
-  return isLocalFirstDesktopMode() || Boolean(getCanonicalCloudAppUrl())
+  // Only needed for local-first Electron: the local SQLite DB must replicate accounts to
+  // the remote cloud server. On Vercel/PostgreSQL, accounts land directly in the cloud DB
+  // at creation time — no separate provisioning step is needed or possible.
+  return isLocalFirstDesktopMode()
 }
 
 /** GET /api/restaurant/waiters — list waiter staff accounts and owner accounts */
