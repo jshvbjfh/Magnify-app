@@ -495,6 +495,40 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	r = dbExecute(`ALTER TABLE "branches" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added branches.deletedAt')
 
+	// dishes
+	r = dbExecute(`ALTER TABLE "dishes" ADD COLUMN "description" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added dishes.description')
+	r = dbExecute(`ALTER TABLE "dishes" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added dishes.deletedAt')
+
+	// restaurant_tables
+	r = dbExecute(`ALTER TABLE "restaurant_tables" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added restaurant_tables.deletedAt')
+
+	// restaurant_orders
+	r = dbExecute(`ALTER TABLE "restaurant_orders" ADD COLUMN "staffId" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added restaurant_orders.staffId')
+	r = dbExecute(`ALTER TABLE "restaurant_orders" ADD COLUMN "notes" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added restaurant_orders.notes')
+	r = dbExecute(`ALTER TABLE "restaurant_orders" ADD COLUMN "journalEntryId" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added restaurant_orders.journalEntryId')
+	r = dbExecute(`ALTER TABLE "restaurant_orders" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added restaurant_orders.deletedAt')
+
+	// inventory_items (restaurantId + branchId handled below; add remaining nullable cols here)
+	r = dbExecute(`ALTER TABLE "inventory_items" ADD COLUMN "description" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_items.description')
+	r = dbExecute(`ALTER TABLE "inventory_items" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_items.deletedAt')
+
+	// inventory_purchases
+	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "paymentMethod" TEXT NOT NULL DEFAULT 'Cash';`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.paymentMethod')
+	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "journalEntryId" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.journalEntryId')
+	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.deletedAt')
+
 	// dish_ingredients
 	r = dbExecute(`ALTER TABLE "dish_ingredients" ADD COLUMN "inventoryItemId" TEXT;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added dish_ingredients.inventoryItemId')
@@ -526,6 +560,8 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	if (r.ok && !r.skipped) actions.push('Added dish_sales.dishName')
 	r = dbExecute(`ALTER TABLE "dish_sales" ADD COLUMN "updatedAt" DATETIME;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added dish_sales.updatedAt')
+	r = dbExecute(`ALTER TABLE "dish_sales" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added dish_sales.deletedAt')
 	dbExecute(
 		`UPDATE "dish_sales" SET "restaurantId" = COALESCE("restaurantId", (SELECT "restaurantId" FROM "restaurant_orders" WHERE "id" = "dish_sales"."orderId" LIMIT 1), (SELECT "restaurantId" FROM "dishes" WHERE "id" = "dish_sales"."dishId" LIMIT 1), (SELECT "id" FROM "restaurants" LIMIT 1)) WHERE "restaurantId" IS NULL;`,
 		SKIP_SOFT
