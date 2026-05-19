@@ -1,28 +1,55 @@
--- Migration: add_missing_tables_v2 (idempotent rewrite — safe to re-apply after failure)
+-- Migration: add_missing_tables_v2 (idempotent — safe to re-apply after any failure)
 -- Neon Postgres track
 --
--- What this fixes:
---   1. Rename restaurant_branches → branches  (Prisma schema maps Branch to "branches")
---   2. Create staff, staff_branches, employee_shifts  (new models, never in PG before)
---   3. Create order_items  (Prisma OrderItem maps to "order_items", not "restaurant_order_items")
---   4. Create journal_entries, journal_lines  (replaced old "transactions" model)
---   5. Add missing columns to restaurant_orders and inventory_purchases
---   6. Fix app_schema_state: drop NOT NULL on legacy columns removed from Prisma schema
---   7. Add FK constraints from existing branchId columns → branches
+-- Handles three possible starting states:
+--   A) Only restaurant_branches exists → rename to branches
+--   B) Both restaurant_branches AND branches exist (db push ran) → merge + drop old
+--   C) Only branches exists → already done, nothing to rename
+--   D) Neither exists → CREATE TABLE IF NOT EXISTS handles it
+--
+-- Then backfills any rows with stale branchId values before enforcing FK constraints.
 
--- ── 1. Rename restaurant_branches → branches (idempotent) ────────────────────
+-- ── 0. Drop old unique indexes early (prevents backfill conflicts) ────────────
+
+DROP INDEX IF EXISTS "dishes_userId_restaurantId_branchId_name_key";
+DROP INDEX IF EXISTS "dishes_userId_restaurantId_name_key";
+DROP INDEX IF EXISTS "inventory_items_userId_restaurantId_branchId_name_key";
+DROP INDEX IF EXISTS "inventory_items_userId_restaurantId_name_key";
+
+-- ── 1. Rename / merge restaurant_branches → branches ─────────────────────────
 
 DO $$ BEGIN
   IF EXISTS (
-    SELECT 1 FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = 'restaurant_branches'
+    SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'restaurant_branches'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'branches'
   ) THEN
+    -- Case A: only old table exists → safe to rename
     ALTER TABLE "restaurant_branches" DROP CONSTRAINT IF EXISTS "restaurant_branches_restaurantId_fkey";
     ALTER TABLE "restaurant_branches" RENAME TO "branches";
+
+  ELSIF EXISTS (
+    SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'restaurant_branches'
+  ) AND EXISTS (
+    SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'branches'
+  ) THEN
+    -- Case B: both exist (db push created branches separately)
+    -- Copy any IDs from restaurant_branches that are not yet in branches so that
+    -- existing rows in dishes/orders/etc. that reference the old IDs remain valid.
+    INSERT INTO "branches" (id, "restaurantId", name, code, "isMain", "isActive", "createdAt", "updatedAt")
+    SELECT rb.id, rb."restaurantId", rb.name, rb.code, rb."isMain", rb."isActive", rb."createdAt", rb."updatedAt"
+    FROM "restaurant_branches" rb
+    WHERE NOT EXISTS (SELECT 1 FROM "branches" WHERE id = rb.id)
+    ON CONFLICT DO NOTHING;
+
+    ALTER TABLE "restaurant_branches" DROP CONSTRAINT IF EXISTS "restaurant_branches_restaurantId_fkey";
+    DROP TABLE "restaurant_branches";
   END IF;
+  -- Case C: only branches exists → nothing to do
+  -- Case D: neither → CREATE TABLE IF NOT EXISTS below creates it
 END $$;
 
--- Fallback: create branches if neither rename nor prior db-push created it
+-- Fallback: create branches if it still doesn't exist after the block above
 CREATE TABLE IF NOT EXISTS "branches" (
     "id"           TEXT        NOT NULL,
     "restaurantId" TEXT        NOT NULL,
@@ -34,20 +61,140 @@ CREATE TABLE IF NOT EXISTS "branches" (
     "createdAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt"    TIMESTAMP(3) NOT NULL,
     "deletedAt"    TIMESTAMP(3),
-
     CONSTRAINT "branches_pkey" PRIMARY KEY ("id")
 );
 
--- Add columns the Prisma Branch model needs that weren't in restaurant_branches
 ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "address"   TEXT;
 ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP(3);
 
--- Re-add the outbound FK under its new name
 DO $$ BEGIN
   ALTER TABLE "branches" ADD CONSTRAINT "branches_restaurantId_fkey"
     FOREIGN KEY ("restaurantId") REFERENCES "restaurants"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+-- ── 1.5. Backfill stale branchId values before enforcing FK constraints ───────
+-- Rows that reference a branchId not in branches (e.g. old 'branch_X' IDs that
+-- were not merged above) are remapped to the restaurant's main/active branch.
+
+DO $$ BEGIN
+  UPDATE "dishes" SET "branchId" = b.id
+  FROM (
+    SELECT DISTINCT ON ("restaurantId") id, "restaurantId"
+    FROM "branches"
+    ORDER BY "restaurantId", "isMain" DESC, "isActive" DESC, "createdAt" ASC
+  ) b
+  WHERE "dishes"."restaurantId" = b."restaurantId"
+    AND "dishes"."branchId" IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "dishes"."branchId");
+END $$;
+
+DO $$ BEGIN
+  UPDATE "restaurant_tables" SET "branchId" = b.id
+  FROM (
+    SELECT DISTINCT ON ("restaurantId") id, "restaurantId"
+    FROM "branches"
+    ORDER BY "restaurantId", "isMain" DESC, "isActive" DESC, "createdAt" ASC
+  ) b
+  WHERE "restaurant_tables"."restaurantId" = b."restaurantId"
+    AND "restaurant_tables"."branchId" IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "restaurant_tables"."branchId");
+END $$;
+
+DO $$ BEGIN
+  UPDATE "restaurant_orders" SET "branchId" = b.id
+  FROM (
+    SELECT DISTINCT ON ("restaurantId") id, "restaurantId"
+    FROM "branches"
+    ORDER BY "restaurantId", "isMain" DESC, "isActive" DESC, "createdAt" ASC
+  ) b
+  WHERE "restaurant_orders"."restaurantId" = b."restaurantId"
+    AND "restaurant_orders"."branchId" IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "restaurant_orders"."branchId");
+END $$;
+
+DO $$ BEGIN
+  UPDATE "inventory_items" SET "branchId" = b.id
+  FROM (
+    SELECT DISTINCT ON ("restaurantId") id, "restaurantId"
+    FROM "branches"
+    ORDER BY "restaurantId", "isMain" DESC, "isActive" DESC, "createdAt" ASC
+  ) b
+  WHERE "inventory_items"."restaurantId" = b."restaurantId"
+    AND "inventory_items"."branchId" IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "inventory_items"."branchId");
+END $$;
+
+DO $$ BEGIN
+  UPDATE "inventory_purchases" SET "branchId" = b.id
+  FROM (
+    SELECT DISTINCT ON ("restaurantId") id, "restaurantId"
+    FROM "branches"
+    ORDER BY "restaurantId", "isMain" DESC, "isActive" DESC, "createdAt" ASC
+  ) b
+  WHERE "inventory_purchases"."restaurantId" = b."restaurantId"
+    AND "inventory_purchases"."branchId" IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "inventory_purchases"."branchId");
+END $$;
+
+DO $$ BEGIN
+  UPDATE "inventory_adjustment_logs" SET "branchId" = b.id
+  FROM (
+    SELECT DISTINCT ON ("restaurantId") id, "restaurantId"
+    FROM "branches"
+    ORDER BY "restaurantId", "isMain" DESC, "isActive" DESC, "createdAt" ASC
+  ) b
+  WHERE "inventory_adjustment_logs"."restaurantId" = b."restaurantId"
+    AND "inventory_adjustment_logs"."branchId" IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "inventory_adjustment_logs"."branchId");
+END $$;
+
+DO $$ BEGIN
+  UPDATE "inventory_batch_usage_ledgers" SET "branchId" = b.id
+  FROM (
+    SELECT DISTINCT ON ("restaurantId") id, "restaurantId"
+    FROM "branches"
+    ORDER BY "restaurantId", "isMain" DESC, "isActive" DESC, "createdAt" ASC
+  ) b
+  WHERE "inventory_batch_usage_ledgers"."restaurantId" = b."restaurantId"
+    AND "inventory_batch_usage_ledgers"."branchId" IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "inventory_batch_usage_ledgers"."branchId");
+END $$;
+
+DO $$ BEGIN
+  UPDATE "dish_sales" SET "branchId" = b.id
+  FROM (
+    SELECT DISTINCT ON ("restaurantId") id, "restaurantId"
+    FROM "branches"
+    ORDER BY "restaurantId", "isMain" DESC, "isActive" DESC, "createdAt" ASC
+  ) b
+  WHERE "dish_sales"."restaurantId" = b."restaurantId"
+    AND "dish_sales"."branchId" IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "dish_sales"."branchId");
+END $$;
+
+DO $$ BEGIN
+  UPDATE "waste_logs" SET "branchId" = b.id
+  FROM (
+    SELECT DISTINCT ON ("restaurantId") id, "restaurantId"
+    FROM "branches"
+    ORDER BY "restaurantId", "isMain" DESC, "isActive" DESC, "createdAt" ASC
+  ) b
+  WHERE "waste_logs"."restaurantId" = b."restaurantId"
+    AND "waste_logs"."branchId" IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "waste_logs"."branchId");
+END $$;
+
+-- sync tables: NULL out invalid branchIds (cursor/event records, safe to re-point)
+UPDATE "sync_cursors"
+SET "branchId" = NULL
+WHERE "branchId" IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "sync_cursors"."branchId");
+
+UPDATE "sync_outbox"
+SET "branchId" = NULL
+WHERE "branchId" IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM "branches" WHERE id = "sync_outbox"."branchId");
 
 -- ── 2. Add FK constraints from existing branchId columns → branches ───────────
 
@@ -132,7 +279,6 @@ CREATE TABLE IF NOT EXISTS "staff" (
     "createdAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "deletedAt"    TIMESTAMP(3),
-
     CONSTRAINT "staff_pkey" PRIMARY KEY ("id")
 );
 
@@ -153,7 +299,6 @@ CREATE TABLE IF NOT EXISTS "staff_branches" (
     "branchId"  TEXT        NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
     CONSTRAINT "staff_branches_pkey" PRIMARY KEY ("id")
 );
 
@@ -185,7 +330,6 @@ CREATE TABLE IF NOT EXISTS "employee_shifts" (
     "createdAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "deletedAt"    TIMESTAMP(3),
-
     CONSTRAINT "employee_shifts_pkey" PRIMARY KEY ("id")
 );
 
@@ -215,7 +359,6 @@ CREATE TABLE IF NOT EXISTS "journal_entries" (
     "createdAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "deletedAt"    TIMESTAMP(3),
-
     CONSTRAINT "journal_entries_pkey" PRIMARY KEY ("id")
 );
 
@@ -239,7 +382,6 @@ CREATE TABLE IF NOT EXISTS "journal_lines" (
     "description"    TEXT,
     "createdAt"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
     CONSTRAINT "journal_lines_pkey" PRIMARY KEY ("id")
 );
 
@@ -276,7 +418,6 @@ CREATE TABLE IF NOT EXISTS "order_items" (
     "createdAt"     TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt"     TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "deletedAt"     TIMESTAMP(3),
-
     CONSTRAINT "order_items_pkey" PRIMARY KEY ("id")
 );
 
@@ -338,16 +479,14 @@ ALTER TABLE "app_schema_state"
 
 CREATE INDEX IF NOT EXISTS "restaurant_orders_staffId_idx" ON "restaurant_orders"("staffId");
 
--- ── 13. Update dishes unique index to match current Prisma schema ─────────────
+-- ── 13. Recreate dishes unique index without userId ───────────────────────────
+-- (DROP already done in step 0 to avoid conflicts during backfill)
 
-DROP INDEX IF EXISTS "dishes_userId_restaurantId_branchId_name_key";
-DROP INDEX IF EXISTS "dishes_userId_restaurantId_name_key";
 CREATE UNIQUE INDEX IF NOT EXISTS "dishes_restaurantId_branchId_name_key"
   ON "dishes"("restaurantId", "branchId", "name");
 
--- ── 14. Update inventory_items unique index to match Prisma schema ────────────
+-- ── 14. Recreate inventory_items unique index without userId ──────────────────
+-- (DROP already done in step 0 to avoid conflicts during backfill)
 
-DROP INDEX IF EXISTS "inventory_items_userId_restaurantId_branchId_name_key";
-DROP INDEX IF EXISTS "inventory_items_userId_restaurantId_name_key";
 CREATE UNIQUE INDEX IF NOT EXISTS "inventory_items_restaurantId_branchId_name_key"
   ON "inventory_items"("restaurantId", "branchId", "name");
