@@ -523,18 +523,28 @@ export default function RestaurantSettings() {
 
   async function saveTrackingMode(mode: 'simple' | 'dish_tracking') {
     setSavingMode(true)
+    const previousMode = trackingMode
     setTrackingMode(mode)
     try {
-      await fetch('/api/user/profile', {
+      const res = await fetch('/api/user/profile', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ trackingMode: mode }),
       })
+      if (!res.ok) {
+        setTrackingMode(previousMode)
+        const data = await res.json().catch(() => ({}))
+        setSaveError(data?.error || 'Failed to save tracking mode. Please try again.')
+        return
+      }
       setSavedMode(true)
       // Notify RestaurantShell to update nav immediately
       window.dispatchEvent(new CustomEvent('trackingModeChanged', { detail: { trackingMode: mode } }))
       setTimeout(() => setSavedMode(false), 2500)
+    } catch {
+      setTrackingMode(previousMode)
+      setSaveError('Failed to save tracking mode. Check your connection and try again.')
     } finally {
       setSavingMode(false)
     }

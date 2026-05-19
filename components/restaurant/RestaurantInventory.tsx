@@ -43,7 +43,7 @@ type Purchase = {
   ingredient: { name: string; unit: string; purchaseUnit: string | null; unitsPerPurchaseUnit: number | null }
 }
 type PurchaseBatchGroup = { key: string; batchId: string | null; purchasedAt: string; earliestCreatedAt: string; totalCost: number; purchases: Purchase[] }
-const INVENTORY_COLUMN_LABELS = ['Item', 'Supplier', 'Unit', 'Opening stock', 'Cost/unit', 'Stock on hand', 'Tot. stock value', 'Actions'] as const
+const INVENTORY_COLUMN_LABELS = ['Item', 'Supplier', 'Unit', 'Qty bought', 'Cost/unit', 'Stock on hand', 'Tot. stock value', 'Actions'] as const
 const FRESH_FETCH_OPTIONS = { credentials: 'include' as const, cache: 'no-store' as const }
 
 const fmt = (n: number) => n.toLocaleString('en-RW', { maximumFractionDigits: 0 })

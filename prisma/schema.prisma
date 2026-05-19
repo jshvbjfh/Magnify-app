@@ -15,6 +15,10 @@ model User {
   name         String?
   password     String
   role         String       @default("owner")
+  businessType String?
+  logoUrl      String?
+  trackingMode String       @default("simple")
+  fifoEnabled  Boolean      @default(false)
   isActive     Boolean      @default(true)
   isSuperAdmin Boolean      @default(false)
   createdAt    DateTime     @default(now())
@@ -192,6 +196,7 @@ model RestaurantOrder {
   cancelReason   String?
   notes          String?
   paidAt         DateTime?
+  servedAt       DateTime?
   canceledAt     DateTime?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt

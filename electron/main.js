@@ -448,6 +448,14 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	if (r.ok && !r.skipped) actions.push('Added users.isActive')
 	r = dbExecute(`ALTER TABLE "users" ADD COLUMN "isSuperAdmin" INTEGER NOT NULL DEFAULT 0;`, SKIP_DUP)
 	if (r.ok && !r.skipped) actions.push('Added users.isSuperAdmin')
+	r = dbExecute(`ALTER TABLE "users" ADD COLUMN "businessType" TEXT;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added users.businessType')
+	r = dbExecute(`ALTER TABLE "users" ADD COLUMN "logoUrl" TEXT;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added users.logoUrl')
+	r = dbExecute(`ALTER TABLE "users" ADD COLUMN "trackingMode" TEXT NOT NULL DEFAULT 'simple';`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added users.trackingMode')
+	r = dbExecute(`ALTER TABLE "users" ADD COLUMN "fifoEnabled" INTEGER NOT NULL DEFAULT 0;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added users.fifoEnabled')
 
 	// restaurants
 	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "managerId" TEXT;`, SKIP_DUP)
@@ -510,6 +518,8 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	if (r.ok && !r.skipped) actions.push('Added restaurant_orders.staffId')
 	r = dbExecute(`ALTER TABLE "restaurant_orders" ADD COLUMN "notes" TEXT;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added restaurant_orders.notes')
+	r = dbExecute(`ALTER TABLE "restaurant_orders" ADD COLUMN "servedAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added restaurant_orders.servedAt')
 	r = dbExecute(`ALTER TABLE "restaurant_orders" ADD COLUMN "journalEntryId" TEXT;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added restaurant_orders.journalEntryId')
 	r = dbExecute(`ALTER TABLE "restaurant_orders" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
@@ -528,6 +538,14 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.journalEntryId')
 	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.deletedAt')
+	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "purchaseQuantity" REAL;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.purchaseQuantity')
+	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "purchaseUnit" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.purchaseUnit')
+	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "unitsPerPurchaseUnit" REAL;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.unitsPerPurchaseUnit')
+	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "purchaseUnitCost" REAL;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.purchaseUnitCost')
 
 	// dish_ingredients
 	r = dbExecute(`ALTER TABLE "dish_ingredients" ADD COLUMN "inventoryItemId" TEXT;`, SKIP_TABLE)
