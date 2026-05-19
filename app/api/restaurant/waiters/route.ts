@@ -35,18 +35,16 @@ export async function GET() {
     const restaurant = adminContext?.restaurant
     if (!restaurant) return NextResponse.json({ error: 'No restaurant is linked to this account' }, { status: 409 })
 
-    const waiters = await prisma.user.findMany({
-      where: { role: 'waiter' },
-      select: { id: true, name: true, email: true, role: true, createdAt: true }
-    })
-
     const ownerAccounts = await prisma.user.findMany({
-      where: { restaurants: { some: { id: restaurant.id } } },
+      where: {
+        role: 'owner',
+        restaurants: { some: { id: restaurant.id } },
+      },
       select: { id: true, name: true, email: true, role: true, createdAt: true },
       orderBy: { createdAt: 'desc' },
     })
 
-    return NextResponse.json({ waiters, ownerAccounts, restaurant })
+    return NextResponse.json({ ownerAccounts, restaurant })
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: e.message === 'Unauthorized' ? 401 : 403 })
   }
@@ -75,7 +73,10 @@ export async function POST(req: Request) {
     if (!name?.trim() || !email?.trim() || !password?.trim()) {
       return NextResponse.json({ error: 'name, email, and password are required' }, { status: 400 })
     }
-    const accountRole = reqRole === 'owner' ? 'owner' : 'waiter'
+    if (reqRole !== 'owner') {
+      return NextResponse.json({ error: 'This endpoint only creates owner (investor) accounts. Use /api/restaurant/employees for waiter accounts.' }, { status: 400 })
+    }
+    const accountRole = 'owner'
     const normalizedEmail = email.trim().toLowerCase()
     const trimmedName = name.trim()
     let cloudProvisionWarning: string | null = null
