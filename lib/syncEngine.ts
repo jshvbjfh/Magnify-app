@@ -333,7 +333,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         break
       }
 
-      const staffRestaurantId = String(payload.restaurantId ?? '').trim()
+      const staffRestaurantId = String(payload.restaurantId ?? change.restaurantId ?? '').trim()
       const staffBranchId = await resolveSyncBranchId(
         db, payload.branchId, staffRestaurantId, 'staff', change.entityId,
       )
@@ -871,7 +871,20 @@ export async function applyIncomingSyncChanges(
   const idRemap = new Map<string, string>()
 
   for (const change of changes) {
-    const pendingConflict = await hasPendingLocalConflict(db, change, localDeviceId)
+    // C3: Guard hasPendingLocalConflict against a Postgres 25P02 (transaction aborted) that
+    // a prior failed applyResolvedSyncChange may have left behind. If the conflict check itself
+    // throws, stop processing further changes and surface the error through failedChanges so
+    // the caller gets a clear failure reason rather than a confusing 25P02 from findFirst().
+    let pendingConflict: Awaited<ReturnType<typeof hasPendingLocalConflict>>
+    try {
+      pendingConflict = await hasPendingLocalConflict(db, change, localDeviceId)
+    } catch (conflictErr) {
+      const message = conflictErr instanceof Error ? conflictErr.message : String(conflictErr)
+      console.error('[syncEngine] hasPendingLocalConflict failed for %s:%s — stopping batch: %s', change.entityType, change.entityId, message)
+      failedChanges.push({ change, error: `Conflict check failed (transaction aborted?): ${message}` })
+      break
+    }
+
     if (pendingConflict) {
       conflicts += 1
       await logSyncConflict(db, {
