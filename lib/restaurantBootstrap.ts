@@ -29,6 +29,8 @@ async function hasLocalRestaurantData(params: {
   // return 0 for legacy installs and incorrectly trigger the bootstrap gate.
   const r = params.restaurantId
   const counts = await Promise.all([
+    // The restaurant record itself counts — a fresh account with no menu yet is still valid.
+    prisma.restaurant.count({ where: { id: r } }),
     prisma.dish.count({ where: { restaurantId: r } }),
     prisma.inventoryItem.count({ where: { restaurantId: r } }),
     prisma.staff.count({ where: { restaurantId: r } }),
