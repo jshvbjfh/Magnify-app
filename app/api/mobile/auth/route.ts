@@ -170,7 +170,7 @@ export async function POST(req: Request) {
     }
 
     return jsonNoStore(
-      { error: 'Provide { username, password } for credential auth or { pin, restaurantId } for PIN auth.' },
+      { error: 'Username and password are required.' },
       { status: 400 },
     )
   } catch (err) {
