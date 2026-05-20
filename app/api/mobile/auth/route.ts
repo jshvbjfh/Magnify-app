@@ -55,14 +55,17 @@ async function resolveRestaurantId(
 
   // Try to resolve via the staff member's restaurant — works for multi-tenant setups
   // where more than one restaurant exists and no explicit restaurantId was sent.
+  // Only matches staff in non-deleted restaurants so old test data can't win.
   if (rawUsername) {
     const staff = await prisma.staff.findFirst({
       where: {
         isActive: true,
         deletedAt: null,
+        restaurant: { deletedAt: null },
         OR: [{ username: rawUsername }, { name: rawUsername }],
       },
       select: { restaurantId: true },
+      orderBy: { createdAt: 'desc' },
     })
     if (staff) return staff.restaurantId
   }
