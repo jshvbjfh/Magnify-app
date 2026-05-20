@@ -162,6 +162,11 @@ export async function clearSession(): Promise<void> {
   await getDB().run('DELETE FROM session')
 }
 
+export async function clearLocalMenu(): Promise<void> {
+  await getDB().run('DELETE FROM dishes')
+  await getDB().run('DELETE FROM restaurant_tables')
+}
+
 // ─── App logs ───────────────────────────────────────────────────────────────
 
 export interface AppLogEntry {
@@ -257,7 +262,14 @@ export async function replaceDishes(dishes: Dish[]): Promise<void> {
   }
 }
 
-export async function getDishes(): Promise<Dish[]> {
+export async function getDishes(restaurantId?: string | null): Promise<Dish[]> {
+  if (restaurantId) {
+    const res = await getDB().query(
+      'SELECT * FROM dishes WHERE is_active = 1 AND restaurant_id = ? ORDER BY name',
+      [restaurantId],
+    )
+    return (res.values ?? []) as Dish[]
+  }
   const res = await getDB().query('SELECT * FROM dishes WHERE is_active = 1 ORDER BY name')
   return (res.values ?? []) as Dish[]
 }

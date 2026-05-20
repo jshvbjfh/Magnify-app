@@ -128,8 +128,18 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   }
 
   const payload = payloadBody as unknown as PullPayload
-  const existingDishes = await getDishes()
-  const existingTables = await getTables()
+  const currentRestaurantId = payload.restaurant?.id ?? null
+
+  // Only treat dishes/tables from THIS restaurant as a valid offline cache.
+  // Data from a previous restaurant login is stale foreign data, not a fallback.
+  const allDishes = await getDishes()
+  const allTables = await getTables()
+  const existingDishes = currentRestaurantId
+    ? allDishes.filter(d => d.restaurant_id === currentRestaurantId)
+    : allDishes
+  const existingTables = currentRestaurantId
+    ? allTables.filter(t => t.restaurant_id === currentRestaurantId)
+    : allTables
   const warnings: string[] = []
   const now = new Date().toISOString()
   let didRefreshLocalSnapshot = false

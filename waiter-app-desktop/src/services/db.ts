@@ -58,6 +58,12 @@ export async function clearSession(): Promise<void> {
   await db.run('DELETE FROM session', [])
 }
 
+export async function clearLocalMenu(): Promise<void> {
+  const db = getDB()
+  await db.run('DELETE FROM dishes', [])
+  await db.run('DELETE FROM restaurant_tables', [])
+}
+
 // ---- app_logs --------------------------------------------------------------
 
 export interface AppLogEntry {

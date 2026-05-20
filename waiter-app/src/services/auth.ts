@@ -1,4 +1,4 @@
-import { getSession, setSession, clearSession, setConfig } from './db'
+import { getSession, setSession, clearSession, setConfig, getConfig, clearLocalMenu } from './db'
 import { API } from '../config'
 import {
   getResponseHeader,
@@ -179,6 +179,13 @@ export async function login(email: string, password: string): Promise<WaiterUser
   // Persist session to SQLite
   await setSession(SESSION_KEY, token)
   await setSession(USER_KEY, JSON.stringify(user))
+
+  // If the restaurant changed, wipe cached menu so the new waiter never sees
+  // the previous session's dishes/tables before the first pull sync completes.
+  const prevRestaurantId = (await getConfig('restaurantId'))?.trim() ?? ''
+  if (prevRestaurantId && prevRestaurantId !== user.restaurantId) {
+    await clearLocalMenu()
+  }
 
   // Cache restaurant + branch in config for offline reads
   await setConfig('restaurantId', user.restaurantId)
