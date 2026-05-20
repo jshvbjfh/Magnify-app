@@ -48,7 +48,11 @@ export default function SignupForm() {
 			})
 			const data = await response.json()
 			if (!response.ok) throw new Error(data.error || 'Something went wrong')
-			setRecoveryKey(data.recoveryKey)
+			if (data.recoveryKey) {
+				setRecoveryKey(data.recoveryKey)
+			} else {
+				router.push('/login?registered=true')
+			}
 		} catch (err: any) {
 			setError(err.message || 'Failed to create account')
 			setStep(1)

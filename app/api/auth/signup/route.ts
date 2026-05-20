@@ -144,7 +144,7 @@ export async function POST(request: NextRequest) {
         email,
         password: hashedPassword,
         role: finalRole,
-        isActive: false,
+        isActive: true,
       },
     })
 
