@@ -71,6 +71,7 @@ model Branch {
   isMain       Boolean    @default(false)
   isActive     Boolean    @default(true)
   address      String?
+  billHeader   String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
   deletedAt    DateTime?

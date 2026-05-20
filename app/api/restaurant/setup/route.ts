@@ -16,6 +16,11 @@ const settingsRestaurantSelect = {
   joinCode: true,
 } as const
 
+const branchBillHeaderSelect = {
+  id: true,
+  billHeader: true,
+} as const
+
 /** GET — fetch the admin's restaurant (creates one if missing) */
 export async function GET() {
   const session = await getServerSession(authOptions)
@@ -45,19 +50,34 @@ export async function GET() {
   }
 
   const activeBranchId = context?.restaurantId === restaurant.id ? context.branchId : null
-  const waiters = activeBranchId
-    ? await prisma.staff.findMany({
-        where: {
-          restaurantId: restaurant.id,
-          branches: { some: { branchId: activeBranchId } },
-          role: { in: ['waiter', 'kitchen'] },
-          deletedAt: null,
-        },
-        select: { id: true, name: true, username: true, role: true, createdAt: true },
-      })
-    : []
+  const [waiters, activeBranch] = await Promise.all([
+    activeBranchId
+      ? prisma.staff.findMany({
+          where: {
+            restaurantId: restaurant.id,
+            branches: { some: { branchId: activeBranchId } },
+            role: { in: ['waiter', 'kitchen'] },
+            deletedAt: null,
+          },
+          select: { id: true, name: true, username: true, role: true, createdAt: true },
+        })
+      : Promise.resolve([]),
+    activeBranchId
+      ? prisma.branch.findUnique({ where: { id: activeBranchId }, select: branchBillHeaderSelect })
+      : Promise.resolve(null),
+  ])
 
-  return NextResponse.json({ restaurant, waiters })
+  const effectiveBillHeader = activeBranch?.billHeader ?? restaurant.billHeader ?? ''
+  const billHeaderInherited = activeBranch !== null && (activeBranch.billHeader === null || activeBranch.billHeader === '')
+
+  return NextResponse.json({
+    restaurant: {
+      ...restaurant,
+      billHeader: effectiveBillHeader,
+      billHeaderInherited,
+    },
+    waiters,
+  })
 }
 
 /** POST — update restaurant settings */
@@ -87,9 +107,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
   }
 
-  const updateData: { name?: string; billHeader?: string; fifoEnabled?: boolean; fifoConfiguredAt?: Date } = {}
-  if (name       !== undefined) updateData.name       = name      || 'My Restaurant'
-  if (billHeader !== undefined) updateData.billHeader = billHeader ?? ''
+  const restaurantUpdateData: { name?: string; fifoEnabled?: boolean; fifoConfiguredAt?: Date } = {}
+  if (name !== undefined) restaurantUpdateData.name = name || 'My Restaurant'
   if (typeof fifoEnabled === 'boolean') {
     if (!fifoEnabled) {
       return NextResponse.json({ error: 'This app now enforces strict FIFO. Average Cost is no longer supported.' }, { status: 409 })
@@ -109,15 +128,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'This app uses strict FIFO. Preview and apply FIFO reconciliation before recording cutover for this restaurant.' }, { status: 409 })
     }
 
-    updateData.fifoEnabled = true
-    updateData.fifoConfiguredAt = new Date()
+    restaurantUpdateData.fifoEnabled = true
+    restaurantUpdateData.fifoConfiguredAt = new Date()
   }
 
   const restaurant = await prisma.restaurant.update({
     where: { id: targetRestaurantId },
-    data: updateData,
+    data: restaurantUpdateData,
     select: settingsRestaurantSelect,
   })
+
+  // Save billHeader to the active branch (falls back to restaurant-level for receipt rendering)
+  const activeBranchId = context?.branchId ?? null
+  if (billHeader !== undefined && activeBranchId) {
+    await prisma.branch.update({
+      where: { id: activeBranchId },
+      data: { billHeader: billHeader ?? null },
+    })
+  }
 
   await enqueueSyncChange(prisma, {
     restaurantId: restaurant.id,
@@ -127,5 +155,17 @@ export async function POST(req: Request) {
     payload: restaurant,
   })
 
-  return NextResponse.json({ restaurant })
+  const activeBranch = activeBranchId
+    ? await prisma.branch.findUnique({ where: { id: activeBranchId }, select: branchBillHeaderSelect })
+    : null
+  const effectiveBillHeader = activeBranch?.billHeader ?? restaurant.billHeader ?? ''
+  const billHeaderInherited = activeBranch !== null && (activeBranch.billHeader === null || activeBranch.billHeader === '')
+
+  return NextResponse.json({
+    restaurant: {
+      ...restaurant,
+      billHeader: effectiveBillHeader,
+      billHeaderInherited,
+    },
+  })
 }

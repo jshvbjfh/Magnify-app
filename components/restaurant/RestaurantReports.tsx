@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { BranchBadge } from '@/contexts/RestaurantBranchContext'
 
 type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory'
 type Period = 'today' | 'week' | 'month' | 'quarter' | 'year'
@@ -1118,7 +1119,10 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
       {/* Header */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-lg font-bold text-gray-800">Financial Reports</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-bold text-gray-800">Financial Reports</h2>
+            <BranchBadge />
+          </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             <div className="p-0.5 rounded bg-gradient-to-br from-orange-500 to-red-600">
               <Sparkles className="h-3 w-3 text-white"/>

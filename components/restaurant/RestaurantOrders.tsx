@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import { Search, X, ShoppingBag, CheckCircle2, Sparkles, Receipt, CreditCard, RefreshCw, ArrowLeftRight, UtensilsCrossed, ArrowLeft, Printer, ClipboardList, Ban, CircleHelp, ChefHat, Clock, Trash2 } from 'lucide-react'
-import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
 import { parseRestaurantBillTemplate } from '@/lib/restaurantBillTemplate'
 import {
@@ -1019,7 +1019,10 @@ ${headerLines}
         <OfflineQueueBanner />
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-bold text-gray-800">Active Orders</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-bold text-gray-800">Active Orders</h2>
+              <BranchBadge />
+            </div>
             <p className="text-sm text-gray-500">Today: <span className="font-semibold text-green-700">{fmtRWF(todayPaid)} RWF</span></p>
           </div>
           <button onClick={() => { loadPending(); loadTables() }} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50">

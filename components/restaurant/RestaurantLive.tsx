@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSession } from 'next-auth/react'
 import { ChefHat, CheckCircle2, Clock, Flame, RefreshCw, Utensils, Receipt } from 'lucide-react'
-import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type LiveOrder = {
@@ -172,6 +172,8 @@ export default function RestaurantLive() {
       {/* Live header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
+          <h2 className="text-lg font-bold text-gray-800">Live View</h2>
+          <BranchBadge />
           <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
           <span className="text-xs text-gray-400">
             Last updated {lastRefresh.toLocaleTimeString('en-RW', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}

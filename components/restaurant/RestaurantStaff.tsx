@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react'
 import { Plus, Users, Clock, X, CheckCircle2, Sparkles, UserCheck, Copy, Trash2, Eye, EyeOff, Wifi, ChefHat, Crown, AlertTriangle } from 'lucide-react'
 import { loadOwnerSyncConfig, loadServerOwnerSyncConfig } from '@/lib/ownerSyncBrowser'
-import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 
 type Employee = { id:string; name:string; role:string; isActive:boolean; phone:string|null }
 type Shift = { id:string; staff:{name:string}; clockInAt:string; durationMins:number; notes:string|null }
@@ -319,7 +319,10 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h2 className="text-lg font-bold text-gray-800">Staff Management</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-bold text-gray-800">Staff Management</h2>
+          <BranchBadge />
+        </div>
         <div className="flex flex-wrap items-center gap-2 justify-end">
           <button disabled className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-200 text-orange-300 bg-white opacity-60 cursor-not-allowed">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI <span className="ml-1 text-[10px] font-bold bg-orange-100 text-orange-400 rounded px-1 py-0.5 leading-none">Soon</span>

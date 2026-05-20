@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import { Plus, Trash2, ChefHat, X, Edit2, ToggleLeft, ToggleRight, Sparkles, Search, ChevronDown } from 'lucide-react'
-import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { estimateFifoCostForQuantity } from '@/lib/fifoCosting'
 import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
@@ -186,7 +186,10 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
         </div>
       ) : null}
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-gray-800">Restaurant Menu</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-bold text-gray-800">Restaurant Menu</h2>
+          <BranchBadge />
+        </div>
         <div className="flex items-center gap-2">
           <button disabled className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-200 text-orange-300 bg-white opacity-60 cursor-not-allowed">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI <span className="ml-1 text-[10px] font-bold bg-orange-100 text-orange-400 rounded px-1 py-0.5 leading-none">Soon</span>

@@ -502,6 +502,8 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	`, SKIP_SOFT)
 	r = dbExecute(`ALTER TABLE "branches" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added branches.deletedAt')
+	r = dbExecute(`ALTER TABLE "branches" ADD COLUMN "billHeader" TEXT;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added branches.billHeader')
 
 	// dishes
 	r = dbExecute(`ALTER TABLE "dishes" ADD COLUMN "description" TEXT;`, SKIP_TABLE)

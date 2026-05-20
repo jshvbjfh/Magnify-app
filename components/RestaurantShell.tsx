@@ -351,9 +351,11 @@ export default function RestaurantShell() {
     : ['dashboard', 'transactions', 'inventory', 'reports']
 
   const isPrimaryMobileTab = mobileTabs.includes(activeTab)
+  const activeBranch = branches.find(b => b.id === activeBranchId) ?? null
   const restaurantBranchContextValue = {
     restaurantId: typeof (session?.user as any)?.restaurantId === 'string' ? (session?.user as any).restaurantId : null,
     branchId: activeBranchId,
+    branchName: activeBranch?.name ?? null,
   }
 
   const renderActiveTab = () => {

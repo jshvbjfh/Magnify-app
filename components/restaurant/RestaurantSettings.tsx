@@ -4,6 +4,7 @@ import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Clo
 import { FIFO_FEATURE_AVAILABLE } from '@/lib/fifoFeature'
 import { getOwnerSyncRetryDelayMs, loadOwnerSyncConfig, loadOwnerSyncStatus, loadServerOwnerSyncConfig, loadSyncConflicts, resolveSyncConflict, retryStalledSyncOutbox, saveOwnerSyncConfig, syncOwnerCloud, type OwnerSyncConfig, type OwnerSyncStatus, type ServerOwnerSyncConfig, type SyncConflictEntry } from '@/lib/ownerSyncBrowser'
 import { composeRestaurantBillTemplate, parseRestaurantBillTemplate } from '@/lib/restaurantBillTemplate'
+import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
 
 function formatSyncTimestamp(value: string | null) {
   if (!value) return '—'
@@ -165,8 +166,10 @@ type StartupLogResponse = {
 }
 
 export default function RestaurantSettings() {
+  const branchCtx = useRestaurantBranch()
   const [billTopText, setBillTopText] = useState('')
   const [billBottomText, setBillBottomText] = useState('')
+  const [billHeaderInherited, setBillHeaderInherited] = useState(false)
   const [restaurantName, setRestaurantName] = useState('')
   const [qrOrderingMode, setQrOrderingMode] = useState<'order' | 'view_only' | 'disabled'>('disabled')
   const [trackingMode, setTrackingMode] = useState<'simple' | 'dish_tracking'>('simple')
@@ -390,6 +393,7 @@ export default function RestaurantSettings() {
           const template = parseRestaurantBillTemplate(setupData.restaurant?.billHeader)
           setBillTopText(template.topText)
           setBillBottomText(template.bottomText)
+          setBillHeaderInherited(setupData.restaurant?.billHeaderInherited === true)
           setFifoEnabled(true)
           setFifoConfiguredAt(typeof setupData.restaurant?.fifoConfiguredAt === 'string' ? setupData.restaurant.fifoConfiguredAt : null)
           setFifoCutoverAt(typeof setupData.restaurant?.fifoCutoverAt === 'string' ? setupData.restaurant.fifoCutoverAt : null)
@@ -501,6 +505,7 @@ export default function RestaurantSettings() {
         const template = parseRestaurantBillTemplate(savedRestaurant.billHeader)
         setBillTopText(template.topText)
         setBillBottomText(template.bottomText)
+        setBillHeaderInherited(savedRestaurant.billHeaderInherited === true)
         if (savedRestaurant.qrOrderingMode === 'view_only') setQrOrderingMode('view_only')
         else if (savedRestaurant.qrOrderingMode === 'order') setQrOrderingMode('order')
         else setQrOrderingMode('disabled')
@@ -760,6 +765,12 @@ export default function RestaurantSettings() {
           <p className="text-sm text-gray-500">
             Edit the printed bill in two parts: the top block and the bottom message. The middle pricing section is generated automatically from the order.
           </p>
+          {branchCtx?.branchName ? (
+            <p className="text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+              This setting applies to <span className="font-semibold">{branchCtx.branchName}</span>.
+              {billHeaderInherited ? ' Currently showing the restaurant-wide default — save to override for this branch.' : ' Leave blank to use the restaurant-wide default instead.'}
+            </p>
+          ) : null}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div className="space-y-4">
               <div>

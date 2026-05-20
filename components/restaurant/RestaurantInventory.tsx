@@ -1,6 +1,6 @@
 ﻿'use client'
 import { Fragment, useEffect, useState } from 'react'
-import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { AlertTriangle, X, Sparkles, ShoppingCart, Search, Trash2 } from 'lucide-react'
 import { createInventoryBatchSuffix, formatInventoryBatchId } from '@/lib/inventoryBatch'
 import {
@@ -799,7 +799,10 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-gray-800">Inventory</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-bold text-gray-800">Inventory</h2>
+          <BranchBadge />
+        </div>
         <div className="flex items-center gap-2">
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse

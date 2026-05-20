@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSession } from 'next-auth/react'
 import { TrendingUp, Users, ShoppingBag, DollarSign, AlertTriangle, CheckCircle2, RefreshCw, Flame, Sparkles, CalendarRange } from 'lucide-react'
-import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type DashboardData = {
@@ -182,7 +182,10 @@ export default function RestaurantDashboard({ onAskJesse }: { onAskJesse?: () =>
       {/* Period selector */}
       <div className="space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <h2 className="text-lg font-bold text-gray-800">Dashboard</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-bold text-gray-800">Dashboard</h2>
+          <BranchBadge />
+        </div>
         <div className="flex items-center gap-2">
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI
