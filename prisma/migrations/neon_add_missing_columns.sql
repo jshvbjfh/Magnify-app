@@ -26,3 +26,11 @@ ALTER TABLE "staff" ADD COLUMN IF NOT EXISTS "username"  TEXT;
 
 -- restaurant_tables
 ALTER TABLE "restaurant_tables" ADD COLUMN IF NOT EXISTS "deletedAt" TIMESTAMP;
+
+-- inventory_items: drop old (userId, name) unique index replaced by (restaurantId, branchId, name)
+ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "restaurantId" TEXT;
+ALTER TABLE "inventory_items" ADD COLUMN IF NOT EXISTS "branchId"    TEXT;
+DROP INDEX IF EXISTS "inventory_items_userId_name_key";
+CREATE UNIQUE INDEX IF NOT EXISTS "inventory_items_restaurantId_branchId_name_key"
+  ON "inventory_items" ("restaurantId", "branchId", "name")
+  WHERE "restaurantId" IS NOT NULL AND "branchId" IS NOT NULL;

@@ -471,6 +471,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           paymentMethod: payload.paymentMethod ?? 'Cash',
           purchasedAt: asDate(payload.purchasedAt) ?? new Date(),
           createdAt: asDate(payload.createdAt) ?? undefined,
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
         create: {
           id: String(payload.id || change.entityId),
@@ -485,6 +486,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           paymentMethod: payload.paymentMethod ?? 'Cash',
           purchasedAt: asDate(payload.purchasedAt) ?? new Date(),
           createdAt: asDate(payload.createdAt) ?? new Date(),
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
       })
       break
