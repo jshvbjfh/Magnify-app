@@ -559,7 +559,8 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         setPurchaseError(err?.error || 'Delete failed')
         return
       }
-      if (editingPurchaseId === purchase.id) closePurchaseForm()
+      const lastInActiveBatch = activeBatchId && purchase.batchId === activeBatchId && activeBatchPurchases.length <= 1
+      if (editingPurchaseId === purchase.id || lastInActiveBatch) closePurchaseForm()
       await Promise.all([load(), loadPurchases()])
       window.dispatchEvent(new CustomEvent('refreshTransactions'))
     } finally {

@@ -84,7 +84,7 @@ export async function POST(req: Request) {
     if (rawPin && rawRestaurantId) {
       const allStaff = await prisma.staff.findMany({
         where: { restaurantId: rawRestaurantId, isActive: true, deletedAt: null, pin: { not: null } },
-        select: { id: true, name: true, role: true, pin: true, restaurantId: true },
+        select: { id: true, name: true, role: true, pin: true, restaurantId: true, username: true },
       })
 
       let matchedStaff: (typeof allStaff)[number] | null = null
@@ -118,9 +118,10 @@ export async function POST(req: Request) {
 
       return jsonNoStore({
         token,
-        staff: {
+        user: {
           id: matchedStaff.id,
           name: matchedStaff.name,
+          email: matchedStaff.username ?? '',
           role: matchedStaff.role,
           restaurantId: matchedStaff.restaurantId,
           branchId,
@@ -137,8 +138,13 @@ export async function POST(req: Request) {
       }
 
       const matchedStaff = await prisma.staff.findFirst({
-        where: { restaurantId, username: rawUsername, isActive: true, deletedAt: null },
-        select: { id: true, name: true, role: true, password: true, restaurantId: true },
+        where: {
+          restaurantId,
+          isActive: true,
+          deletedAt: null,
+          OR: [{ username: rawUsername }, { name: rawUsername }],
+        },
+        select: { id: true, name: true, role: true, password: true, restaurantId: true, username: true },
       })
 
       if (!matchedStaff || !matchedStaff.password) {
@@ -169,9 +175,10 @@ export async function POST(req: Request) {
 
       return jsonNoStore({
         token,
-        staff: {
+        user: {
           id: matchedStaff.id,
           name: matchedStaff.name,
+          email: matchedStaff.username ?? '',
           role: matchedStaff.role,
           restaurantId: matchedStaff.restaurantId,
           branchId,

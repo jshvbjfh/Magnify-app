@@ -1,6 +1,6 @@
 {
   "name": "restaurant-app",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "Magnify — Restaurant Management",
   "author": "Magnify",
   "private": true,
@@ -22,7 +22,7 @@
     "build:web": "npm run prisma:generate && next build",
     "build": "npm run build:web",
     "build:vercel": "npm run build:web",
-    "build:electron": "node scripts/build-electron-env.mjs && cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=local-first PRISMA_FORCE_PROVIDER=sqlite npm run prisma:generate && cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=local-first next build && node scripts/copy-standalone.mjs",
+    "build:electron": "node scripts/build-electron-env.mjs && cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=local-first PRISMA_FORCE_PROVIDER=sqlite npm run prisma:generate && cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=local-first DATABASE_URL=file:./dev.db next build && node scripts/copy-standalone.mjs",
     "build:electron:updater": "cross-env ELECTRON_AUTO_UPDATE=true npm run build:electron",
     "clean:electron": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "start": "next start -p $PORT -H 0.0.0.0",

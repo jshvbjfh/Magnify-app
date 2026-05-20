@@ -8,7 +8,7 @@ import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type Ingredient = { id: string; name: string; unit: string; unitCost: number | null; quantity: number }
-type DishIngredient = { id: string; ingredientId: string; quantityRequired: number; ingredient: Ingredient }
+type DishIngredient = { id: string; inventoryItemId: string; quantityRequired: number; inventoryItem: Ingredient }
 type Dish = { id: string; name: string; sellingPrice: number; category: string | null; isActive: boolean; ingredients: DishIngredient[] }
 type PurchaseLayer = { id: string; ingredientId: string; remainingQuantity: number; unitCost: number; purchasedAt: string; createdAt: string }
 
@@ -139,7 +139,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   async function addIngredient(e: React.FormEvent) {
     e.preventDefault()
     if (!selectedDish||!recipeForm.ingredientId||!recipeForm.quantityRequired) return
-    await fetch(`/api/restaurant/dishes/${selectedDish.id}/ingredients`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ingredientId:recipeForm.ingredientId,quantityRequired:Number(recipeForm.quantityRequired)})})
+    await fetch(`/api/restaurant/dishes/${selectedDish.id}/ingredients`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({inventoryItemId:recipeForm.ingredientId,quantityRequired:Number(recipeForm.quantityRequired)})})
     setRecipeForm({ingredientId:'',quantityRequired:''}); setIngSearch(''); setIngDropOpen(false); load()
     // refresh selected dish
     const updated = await fetch('/api/restaurant/dishes').then(r=>r.json())
@@ -147,7 +147,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   }
 
   async function removeIngredient(dishId: string, ingredientId: string) {
-    await fetch(`/api/restaurant/dishes/${dishId}/ingredients`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({ingredientId})})
+    await fetch(`/api/restaurant/dishes/${dishId}/ingredients`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({inventoryItemId:ingredientId})})
     const updated = await fetch('/api/restaurant/dishes').then(r=>r.json())
     const all: Dish[] = Array.isArray(updated)?updated:[]
     setDishes(all)
@@ -164,7 +164,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
     )
   }
 
-  const foodCost = (dish: Dish) => dish.ingredients.reduce((sum, row) => sum + estimateIngredientCost(row.ingredient, row.quantityRequired).totalCost, 0)
+  const foodCost = (dish: Dish) => dish.ingredients.reduce((sum, row) => sum + estimateIngredientCost(row.inventoryItem, row.quantityRequired).totalCost, 0)
   const margin = (dish: Dish) => { const fc=foodCost(dish); return dish.sellingPrice>0?((dish.sellingPrice-fc)/dish.sellingPrice*100):0 }
 
   const filteredDishes = dishes.filter(d => {
@@ -395,18 +395,18 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                 ) : (
                   <div className="space-y-2">
                     {selectedDish.ingredients.map(r=>{
-                      const lineEstimate = estimateIngredientCost(r.ingredient, r.quantityRequired)
-                      const effectiveUnitCost = lineEstimate.effectiveUnitCost ?? r.ingredient.unitCost ?? 0
+                      const lineEstimate = estimateIngredientCost(r.inventoryItem, r.quantityRequired)
+                      const effectiveUnitCost = lineEstimate.effectiveUnitCost ?? r.inventoryItem.unitCost ?? 0
                       return (
                       <div key={r.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2.5">
                         <div>
-                          <p className="text-sm font-medium text-gray-800">{r.ingredient.name}</p>
+                          <p className="text-sm font-medium text-gray-800">{r.inventoryItem.name}</p>
                           <p className="text-xs text-gray-500">
-                            {r.quantityRequired} {r.ingredient.unit} x {effectiveUnitCost.toLocaleString()} RWF = <span className="font-semibold text-gray-700">{lineEstimate.totalCost.toFixed(0)} RWF</span>
+                            {r.quantityRequired} {r.inventoryItem.unit} x {effectiveUnitCost.toLocaleString()} RWF = <span className="font-semibold text-gray-700">{lineEstimate.totalCost.toFixed(0)} RWF</span>
                             {lineEstimate.allocations.length > 1 && <span className="ml-1 font-medium text-amber-600">FIFO blend</span>}
                           </p>
                         </div>
-                        <button onClick={()=>removeIngredient(selectedDish.id,r.ingredientId)} className="p-1 rounded hover:bg-red-50">
+                        <button onClick={()=>removeIngredient(selectedDish.id,r.inventoryItemId)} className="p-1 rounded hover:bg-red-50">
                           <Trash2 className="h-4 w-4 text-red-400"/>
                         </button>
                       </div>

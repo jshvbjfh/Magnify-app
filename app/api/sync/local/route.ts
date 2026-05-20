@@ -11,8 +11,10 @@ import {
   mapSyncOutboxRows,
   markSyncOutboxChangesSynced,
   markSyncOutboxChangesFailed,
+  type SyncChangeEnvelope,
 } from '@/lib/syncOutbox'
 import { buildHybridSyncBatchSignature, normalizeTargetUrl } from '@/lib/minimalSync'
+import { applyIncomingSyncChanges } from '@/lib/syncEngine'
 
 export const dynamic = 'force-dynamic'
 
@@ -88,7 +90,7 @@ export async function POST(req: NextRequest) {
   const pullCursors = syncCursors.map((cursor) => ({
     scopeId: cursor.scopeId,
     target: cursor.target,
-    lastReceivedAt: cursor.lastPulledAt?.toISOString() ?? null,
+    lastPulledAt: cursor.lastPulledAt?.toISOString() ?? null,
   }))
 
   // Include branch identity so the cloud can remap branch IDs correctly
@@ -106,6 +108,8 @@ export async function POST(req: NextRequest) {
   // POST changes to the cloud sync endpoint
   let cloudOk = false
   let cloudError: string | null = null
+  let cloudPullChanges: SyncChangeEnvelope[] = []
+  let cloudPullCursors: Array<{ scopeId: string; lastPulledAt: string | null }> = []
 
   try {
     const headers: Record<string, string> = {
@@ -128,6 +132,9 @@ export async function POST(req: NextRequest) {
       cloudOk = res.ok
       if (!res.ok) {
         cloudError = String(payload?.error ?? payload?.message ?? `HTTP ${res.status}`)
+      } else {
+        if (Array.isArray(payload?.pullChanges)) cloudPullChanges = payload.pullChanges
+        if (Array.isArray(payload?.pullCursors)) cloudPullCursors = payload.pullCursors
       }
     } finally {
       clearTimeout(timeoutId)
@@ -151,11 +158,36 @@ export async function POST(req: NextRequest) {
     await markSyncOutboxChangesSynced(prisma, outboxRows.map((r) => r.id))
   }
 
+  // Apply changes pulled from cloud into the local database
+  let pullApplied = 0
+  if (cloudPullChanges.length > 0) {
+    const pullResult = await applyIncomingSyncChanges(prisma, cloudPullChanges, { localDeviceId: deviceId })
+    pullApplied = pullResult.applied
+  }
+
+  // Advance pull cursors so the next sync doesn't re-fetch the same changes
+  for (const cursor of cloudPullCursors) {
+    if (!cursor.scopeId || !cursor.lastPulledAt) continue
+    await prisma.syncCursor.upsert({
+      where: { scopeId_target: { scopeId: cursor.scopeId, target: targetUrl } },
+      update: { lastPulledAt: new Date(cursor.lastPulledAt) },
+      create: {
+        scopeId: cursor.scopeId,
+        target: targetUrl,
+        lastPulledAt: new Date(cursor.lastPulledAt),
+        lastPushedAt: new Date(0),
+      },
+    })
+  }
+
   return NextResponse.json({
     ok: true,
-    message: changes.length > 0 ? `Synced ${changes.length} change(s) to cloud.` : 'No pending changes to sync.',
+    message: changes.length > 0 || pullApplied > 0
+      ? `Synced ${changes.length} change(s) to cloud; pulled ${pullApplied} change(s) from cloud.`
+      : 'No pending changes to sync.',
     consecutiveFailures: 0,
     syncedTransactions: 0,
     syncedSummaries: 0,
+    pullApplied,
   })
 }
