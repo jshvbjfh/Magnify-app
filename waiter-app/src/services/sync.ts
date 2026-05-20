@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs'
 import {
-  replaceDishes, replaceTables, setConfig,
+  replaceDishes, replaceTables, setConfig, getConfig,
   getDishes, getTables, getUnsyncedOrders, markOrdersSynced,
   replaceCancellationApprovers, getCancellationApprovers,
   reconcileOrderStatuses,
@@ -177,8 +177,19 @@ export async function pushSync(): Promise<number> {
   const token = await requireValidToken()
   const method = 'POST'
 
-  const { orders, items } = await getUnsyncedOrders()
+  const { orders: allUnsynced, items: allItems } = await getUnsyncedOrders()
+  if (!allUnsynced.length) return 0
+
+  // Only push orders that belong to the current session's restaurant.
+  // Orders from a previous login (different restaurant) are silently skipped
+  // by the server and would loop forever as unsynced without this guard.
+  const sessionRestaurantId = (await getConfig('restaurantId'))?.trim() ?? ''
+  const orders = sessionRestaurantId
+    ? allUnsynced.filter(o => o.restaurant_id === sessionRestaurantId)
+    : allUnsynced
   if (!orders.length) return 0
+  const orderIds = new Set(orders.map(o => o.id))
+  const items = allItems.filter(i => orderIds.has(i.order_id))
 
   const response = await sendRequest({
     scope: 'sync',
