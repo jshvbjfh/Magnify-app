@@ -466,7 +466,10 @@ export async function POST(req: Request) {
         })
       }
 
-      const pull = await collectPullChanges(tx, { restaurantId: restaurant!.id, branchId: resolvedBranchId, deviceId, pullCursors })
+      // Omit branchId so the manager receives changes from ALL branches, not just the
+      // resolved branch. Waiter devices have their own branch-scoped pull endpoint
+      // (/api/mobile/pull) and never reach this path.
+      const pull = await collectPullChanges(tx, { restaurantId: restaurant!.id, deviceId, pullCursors })
 
       return {
         ok: true,
