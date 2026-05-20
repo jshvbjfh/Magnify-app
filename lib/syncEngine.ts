@@ -340,12 +340,16 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       if (!staffBranchId) throw new Error(`[syncEngine] staff:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
 
       const staffTargetId = String(payload.id || change.entityId)
+      const staffUsername = typeof payload.username === 'string' && payload.username ? payload.username : null
+      const staffPassword = typeof payload.password === 'string' && payload.password ? payload.password : null
       await db.staff.upsert({
         where: { id: staffTargetId },
         update: {
           restaurantId: staffRestaurantId,
           name: payload.name,
           role: payload.role ?? 'waiter',
+          username: staffUsername ?? undefined,
+          password: staffPassword ?? undefined,
           pin: payload.pin ?? payload.cancellationPinHash ?? null,
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
           phone: payload.phone ?? null,
@@ -357,6 +361,8 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           restaurantId: staffRestaurantId,
           name: payload.name,
           role: payload.role ?? 'waiter',
+          username: staffUsername,
+          password: staffPassword,
           pin: payload.pin ?? payload.cancellationPinHash ?? null,
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
           phone: payload.phone ?? null,

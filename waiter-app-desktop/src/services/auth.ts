@@ -144,12 +144,12 @@ export async function login(username: string, password: string): Promise<WaiterU
         contentType,
         preview: rawBody.slice(0, 240),
       })
-      throw new Error('Server returned HTML instead of JSON. Open startup.log to inspect the response.')
+      throw new Error('Could not connect to the restaurant server. Open startup.log for details.')
     }
 
     const fallbackError = response.status === 401
-      ? 'Invalid username or password'
-      : `Login failed: ${response.status}`
+      ? 'Invalid username or password.'
+      : 'Login failed. Please try again.'
 
     throw new Error(typeof body.error === 'string' ? body.error : fallbackError)
   }
@@ -162,7 +162,7 @@ export async function login(username: string, password: string): Promise<WaiterU
       contentType,
       preview: rawBody.slice(0, 240),
     })
-    throw new Error('Server returned HTML instead of JSON. Open startup.log to inspect the response.')
+    throw new Error('Could not connect to the restaurant server. Open startup.log for details.')
   }
 
   const { token, user } = body as { token: string; user: WaiterUser }

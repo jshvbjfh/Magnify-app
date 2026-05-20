@@ -35,12 +35,41 @@ async function resolveStaffBranchId(staffId: string, restaurantId: string): Prom
 }
 
 /**
+ * Resolve a restaurantId from an explicit id, joinCode, or by auto-detecting the
+ * single restaurant in the database (works for local-first single-restaurant setups).
+ */
+async function resolveRestaurantId(
+  rawRestaurantId: string | null,
+  rawJoinCode: string | null,
+): Promise<string | null> {
+  if (rawRestaurantId) return rawRestaurantId
+
+  if (rawJoinCode) {
+    const restaurant = await prisma.restaurant.findUnique({
+      where: { joinCode: rawJoinCode },
+      select: { id: true },
+    })
+    return restaurant?.id ?? null
+  }
+
+  // No explicit identifier — auto-detect when there is exactly one restaurant (local-first mode).
+  const restaurants = await prisma.restaurant.findMany({
+    where: { deletedAt: null },
+    select: { id: true },
+    take: 2,
+  })
+  if (restaurants.length === 1) return restaurants[0].id
+
+  return null
+}
+
+/**
  * POST /api/mobile/auth
  *
- * Accepts either:
- *   { username, password }            — Staff credentials (username scoped to restaurant via restaurantId or joinCode)
- *   { pin, restaurantId }             — Staff PIN on a shared device
- *   { username, password, joinCode }  — Staff credentials when restaurantId is unknown on device
+ * Accepts:
+ *   { username, password }                        — Staff login (restaurant auto-detected in single-restaurant mode)
+ *   { username, password, restaurantId|joinCode } — Staff login with explicit restaurant
+ *   { pin, restaurantId }                         — PIN login on a shared device
  */
 export async function POST(req: Request) {
   try {
@@ -53,17 +82,6 @@ export async function POST(req: Request) {
 
     // ── PIN auth ──────────────────────────────────────────────────────────────
     if (rawPin && rawRestaurantId) {
-      const staff = await prisma.staff.findFirst({
-        where: {
-          restaurantId: rawRestaurantId,
-          isActive: true,
-          deletedAt: null,
-        },
-        select: { id: true, name: true, role: true, pin: true, restaurantId: true },
-      })
-
-      // We fetch all active staff for this restaurant and compare PINs individually
-      // (bcrypt compare is required — never compare plain PIN to hashed PIN with ===)
       const allStaff = await prisma.staff.findMany({
         where: { restaurantId: rawRestaurantId, isActive: true, deletedAt: null, pin: { not: null } },
         select: { id: true, name: true, role: true, pin: true, restaurantId: true },
@@ -78,12 +96,12 @@ export async function POST(req: Request) {
       }
 
       if (!matchedStaff) {
-        return jsonNoStore({ error: 'Invalid PIN' }, { status: 401 })
+        return jsonNoStore({ error: 'Incorrect PIN. Please try again.' }, { status: 401 })
       }
 
       const branchId = await resolveStaffBranchId(matchedStaff.id, matchedStaff.restaurantId)
       if (!branchId) {
-        return jsonNoStore({ error: 'No branch configured for this restaurant.' }, { status: 403 })
+        return jsonNoStore({ error: 'Your account is not linked to a branch. Contact your manager.' }, { status: 403 })
       }
 
       const token = await new SignJWT({
@@ -112,18 +130,10 @@ export async function POST(req: Request) {
 
     // ── Username + password auth ───────────────────────────────────────────────
     if (rawUsername && rawPassword) {
-      // Resolve restaurant — either by restaurantId or joinCode
-      let restaurantId: string | null = rawRestaurantId
-      if (!restaurantId && rawJoinCode) {
-        const restaurant = await prisma.restaurant.findUnique({
-          where: { joinCode: rawJoinCode },
-          select: { id: true },
-        })
-        restaurantId = restaurant?.id ?? null
-      }
+      const restaurantId = await resolveRestaurantId(rawRestaurantId, rawJoinCode)
 
       if (!restaurantId) {
-        return jsonNoStore({ error: 'Restaurant not found. Provide a valid restaurantId or joinCode.' }, { status: 400 })
+        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
       }
 
       const matchedStaff = await prisma.staff.findFirst({
@@ -132,17 +142,17 @@ export async function POST(req: Request) {
       })
 
       if (!matchedStaff || !matchedStaff.password) {
-        return jsonNoStore({ error: 'Invalid username or password' }, { status: 401 })
+        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
       }
 
       const valid = await bcrypt.compare(rawPassword, matchedStaff.password)
       if (!valid) {
-        return jsonNoStore({ error: 'Invalid username or password' }, { status: 401 })
+        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
       }
 
       const branchId = await resolveStaffBranchId(matchedStaff.id, matchedStaff.restaurantId)
       if (!branchId) {
-        return jsonNoStore({ error: 'No branch configured for this restaurant.' }, { status: 403 })
+        return jsonNoStore({ error: 'Your account is not linked to a branch. Contact your manager.' }, { status: 403 })
       }
 
       const token = await new SignJWT({
@@ -170,11 +180,11 @@ export async function POST(req: Request) {
     }
 
     return jsonNoStore(
-      { error: 'Username and password are required.' },
+      { error: 'Please enter your username and password.' },
       { status: 400 },
     )
   } catch (err) {
     console.error('[mobile/auth]', err)
-    return jsonNoStore({ error: 'Server error' }, { status: 500 })
+    return jsonNoStore({ error: 'Something went wrong. Please try again.' }, { status: 500 })
   }
 }

@@ -107,7 +107,7 @@ export async function POST(req: Request) {
 
       if (canProvisionToCloud()) {
         const remoteProvision = await provisionRestaurantAccountInCloud({
-          restaurant: { name: restaurant.name },
+          restaurant: { name: restaurant.name, joinCode: (restaurant as any).joinCode },
           role: 'owner',
           name: trimmedName,
           email: normalizedEmail,
@@ -168,22 +168,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Email already in use' }, { status: 409 })
     }
 
-    if (canProvisionToCloud()) {
-      const remoteProvision = await provisionRestaurantAccountInCloud({
-        restaurant: { name: restaurant.name },
-        role: 'waiter',
-        name: trimmedName,
-        email: normalizedEmail,
-        password,
-        branchId: adminContext.branchId,
-        syncTargetUrl,
-        syncEmail,
-        syncPassword,
-        adminEmail: admin.email,
-      })
-      if (!remoteProvision.ok) cloudProvisionWarning = remoteProvision.error
-    }
-
     const hashed = await hash(password, 12)
     const waiterStaff = await prisma.staff.create({
       data: {
@@ -196,8 +180,21 @@ export async function POST(req: Request) {
           create: { branchId: adminContext.branchId },
         },
       },
-      select: { id: true, name: true, username: true, role: true, createdAt: true },
+      select: { id: true, name: true, username: true, password: true, role: true, isActive: true, createdAt: true, updatedAt: true },
     })
+
+    const syncPayload = {
+      id: waiterStaff.id,
+      restaurantId: restaurant.id,
+      branchId: adminContext.branchId,
+      name: waiterStaff.name,
+      username: waiterStaff.username,
+      password: waiterStaff.password,
+      role: waiterStaff.role,
+      isActive: waiterStaff.isActive,
+      createdAt: waiterStaff.createdAt,
+      updatedAt: waiterStaff.updatedAt,
+    }
 
     await enqueueSyncChange(prisma, {
       restaurantId: restaurant.id,
@@ -205,8 +202,27 @@ export async function POST(req: Request) {
       entityType: 'staff',
       entityId: waiterStaff.id,
       operation: 'upsert',
-      payload: waiterStaff,
+      payload: syncPayload,
     })
+
+    // Immediately provision to cloud using the actual staff ID so the waiter
+    // can log in to the mobile app without waiting for background sync.
+    if (canProvisionToCloud()) {
+      const remoteProvision = await provisionRestaurantAccountInCloud({
+        restaurant: { name: restaurant.name, joinCode: (restaurant as any).joinCode },
+        role: 'waiter',
+        name: trimmedName,
+        email: normalizedEmail,
+        password,
+        staffId: waiterStaff.id,
+        branchId: adminContext.branchId,
+        syncTargetUrl,
+        syncEmail,
+        syncPassword,
+        adminEmail: admin.email,
+      })
+      if (!remoteProvision.ok) cloudProvisionWarning = remoteProvision.error
+    }
 
     const waiter = {
       id: waiterStaff.id,
