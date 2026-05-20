@@ -134,7 +134,7 @@ export async function POST(req: Request) {
       const restaurantId = await resolveRestaurantId(rawRestaurantId, rawJoinCode)
 
       if (!restaurantId) {
-        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
+        return jsonNoStore({ error: 'Invalid username or password. [debug: no restaurant resolved]' }, { status: 401 })
       }
 
       const matchedStaff = await prisma.staff.findFirst({
@@ -147,13 +147,16 @@ export async function POST(req: Request) {
         select: { id: true, name: true, role: true, password: true, restaurantId: true, username: true },
       })
 
-      if (!matchedStaff || !matchedStaff.password) {
-        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
+      if (!matchedStaff) {
+        return jsonNoStore({ error: `Invalid username or password. [debug: staff not found for restaurantId=${restaurantId}]` }, { status: 401 })
+      }
+      if (!matchedStaff.password) {
+        return jsonNoStore({ error: `Invalid username or password. [debug: staff ${matchedStaff.name} has no password set]` }, { status: 401 })
       }
 
       const valid = await bcrypt.compare(rawPassword, matchedStaff.password)
       if (!valid) {
-        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
+        return jsonNoStore({ error: `Invalid username or password. [debug: password mismatch for ${matchedStaff.name}]` }, { status: 401 })
       }
 
       const branchId = await resolveStaffBranchId(matchedStaff.id, matchedStaff.restaurantId)
