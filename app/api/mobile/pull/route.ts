@@ -77,7 +77,11 @@ export async function GET(req: Request) {
 
     const tableWhere = { restaurantId, branchId: effectiveBranchId }
 
-    const [dishes, tables, restaurant, approverEmployees, allBranches] = await Promise.all([
+    // Recent orders window: last 3 days so waiter sees status changes (PAID/CANCELLED)
+    // made by the manager without re-pushing. Scoped to the waiter's branch.
+    const recentOrderSince = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+
+    const [dishes, tables, restaurant, approverEmployees, allBranches, recentOrders] = await Promise.all([
       prisma.dish.findMany({
         where: dishWhere,
         select: {
@@ -117,6 +121,26 @@ export async function GET(req: Request) {
         where: { restaurantId, isActive: true },
         select: { id: true, name: true, code: true, isMain: true },
         orderBy: { name: 'asc' },
+      }),
+
+      // Recent order status updates so the waiter app can reconcile local copies.
+      prisma.restaurantOrder.findMany({
+        where: {
+          restaurantId,
+          branchId: effectiveBranchId,
+          updatedAt: { gte: recentOrderSince },
+        },
+        select: {
+          id: true,
+          status: true,
+          paymentMethod: true,
+          paidAt: true,
+          canceledAt: true,
+          cancelReason: true,
+          updatedAt: true,
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 200,
       }),
     ])
 
@@ -159,6 +183,17 @@ export async function GET(req: Request) {
         id: e.id,
         name: e.name,
         pin_hash: e.pin as string,
+      })),
+      // Recent order status updates for local reconciliation on the waiter device.
+      // Waiter app can update matching local rows without re-pushing.
+      recentOrders: recentOrders.map(o => ({
+        id: o.id,
+        status: o.status,
+        payment_method: o.paymentMethod ?? null,
+        paid_at: o.paidAt?.toISOString() ?? null,
+        canceled_at: o.canceledAt?.toISOString() ?? null,
+        cancel_reason: o.cancelReason ?? null,
+        updated_at: o.updatedAt.toISOString(),
       })),
     })
   } catch (err: any) {

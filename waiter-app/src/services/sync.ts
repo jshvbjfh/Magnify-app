@@ -3,7 +3,8 @@ import {
   replaceDishes, replaceTables, setConfig,
   getDishes, getTables, getUnsyncedOrders, markOrdersSynced,
   replaceCancellationApprovers, getCancellationApprovers,
-  type Dish, type RestaurantTable, type CancellationApprover,
+  reconcileOrderStatuses,
+  type Dish, type RestaurantTable, type CancellationApprover, type RemoteOrderStatus,
 } from './db'
 import { getToken, invalidateSession, SESSION_INVALID_MESSAGE } from './auth'
 import { API } from '../config'
@@ -148,6 +149,12 @@ export async function pullSync(): Promise<PullResult> {
   // Store cancellation approvers for offline PIN validation
   if (Array.isArray(payload.cancellationApprovers) && payload.cancellationApprovers.length > 0) {
     await replaceCancellationApprovers(payload.cancellationApprovers)
+  }
+
+  // Reconcile local order statuses with server-authoritative values (last 3 days).
+  const recentOrders = (payload as unknown as { recentOrders?: RemoteOrderStatus[] }).recentOrders
+  if (Array.isArray(recentOrders) && recentOrders.length > 0) {
+    await reconcileOrderStatuses(recentOrders)
   }
 
   if (warnings.length > 0) {

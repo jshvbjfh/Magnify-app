@@ -423,6 +423,40 @@ export async function markOrdersSynced(orders: Array<{ id: string; updated_at: s
   }
 }
 
+export interface RemoteOrderStatus {
+  id: string
+  status: string
+  payment_method: string | null
+  paid_at: string | null
+  canceled_at: string | null
+  cancel_reason: string | null
+  updated_at: string
+}
+
+// Applies server-authoritative status changes from pull without marking orders
+// for re-push (synced stays 1). Only updates rows where server updated_at is newer.
+export async function reconcileOrderStatuses(remoteOrders: RemoteOrderStatus[]): Promise<void> {
+  if (!remoteOrders.length) return
+  const d = getDB()
+  for (const remote of remoteOrders) {
+    await d.run(
+      `UPDATE orders
+       SET status = ?, payment_method = ?, paid_at = ?, canceled_at = ?, cancel_reason = ?, updated_at = ?
+       WHERE id = ? AND updated_at < ?`,
+      [
+        remote.status,
+        remote.payment_method,
+        remote.paid_at,
+        remote.canceled_at,
+        remote.cancel_reason,
+        remote.updated_at,
+        remote.id,
+        remote.updated_at,
+      ]
+    )
+  }
+}
+
 // ─── Cancellation Approvers ──────────────────────────────────────────────────
 // Pulled from server on every pullSync. Only stores id, name, and bcrypt hash.
 // No PINs in plaintext — validation is bcrypt.compare() locally when offline.
