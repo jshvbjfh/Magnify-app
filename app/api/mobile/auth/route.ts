@@ -191,7 +191,8 @@ export async function POST(req: Request) {
       { status: 400 },
     )
   } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
     console.error('[mobile/auth]', err)
-    return jsonNoStore({ error: 'Something went wrong. Please try again.' }, { status: 500 })
+    return jsonNoStore({ error: `Something went wrong. Please try again. [debug: ${detail}]` }, { status: 500 })
   }
 }
