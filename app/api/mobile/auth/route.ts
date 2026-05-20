@@ -35,12 +35,13 @@ async function resolveStaffBranchId(staffId: string, restaurantId: string): Prom
 }
 
 /**
- * Resolve a restaurantId from an explicit id, joinCode, or by auto-detecting the
- * single restaurant in the database (works for local-first single-restaurant setups).
+ * Resolve a restaurantId from an explicit id, joinCode, by staff username lookup,
+ * or by auto-detecting the single restaurant in the database.
  */
 async function resolveRestaurantId(
   rawRestaurantId: string | null,
   rawJoinCode: string | null,
+  rawUsername: string | null = null,
 ): Promise<string | null> {
   if (rawRestaurantId) return rawRestaurantId
 
@@ -52,7 +53,21 @@ async function resolveRestaurantId(
     return restaurant?.id ?? null
   }
 
-  // No explicit identifier — auto-detect when there is exactly one restaurant (local-first mode).
+  // Try to resolve via the staff member's restaurant — works for multi-tenant setups
+  // where more than one restaurant exists and no explicit restaurantId was sent.
+  if (rawUsername) {
+    const staff = await prisma.staff.findFirst({
+      where: {
+        isActive: true,
+        deletedAt: null,
+        OR: [{ username: rawUsername }, { name: rawUsername }],
+      },
+      select: { restaurantId: true },
+    })
+    if (staff) return staff.restaurantId
+  }
+
+  // Fallback: auto-detect when there is exactly one restaurant (local-first single-restaurant).
   const restaurants = await prisma.restaurant.findMany({
     where: { deletedAt: null },
     select: { id: true },
@@ -131,10 +146,10 @@ export async function POST(req: Request) {
 
     // ── Username + password auth ───────────────────────────────────────────────
     if (rawUsername && rawPassword) {
-      const restaurantId = await resolveRestaurantId(rawRestaurantId, rawJoinCode)
+      const restaurantId = await resolveRestaurantId(rawRestaurantId, rawJoinCode, rawUsername)
 
       if (!restaurantId) {
-        return jsonNoStore({ error: 'Invalid username or password. [debug: no restaurant resolved]' }, { status: 401 })
+        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
       }
 
       const matchedStaff = await prisma.staff.findFirst({
@@ -147,16 +162,13 @@ export async function POST(req: Request) {
         select: { id: true, name: true, role: true, password: true, restaurantId: true, username: true },
       })
 
-      if (!matchedStaff) {
-        return jsonNoStore({ error: `Invalid username or password. [debug: staff not found for restaurantId=${restaurantId}]` }, { status: 401 })
-      }
-      if (!matchedStaff.password) {
-        return jsonNoStore({ error: `Invalid username or password. [debug: staff ${matchedStaff.name} has no password set]` }, { status: 401 })
+      if (!matchedStaff || !matchedStaff.password) {
+        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
       }
 
       const valid = await bcrypt.compare(rawPassword, matchedStaff.password)
       if (!valid) {
-        return jsonNoStore({ error: `Invalid username or password. [debug: password mismatch for ${matchedStaff.name}]` }, { status: 401 })
+        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
       }
 
       const branchId = await resolveStaffBranchId(matchedStaff.id, matchedStaff.restaurantId)
@@ -194,8 +206,7 @@ export async function POST(req: Request) {
       { status: 400 },
     )
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err)
     console.error('[mobile/auth]', err)
-    return jsonNoStore({ error: `Something went wrong. Please try again. [debug: ${detail}]` }, { status: 500 })
+    return jsonNoStore({ error: 'Something went wrong. Please try again.' }, { status: 500 })
   }
 }
