@@ -25,3 +25,4 @@ dev.db-journal
 .tmp-*.js
 runtime.env
 public/uploads/chat/
+tsconfig.tsbuildinfo
