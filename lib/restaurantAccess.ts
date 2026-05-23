@@ -238,7 +238,6 @@ async function getStaffRestaurantContextForUser(
     }
   }
 
-  const mainBranch = await ensureMainBranchForRestaurant(staff.restaurantId)
   const cookieBranchSelection = readActiveBranchCookie()
   const preferredBranchId = String(options?.preferredBranchId ?? '').trim()
     || (cookieBranchSelection?.restaurantId === staff.restaurantId ? cookieBranchSelection.branchId : '')
@@ -257,17 +256,18 @@ async function getStaffRestaurantContextForUser(
 
   const effectiveBranch = selectedBranch
     ?? assignedBranches[0]
-    ?? mainBranch
     ?? await prisma.branch.findFirst({
       where: {
         restaurantId: staff.restaurantId,
+        isMain: true,
         isActive: true,
         deletedAt: null,
       },
-      orderBy: [
-        { isMain: 'desc' },
-        { createdAt: 'asc' },
-      ],
+      orderBy: { createdAt: 'asc' },
+    })
+    ?? await prisma.branch.findFirst({
+      where: { restaurantId: staff.restaurantId, isActive: true, deletedAt: null },
+      orderBy: [{ isMain: 'desc' }, { createdAt: 'asc' }],
     })
 
   return {
@@ -294,15 +294,21 @@ export async function getRestaurantContextForUser(
     return getStaffRestaurantContextForUser(user, options)
   }
 
-  // admin (manager) — finds restaurant they manage via managerId
-  // owner (investor) — finds restaurant they own via ownerId
-  // Both fall back to ownerId for legacy records created before managerId existed
-  const restaurant = user.role === 'admin'
-    ? await prisma.restaurant.findFirst({
+  // Read cookie synchronously before the DB round-trip so it's ready to use immediately.
+  const cookieBranchSelection = readActiveBranchCookie()
+  const preferredBranchId = String(options?.preferredBranchId ?? '').trim()
+    || (cookieBranchSelection?.branchId ?? '')
+
+  // Round-trip 1: resolve restaurant (admin or owner lookup) in parallel with the
+  // preferred-branch lookup when we already have a branchId from the cookie.
+  const restaurantPromise = user.role === 'admin'
+    ? prisma.restaurant.findFirst({
         where: { OR: [{ managerId: user.id }, { ownerId: user.id }], deletedAt: null },
         orderBy: { createdAt: 'asc' },
       })
-    : await findOwnedRestaurant(user.id)
+    : findOwnedRestaurant(user.id)
+
+  const [restaurant] = await Promise.all([restaurantPromise])
 
   if (!restaurant) {
     return {
@@ -315,34 +321,28 @@ export async function getRestaurantContextForUser(
     }
   }
 
-  const mainBranch = await ensureMainBranchForRestaurant(restaurant.id)
-  const cookieBranchSelection = readActiveBranchCookie()
-  const preferredBranchId = String(options?.preferredBranchId ?? '').trim()
-    || (cookieBranchSelection?.restaurantId === restaurant.id ? cookieBranchSelection.branchId : '')
-
-  const branch = preferredBranchId
-    ? await prisma.branch.findFirst({
-        where: {
-          id: preferredBranchId,
-          restaurantId: restaurant.id,
-          isActive: true,
-          deletedAt: null,
-        },
-      })
+  // Round-trip 2: preferred branch + main branch in parallel (skip ensureMainBranch on hot path).
+  const validPreferredId = preferredBranchId && cookieBranchSelection?.restaurantId === restaurant.id
+    ? preferredBranchId
     : null
 
-  const effectiveBranch = branch
+  const [preferredBranch, mainBranch] = await Promise.all([
+    validPreferredId
+      ? prisma.branch.findFirst({
+          where: { id: validPreferredId, restaurantId: restaurant.id, isActive: true, deletedAt: null },
+        })
+      : Promise.resolve(null),
+    prisma.branch.findFirst({
+      where: { restaurantId: restaurant.id, isMain: true, isActive: true, deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+    }),
+  ])
+
+  const effectiveBranch = preferredBranch
     ?? mainBranch
     ?? await prisma.branch.findFirst({
-      where: {
-        restaurantId: restaurant.id,
-        isActive: true,
-        deletedAt: null,
-      },
-      orderBy: [
-        { isMain: 'desc' },
-        { createdAt: 'asc' },
-      ],
+      where: { restaurantId: restaurant.id, isActive: true, deletedAt: null },
+      orderBy: [{ isMain: 'desc' }, { createdAt: 'asc' }],
     })
 
   return {
