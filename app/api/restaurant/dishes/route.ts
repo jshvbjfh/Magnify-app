@@ -16,15 +16,18 @@ const dishInclude = {
   },
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = await getRestaurantContextForUser(session.user.id)
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
+  const { searchParams } = new URL(req.url)
+  const scope = String(searchParams.get('scope') ?? '').trim().toLowerCase()
+  const restaurantWideScope = scope === 'restaurant'
 
-  if (!restaurantId || !branchId) {
+  if (!restaurantId || (!branchId && !restaurantWideScope)) {
     return NextResponse.json(
       { error: 'No restaurant branch found for this account. Ask your administrator to check your account configuration.' },
       { status: 400 },
@@ -32,9 +35,15 @@ export async function GET() {
   }
 
   const dishes = await prisma.dish.findMany({
-    where: { restaurantId, branchId, deletedAt: null },
+    where: {
+      restaurantId,
+      deletedAt: null,
+      ...(restaurantWideScope ? {} : { branchId: branchId! }),
+    },
     include: dishInclude,
-    orderBy: { createdAt: 'desc' },
+    orderBy: restaurantWideScope
+      ? [{ menuType: 'asc' }, { category: 'asc' }, { name: 'asc' }]
+      : { createdAt: 'desc' },
   })
   return NextResponse.json(dishes)
 }

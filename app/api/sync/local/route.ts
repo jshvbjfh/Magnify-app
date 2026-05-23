@@ -90,12 +90,45 @@ export async function POST(req: NextRequest) {
       nextJoinCode !== ((restaurant as any).joinCode ?? null)
       || nextSyncRestaurantId !== ((restaurant as any).syncRestaurantId ?? null)
     ) {
-      restaurant = await prisma.restaurant.update({
-        where: { id: restaurant.id },
-        data: {
-          ...(nextJoinCode ? { joinCode: nextJoinCode } : {}),
-          ...(nextSyncRestaurantId ? { syncRestaurantId: nextSyncRestaurantId } : {}),
-        },
+      const identityUpdate = {
+        ...(nextJoinCode ? { joinCode: nextJoinCode } : {}),
+        ...(nextSyncRestaurantId ? { syncRestaurantId: nextSyncRestaurantId } : {}),
+      }
+
+      const currentRestaurantId = restaurant.id
+      restaurant = await prisma.$transaction(async (tx) => {
+        if (nextJoinCode) {
+          const joinCodeConflict = await tx.restaurant.findFirst({
+            where: { joinCode: nextJoinCode, NOT: { id: currentRestaurantId } },
+            select: { id: true },
+          })
+
+          if (joinCodeConflict) {
+            await tx.restaurant.update({
+              where: { id: joinCodeConflict.id },
+              data: { joinCode: `DISPLACED-${joinCodeConflict.id.slice(-8)}` },
+            })
+          }
+        }
+
+        if (nextSyncRestaurantId) {
+          const syncRestaurantConflict = await tx.restaurant.findFirst({
+            where: { syncRestaurantId: nextSyncRestaurantId, NOT: { id: currentRestaurantId } },
+            select: { id: true },
+          })
+
+          if (syncRestaurantConflict) {
+            await tx.restaurant.update({
+              where: { id: syncRestaurantConflict.id },
+              data: { syncRestaurantId: null },
+            })
+          }
+        }
+
+        return tx.restaurant.update({
+          where: { id: currentRestaurantId },
+          data: identityUpdate,
+        })
       })
     }
   }
