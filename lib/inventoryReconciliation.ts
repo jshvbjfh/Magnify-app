@@ -133,6 +133,7 @@ export async function applyRestaurantInventoryReconciliation(
 					restaurantId: params.restaurantId,
 					branchId,
 					ingredientId: action.ingredientId,
+					batchId: action.batchId,
 					supplier: 'FIFO Opening Balance Reconciliation',
 					quantityPurchased: quantityDelta,
 					remainingQuantity: quantityDelta,
@@ -230,6 +231,7 @@ export async function applyRestaurantInventoryReconciliation(
 					remainingQuantity: { decrement: quantityConsumed },
 				},
 			})
+			const effectiveBatchId = String(layer.batchId || layer.id)
 
 			const usage = await db.inventoryBatchUsageLedger.create({
 				data: {
@@ -239,7 +241,7 @@ export async function applyRestaurantInventoryReconciliation(
 					ingredientId: action.ingredientId,
 					sourceType: 'adjustment',
 					sourceId: adjustmentLog.id,
-					batchId: layer.id,
+					batchId: effectiveBatchId,
 					quantityConsumed,
 					unitCost: Number(layer.unitCost),
 					totalCost: roundQuantity(quantityConsumed * Number(layer.unitCost)),

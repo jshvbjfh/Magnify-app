@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 
 import { recordJournalEntry } from '@/lib/accounting'
 import { recordDishSalesForPaidOrder } from '@/lib/dishSaleRecording'
-import { calculateRestaurantOrderTotals, enqueueOrderSync, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
+import { ACTIVE_RESTAURANT_ORDER_STATUSES, calculateRestaurantOrderTotals, enqueueOrderSync, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
@@ -62,7 +62,11 @@ export async function finalizeRestaurantOrderPayment(
         paymentMethod: params.paymentMethod || currentOrder.paymentMethod || 'Cash',
         saleDate: currentOrder.paidAt ?? params.paidAt ?? new Date(),
         items: currentOrder.items.map((item) => ({
+          orderItemId: item.id,
           dishId: item.dishId,
+          dishName: item.dishName,
+          dishVariantId: item.dishVariantId,
+          dishVariantName: item.dishVariantName,
           dishPrice: item.dishPrice,
           qty: item.qty,
         })),
@@ -90,7 +94,7 @@ export async function finalizeRestaurantOrderPayment(
       id: params.orderId,
       restaurantId: params.restaurantId,
       branchId: params.branchId,
-      status: 'PENDING',
+      status: { in: [...ACTIVE_RESTAURANT_ORDER_STATUSES] },
     },
     data: {
       status: 'PAID',
@@ -125,7 +129,11 @@ export async function finalizeRestaurantOrderPayment(
     paymentMethod: normalizedPaymentMethod,
     saleDate: paidAt,
     items: currentOrder.items.map((item) => ({
+      orderItemId: item.id,
       dishId: item.dishId,
+      dishName: item.dishName,
+      dishVariantId: item.dishVariantId,
+      dishVariantName: item.dishVariantName,
       dishPrice: item.dishPrice,
       qty: item.qty,
     })),

@@ -153,6 +153,7 @@ export async function consumeIngredientStock(
       remaining = roundQuantity(remaining - quantityConsumed)
       const unitCost = Number(layer.unitCost || 0)
       const allocationCost = roundQuantity(quantityConsumed * unitCost)
+      const effectiveBatchId = String(layer.batchId || layer.id)
       totalCost = roundQuantity(totalCost + allocationCost)
 
       const updatedPurchase = await db.inventoryPurchase.update({
@@ -178,7 +179,7 @@ export async function consumeIngredientStock(
           ingredientId: params.ingredientId,
           sourceType: params.sourceType,
           sourceId: params.sourceId,
-          batchId: layer.id,
+          batchId: effectiveBatchId,
           quantityConsumed,
           unitCost,
           totalCost: allocationCost,
@@ -198,7 +199,7 @@ export async function consumeIngredientStock(
 
       allocations.push({
         purchaseId: layer.id,
-        batchId: layer.id,
+        batchId: effectiveBatchId,
         quantityConsumed,
         unitCost,
         totalCost: allocationCost,

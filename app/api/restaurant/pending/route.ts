@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { resolveCancellationApprover } from '@/lib/cancelApproval'
-import { calculateRestaurantOrderTotals, enqueueOrderSync, generateRestaurantOrderNumber, isRestaurantOrderNumberConflict, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
+import { ACTIVE_RESTAURANT_ORDER_STATUSES, calculateRestaurantOrderTotals, enqueueOrderSync, generateRestaurantOrderNumber, isRestaurantOrderNumberConflict, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
 import { findRestaurantAction, isRestaurantActionConflict, normalizeRestaurantActionKey, recordRestaurantAction } from '@/lib/restaurantAction'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
 
@@ -27,7 +27,7 @@ export async function GET(req: Request) {
     where: {
       restaurantId: context.restaurantId,
       branchId: context.branchId,
-      status: 'PENDING',
+      status: { in: [...ACTIVE_RESTAURANT_ORDER_STATUSES] },
       ...(includeServed ? {} : { servedAt: null }),
     },
     include: {
@@ -97,7 +97,7 @@ export async function POST(req: Request) {
           where: {
             restaurantId,
             branchId,
-            status: 'PENDING',
+            status: { in: [...ACTIVE_RESTAURANT_ORDER_STATUSES] },
             tableId: normalizedTableId,
             ...(normalizedTableId === null ? { tableName: normalizedTableName } : {}),
           },
@@ -109,6 +109,7 @@ export async function POST(req: Request) {
             data: {
               restaurantId,
               branchId,
+              status: 'PENDING',
               tableId: normalizedTableId,
               tableName: normalizedTableName,
               orderNumber: await generateRestaurantOrderNumber(tx, restaurantId, branchId),
@@ -215,7 +216,7 @@ export async function DELETE(req: Request) {
 
   if (orderId) {
     const item = await prisma.orderItem.findFirst({
-      where: { id: orderId, order: { restaurantId, branchId, status: 'PENDING' } },
+      where: { id: orderId, order: { restaurantId, branchId, status: { in: [...ACTIVE_RESTAURANT_ORDER_STATUSES] } } },
       include: { order: true },
     })
 
@@ -282,7 +283,7 @@ export async function DELETE(req: Request) {
       where: {
         restaurantId,
         branchId,
-        status: 'PENDING',
+        status: { in: [...ACTIVE_RESTAURANT_ORDER_STATUSES] },
         tableId,
         ...(tableId === null ? { tableName: 'Takeaway' } : {}),
       },

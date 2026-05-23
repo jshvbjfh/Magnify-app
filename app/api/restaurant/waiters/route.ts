@@ -4,8 +4,9 @@ import { Prisma } from '@prisma/client'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { hash } from 'bcryptjs'
-import { provisionRestaurantAccountInCloud } from '@/lib/cloudRestaurantAccountProvision'
+import { provisionRestaurantAccountInCloud, resolveCloudRestaurantIdentity } from '@/lib/cloudRestaurantAccountProvision'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { ensureRestaurantStaffLoginUser } from '@/lib/restaurantStaffUsers'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 async function requireAdmin() {
@@ -28,6 +29,50 @@ function canProvisionToCloud() {
   // the remote cloud server. On Vercel/PostgreSQL, accounts land directly in the cloud DB
   // at creation time — no separate provisioning step is needed or possible.
   return isLocalFirstDesktopMode()
+}
+
+async function ensureProvisioningRestaurantIdentity(params: {
+  restaurant: { id: string; name: string; joinCode?: string | null; syncRestaurantId?: string | null }
+  syncTargetUrl?: string | null
+  syncEmail?: string | null
+  syncPassword?: string | null
+  adminEmail?: string | null
+}) {
+  const currentSyncRestaurantId = String(params.restaurant.syncRestaurantId ?? '').trim()
+  if (currentSyncRestaurantId) return params.restaurant
+
+  const resolved = await resolveCloudRestaurantIdentity({
+    restaurant: {
+      name: params.restaurant.name,
+      joinCode: params.restaurant.joinCode,
+      syncRestaurantId: params.restaurant.syncRestaurantId,
+    },
+    syncTargetUrl: params.syncTargetUrl,
+    syncEmail: params.syncEmail,
+    syncPassword: params.syncPassword,
+    adminEmail: params.adminEmail,
+  })
+
+  if (!resolved.ok) {
+    throw new Error(`Cloud restaurant identity could not be verified for this desktop. ${resolved.error}`)
+  }
+
+  const nextJoinCode = resolved.restaurant.joinCode
+  const nextSyncRestaurantId = resolved.restaurant.syncRestaurantId
+  if (
+    nextJoinCode === (params.restaurant.joinCode ?? null)
+    && nextSyncRestaurantId === (params.restaurant.syncRestaurantId ?? null)
+  ) {
+    return params.restaurant
+  }
+
+  return prisma.restaurant.update({
+    where: { id: params.restaurant.id },
+    data: {
+      ...(nextJoinCode ? { joinCode: nextJoinCode } : {}),
+      ...(nextSyncRestaurantId ? { syncRestaurantId: nextSyncRestaurantId } : {}),
+    },
+  })
 }
 
 /** GET /api/restaurant/waiters — list waiter staff accounts and owner accounts */
@@ -78,11 +123,22 @@ export async function POST(req: Request) {
     if (!adminContext.branchId) {
       return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
     }
+    const branchId = adminContext.branchId
 
     const { name, email, password, role: reqRole, syncTargetUrl, syncEmail, syncPassword } = await req.json()
     if (!name?.trim() || !email?.trim() || !password?.trim()) {
       return NextResponse.json({ error: 'name, email, and password are required' }, { status: 400 })
     }
+
+    const provisioningRestaurant = canProvisionToCloud()
+      ? await ensureProvisioningRestaurantIdentity({
+          restaurant,
+          syncTargetUrl,
+          syncEmail,
+          syncPassword,
+          adminEmail: admin.email,
+        })
+      : restaurant
 
     const normalizedEmail = email.trim().toLowerCase()
     const trimmedName = name.trim()
@@ -107,12 +163,16 @@ export async function POST(req: Request) {
 
       if (canProvisionToCloud()) {
         const remoteProvision = await provisionRestaurantAccountInCloud({
-          restaurant: { name: restaurant.name, joinCode: (restaurant as any).joinCode },
+          restaurant: {
+            name: provisioningRestaurant.name,
+            joinCode: (provisioningRestaurant as any).joinCode,
+            syncRestaurantId: (provisioningRestaurant as any).syncRestaurantId,
+          },
           role: 'owner',
           name: trimmedName,
           email: normalizedEmail,
           password,
-          branchId: adminContext.branchId,
+          branchId,
           syncTargetUrl,
           syncEmail,
           syncPassword,
@@ -168,19 +228,40 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Email already in use' }, { status: 409 })
     }
 
+    const existingLoginUser = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      select: { id: true },
+    })
+    if (existingLoginUser) {
+      return NextResponse.json({ error: 'Email already in use' }, { status: 409 })
+    }
+
     const hashed = await hash(password, 12)
-    const waiterStaff = await prisma.staff.create({
-      data: {
-        restaurantId: restaurant.id,
-        name: trimmedName,
-        username: normalizedEmail,
-        password: hashed,
-        role: 'waiter',
-        branches: {
-          create: { branchId: adminContext.branchId },
+    const waiterStaff = await prisma.$transaction(async (tx) => {
+      const createdStaff = await tx.staff.create({
+        data: {
+          restaurantId: restaurant.id,
+          name: trimmedName,
+          username: normalizedEmail,
+          password: hashed,
+          role: 'waiter',
+          branches: {
+            create: { branchId },
+          },
         },
-      },
-      select: { id: true, name: true, username: true, password: true, role: true, isActive: true, createdAt: true, updatedAt: true },
+        select: { id: true, name: true, username: true, role: true, isActive: true, createdAt: true, updatedAt: true },
+      })
+
+      await ensureRestaurantStaffLoginUser(tx, {
+        id: createdStaff.id,
+        email: normalizedEmail,
+        name: trimmedName,
+        passwordHash: hashed,
+        role: 'waiter',
+        isActive: createdStaff.isActive,
+      })
+
+      return createdStaff
     })
 
     const syncPayload = {
@@ -189,7 +270,7 @@ export async function POST(req: Request) {
       branchId: adminContext.branchId,
       name: waiterStaff.name,
       username: waiterStaff.username,
-      password: waiterStaff.password,
+      password: hashed,
       role: waiterStaff.role,
       isActive: waiterStaff.isActive,
       createdAt: waiterStaff.createdAt,
@@ -209,13 +290,17 @@ export async function POST(req: Request) {
     // can log in to the mobile app without waiting for background sync.
     if (canProvisionToCloud()) {
       const remoteProvision = await provisionRestaurantAccountInCloud({
-        restaurant: { name: restaurant.name, joinCode: (restaurant as any).joinCode },
+        restaurant: {
+          name: provisioningRestaurant.name,
+          joinCode: (provisioningRestaurant as any).joinCode,
+          syncRestaurantId: (provisioningRestaurant as any).syncRestaurantId,
+        },
         role: 'waiter',
         name: trimmedName,
         email: normalizedEmail,
         password,
         staffId: waiterStaff.id,
-        branchId: adminContext.branchId,
+        branchId,
         syncTargetUrl,
         syncEmail,
         syncPassword,

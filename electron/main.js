@@ -1499,7 +1499,7 @@ app.whenReady().then(async () => {
 
 	const configuredDatabaseUrl = String(process.env.DATABASE_URL || '')
 	const hasCloudDatabaseUrl = configuredDatabaseUrl.startsWith('postgresql://') || configuredDatabaseUrl.startsWith('postgres://')
-	const electronDataMode = normalizeElectronDataMode(process.env.ELECTRON_DATA_MODE || (app.isPackaged ? 'local-first' : 'cloud'))
+	const electronDataMode = normalizeElectronDataMode(process.env.ELECTRON_DATA_MODE || 'cloud')
 	const shouldUseLocalDatabase = !hasCloudDatabaseUrl || (app.isPackaged && electronDataMode !== 'cloud')
 	appendStartupLog(`Electron data mode=${electronDataMode}`)
 	appendStartupLog(`Database mode=${shouldUseLocalDatabase ? 'local-sqlite' : 'cloud-postgres'}`)

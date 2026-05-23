@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
 import { enqueueOrderSync } from '@/lib/restaurantOrders'
 import { finalizeRestaurantOrderPayment } from '@/lib/restaurantOrderPayment'
+import { resolveActiveStaffAccess } from '@/lib/mobileStaffAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -95,12 +96,15 @@ interface MobileOrderItem {
 export async function POST(req: Request) {
   try {
     const claims = await verifyToken(req)
-    const { restaurantId, branchId } = claims
+    const staffAccess = await resolveActiveStaffAccess(claims.sub)
     const mobileSourceDeviceId = `mobile:${claims.sub}`
 
-    if (!restaurantId || !branchId) {
+    if (!staffAccess?.restaurantId || !staffAccess.branchId) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const restaurantId = staffAccess.restaurantId
+    const branchId = staffAccess.branchId
 
     const { orders, orderItems } = (await req.json()) as {
       orders: MobileOrder[]

@@ -41,6 +41,7 @@ model Restaurant {
   manager          User?     @relation("RestaurantManager", fields: [managerId], references: [id], onDelete: SetNull)
   joinCode         String    @unique
   billHeader       String?
+  qrOrderingMode   String    @default("order")
   licenseExpiry    DateTime?
   licenseActive    Boolean   @default(true)
   fifoEnabled      Boolean   @default(true)
@@ -72,6 +73,7 @@ model Branch {
   isActive     Boolean    @default(true)
   address      String?
   billHeader   String?
+  qrMenuHeroImageUrl String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
   deletedAt    DateTime?
@@ -186,7 +188,7 @@ model RestaurantOrder {
   table          RestaurantTable? @relation(fields: [tableId], references: [id])
   tableName      String?
   orderNumber    String
-  status         String           @default("OPEN")
+  status         String           @default("PENDING")
   paymentMethod  String?
   subtotalAmount Float            @default(0)
   vatAmount      Float            @default(0)
@@ -221,6 +223,8 @@ model OrderItem {
   order         RestaurantOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
   dishId        String
   dish          Dish            @relation(fields: [dishId], references: [id])
+  dishVariantId String?
+  dishVariantName String?
   dishName      String
   dishPrice     Float
   qty           Int             @default(1)
@@ -248,6 +252,7 @@ model Dish {
   branch       Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
   name         String
   category     String?
+  menuType     String?
   sellingPrice Float
   description  String?
   isActive     Boolean          @default(true)
@@ -256,12 +261,30 @@ model Dish {
   deletedAt    DateTime?
 
   ingredients  DishIngredient[]
+  variants     DishVariant[]
   orderItems   OrderItem[]
   dishSales    DishSale[]
 
   @@unique([restaurantId, branchId, name])
   @@index([branchId, isActive])
   @@map("dishes")
+}
+
+model DishVariant {
+  id           String   @id @default(cuid())
+  dishId       String
+  dish         Dish     @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  name         String
+  sellingPrice Float
+  sortOrder    Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+
+  @@unique([dishId, name])
+  @@index([dishId, sortOrder, isActive])
+  @@map("dish_variants")
 }
 
 // Dish recipe: how much of each inventory item one serving uses.
@@ -317,6 +340,7 @@ model InventoryPurchase {
   branch            Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
   ingredientId      String
   ingredient        InventoryItem @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  batchId           String?
   supplier             String?
   purchaseQuantity     Float?
   purchaseUnit         String?
@@ -398,8 +422,11 @@ model DishSale {
   branch             Branch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
   orderId            String?
   order              RestaurantOrder?     @relation(fields: [orderId], references: [id])
+  orderItemId        String?
   dishId             String
   dish               Dish                 @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  dishVariantId      String?
+  dishVariantName    String?
   dishName           String
   quantitySold       Float
   totalSaleAmount    Float
@@ -414,6 +441,7 @@ model DishSale {
 
   @@index([restaurantId, branchId])
   @@index([orderId])
+  @@index([orderItemId])
   @@map("dish_sales")
 }
 

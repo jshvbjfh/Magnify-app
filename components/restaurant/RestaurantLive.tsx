@@ -17,7 +17,7 @@ type Ticket = {
   cookMins?: number
 }
 type Sale = {
-  id: string; dish: { name: string }; quantitySold: number
+  id: string; dishName?: string; dish: { name: string }; quantitySold: number
   totalSaleAmount: number; saleDate: string; paymentMethod: string
 }
 
@@ -327,7 +327,7 @@ export default function RestaurantLive() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-800 truncate">
-                    {sale.dish.name}{sale.quantitySold > 1 ? ` ×${sale.quantitySold}` : ''}
+                    {sale.dishName || sale.dish.name}{sale.quantitySold > 1 ? ` ×${sale.quantitySold}` : ''}
                   </p>
                   <p className="text-xs text-gray-400">{fmtTime(sale.saleDate)} · {sale.paymentMethod}</p>
                 </div>

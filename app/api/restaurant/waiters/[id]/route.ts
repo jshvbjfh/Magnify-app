@@ -32,6 +32,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
       where: { id },
       data: { deletedAt: new Date(), isActive: false },
     })
+    await prisma.user.deleteMany({ where: { id, role: 'waiter' } })
     await enqueueSyncChange(prisma, {
       restaurantId: context.restaurantId,
       branchId: context.branchId,

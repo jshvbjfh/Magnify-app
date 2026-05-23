@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { buildDishVariantLabel } from '@/lib/dishVariants'
 import { calculateRestaurantOrderTotals, enqueueOrderSync, generateRestaurantOrderNumber, isRestaurantOrderNumberConflict } from '@/lib/restaurantOrders'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
 import { ensureMainBranchForRestaurant } from '@/lib/restaurantAccess'
@@ -8,9 +9,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
   try {
     const { restaurantId } = await params
 
-    const restaurantRecord = await prisma.restaurant.findUnique({ where: { id: restaurantId } })
+    const restaurantRecord = await prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+      select: { id: true, qrOrderingMode: true },
+    })
     if (!restaurantRecord) return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
     const resolvedRestaurantId = restaurantRecord.id
+
+    if (restaurantRecord.qrOrderingMode !== 'order') {
+      return NextResponse.json({ error: 'Guest QR ordering is not enabled for this restaurant.' }, { status: 403 })
+    }
 
     const body = await req.json()
     const { tableId, tableName, items, customerName } = body
@@ -42,16 +50,43 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
     const requestedDishIds = Array.from(new Set(items.map((item: { dishId: string }) => String(item?.dishId || '')).filter(Boolean)))
     const dishes = await prisma.dish.findMany({
       where: { id: { in: requestedDishIds }, restaurantId: resolvedRestaurantId, branchId, isActive: true },
-      select: { id: true, name: true, sellingPrice: true },
+      select: {
+        id: true,
+        name: true,
+        sellingPrice: true,
+        variants: {
+          where: { isActive: true, deletedAt: null },
+          select: { id: true, name: true, sellingPrice: true },
+          orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        },
+      },
     })
 
     const dishMap = new Map(dishes.map((dish) => [dish.id, dish]))
-    const normalizedItems = items.map((item: { dishId: string; qty: number }) => {
+    const normalizedItems = items.map((item: { dishId: string; dishVariantId?: string | null; qty: number }) => {
       const dish = dishMap.get(String(item.dishId))
       const qty = Number(item.qty) || 1
+      const requestedVariantId = String(item.dishVariantId ?? '').trim()
+      const variant = requestedVariantId ? dish?.variants.find((row) => row.id === requestedVariantId) : null
       if (!dish || qty <= 0) return null
-      return { dishId: dish.id, dishName: dish.name, dishPrice: dish.sellingPrice, qty }
-    }).filter(Boolean) as Array<{ dishId: string; dishName: string; dishPrice: number; qty: number }>
+      if (dish.variants.length > 0 && !variant) return null
+
+      return {
+        dishId: dish.id,
+        dishVariantId: variant?.id ?? null,
+        dishVariantName: variant?.name ?? null,
+        dishName: buildDishVariantLabel(dish.name, variant?.name),
+        dishPrice: variant?.sellingPrice ?? dish.sellingPrice,
+        qty,
+      }
+    }).filter(Boolean) as Array<{
+      dishId: string
+      dishVariantId: string | null
+      dishVariantName: string | null
+      dishName: string
+      dishPrice: number
+      qty: number
+    }>
 
     if (normalizedItems.length === 0 || normalizedItems.length !== items.length) {
       return NextResponse.json({ error: 'One or more menu items are no longer available. Please refresh and try again.' }, { status: 400 })
@@ -70,6 +105,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
             data: {
               restaurantId: resolvedRestaurantId,
               branchId,
+              status: 'PENDING',
               tableId: tableId || null,
               tableName: resolvedTableName,
               orderNumber: await generateRestaurantOrderNumber(txDb, resolvedRestaurantId),
@@ -84,9 +120,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
             data: normalizedItems.map((item) => ({
               orderId: order.id,
               dishId: item.dishId,
+              dishVariantId: item.dishVariantId,
+              dishVariantName: item.dishVariantName,
               dishName: item.dishName,
               dishPrice: item.dishPrice,
               qty: item.qty,
+              totalPrice: item.dishPrice * item.qty,
             })),
           })
 

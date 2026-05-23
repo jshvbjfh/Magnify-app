@@ -13,6 +13,7 @@ interface Transaction {
   createdAt?: string
   description: string
   amount: number
+  direction: 'in' | 'out'
   type: 'debit' | 'credit'
   accountName: string
   categoryType: string
@@ -90,14 +91,42 @@ function formatDateLabel(isoDate: string): string {
   return `${dayName}, ${ordinal(d.getDate())} ${month} ${d.getFullYear()}`
 }
 
-function isCashEquivalentAccountName(name?: string) {
-  const normalized = (name ?? '').trim().toLowerCase()
-  return normalized === 'cash'
-    || normalized.includes('cash')
-    || normalized === 'current account'
-    || normalized.includes('bank')
-    || normalized === 'mobile money'
-    || normalized.includes('momo')
+function normalizeTransactionDirection(transaction: Partial<Transaction>) {
+  if (transaction.direction === 'in' || transaction.direction === 'out') return transaction.direction
+  return transaction.type === 'credit' ? 'in' : 'out'
+}
+
+function normalizeTransactionType(transaction: Partial<Transaction>) {
+  if (transaction.type === 'debit' || transaction.type === 'credit') return transaction.type
+  return normalizeTransactionDirection(transaction) === 'in' ? 'credit' : 'debit'
+}
+
+function normalizeTransaction(row: Partial<Transaction>): Transaction {
+  return {
+    id: String(row.id ?? ''),
+    date: String(row.date ?? new Date().toISOString()),
+    createdAt: typeof row.createdAt === 'string' ? row.createdAt : undefined,
+    description: String(row.description ?? ''),
+    amount: typeof row.amount === 'number' ? row.amount : Number(row.amount ?? 0),
+    direction: normalizeTransactionDirection(row),
+    type: normalizeTransactionType(row),
+    accountName: String(row.accountName ?? ''),
+    categoryType: String(row.categoryType ?? ''),
+    paymentMethod: typeof row.paymentMethod === 'string' ? row.paymentMethod : '',
+    pairId: typeof row.pairId === 'string' ? row.pairId : null,
+    isManual: Boolean(row.isManual),
+    sourceKind: typeof row.sourceKind === 'string' ? row.sourceKind : null,
+    uploadId: typeof row.uploadId === 'string' ? row.uploadId : null,
+    screenshotUrl: typeof row.screenshotUrl === 'string' ? row.screenshotUrl : null,
+  }
+}
+
+function normalizeTransactions(rows: Partial<Transaction>[]) {
+  return rows.map(normalizeTransaction)
+}
+
+function normalizeCategoryType(categoryType?: string) {
+  return String(categoryType ?? '').trim().toLowerCase()
 }
 
 function isWasteLikeTransaction(transaction: Pick<Transaction, 'description' | 'sourceKind'>) {
@@ -169,7 +198,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
       const res = await fetch('/api/transactions', { credentials: 'include' })
       if (!res.ok) throw new Error('Failed to load transactions')
       const data = await res.json()
-      const nextTransactions = data.transactions || []
+      const nextTransactions = normalizeTransactions(data.transactions || [])
       setTransactions(nextTransactions)
       persistSnapshot(nextTransactions)
     } catch {
@@ -185,7 +214,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     const snapshot = loadRestaurantDeviceSnapshot<RestaurantTransactionsSnapshot>(snapshotStorageScope)
     if (!snapshot) return
 
-    setTransactions(Array.isArray(snapshot.transactions) ? snapshot.transactions : [])
+    setTransactions(Array.isArray(snapshot.transactions) ? normalizeTransactions(snapshot.transactions) : [])
     setSnapshotUpdatedAt(snapshot.updatedAt ?? null)
     setShowingCachedSnapshot(true)
     setLoading(false)
@@ -257,8 +286,12 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     rows.push(t)
   }
 
-  const totalIn  = dateTransactions.filter(t => !isWasteLikeTransaction(t) && t.type === 'debit'  && isCashEquivalentAccountName(t.accountName)).reduce((s, t) => s + t.amount, 0)
-  const totalOut = dateTransactions.filter(t => !isWasteLikeTransaction(t) && t.type === 'credit' && isCashEquivalentAccountName(t.accountName)).reduce((s, t) => s + t.amount, 0)
+  const totalRevenue = dateTransactions
+    .filter((transaction) => !isWasteLikeTransaction(transaction) && normalizeCategoryType(transaction.categoryType) === 'income' && transaction.direction === 'in')
+    .reduce((sum, transaction) => sum + transaction.amount, 0)
+  const totalExpenses = dateTransactions
+    .filter((transaction) => !isWasteLikeTransaction(transaction) && normalizeCategoryType(transaction.categoryType) === 'expense' && transaction.direction === 'out')
+    .reduce((sum, transaction) => sum + transaction.amount, 0)
   const hasEntriesOnOtherDates = sortedDates.some((dateKey) => dateKey !== selectedDate && (entriesPerDate[dateKey]?.size ?? 0) > 0)
 
   const openAddRow = () => {
@@ -412,7 +445,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <span className="text-xs text-gray-500 font-medium">Revenue</span>
                 <div className="p-1.5 bg-green-100 rounded-lg"><TrendingUp className="h-4 w-4 text-green-600" /></div>
               </div>
-              <p className="text-xl font-bold text-green-600">{fmtRWF(totalIn)}</p>
+              <p className="text-xl font-bold text-green-600">{fmtRWF(totalRevenue)}</p>
               <p className="text-xs text-gray-400 mt-1">{dateLabel}</p>
             </div>
             <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
@@ -420,7 +453,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <span className="text-xs text-gray-500 font-medium">Expenses</span>
                 <div className="p-1.5 bg-red-100 rounded-lg"><TrendingDown className="h-4 w-4 text-red-600" /></div>
               </div>
-              <p className="text-xl font-bold text-red-600">{fmtRWF(totalOut)}</p>
+              <p className="text-xl font-bold text-red-600">{fmtRWF(totalExpenses)}</p>
               <p className="text-xs text-gray-400 mt-1">{dateLabel}</p>
             </div>
             <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
@@ -428,10 +461,10 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <span className="text-xs text-gray-500 font-medium">Profit / Loss</span>
                 <div className="p-1.5 bg-orange-100 rounded-lg"><Layers className="h-4 w-4 text-orange-600" /></div>
               </div>
-              <p className={`text-xl font-bold ${totalIn - totalOut >= 0 ? 'text-orange-600' : 'text-red-600'}`}>
-                {fmtRWF(Math.abs(totalIn - totalOut))}
+              <p className={`text-xl font-bold ${totalRevenue - totalExpenses >= 0 ? 'text-orange-600' : 'text-red-600'}`}>
+                {fmtRWF(Math.abs(totalRevenue - totalExpenses))}
               </p>
-              <p className="text-xs text-gray-400 mt-1">{totalIn - totalOut >= 0 ? 'Profitable' : 'Loss recorded'}</p>
+              <p className="text-xs text-gray-400 mt-1">{totalRevenue - totalExpenses >= 0 ? 'Profitable' : 'Loss recorded'}</p>
             </div>
           </div>
 
@@ -598,8 +631,8 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                     )}
                     {rows.map(t => {
                       const isWasteEntry = isWasteLikeTransaction(t)
-                      const isIn = !isWasteEntry && t.type === 'debit' && isCashEquivalentAccountName(t.accountName)
-                      const isCashOut = !isWasteEntry && t.type === 'credit' && isCashEquivalentAccountName(t.accountName)
+                      const isRevenueEntry = !isWasteEntry && normalizeCategoryType(t.categoryType) === 'income' && t.direction === 'in'
+                      const isExpenseEntry = !isWasteEntry && normalizeCategoryType(t.categoryType) === 'expense' && t.direction === 'out'
                       const originLabel = isWasteEntry ? 'Inventory Loss' : t.uploadId ? 'Upload' : t.isManual ? 'Manual' : 'Recorded'
                       const originClass = isWasteEntry
                         ? 'bg-amber-100 text-amber-700'
@@ -640,9 +673,9 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                             </span>
                           </td>
                           <td className={`px-4 py-3 font-semibold text-right whitespace-nowrap ${
-                            isIn ? 'text-green-600' : isCashOut ? 'text-red-600' : 'text-gray-700'
+                            isRevenueEntry ? 'text-green-600' : isExpenseEntry ? 'text-red-600' : 'text-gray-700'
                           }`}>
-                            {isIn ? '+' : isCashOut ? '-' : ''}{fmtRWF(t.amount)}
+                            {isRevenueEntry ? '+' : isExpenseEntry ? '-' : ''}{fmtRWF(t.amount)}
                           </td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${originClass}`}>{originLabel}</span>

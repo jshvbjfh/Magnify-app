@@ -1,7 +1,10 @@
+import { cookies } from 'next/headers'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
+
+export const ACTIVE_BRANCH_COOKIE_NAME = 'magnify_active_branch'
 
 function makeJoinCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -18,6 +21,22 @@ async function uniqueJoinCode() {
 
 const DEFAULT_BRANCH_NAME = 'Main'
 const DEFAULT_BRANCH_CODE = 'MAIN'
+
+function readActiveBranchCookie() {
+  try {
+    const rawValue = cookies().get(ACTIVE_BRANCH_COOKIE_NAME)?.value ?? ''
+    const separatorIndex = rawValue.indexOf(':')
+    if (separatorIndex <= 0) return null
+
+    const restaurantId = rawValue.slice(0, separatorIndex).trim()
+    const branchId = rawValue.slice(separatorIndex + 1).trim()
+    if (!restaurantId || !branchId) return null
+
+    return { restaurantId, branchId }
+  } catch {
+    return null
+  }
+}
 
 export function normalizeBranchCode(value?: string | null) {
   const normalized = String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '')
@@ -189,12 +208,91 @@ export async function getBranchIdForUser(userId: string) {
   return context?.branchId ?? null
 }
 
-export async function getRestaurantContextForUser(userId: string) {
+async function getStaffRestaurantContextForUser(
+  user: { id: string; role: string; name: string | null },
+  options?: { preferredBranchId?: string | null },
+) {
+  const staff = await prisma.staff.findFirst({
+    where: {
+      id: user.id,
+      role: user.role,
+      deletedAt: null,
+      isActive: true,
+    },
+    include: {
+      restaurant: true,
+      branches: {
+        include: { branch: true },
+      },
+    },
+  })
+
+  if (!staff || staff.restaurant.deletedAt) {
+    return {
+      currentUser: user,
+      restaurant: null,
+      branch: null,
+      restaurantId: null,
+      branchId: null,
+      billingUserId: user.id,
+    }
+  }
+
+  const mainBranch = await ensureMainBranchForRestaurant(staff.restaurantId)
+  const cookieBranchSelection = readActiveBranchCookie()
+  const preferredBranchId = String(options?.preferredBranchId ?? '').trim()
+    || (cookieBranchSelection?.restaurantId === staff.restaurantId ? cookieBranchSelection.branchId : '')
+
+  const assignedBranches = staff.branches
+    .map((entry) => entry.branch)
+    .filter((branch) => branch.isActive && !branch.deletedAt && branch.restaurantId === staff.restaurantId)
+    .sort((left, right) => {
+      if (left.isMain !== right.isMain) return Number(right.isMain) - Number(left.isMain)
+      return left.createdAt.getTime() - right.createdAt.getTime()
+    })
+
+  const selectedBranch = preferredBranchId
+    ? assignedBranches.find((branch) => branch.id === preferredBranchId) ?? null
+    : null
+
+  const effectiveBranch = selectedBranch
+    ?? assignedBranches[0]
+    ?? mainBranch
+    ?? await prisma.branch.findFirst({
+      where: {
+        restaurantId: staff.restaurantId,
+        isActive: true,
+        deletedAt: null,
+      },
+      orderBy: [
+        { isMain: 'desc' },
+        { createdAt: 'asc' },
+      ],
+    })
+
+  return {
+    currentUser: user,
+    restaurant: staff.restaurant,
+    branch: effectiveBranch,
+    restaurantId: staff.restaurant.id,
+    branchId: effectiveBranch?.id ?? null,
+    billingUserId: staff.restaurant.ownerId,
+  }
+}
+
+export async function getRestaurantContextForUser(
+  userId: string,
+  options?: { preferredBranchId?: string | null },
+) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { id: true, role: true, name: true },
   })
   if (!user) return null
+
+  if (user.role === 'waiter' || user.role === 'kitchen') {
+    return getStaffRestaurantContextForUser(user, options)
+  }
 
   // admin (manager) — finds restaurant they manage via managerId
   // owner (investor) — finds restaurant they own via ownerId
@@ -217,14 +315,42 @@ export async function getRestaurantContextForUser(userId: string) {
     }
   }
 
-  const branch = await ensureMainBranchForRestaurant(restaurant.id)
+  const mainBranch = await ensureMainBranchForRestaurant(restaurant.id)
+  const cookieBranchSelection = readActiveBranchCookie()
+  const preferredBranchId = String(options?.preferredBranchId ?? '').trim()
+    || (cookieBranchSelection?.restaurantId === restaurant.id ? cookieBranchSelection.branchId : '')
+
+  const branch = preferredBranchId
+    ? await prisma.branch.findFirst({
+        where: {
+          id: preferredBranchId,
+          restaurantId: restaurant.id,
+          isActive: true,
+          deletedAt: null,
+        },
+      })
+    : null
+
+  const effectiveBranch = branch
+    ?? mainBranch
+    ?? await prisma.branch.findFirst({
+      where: {
+        restaurantId: restaurant.id,
+        isActive: true,
+        deletedAt: null,
+      },
+      orderBy: [
+        { isMain: 'desc' },
+        { createdAt: 'asc' },
+      ],
+    })
 
   return {
     currentUser: user,
     restaurant,
-    branch,
+    branch: effectiveBranch,
     restaurantId: restaurant.id,
-    branchId: branch?.id ?? null,
+    branchId: effectiveBranch?.id ?? null,
     billingUserId: restaurant.ownerId,
   }
 }

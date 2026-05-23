@@ -47,6 +47,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   const [kitchenCredCopied, setKitchenCredCopied] = useState<'email'|'password'|null>(null)
   const [urlCopied, setUrlCopied] = useState(false)
   const [waiterUrl, setWaiterUrl] = useState<string>('')
+  const [waiterUrlAccessMode, setWaiterUrlAccessMode] = useState<'lan'|'public'>('lan')
   const [showPasswords, setShowPasswords] = useState<Record<string,boolean>>({})
   const [empForm, setEmpForm] = useState({name:'',role:'Waiter',phone:''})
   const [shiftForm, setShiftForm] = useState({staffId:'',date:new Date().toISOString().split('T')[0],durationMins:'480',notes:''})
@@ -134,7 +135,11 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
     loadWaiters()
     loadKitchenAccounts()
     loadOwnerAccounts()
-    fetchJson<{ waiterUrl?: string }>('/api/restaurant/server-info').then(d=>{ if(d?.waiterUrl) setWaiterUrl(d.waiterUrl) })
+    fetchJson<{ waiterUrl?: string; accessMode?: 'lan'|'public' }>('/api/restaurant/server-info').then((d) => {
+      if (!d?.waiterUrl) return
+      setWaiterUrl(d.waiterUrl)
+      setWaiterUrlAccessMode(d.accessMode === 'public' ? 'public' : 'lan')
+    })
   },[restaurantBranch?.branchId])
 
   async function saveEmployee(e:React.FormEvent) {
@@ -598,7 +603,11 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
                 <Wifi className="h-5 w-5"/>
                 <p className="font-bold text-sm">Waiter Login URL</p>
               </div>
-              <p className="text-xs opacity-80 mb-2">Give this address to your waiters. They open it in any browser on the same WiFi.</p>
+              <p className="text-xs opacity-80 mb-2">
+                {waiterUrlAccessMode === 'public'
+                  ? 'Give this address to your waiters. They can open it in any browser with internet access.'
+                  : 'Give this address to your waiters. They open it in any browser on the same WiFi.'}
+              </p>
               <div className="bg-white/20 rounded-lg px-4 py-3 flex items-center justify-between gap-3">
                 <p className="font-black text-lg tracking-wide break-all">{waiterUrl}</p>
                 <button onClick={copyWaiterUrl} className="flex-shrink-0 flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-white text-orange-600 hover:bg-orange-50 transition-colors">
@@ -763,7 +772,11 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
                 <ChefHat className="h-5 w-5"/>
                 <p className="font-bold text-sm">Kitchen Login URL</p>
               </div>
-              <p className="text-xs opacity-70 mb-2">Kitchen staff open this URL in a browser on the kitchen computer and log in with their credentials.</p>
+              <p className="text-xs opacity-70 mb-2">
+                {waiterUrlAccessMode === 'public'
+                  ? 'Kitchen staff can open this URL in any browser and log in with their credentials.'
+                  : 'Kitchen staff open this URL in a browser on the kitchen computer and log in with their credentials.'}
+              </p>
               <div className="bg-white/10 rounded-lg px-4 py-3 flex items-center justify-between gap-3">
                 <p className="font-black text-lg tracking-wide break-all">{waiterUrl}</p>
                 <button onClick={copyWaiterUrl} className="flex-shrink-0 flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-lg bg-white text-gray-800 hover:bg-gray-100 transition-colors">

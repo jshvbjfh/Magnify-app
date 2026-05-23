@@ -271,6 +271,8 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           name: payload.name,
           sellingPrice: Number(payload.sellingPrice),
           category: payload.category ?? null,
+          menuType: payload.menuType ?? null,
+          description: payload.description ?? null,
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
           createdAt: asDate(payload.createdAt) ?? undefined,
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
@@ -282,11 +284,32 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           name: payload.name,
           sellingPrice: Number(payload.sellingPrice),
           category: payload.category ?? null,
+          menuType: payload.menuType ?? null,
+          description: payload.description ?? null,
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
           createdAt: asDate(payload.createdAt) ?? new Date(),
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
       })
+
+      if (Array.isArray(payload.variants)) {
+        await db.dishVariant.deleteMany({ where: { dishId: dishTargetId } })
+        if (payload.variants.length > 0) {
+          await db.dishVariant.createMany({
+            data: payload.variants.map((variant: any, index: number) => ({
+              id: String(variant.id || `${dishTargetId}:variant:${index}`),
+              dishId: dishTargetId,
+              name: String(variant.name ?? ''),
+              sellingPrice: Number(variant.sellingPrice ?? 0),
+              sortOrder: Number(variant.sortOrder ?? index),
+              isActive: variant.isActive == null ? true : Boolean(variant.isActive),
+              createdAt: asDate(variant.createdAt) ?? new Date(),
+              updatedAt: asDate(variant.updatedAt) ?? new Date(),
+              deletedAt: asDate(variant.deletedAt),
+            })),
+          })
+        }
+      }
       break
     }
     case 'dishIngredient': {
@@ -463,6 +486,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           restaurantId: inventoryPurchaseRestaurantId,
           branchId: inventoryPurchaseBranchId,
           ingredientId: resolvedIngredientIdForPurchase,
+          batchId: payload.batchId ?? null,
           supplier: payload.supplier ?? null,
           quantityPurchased: Number(payload.quantityPurchased),
           remainingQuantity: Number(payload.remainingQuantity),
@@ -478,6 +502,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           restaurantId: inventoryPurchaseRestaurantId,
           branchId: inventoryPurchaseBranchId,
           ingredientId: resolvedIngredientIdForPurchase,
+          batchId: payload.batchId ?? null,
           supplier: payload.supplier ?? null,
           quantityPurchased: Number(payload.quantityPurchased),
           remainingQuantity: Number(payload.remainingQuantity),
@@ -704,7 +729,10 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           restaurantId: dishSaleRestaurantId,
           branchId: dishSaleBranchId,
           orderId: payload.orderId ?? null,
+          orderItemId: payload.orderItemId ?? null,
           dishId: resolvedDishIdForSale,
+          dishVariantId: payload.dishVariantId ?? null,
+          dishVariantName: payload.dishVariantName ?? null,
           dishName: String(payload.dishName ?? ''),
           quantitySold: Number(payload.quantitySold),
           saleDate: asDate(payload.saleDate) ?? new Date(),
@@ -719,7 +747,10 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           restaurantId: dishSaleRestaurantId,
           branchId: dishSaleBranchId,
           orderId: payload.orderId ?? null,
+          orderItemId: payload.orderItemId ?? null,
           dishId: resolvedDishIdForSale,
+          dishVariantId: payload.dishVariantId ?? null,
+          dishVariantName: payload.dishVariantName ?? null,
           dishName: String(payload.dishName ?? ''),
           quantitySold: Number(payload.quantitySold),
           saleDate: asDate(payload.saleDate) ?? new Date(),
@@ -827,6 +858,8 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
               id: String(item.id),
               orderId,
               dishId: String(item.dishId),
+              dishVariantId: item.dishVariantId ?? null,
+              dishVariantName: item.dishVariantName ?? null,
               dishName: String(item.dishName ?? ''),
               dishPrice: Number(item.dishPrice ?? 0),
               totalPrice: Number(item.totalPrice ?? item.dishPrice ?? 0),

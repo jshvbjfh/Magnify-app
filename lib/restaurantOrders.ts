@@ -6,6 +6,8 @@ type PrismaDb = PrismaClient | Prisma.TransactionClient
 
 type TotalsInput = Array<{ dishPrice: number; qty: number }>
 
+export const ACTIVE_RESTAURANT_ORDER_STATUSES = ['PENDING', 'OPEN'] as const
+
 export function calculateRestaurantOrderTotals(items: TotalsInput) {
   const subtotalAmount = items.reduce((sum, item) => sum + Number(item.dishPrice) * Number(item.qty), 0)
   const vatAmount = calculateVatFromNet(subtotalAmount)

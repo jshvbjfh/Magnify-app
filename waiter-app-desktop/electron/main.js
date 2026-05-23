@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS dishes (
   name TEXT NOT NULL,
   selling_price REAL NOT NULL,
   category TEXT,
+  menu_type TEXT,
   is_active INTEGER DEFAULT 1,
   branch_id TEXT,
   restaurant_id TEXT
@@ -124,8 +125,12 @@ CREATE TABLE IF NOT EXISTS cancellation_approvers (
 );
 `,
   },
-  // To add a migration, append a new entry here:
-  // { version: 2, sql: 'ALTER TABLE orders ADD COLUMN kitchen_note TEXT;' },
+  {
+    version: 2,
+    sql: `
+ALTER TABLE dishes ADD COLUMN menu_type TEXT;
+`,
+  },
 ]
 
 function runMigrations(database) {

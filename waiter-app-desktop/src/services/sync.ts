@@ -129,6 +129,10 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
 
   const payload = payloadBody as unknown as PullPayload
   const currentRestaurantId = payload.restaurant?.id ?? null
+  const replaceScope = {
+    branchId: effectiveBranchId ?? null,
+    restaurantId: currentRestaurantId,
+  }
 
   // Only treat dishes/tables from THIS restaurant as a valid offline cache.
   // Data from a previous restaurant login is stale foreign data, not a fallback.
@@ -144,31 +148,38 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   const now = new Date().toISOString()
   let didRefreshLocalSnapshot = false
 
-  if (payload.dishes.length === 0 && existingDishes.length === 0) {
-    await logError('sync', 'Pull returned no menu for assigned branch', {
-      restaurantId: payload.restaurant.id,
-      dishes: payload.dishes.length,
-      tables: payload.tables.length,
-    })
-    throw new Error('No menu is available for your assigned branch. Ask your manager to sync the branch menu and verify your branch assignment.')
-  }
-
   if (payload.dishes.length === 0) {
+    await replaceDishes([], replaceScope)
+    didRefreshLocalSnapshot = true
+
     if (existingDishes.length > 0) {
-      warnings.push('No menu received for this branch yet — using cached menu.')
+      warnings.push('This branch currently has no menu.')
     }
   } else {
-    await replaceDishes(payload.dishes)
+    await replaceDishes(payload.dishes, replaceScope)
     didRefreshLocalSnapshot = true
   }
 
   if (payload.tables.length === 0) {
+    await replaceTables([], replaceScope)
+    didRefreshLocalSnapshot = true
+
     if (existingTables.length > 0) {
-      warnings.push('No tables received for this branch yet — using cached tables.')
+      warnings.push('This branch currently has no tables.')
     }
   } else {
-    await replaceTables(payload.tables)
+    await replaceTables(payload.tables, replaceScope)
     didRefreshLocalSnapshot = true
+  }
+
+  if (payload.dishes.length === 0 && existingDishes.length === 0) {
+    await logError('sync', 'Pull returned no menu for assigned branch', {
+      restaurantId: payload.restaurant.id,
+      branchId: effectiveBranchId ?? null,
+      dishes: payload.dishes.length,
+      tables: payload.tables.length,
+    })
+    throw new Error('No menu is available for your assigned branch. Ask your manager to sync the branch menu and verify your branch assignment.')
   }
 
   await setConfig('restaurantName', payload.restaurant.name)

@@ -12,13 +12,14 @@ const normalizedElectronDataMode = String(process.env.ELECTRON_DATA_MODE ?? '')
 	.trim()
 	.toLowerCase() === 'cloud'
 	? 'cloud'
-	: 'local-first'
+	: 'cloud'
 
 const includeCloudDatabase = normalizedElectronDataMode === 'cloud'
 	|| /^(1|true|yes)$/i.test(String(process.env.ELECTRON_INCLUDE_CLOUD_DATABASE ?? '').trim())
 
 // SECURITY: NEXTAUTH_SECRET is generated per-device at runtime in main.js — never bundle it.
 const allowedKeys = [
+	'DATABASE_URL',
 	'GEMINI_MODEL',
 	'GEMINI_FALLBACK_MODEL',
 	'TRIAL_DAYS',

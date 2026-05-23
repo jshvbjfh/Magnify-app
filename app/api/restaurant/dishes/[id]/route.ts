@@ -2,8 +2,19 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { normalizeDishVariantPayload } from '@/lib/dishVariants'
 import { ensureMainBranchForRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
+
+const dishInclude = {
+  ingredients: {
+    include: { inventoryItem: true },
+  },
+  variants: {
+    where: { deletedAt: null },
+    orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
+  },
+}
 
 /** Resolve branchId for mutations — explicit, never silent null. */
 async function requireBranchId(restaurantId: string, contextBranchId: string | null, userId: string): Promise<string | null> {
@@ -30,17 +41,46 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const { id } = await params
   const data = await req.json()
-  const dish = await prisma.dish.updateMany({
-    where: { id, restaurantId: context.restaurantId, branchId },
-    data: {
-      ...(data.name !== undefined && { name: data.name }),
-      ...(data.sellingPrice !== undefined && { sellingPrice: Number(data.sellingPrice) }),
-      ...(data.category !== undefined && { category: data.category }),
-      ...(data.isActive !== undefined && { isActive: data.isActive }),
+  const hasVariantsPayload = Array.isArray(data.variants)
+  const normalizedVariants = hasVariantsPayload ? normalizeDishVariantPayload(data.variants) : null
+
+  const dish = await prisma.$transaction(async (tx) => {
+    const updated = await tx.dish.updateMany({
+      where: { id, restaurantId: context.restaurantId, branchId },
+      data: {
+        ...(data.name !== undefined && { name: data.name }),
+        ...(data.sellingPrice !== undefined && { sellingPrice: Number(data.sellingPrice) }),
+        ...(data.category !== undefined && { category: data.category }),
+        ...(data.menuType !== undefined && { menuType: data.menuType }),
+        ...(data.isActive !== undefined && { isActive: data.isActive }),
+      },
+    })
+
+    if (normalizedVariants) {
+      await tx.dishVariant.deleteMany({ where: { dishId: id } })
+      if (normalizedVariants.length > 0) {
+        await tx.dishVariant.createMany({
+          data: normalizedVariants.map((variant) => ({
+            ...(variant.id ? { id: variant.id } : {}),
+            dishId: id,
+            name: variant.name,
+            sellingPrice: variant.sellingPrice,
+            sortOrder: variant.sortOrder,
+            isActive: variant.isActive,
+          })),
+        })
+      }
     }
+
+    const updatedDish = await tx.dish.findFirst({
+      where: { id, restaurantId: context.restaurantId, branchId },
+      include: dishInclude,
+    })
+
+    return { updated, updatedDish }
   })
 
-  const updatedDish = await prisma.dish.findFirst({ where: { id, restaurantId: context.restaurantId, branchId } })
+  const updatedDish = dish.updatedDish
   if (updatedDish) {
     await enqueueSyncChange(prisma, {
       restaurantId: context.restaurantId,
@@ -52,7 +92,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     })
   }
 
-  return NextResponse.json(dish)
+  return NextResponse.json(dish.updated)
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {

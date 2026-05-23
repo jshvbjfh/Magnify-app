@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { hash } from 'bcryptjs'
 import { provisionRestaurantAccountInCloud } from '@/lib/cloudRestaurantAccountProvision'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { ensureRestaurantStaffLoginUser } from '@/lib/restaurantStaffUsers'
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions)
@@ -65,6 +66,7 @@ export async function POST(req: Request) {
     if (!adminContext.branchId) {
       return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
     }
+    const branchId = adminContext.branchId
 
     // UI sends 'email' field; accept that as the username (with 'username' as fallback)
     const { name, email, username: usernameField, password, syncTargetUrl, syncEmail, syncPassword } = await req.json()
@@ -81,6 +83,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Username already in use' }, { status: 409 })
     }
 
+    const existingLoginUser = await prisma.user.findUnique({
+      where: { email: username },
+      select: { id: true },
+    })
+    if (existingLoginUser) {
+      return NextResponse.json({ error: 'Username already in use' }, { status: 409 })
+    }
+
     if (canProvisionToCloud()) {
       const remoteProvision = await provisionRestaurantAccountInCloud({
         restaurant,
@@ -88,7 +98,7 @@ export async function POST(req: Request) {
         name: name.trim(),
         email: username,
         password,
-        branchId: adminContext.branchId,
+        branchId,
         syncTargetUrl,
         syncEmail,
         syncPassword,
@@ -100,18 +110,31 @@ export async function POST(req: Request) {
     }
 
     const hashed = await hash(password, 12)
-    const kitchenStaff = await prisma.staff.create({
-      data: {
-        restaurantId: restaurant.id,
-        name: name.trim(),
-        username,
-        password: hashed,
-        role: 'kitchen',
-        branches: {
-          create: { branchId: adminContext.branchId },
+    const kitchenStaff = await prisma.$transaction(async (tx) => {
+      const createdStaff = await tx.staff.create({
+        data: {
+          restaurantId: restaurant.id,
+          name: name.trim(),
+          username,
+          password: hashed,
+          role: 'kitchen',
+          branches: {
+            create: { branchId },
+          },
         },
-      },
-      select: { id: true, name: true, username: true, role: true, createdAt: true },
+        select: { id: true, name: true, username: true, role: true, isActive: true, createdAt: true },
+      })
+
+      await ensureRestaurantStaffLoginUser(tx, {
+        id: createdStaff.id,
+        email: username,
+        name: name.trim(),
+        passwordHash: hashed,
+        role: 'kitchen',
+        isActive: createdStaff.isActive,
+      })
+
+      return createdStaff
     })
 
     return NextResponse.json({ kitchenUser: kitchenStaff, cloudProvisionWarning }, { status: 201 })

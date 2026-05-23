@@ -11,14 +11,16 @@ const settingsRestaurantSelect = {
   id: true,
   name: true,
   billHeader: true,
+  qrOrderingMode: true,
   fifoEnabled: true,
   fifoConfiguredAt: true,
   joinCode: true,
 } as const
 
-const branchBillHeaderSelect = {
+const branchPresentationSelect = {
   id: true,
   billHeader: true,
+  qrMenuHeroImageUrl: true,
 } as const
 
 /** GET — fetch the admin's restaurant (creates one if missing) */
@@ -63,7 +65,7 @@ export async function GET() {
         })
       : Promise.resolve([]),
     activeBranchId
-      ? prisma.branch.findUnique({ where: { id: activeBranchId }, select: branchBillHeaderSelect })
+      ? prisma.branch.findUnique({ where: { id: activeBranchId }, select: branchPresentationSelect })
       : Promise.resolve(null),
   ])
 
@@ -75,6 +77,7 @@ export async function GET() {
       ...restaurant,
       billHeader: effectiveBillHeader,
       billHeaderInherited,
+      qrMenuHeroImageUrl: activeBranch?.qrMenuHeroImageUrl ?? null,
     },
     waiters,
   })
@@ -85,7 +88,13 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const userId = session.user.id
-  const { name, billHeader, fifoEnabled } = await req.json()
+  const body = await req.json()
+  const { name, billHeader, qrOrderingMode, fifoEnabled } = body
+  const qrMenuHeroImageUrl = body?.qrMenuHeroImageUrl === null
+    ? null
+    : typeof body?.qrMenuHeroImageUrl === 'string'
+      ? body.qrMenuHeroImageUrl.trim() || null
+      : undefined
 
   const context = await getRestaurantContextForUser(userId)
   let targetRestaurantId = context?.restaurantId
@@ -107,8 +116,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 })
   }
 
-  const restaurantUpdateData: { name?: string; fifoEnabled?: boolean; fifoConfiguredAt?: Date } = {}
+  const restaurantUpdateData: {
+    name?: string
+    qrOrderingMode?: 'order' | 'view_only' | 'disabled'
+    fifoEnabled?: boolean
+    fifoConfiguredAt?: Date
+  } = {}
   if (name !== undefined) restaurantUpdateData.name = name || 'My Restaurant'
+  if (qrOrderingMode === 'order' || qrOrderingMode === 'view_only' || qrOrderingMode === 'disabled') {
+    restaurantUpdateData.qrOrderingMode = qrOrderingMode
+  }
   if (typeof fifoEnabled === 'boolean') {
     if (!fifoEnabled) {
       return NextResponse.json({ error: 'This app now enforces strict FIFO. Average Cost is no longer supported.' }, { status: 409 })
@@ -140,10 +157,22 @@ export async function POST(req: Request) {
 
   // Save billHeader to the active branch (falls back to restaurant-level for receipt rendering)
   const activeBranchId = context?.branchId ?? null
-  if (billHeader !== undefined && activeBranchId) {
+  if (qrMenuHeroImageUrl !== undefined && !activeBranchId) {
+    return NextResponse.json({ error: 'Active branch required to save QR menu artwork.' }, { status: 400 })
+  }
+
+  if ((billHeader !== undefined || qrMenuHeroImageUrl !== undefined) && activeBranchId) {
+    const branchUpdateData: { billHeader?: string | null; qrMenuHeroImageUrl?: string | null } = {}
+    if (billHeader !== undefined) {
+      branchUpdateData.billHeader = billHeader ?? null
+    }
+    if (qrMenuHeroImageUrl !== undefined) {
+      branchUpdateData.qrMenuHeroImageUrl = qrMenuHeroImageUrl
+    }
+
     await prisma.branch.update({
       where: { id: activeBranchId },
-      data: { billHeader: billHeader ?? null },
+      data: branchUpdateData,
     })
   }
 
@@ -156,7 +185,7 @@ export async function POST(req: Request) {
   })
 
   const activeBranch = activeBranchId
-    ? await prisma.branch.findUnique({ where: { id: activeBranchId }, select: branchBillHeaderSelect })
+    ? await prisma.branch.findUnique({ where: { id: activeBranchId }, select: branchPresentationSelect })
     : null
   const effectiveBillHeader = activeBranch?.billHeader ?? restaurant.billHeader ?? ''
   const billHeaderInherited = activeBranch !== null && (activeBranch.billHeader === null || activeBranch.billHeader === '')
@@ -166,6 +195,7 @@ export async function POST(req: Request) {
       ...restaurant,
       billHeader: effectiveBillHeader,
       billHeaderInherited,
+      qrMenuHeroImageUrl: activeBranch?.qrMenuHeroImageUrl ?? null,
     },
   })
 }

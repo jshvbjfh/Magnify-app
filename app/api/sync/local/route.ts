@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
+import { resolveCloudRestaurantIdentity } from '@/lib/cloudRestaurantAccountProvision'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { getCanonicalCloudAppUrl } from '@/lib/cloudAuthBridge'
@@ -42,6 +43,8 @@ export async function POST(req: NextRequest) {
     String(process.env.OWNER_SYNC_TARGET_URL ?? body.targetUrl ?? getCanonicalCloudAppUrl() ?? '').trim(),
   )
   const sessionEmail = typeof session.user.email === 'string' ? session.user.email.trim().toLowerCase() : ''
+  const requestEmail = String(body.email ?? sessionEmail).trim().toLowerCase()
+  const requestPassword = String(body.password ?? '').trim()
   const email = String(process.env.OWNER_SYNC_EMAIL ?? body.email ?? sessionEmail).trim().toLowerCase()
   const sharedSecret = String(process.env.OWNER_SYNC_SHARED_SECRET ?? '').trim()
   const password = sharedSecret ? '' : String(process.env.OWNER_SYNC_PASSWORD ?? body.password ?? '').trim()
@@ -54,16 +57,53 @@ export async function POST(req: NextRequest) {
   }
 
   const context = await getRestaurantContextForUser(session.user.id)
-  const restaurant = context?.restaurant
+  let restaurant = context?.restaurant
   const branchId = context?.branchId ?? null
 
   if (!restaurant) {
     return NextResponse.json({ ok: false, message: 'No restaurant linked to this account.' }, { status: 200 })
   }
 
+  if (!String((restaurant as any).syncRestaurantId ?? '').trim()) {
+    const resolvedIdentity = await resolveCloudRestaurantIdentity({
+      restaurant: {
+        name: restaurant.name,
+        joinCode: (restaurant as any).joinCode,
+        syncRestaurantId: (restaurant as any).syncRestaurantId,
+      },
+      syncTargetUrl: targetUrl,
+      syncEmail: requestEmail,
+      syncPassword: requestPassword,
+      adminEmail: sessionEmail,
+    })
+
+    if (!resolvedIdentity.ok) {
+      return NextResponse.json({
+        ok: false,
+        message: `Cloud restaurant identity could not be verified for this desktop. ${resolvedIdentity.error}`,
+      }, { status: 200 })
+    }
+
+    const nextJoinCode = resolvedIdentity.restaurant.joinCode
+    const nextSyncRestaurantId = resolvedIdentity.restaurant.syncRestaurantId
+    if (
+      nextJoinCode !== ((restaurant as any).joinCode ?? null)
+      || nextSyncRestaurantId !== ((restaurant as any).syncRestaurantId ?? null)
+    ) {
+      restaurant = await prisma.restaurant.update({
+        where: { id: restaurant.id },
+        data: {
+          ...(nextJoinCode ? { joinCode: nextJoinCode } : {}),
+          ...(nextSyncRestaurantId ? { syncRestaurantId: nextSyncRestaurantId } : {}),
+        },
+      })
+    }
+  }
+
   const joinCode = (restaurant as any).joinCode ?? null
-  if (!joinCode) {
-    return NextResponse.json({ ok: false, message: 'Restaurant joinCode is not set.' }, { status: 200 })
+  const restaurantSyncId = String((restaurant as any).syncRestaurantId ?? '').trim() || null
+  if (!joinCode && !restaurantSyncId) {
+    return NextResponse.json({ ok: false, message: 'Restaurant cloud identity is not set.' }, { status: 200 })
   }
 
   const deviceId = getSyncDeviceId()
@@ -125,7 +165,7 @@ export async function POST(req: NextRequest) {
       const res = await fetch(`${targetUrl}/api/sync`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ joinCode, batchId, payloadHash, deviceId, branchId, branchIdentity, changes, pullCursors }),
+        body: JSON.stringify({ joinCode, ...(restaurantSyncId ? { restaurantSyncId } : {}), batchId, payloadHash, deviceId, branchId, branchIdentity, changes, pullCursors }),
         signal: controller.signal,
       })
       const payload = await res.json().catch(() => null)

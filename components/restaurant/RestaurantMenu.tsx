@@ -3,14 +3,31 @@ import { useState, useEffect, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import { Plus, Trash2, ChefHat, X, Edit2, ToggleLeft, ToggleRight, Sparkles, Search, ChevronDown } from 'lucide-react'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
+import { getActiveDishVariants, getDishStartingPrice } from '@/lib/dishVariants'
 import { estimateFifoCostForQuantity } from '@/lib/fifoCosting'
+import { DEFAULT_MENU_CATEGORY_SUGGESTIONS, MENU_TYPE_OPTIONS, getDishMenuTypeLabel, normalizeDishMenuType, resolveDishMenuType } from '@/lib/menuMetadata'
+import RestaurantQrMenuStudio from '@/components/restaurant/RestaurantQrMenuStudio'
 import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type Ingredient = { id: string; name: string; unit: string; unitCost: number | null; quantity: number }
 type DishIngredient = { id: string; inventoryItemId: string; quantityRequired: number; inventoryItem: Ingredient }
-type Dish = { id: string; name: string; sellingPrice: number; category: string | null; isActive: boolean; ingredients: DishIngredient[] }
+type DishVariant = { id: string; name: string; sellingPrice: number; sortOrder?: number | null; isActive?: boolean | null }
+type Dish = { id: string; name: string; sellingPrice: number; category: string | null; menuType?: string | null; description?: string | null; isActive: boolean; ingredients: DishIngredient[]; variants?: DishVariant[] }
+type DishVariantFormRow = { id?: string; name: string; sellingPrice: string }
+type DishFormState = { name: string; sellingPrice: string; category: string; menuType: string; variants: DishVariantFormRow[] }
 type PurchaseLayer = { id: string; ingredientId: string; remainingQuantity: number; unitCost: number; purchasedAt: string; createdAt: string }
+
+const DEFAULT_VARIANT_NAMES = ['Regular', 'Medium', 'Large', 'Mega'] as const
+
+function createEmptyDishForm(): DishFormState {
+  return { name: '', sellingPrice: '', category: '', menuType: '', variants: [] }
+}
+
+function getSuggestedVariantName(currentVariants: DishVariantFormRow[]) {
+  const usedNames = new Set(currentVariants.map((variant) => variant.name.trim().toLowerCase()).filter(Boolean))
+  return DEFAULT_VARIANT_NAMES.find((name) => !usedNames.has(name.toLowerCase())) ?? ''
+}
 
 type RestaurantMenuSnapshot = {
   updatedAt: string
@@ -19,21 +36,23 @@ type RestaurantMenuSnapshot = {
   purchases: PurchaseLayer[]
 }
 
-const CATEGORIES = ['Mains','Sides','Drinks','Desserts','Breakfast','Specials']
+type MenuWorkspaceTab = 'items' | 'qr-menu'
 
 export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void }) {
   const { data: session } = useSession()
   const restaurantBranch = useRestaurantBranch()
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<MenuWorkspaceTab>('items')
   const [dishes, setDishes] = useState<Dish[]>([])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
   const [purchases, setPurchases] = useState<PurchaseLayer[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterCat, setFilterCat] = useState('')
+  const [filterType, setFilterType] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editDish, setEditDish] = useState<Dish | null>(null)
   const [selectedDish, setSelectedDish] = useState<Dish | null>(null)
-  const [form, setForm] = useState({ name:'', sellingPrice:'', category:'' })
+  const [form, setForm] = useState<DishFormState>(createEmptyDishForm())
   const [recipeForm, setRecipeForm] = useState({ ingredientId:'', quantityRequired:'' })
   const [ingSearch, setIngSearch] = useState('')
   const [ingDropOpen, setIngDropOpen] = useState(false)
@@ -114,14 +133,57 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
     setLoading(false)
   }, [snapshotStorageScope])
   useEffect(()=>{load()},[restaurantBranch?.branchId])
+
+  function resetDishForm() {
+    setShowForm(false)
+    setEditDish(null)
+    setForm(createEmptyDishForm())
+  }
+
+  function addVariantRow() {
+    setForm((current) => ({
+      ...current,
+      variants: [...current.variants, { name: getSuggestedVariantName(current.variants), sellingPrice: '' }],
+    }))
+  }
+
+  function updateVariantRow(index: number, field: keyof DishVariantFormRow, value: string) {
+    setForm((current) => ({
+      ...current,
+      variants: current.variants.map((variant, variantIndex) => (
+        variantIndex === index ? { ...variant, [field]: value } : variant
+      )),
+    }))
+  }
+
+  function removeVariantRow(index: number) {
+    setForm((current) => ({
+      ...current,
+      variants: current.variants.filter((_, variantIndex) => variantIndex !== index),
+    }))
+  }
+
   async function saveDish(e: React.FormEvent) {
     e.preventDefault()
-    if (editDish) {
-      await fetch(`/api/restaurant/dishes/${editDish.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:form.name,sellingPrice:Number(form.sellingPrice),category:form.category||null})})
-    } else {
-      await fetch('/api/restaurant/dishes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:form.name,sellingPrice:Number(form.sellingPrice),category:form.category||null})})
+    const payload = {
+      name: form.name,
+      sellingPrice: Number(form.sellingPrice),
+      category: form.category.trim() || null,
+      menuType: normalizeDishMenuType(form.menuType) ?? null,
+      variants: form.variants.map((variant, index) => ({
+        ...(variant.id ? { id: variant.id } : {}),
+        name: variant.name.trim(),
+        sellingPrice: Number(variant.sellingPrice),
+        sortOrder: index,
+      })),
     }
-    setShowForm(false); setEditDish(null); setForm({name:'',sellingPrice:'',category:''}); load()
+
+    if (editDish) {
+      await fetch(`/api/restaurant/dishes/${editDish.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    } else {
+      await fetch('/api/restaurant/dishes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    }
+    resetDishForm(); load()
   }
 
   async function deleteDish(id: string) {
@@ -154,7 +216,21 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
     setSelectedDish(all.find(d=>d.id===dishId)||null)
   }
 
-  function openEdit(dish: Dish) { setEditDish(dish); setForm({name:dish.name,sellingPrice:String(dish.sellingPrice),category:dish.category||''}); setShowForm(true) }
+  function openEdit(dish: Dish) {
+    setEditDish(dish)
+    setForm({
+      name: dish.name,
+      sellingPrice: String(dish.sellingPrice),
+      category: dish.category || '',
+      menuType: resolveDishMenuType(dish.menuType, dish.category) || '',
+      variants: getActiveDishVariants(dish.variants).map((variant) => ({
+        id: variant.id,
+        name: variant.name,
+        sellingPrice: String(variant.sellingPrice),
+      })),
+    })
+    setShowForm(true)
+  }
 
   function estimateIngredientCost(ingredient: Ingredient, quantityRequired: number) {
     return estimateFifoCostForQuantity(
@@ -167,11 +243,23 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   const foodCost = (dish: Dish) => dish.ingredients.reduce((sum, row) => sum + estimateIngredientCost(row.inventoryItem, row.quantityRequired).totalCost, 0)
   const margin = (dish: Dish) => { const fc=foodCost(dish); return dish.sellingPrice>0?((dish.sellingPrice-fc)/dish.sellingPrice*100):0 }
 
+  const categorySuggestions = Array.from(new Set([
+    ...DEFAULT_MENU_CATEGORY_SUGGESTIONS,
+    ...dishes.map((dish) => String(dish.category ?? '').trim()).filter(Boolean),
+  ])).sort((left, right) => left.localeCompare(right))
+
+  const categoryFilterOptions = Array.from(new Set(
+    dishes.map((dish) => String(dish.category ?? '').trim()).filter(Boolean),
+  )).sort((left, right) => left.localeCompare(right))
+
   const filteredDishes = dishes.filter(d => {
     const q = search.trim().toLowerCase()
-    const matchesSearch = !q || d.name.toLowerCase().includes(q) || (d.category??'').toLowerCase().includes(q)
+    const typeLabel = getDishMenuTypeLabel(d.menuType, d.category)?.toLowerCase() ?? ''
+    const resolvedType = resolveDishMenuType(d.menuType, d.category) ?? ''
+    const matchesSearch = !q || d.name.toLowerCase().includes(q) || (d.category??'').toLowerCase().includes(q) || typeLabel.includes(q)
     const matchesCat = !filterCat || d.category === filterCat
-    return matchesSearch && matchesCat
+    const matchesType = !filterType || resolvedType === filterType
+    return matchesSearch && matchesCat && matchesType
   })
   const snapshotUpdatedLabel = snapshotUpdatedAt
     ? new Date(snapshotUpdatedAt).toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
@@ -194,38 +282,112 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
           <button disabled className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-200 text-orange-300 bg-white opacity-60 cursor-not-allowed">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI <span className="ml-1 text-[10px] font-bold bg-orange-100 text-orange-400 rounded px-1 py-0.5 leading-none">Soon</span>
           </button>
-          <button onClick={()=>{setShowForm(true);setEditDish(null);setForm({name:'',sellingPrice:'',category:''})}}
-          className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-            <Plus className="h-4 w-4" /> Add Menu Item
-          </button>
+          {activeWorkspaceTab === 'items' ? (
+            <button onClick={()=>{setShowForm(true);setEditDish(null);setForm(createEmptyDishForm())}}
+            className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+              <Plus className="h-4 w-4" /> Add Menu Item
+            </button>
+          ) : null}
         </div>
+      </div>
+
+      <div className="inline-flex rounded-2xl border border-orange-100 bg-white p-1 shadow-sm">
+        <button
+          type="button"
+          onClick={() => setActiveWorkspaceTab('items')}
+          className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${
+            activeWorkspaceTab === 'items'
+              ? 'bg-gradient-to-r from-orange-500 to-red-600 text-white shadow-lg shadow-orange-500/20'
+              : 'text-gray-600 hover:text-orange-600'
+          }`}
+        >
+          Items & Recipe
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveWorkspaceTab('qr-menu')}
+          className={`rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${
+            activeWorkspaceTab === 'qr-menu'
+              ? 'bg-gradient-to-r from-orange-500 to-red-600 text-white shadow-lg shadow-orange-500/20'
+              : 'text-gray-600 hover:text-orange-600'
+          }`}
+        >
+          QR Menu
+        </button>
       </div>
 
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-gray-900">{editDish?'Edit Menu Item':'New Menu Item'}</h3>
-              <button onClick={()=>{setShowForm(false);setEditDish(null)}}><X className="h-5 w-5 text-gray-400 hover:text-gray-600"/></button>
+              <button onClick={resetDishForm}><X className="h-5 w-5 text-gray-400 hover:text-gray-600"/></button>
             </div>
             <form onSubmit={saveDish} className="space-y-3">
               <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Menu Item Name</label>
                 <input required className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Grilled Tilapia"/></div>
-              <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Selling Price Before VAT (RWF)</label>
+              <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Default / Base Price Before VAT (RWF)</label>
                 <input required type="number" min="0" step="any" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.sellingPrice} onChange={e=>setForm(f=>({...f,sellingPrice:e.target.value}))} placeholder="5000"/></div>
               <div className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-3 text-sm text-orange-900">
-                <p className="font-semibold">Price shown on the menu</p>
+                <p className="font-semibold">Default price shown on the menu</p>
                 <p className="mt-1 text-lg font-bold">{previewMenuPrice.toLocaleString()} RWF</p>
                 <p className="mt-1 text-xs text-orange-700">{sellingPriceNumber.toLocaleString()} + ({sellingPriceNumber.toLocaleString()} × 18%) = {previewMenuPrice.toLocaleString()} RWF</p>
                 <p className="text-xs text-orange-700">VAT included: {previewVatAmount.toLocaleString()} RWF</p>
               </div>
+              <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Size / Variant Prices</p>
+                    <p className="mt-1 text-xs text-gray-500">Optional. Use this when one dish has prices like Regular, Medium, Large, or Mega.</p>
+                  </div>
+                  <button type="button" onClick={addVariantRow} className="rounded-lg border border-orange-200 bg-white px-3 py-1.5 text-xs font-semibold text-orange-600 hover:border-orange-300 hover:bg-orange-50">
+                    Add size
+                  </button>
+                </div>
+                {form.variants.length === 0 ? (
+                  <p className="mt-3 text-xs text-gray-400">No extra sizes yet. The base price above will be used on its own.</p>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    {form.variants.map((variant, index) => (
+                      <div key={`${variant.id ?? 'new'}:${index}`} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_160px_auto]">
+                        <input
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none"
+                          value={variant.name}
+                          onChange={(event) => updateVariantRow(index, 'name', event.target.value)}
+                          placeholder="e.g. Large"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none"
+                          value={variant.sellingPrice}
+                          onChange={(event) => updateVariantRow(index, 'sellingPrice', event.target.value)}
+                          placeholder="6500"
+                        />
+                        <button type="button" onClick={() => removeVariantRow(index)} className="inline-flex items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 hover:text-red-500">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                    <p className="text-[11px] text-gray-500">Keep the base price as your default size. The QR menu will show these extra size prices as separate choices.</p>
+                  </div>
+                )}
+              </div>
               <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Category</label>
-                <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
-                  <option value="">Select category</option>
-                  {CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+                <input list="menu-category-suggestions" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} placeholder="e.g. Pizzas, Burgers, Soft Drinks" />
+                <datalist id="menu-category-suggestions">
+                  {categorySuggestions.map(category => <option key={category} value={category} />)}
+                </datalist>
+                <p className="mt-1 text-[11px] text-gray-400">Choose a suggested category or type a new one.</p>
+              </div>
+              <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Type</label>
+                <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.menuType} onChange={e=>setForm(f=>({...f,menuType:e.target.value}))}>
+                  <option value="">Select type</option>
+                  {MENU_TYPE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select></div>
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={()=>{setShowForm(false);setEditDish(null)}} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+                <button type="button" onClick={resetDishForm} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
                 <button type="submit" className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium py-2 rounded-lg transition-colors">{editDish?'Save Changes':'Create Menu Item'}</button>
               </div>
             </form>
@@ -236,6 +398,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
       {loading ? (
         <div className="bg-white rounded-xl border border-gray-200 p-10 text-center text-gray-400">Loading...</div>
       ) : (
+        activeWorkspaceTab === 'items' ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
 
           {/* Dish list */}
@@ -246,7 +409,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                 <h3 className="font-semibold text-gray-800">Menu Items ({filteredDishes.length}{filteredDishes.length !== dishes.length ? ` of ${dishes.length}` : ''})</h3>
               </div>
               {/* Search + filter row */}
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none"/>
                   <input
@@ -257,11 +420,18 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                   />
                 </div>
                 <select
+                  value={filterType}
+                  onChange={e => setFilterType(e.target.value)}
+                  className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-gray-50 text-gray-600">
+                  <option value="">All types</option>
+                  {MENU_TYPE_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                <select
                   value={filterCat}
                   onChange={e => setFilterCat(e.target.value)}
                   className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-gray-50 text-gray-600">
                   <option value="">All categories</option>
-                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  {categoryFilterOptions.map(category => <option key={category} value={category}>{category}</option>)}
                 </select>
               </div>
             </div>
@@ -273,6 +443,9 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
               <div className="grid grid-cols-2 gap-3 p-3 max-h-[500px] overflow-y-auto">
                 {filteredDishes.map(dish=>{
                   const fc=foodCost(dish); const mgn=margin(dish)
+                  const typeLabel = getDishMenuTypeLabel(dish.menuType, dish.category)
+                  const activeVariants = getActiveDishVariants(dish.variants)
+                  const startingPrice = getDishStartingPrice(activeVariants, dish.sellingPrice)
                   return (
                   <div key={dish.id}
                     className={`rounded-xl overflow-hidden cursor-pointer border-2 transition-all shadow-sm hover:shadow-md ${selectedDish?.id===dish.id?'border-sky-400 ring-2 ring-sky-100':'border-transparent hover:border-sky-200'}`}
@@ -291,9 +464,25 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                     {/* Info section */}
                     <div className="bg-white px-3 py-2.5">
                       <p className="text-sm font-bold text-blue-700 truncate">{dish.name}</p>
-                      {dish.category && <p className="text-xs text-sky-500 font-medium">{dish.category}</p>}
+                      {(dish.category || typeLabel) ? (
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {typeLabel ? <span className="rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-600">{typeLabel}</span> : null}
+                          {dish.category ? <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-600">{dish.category}</span> : null}
+                        </div>
+                      ) : null}
+                      {activeVariants.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {activeVariants.map((variant) => (
+                            <span key={`${dish.id}:${variant.id ?? variant.name}`} className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">
+                              {variant.name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="mt-1 text-xs">
-                        <span className="text-gray-700 font-semibold">{calculateGrossFromNet(dish.sellingPrice).toLocaleString()} RWF</span>
+                        <span className="text-gray-700 font-semibold">
+                          {activeVariants.length > 0 ? `From ${calculateGrossFromNet(startingPrice).toLocaleString()}` : calculateGrossFromNet(dish.sellingPrice).toLocaleString()} RWF
+                        </span>
                         <span className="ml-2 text-[11px] font-medium text-orange-500">incl. VAT</span>
                         {dish.ingredients.length>0&&<div className="flex items-center gap-2 mt-0.5">
                           <span className="text-gray-400">Cost: {fc.toFixed(0)}</span>
@@ -316,11 +505,20 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                 </h3>
                 {selectedDish && (
                   <div className="text-right">
-                    <span className="text-sm font-bold text-orange-500">{calculateGrossFromNet(selectedDish.sellingPrice).toLocaleString()} RWF</span>
+                    <span className="text-sm font-bold text-orange-500">{calculateGrossFromNet(getDishStartingPrice(selectedDish.variants, selectedDish.sellingPrice)).toLocaleString()} RWF</span>
                     <p className="text-[11px] text-gray-400">Base price {selectedDish.sellingPrice.toLocaleString()} RWF</p>
                   </div>
                 )}
               </div>
+                {selectedDish && getActiveDishVariants(selectedDish.variants).length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {getActiveDishVariants(selectedDish.variants).map((variant) => (
+                      <span key={`${selectedDish.id}:${variant.id ?? variant.name}`} className="rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[11px] font-semibold text-orange-700">
+                        {variant.name} · {calculateGrossFromNet(variant.sellingPrice).toLocaleString()} RWF
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
             </div>
             {!selectedDish ? (
               <p className="p-8 text-center text-gray-400 text-sm">Click on a menu item to view and edit its recipe ingredients.</p>
@@ -428,6 +626,9 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
             )}
           </div>
         </div>
+        ) : (
+          <RestaurantQrMenuStudio menuItems={dishes.filter((dish) => dish.isActive)} />
+        )
       )}
     </div>
   )

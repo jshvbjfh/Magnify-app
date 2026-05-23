@@ -200,6 +200,7 @@ export async function POST(req: Request) {
 
     const body = await req.json()
     const { ingredientId, itemName, unit, supplier, paymentMethod, purchaseUnit } = body
+    const normalizedBatchId = typeof body.batchId === 'string' && body.batchId.trim() ? body.batchId.trim() : null
     // Frontend sends purchaseQuantity (in purchase units) + purchaseUnitCost (per purchase unit).
     // Convert to usage-unit values for storage using the unitsPerPurchaseUnit ratio.
     const purchaseQuantity = Number(body.purchaseQuantity)
@@ -253,6 +254,7 @@ export async function POST(req: Request) {
           branchId,
           journalEntryId: journalEntry?.id ?? null,
           ingredientId: ingredient.id,
+          batchId: normalizedBatchId,
           supplier: supplier || null,
           purchaseQuantity,
           purchaseUnit: purchaseUnit || unit || null,
@@ -281,7 +283,7 @@ export async function POST(req: Request) {
       return createdPurchase
     }, INVENTORY_TRANSACTION_OPTIONS)
 
-    return NextResponse.json({ purchase, totalCost, batchId: null }, { status: 201 })
+    return NextResponse.json({ purchase, totalCost, batchId: normalizedBatchId }, { status: 201 })
   } catch (error: any) {
     console.error('Failed to record inventory purchase:', error)
     const status = ['Ingredient not found', 'itemName is required', 'unit is required when recording a new item'].includes(error?.message)

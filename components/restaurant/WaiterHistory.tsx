@@ -4,6 +4,7 @@ import { History, ShoppingBag, ArrowLeftRight, Sparkles, RefreshCw, CalendarRang
 
 type SaleItem = {
   id: string
+  dishName?: string
   dish: { name: string }
   quantitySold: number
   totalSaleAmount: number
@@ -211,7 +212,7 @@ export default function WaiterHistory({ onAskJesse }: { onAskJesse?: () => void 
                     <td className="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">
                       {new Date(s.saleDate).toLocaleTimeString('en-RW', { hour: '2-digit', minute: '2-digit' })}
                     </td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{s.dish.name}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900">{s.dishName || s.dish.name}</td>
                     <td className="px-4 py-3 text-gray-600">{s.quantitySold}×</td>
                     <td className="px-4 py-3 font-semibold text-orange-700">{fmtRWF(s.totalSaleAmount)} RWF</td>
                     <td className="px-4 py-3">

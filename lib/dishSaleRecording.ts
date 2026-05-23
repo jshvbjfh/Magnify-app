@@ -7,7 +7,11 @@ import { enqueueSyncChange } from '@/lib/syncOutbox'
 type PrismaDb = PrismaClient | Prisma.TransactionClient
 
 type SaleLineInput = {
+  orderItemId?: string | null
   dishId: string
+  dishName?: string | null
+  dishVariantId?: string | null
+  dishVariantName?: string | null
   dishPrice: number
   qty: number
 }
@@ -83,10 +87,14 @@ export async function recordDishSalesForPaidOrder(
     const quantitySold = Number(item.qty) || 0
     if (quantitySold <= 0) continue
 
-    // Idempotency guard: skip this dish line if already recorded for this order.
-    // Checked per dish (not per order) so a partial-failure retry can fill in
-    // the remaining lines without silently skipping them.
-    if (params.orderId) {
+    // Idempotency guard: prefer order-item granularity so one order can safely
+    // contain the same parent dish more than once with different sizes.
+    if (item.orderItemId) {
+      const existingSale = await db.dishSale.findFirst({
+        where: { orderItemId: item.orderItemId },
+      })
+      if (existingSale) continue
+    } else if (params.orderId) {
       const existingSale = await db.dishSale.findFirst({
         where: { orderId: params.orderId, dishId: item.dishId },
       })
@@ -99,8 +107,11 @@ export async function recordDishSalesForPaidOrder(
         restaurantId: params.restaurantId,
         branchId: params.branchId,
         orderId: params.orderId ?? null,
+        orderItemId: item.orderItemId ?? null,
         dishId: item.dishId,
-        dishName: dish.name,
+        dishVariantId: item.dishVariantId ?? null,
+        dishVariantName: item.dishVariantName ?? null,
+        dishName: item.dishName?.trim() || dish.name,
         quantitySold,
         saleDate: params.saleDate,
         paymentMethod: params.paymentMethod || 'Cash',

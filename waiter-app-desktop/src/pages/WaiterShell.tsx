@@ -236,7 +236,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
       </header>
 
       {branches.length > 0 && (
-        <div className="border-b border-orange-100 bg-white px-4 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar flex-shrink-0">
+        <div className="border-b border-orange-100 bg-white px-4 py-2 flex justify-center items-center gap-2 overflow-x-auto no-scrollbar flex-shrink-0">
           {branches.map((branch) => {
             const isActive = branch.id === activeBranchId
             const isSwitching = branch.id === branchSwitchingId
@@ -247,7 +247,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
                 onClick={() => { void handleBranchSelect(branch.id) }}
                 disabled={isSwitching}
                 title={branch.name}
-                className={`flex-shrink-0 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                className={`flex-shrink-0 rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
                   isActive
                     ? 'border-orange-500 bg-orange-500 text-white'
                     : 'border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100'

@@ -14,6 +14,7 @@ async function resolveLinkedRestaurant(userId: string, role: string) {
           id: true,
           name: true,
           joinCode: true,
+          syncRestaurantId: true,
           licenseActive: true,
           licenseExpiry: true,
           owner: {
@@ -70,6 +71,7 @@ export async function POST(request: NextRequest) {
       id: restaurant.id,
       name: restaurant.name,
       joinCode: restaurant.joinCode,
+      syncRestaurantId: restaurant.syncRestaurantId,
       licenseActive: restaurant.licenseActive,
       licenseExpiry: restaurant.licenseExpiry?.toISOString() ?? null,
       owner: restaurant.owner ? {

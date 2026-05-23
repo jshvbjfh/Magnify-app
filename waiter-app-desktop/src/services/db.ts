@@ -115,6 +115,47 @@ export async function getConfig(key: string): Promise<string | null> {
   return (rows[0] as DBRow).value as string
 }
 
+interface ReplaceScope {
+  branchId?: string | null
+  restaurantId?: string | null
+}
+
+function normalizeScopeId(value: string | null | undefined): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  return normalized || null
+}
+
+function buildScopedDeleteStatement(
+  tableName: 'dishes' | 'restaurant_tables',
+  scope: ReplaceScope,
+): { statement: string; values: unknown[] } | null {
+  const branchId = normalizeScopeId(scope.branchId)
+  const restaurantId = normalizeScopeId(scope.restaurantId)
+
+  if (branchId && restaurantId) {
+    return {
+      statement: `DELETE FROM ${tableName} WHERE branch_id = ? AND restaurant_id = ?`,
+      values: [branchId, restaurantId],
+    }
+  }
+
+  if (branchId) {
+    return {
+      statement: `DELETE FROM ${tableName} WHERE branch_id = ?`,
+      values: [branchId],
+    }
+  }
+
+  if (restaurantId) {
+    return {
+      statement: `DELETE FROM ${tableName} WHERE restaurant_id = ?`,
+      values: [restaurantId],
+    }
+  }
+
+  return null
+}
+
 // ---- dishes ----------------------------------------------------------------
 
 export interface Dish {
@@ -122,27 +163,37 @@ export interface Dish {
   name: string
   selling_price: number
   category: string | null
+  menu_type: string | null
   is_active: number
   branch_id: string | null
   restaurant_id: string | null
 }
 
-export async function replaceDishes(dishes: Dish[]): Promise<void> {
+export async function replaceDishes(dishes: Dish[], scope: ReplaceScope = {}): Promise<void> {
+  const deleteStatement = buildScopedDeleteStatement('dishes', {
+    branchId: dishes[0]?.branch_id ?? scope.branchId,
+    restaurantId: dishes[0]?.restaurant_id ?? scope.restaurantId,
+  })
+
   if (!dishes.length) {
-    console.warn('[replaceDishes] received empty dishes array — skipping replace to preserve local data')
+    if (!deleteStatement) {
+      console.warn('[replaceDishes] received empty dishes array without branch or restaurant scope — skipping replace to preserve local data')
+      return
+    }
+
+    const db = getDB()
+    await db.run(deleteStatement.statement, deleteStatement.values)
     return
   }
-  // Branch-scoped: only wipe dishes for the branch being replaced so other
-  // branches' menus survive a branch switch in offline mode.
-  const pullBranchId = dishes[0].branch_id
+
   const db = getDB()
-  if (pullBranchId) {
+  if (deleteStatement) {
     await db.executeSet([
-      { statement: 'DELETE FROM dishes WHERE branch_id = ?', values: [pullBranchId] },
+      deleteStatement,
       ...dishes.map((d) => ({
         statement:
-          'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        values: [d.id, d.name, d.selling_price, d.category, d.is_active ? 1 : 0, d.branch_id, d.restaurant_id],
+          'INSERT INTO dishes (id, name, selling_price, category, menu_type, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        values: [d.id, d.name, d.selling_price, d.category, d.menu_type, d.is_active ? 1 : 0, d.branch_id, d.restaurant_id],
       })),
     ])
   } else {
@@ -150,8 +201,8 @@ export async function replaceDishes(dishes: Dish[]): Promise<void> {
       { statement: 'DELETE FROM dishes', values: [] },
       ...dishes.map((d) => ({
         statement:
-          'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        values: [d.id, d.name, d.selling_price, d.category, d.is_active ? 1 : 0, d.branch_id, d.restaurant_id],
+          'INSERT INTO dishes (id, name, selling_price, category, menu_type, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        values: [d.id, d.name, d.selling_price, d.category, d.menu_type, d.is_active ? 1 : 0, d.branch_id, d.restaurant_id],
       })),
     ])
   }
@@ -182,17 +233,27 @@ export interface RestaurantTable {
   restaurant_id: string | null
 }
 
-export async function replaceTables(tables: RestaurantTable[]): Promise<void> {
+export async function replaceTables(tables: RestaurantTable[], scope: ReplaceScope = {}): Promise<void> {
+  const deleteStatement = buildScopedDeleteStatement('restaurant_tables', {
+    branchId: tables[0]?.branch_id ?? scope.branchId,
+    restaurantId: tables[0]?.restaurant_id ?? scope.restaurantId,
+  })
+
   if (!tables.length) {
-    console.warn('[replaceTables] received empty tables array — skipping replace to preserve local data')
+    if (!deleteStatement) {
+      console.warn('[replaceTables] received empty tables array without branch or restaurant scope — skipping replace to preserve local data')
+      return
+    }
+
+    const db = getDB()
+    await db.run(deleteStatement.statement, deleteStatement.values)
     return
   }
-  // Branch-scoped: only wipe tables for the pulled branch, same pattern as replaceDishes.
-  const pullBranchId = tables[0].branch_id
+
   const db = getDB()
-  if (pullBranchId) {
+  if (deleteStatement) {
     await db.executeSet([
-      { statement: 'DELETE FROM restaurant_tables WHERE branch_id = ?', values: [pullBranchId] },
+      deleteStatement,
       ...tables.map((t) => ({
         statement:
           'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',

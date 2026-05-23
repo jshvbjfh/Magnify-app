@@ -241,6 +241,7 @@ export async function POST(req: Request) {
     const configuredSharedSecret = process.env.OWNER_SYNC_SHARED_SECRET?.trim() ?? ''
 
     // Support both old (restaurantSyncId) and new (joinCode) restaurant identifiers
+    const resolveRestaurantOnly = Boolean(parsedBody.resolveRestaurantOnly)
     const joinCode = String(parsedBody.joinCode ?? '').trim().toUpperCase() || null
     const restaurantSyncId = String(parsedBody.restaurantSyncId ?? '').trim() || null
 
@@ -249,9 +250,11 @@ export async function POST(req: Request) {
     if (!user && sharedSecret && matchesSharedSecret(sharedSecret, configuredSharedSecret)) {
       const provision = parsedBody.provisionUser
       // Find restaurant by joinCode or restaurantSyncId
-      const provisionRestaurant = joinCode
-        ? await prisma.restaurant.findUnique({ where: { joinCode }, select: { id: true, branches: { where: { isMain: true }, select: { id: true }, take: 1 } } })
-        : null
+      const provisionRestaurant = restaurantSyncId
+        ? await prisma.restaurant.findUnique({ where: { syncRestaurantId: restaurantSyncId }, select: { id: true, branches: { where: { isMain: true }, select: { id: true }, take: 1 } } })
+        : joinCode
+          ? await prisma.restaurant.findUnique({ where: { joinCode }, select: { id: true, branches: { where: { isMain: true }, select: { id: true }, take: 1 } } })
+          : null
       user = await prisma.user.create({
         data: {
           email,
@@ -288,25 +291,47 @@ export async function POST(req: Request) {
     }
 
     // Resolve restaurant — by joinCode (new), or by owner
-    let restaurant: { id: string; name: string; ownerId: string } | null = null
+    let restaurant: { id: string; name: string; ownerId: string; joinCode: string; syncRestaurantId: string | null } | null = null
 
-    if (joinCode) {
+    if (restaurantSyncId) {
+      restaurant = await prisma.restaurant.findUnique({
+        where: { syncRestaurantId: restaurantSyncId },
+        select: { id: true, name: true, ownerId: true, joinCode: true, syncRestaurantId: true },
+      })
+    }
+
+    if (!restaurant && joinCode) {
       restaurant = await prisma.restaurant.findUnique({
         where: { joinCode },
-        select: { id: true, name: true, ownerId: true },
+        select: { id: true, name: true, ownerId: true, joinCode: true, syncRestaurantId: true },
       })
     }
 
     if (!restaurant) {
       restaurant = await prisma.restaurant.findFirst({
-        where: { ownerId: user.id, deletedAt: null },
-        select: { id: true, name: true, ownerId: true },
+        where: {
+          OR: [{ ownerId: user.id }, { managerId: user.id }],
+          deletedAt: null,
+        },
+        select: { id: true, name: true, ownerId: true, joinCode: true, syncRestaurantId: true },
         orderBy: { createdAt: 'asc' },
       })
     }
 
     if (!restaurant) {
       return NextResponse.json({ error: 'No restaurant found for this account. Provide a valid joinCode.' }, { status: 403 })
+    }
+
+    if (resolveRestaurantOnly) {
+      return NextResponse.json({
+        ok: true,
+        restaurant: {
+          id: restaurant.id,
+          name: restaurant.name,
+          joinCode: restaurant.joinCode,
+          syncRestaurantId: restaurant.syncRestaurantId,
+        },
+      })
     }
 
     await ensureMainBranchForRestaurant(restaurant.id)
@@ -474,6 +499,12 @@ export async function POST(req: Request) {
       return {
         ok: true,
         batchId,
+        restaurant: {
+          id: restaurant!.id,
+          name: restaurant!.name,
+          joinCode: restaurant!.joinCode,
+          syncRestaurantId: restaurant!.syncRestaurantId,
+        },
         message: pull.pullChanges.length > 0 || appliedEntityChanges.applied > 0
           ? 'Sync batch applied successfully.'
           : 'No local or remote changes to sync.',

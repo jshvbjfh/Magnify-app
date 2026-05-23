@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
+import { resolveActiveStaffAccess } from '@/lib/mobileStaffAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,20 +35,17 @@ async function verifyToken(req: Request) {
 export async function GET(req: Request) {
   try {
     const claims = await verifyToken(req)
-    const { restaurantId } = claims
+    // Resolve the current staff->restaurant->branch binding from the database.
+    // JWT restaurant/branch claims can become stale after account repair or branch reassignment.
+    const staffAccess = await resolveActiveStaffAccess(claims.sub)
 
-    // Validate staff identity directly from the Staff table using the JWT subject.
-    // claims.sub is a Staff ID (not a User ID), so we never use getRestaurantContextForUser here.
-    const staff = await prisma.staff.findUnique({
-      where: { id: claims.sub },
-      select: { id: true, restaurantId: true, isActive: true, deletedAt: true },
-    })
-
-    if (!staff || !staff.isActive || staff.deletedAt || staff.restaurantId !== restaurantId) {
+    if (!staffAccess) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const userBranchId = claims.branchId ?? null
+    const restaurantId = staffAccess.restaurantId
+
+    const userBranchId = staffAccess.branchId ?? null
 
     if (!userBranchId) {
       return jsonNoStore(
@@ -86,7 +84,7 @@ export async function GET(req: Request) {
         where: dishWhere,
         select: {
           id: true, name: true, sellingPrice: true,
-          category: true, isActive: true, branchId: true, restaurantId: true,
+          category: true, menuType: true, isActive: true, branchId: true, restaurantId: true,
         },
         orderBy: { name: 'asc' },
       }),
@@ -150,6 +148,7 @@ export async function GET(req: Request) {
       name: d.name,
       selling_price: Number(d.sellingPrice),
       category: d.category ?? null,
+      menu_type: d.menuType ?? null,
       is_active: d.isActive ? 1 : 0,
       branch_id: d.branchId ?? null,
       restaurant_id: d.restaurantId,

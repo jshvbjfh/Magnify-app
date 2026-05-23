@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
-  Search, ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
+  ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
   ArrowLeft, Trash2, X, Receipt, ShieldAlert,
 } from 'lucide-react'
 import {
@@ -108,7 +108,6 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [showPanel,        setShowPanel]        = useState<'dishes' | 'order'>('dishes')
   const [addedFlash,       setAddedFlash]       = useState(false)
   const [searchQuery,      setSearchQuery]      = useState('')
-  const [showSearch,       setShowSearch]       = useState(false)
   const [confirmingOrder,  setConfirmingOrder]  = useState(false)
   const [submitError,      setSubmitError]      = useState<string | null>(null)
   const [confirmSuccess,   setConfirmSuccess]   = useState<string | null>(null)
@@ -567,19 +566,12 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
                   <span>{cartItems.length > 0 ? cartItems.length : confirmedItems.length}</span>
                 </button>
               )}
-              {showSearch ? (
-                <input
-                  autoFocus type="text" value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  onBlur={() => { if (!searchQuery) setShowSearch(false) }}
-                  placeholder="Search dishes…"
-                  className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-orange-400 w-40"
-                />
-              ) : (
-                <button onClick={() => setShowSearch(true)} className="p-2 rounded-lg hover:bg-gray-100 transition-colors">
-                  <Search className="h-5 w-5 text-gray-600" />
-                </button>
-              )}
+              <input
+                type="text" value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search dishes…"
+                className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-orange-400 w-44"
+              />
               <button onClick={() => { loadPOS(); setShowPanel('dishes') }}
                 className="p-2 rounded-lg hover:bg-gray-100 transition-colors" title="Refresh">
                 <RefreshCw className="h-4 w-4 text-gray-500" />
@@ -599,7 +591,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
                 return (
                   <button key={key}
                     onClick={() => { setSelectedTableKey(key); setShowPanel('order') }}
-                    className={`relative flex-shrink-0 flex flex-col items-start px-3 py-1.5 rounded-xl text-left transition-all border ${
+                    className={`relative flex-shrink-0 flex flex-col items-start px-4 py-2.5 rounded-xl text-left transition-all border ${
                       isSelected && isServed  ? 'bg-green-500  text-white border-green-500  shadow-sm' :
                       isSelected && hasOrder  ? 'bg-orange-500 text-white border-orange-500 shadow-sm' :
                       isSelected              ? 'bg-gray-900   text-white border-gray-900   shadow-sm' :
@@ -615,12 +607,12 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
                     {hasOrder && !isServed && (
                       <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white" />
                     )}
-                    <span className="text-[13px] font-bold leading-tight">{table.name}</span>
+                    <span className="text-[18px] font-bold leading-tight">{table.name}</span>
                     {isServed
-                      ? <span className={`text-[10px] font-semibold ${isSelected ? 'text-green-100' : 'text-green-600'}`}>Served</span>
+                      ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-green-100' : 'text-green-600'}`}>Served</span>
                       : hasOrder
-                        ? <span className={`text-[10px] font-semibold ${isSelected ? 'text-orange-100' : 'text-orange-500'}`}>Pending…</span>
-                        : <span className="text-[10px] font-medium text-gray-400">Free</span>
+                        ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-orange-100' : 'text-orange-500'}`}>Pending…</span>
+                        : <span className="text-[14px] font-medium text-gray-400">Free</span>
                     }
                   </button>
                 )
@@ -633,13 +625,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         <div className="flex-shrink-0 px-4 py-2 flex items-center gap-2 overflow-x-auto" style={{scrollbarWidth:'none'}}>
           <button
             onClick={() => setSelectedCategory(null)}
-            className={`flex-shrink-0 rounded-lg px-3 py-1.5 text-left transition-all ${
+            className={`flex-shrink-0 rounded-lg px-4 py-2 text-left transition-all ${
               selectedCategory === null
                 ? 'bg-gray-800 text-white shadow'
                 : 'bg-white text-gray-700 border border-gray-200 hover:border-gray-300'
             }`}>
-            <span className="block text-xs font-bold">All items</span>
-            <span className="text-[10px] opacity-70">{dishes.length} items</span>
+            <span className="block text-sm font-bold">All items</span>
+            <span className="text-xs opacity-70">{dishes.length} items</span>
           </button>
           {categories.map((cat, idx) => {
             const [bg, fg] = COLOR_POOL[idx % COLOR_POOL.length]
@@ -647,11 +639,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
             const isActive = selectedCategory === cat
             return (
               <button key={cat} onClick={() => setSelectedCategory(isActive ? null : cat)}
-                className={`flex-shrink-0 rounded-lg px-3 py-1.5 text-left transition-all ${bg} ${fg} ${
+                className={`flex-shrink-0 rounded-lg px-4 py-2 text-left transition-all ${bg} ${fg} ${
                   isActive ? 'ring-2 ring-gray-900 ring-offset-1' : 'hover:shadow-md'
                 }`}>
-                <span className="block text-xs font-bold">{cat}</span>
-                <span className="text-[10px] opacity-90">{count} items</span>
+                <span className="block text-sm font-bold">{cat}</span>
+                <span className="text-xs opacity-90">{count} items</span>
               </button>
             )
           })}
@@ -669,7 +661,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
           ) : filteredDishes.length === 0 ? (
             <div className="py-12 text-center text-gray-400 text-sm">No dishes found</div>
           ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-3">
               {filteredDishes.map(dish => {
                 const qtyInCart = cartItems.filter(i => i.dishId === dish.id).reduce((s, i) => s + i.qty, 0)
                 const catIdx    = categories.indexOf(dish.category ?? '')
@@ -680,17 +672,17 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
                 return (
                   <button key={dish.id} onClick={() => addDishToOrder(dish)}
                     className="relative rounded-xl overflow-hidden hover:shadow-md hover:scale-[1.02] active:scale-[0.97] transition-all text-left flex flex-col h-full">
-                    <div className={`${bgTop} h-[52px] w-full flex items-center justify-center`}>
-                      <span className="text-white font-black text-xl tracking-tight select-none drop-shadow">{initials}</span>
+                    <div className={`${bgTop} h-[78px] w-full flex items-center justify-center`}>
+                      <span className="text-white font-black text-3xl tracking-tight select-none drop-shadow">{initials}</span>
                     </div>
-                    <div className={`${bgBottom} px-2 py-1.5 flex-1 w-full`}>
-                      <p className="text-white text-[11px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
-                      <p className="text-white/70 font-medium text-[10px] mt-0.5">
+                    <div className={`${bgBottom} px-3 py-2 flex-1 w-full`}>
+                      <p className="text-white text-[16px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
+                      <p className="text-white/70 font-medium text-[14px] mt-0.5">
                         {fmtRWF(Math.round(dish.selling_price * (1 + VAT_RATE)))} RWF incl. VAT
                       </p>
                     </div>
                     {qtyInCart > 0 && (
-                      <span className="absolute top-1.5 right-1.5 h-5 min-w-[20px] bg-gray-900 border-2 border-white text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 shadow-sm">
+                      <span className="absolute top-1.5 right-1.5 h-7 min-w-[28px] bg-gray-900 border-2 border-white text-white text-xs font-bold rounded-full flex items-center justify-center px-1 shadow-sm">
                         {qtyInCart}
                       </span>
                     )}

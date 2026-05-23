@@ -3,7 +3,12 @@ import { getServerSession } from 'next-auth'
 
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { createBranch, ensureMainBranchForRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import {
+  ACTIVE_BRANCH_COOKIE_NAME,
+  createBranch,
+  ensureMainBranchForRestaurant,
+  getRestaurantContextForUser,
+} from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 const branchTabSelect = {
@@ -31,7 +36,11 @@ async function getAuthorizedBranchContext() {
     return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
   }
 
-  const context = await getRestaurantContextForUser(session.user.id)
+  const preferredBranchId = typeof (session.user as { branchId?: string | null }).branchId === 'string'
+    ? (session.user as { branchId?: string | null }).branchId ?? null
+    : null
+
+  const context = await getRestaurantContextForUser(session.user.id, { preferredBranchId })
   const restaurantId = context?.restaurantId ?? null
   if (!restaurantId) {
     return {
@@ -64,14 +73,32 @@ async function getAuthorizedBranchContext() {
   }
 }
 
+function withActiveBranchCookie(response: NextResponse, restaurantId: string | null, branchId: string | null) {
+  if (!restaurantId || !branchId) {
+    response.cookies.delete(ACTIVE_BRANCH_COOKIE_NAME)
+    return response
+  }
+
+  response.cookies.set({
+    name: ACTIVE_BRANCH_COOKIE_NAME,
+    value: `${restaurantId}:${branchId}`,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+  })
+
+  return response
+}
+
 export async function GET() {
   const result = await getAuthorizedBranchContext()
   if ('error' in result) return result.error
 
-  return NextResponse.json({
+  return withActiveBranchCookie(NextResponse.json({
     activeBranchId: result.activeBranchId,
     branches: result.branches,
-  })
+  }), result.restaurantId, result.activeBranchId)
 }
 
 export async function PATCH(req: Request) {
@@ -111,11 +138,11 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: 'Branch not found' }, { status: 404 })
   }
 
-  return NextResponse.json({
+  return withActiveBranchCookie(NextResponse.json({
     ok: true,
     activeBranchId: branch.id,
     branch,
-  })
+  }), result.restaurantId, branch.id)
 }
 
 export async function POST(req: Request) {
@@ -160,12 +187,12 @@ export async function POST(req: Request) {
 
     const branches = await listActiveBranches(result.restaurantId)
 
-    return NextResponse.json({
+    return withActiveBranchCookie(NextResponse.json({
       ok: true,
       activeBranchId: result.activeBranchId,
       branch,
       branches,
-    }, { status: 201 })
+    }, { status: 201 }), result.restaurantId, result.activeBranchId)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create branch'
     const status = message.includes('already exists') ? 409 : message.includes('required') ? 400 : 500

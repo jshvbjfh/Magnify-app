@@ -23,6 +23,7 @@ import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestau
 type Dish        = { id: string; name: string; sellingPrice: number; category: string | null; isActive: boolean }
 type Sale        = {
   id: string
+  dishName?: string
   dish: { name: string }
   quantitySold: number
   totalSaleAmount: number
@@ -1143,7 +1144,7 @@ ${headerLines}
                     <tr key={s.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 text-gray-500 text-xs">{new Date(s.saleDate).toLocaleString('en-RW', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
                       <td className="px-4 py-3">
-                        <p className="font-medium text-gray-900">{s.dish.name}</p>
+                        <p className="font-medium text-gray-900">{s.dishName || s.dish.name}</p>
                         {(s.orderNumber || s.tableName) && (
                           <p className="mt-0.5 text-xs text-gray-400">{[s.orderNumber, s.tableName].filter(Boolean).join(' · ')}</p>
                         )}

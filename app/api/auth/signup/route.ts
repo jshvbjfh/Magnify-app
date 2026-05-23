@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { hash } from 'bcryptjs'
 import { Prisma } from '@prisma/client'
+import { syncLocalUserFromCloud } from '@/lib/auth'
 import { isLocalFirstDesktopAuthBridgeEnabled, mirrorSignupToCloud, verifyCloudCredentials } from '@/lib/cloudAuthBridge'
 import { prisma } from '@/lib/prisma'
 import { ensureRestaurantForOwner } from '@/lib/restaurantAccess'
@@ -73,6 +74,12 @@ export async function POST(request: NextRequest) {
     const email = String(body?.email ?? '').trim().toLowerCase()
     const password = String(body?.password ?? '')
     const role = body?.role
+    const trackingMode = body?.trackingMode === 'dish_tracking' ? 'dish_tracking' : 'simple'
+    const qrOrderingMode = body?.qrOrderingMode === 'view_only'
+      ? 'view_only'
+      : body?.qrOrderingMode === 'disabled'
+        ? 'disabled'
+        : 'order'
 
     const missingFields: string[] = []
     if (!name) missingFields.push('name')
@@ -109,6 +116,7 @@ export async function POST(request: NextRequest) {
     }
 
     let finalRole = role === 'owner' ? 'owner' : 'admin'
+    let cloudAccountCreated = false
 
     if (isLocalFirstDesktopAuthBridgeEnabled()) {
       const cloudSignup = await mirrorSignupToCloud({ name, email, password, role })
@@ -131,9 +139,26 @@ export async function POST(request: NextRequest) {
           )
         }
       } else {
+        cloudAccountCreated = true
         const cloudRole = cloudSignup.body?.user?.role
         if (cloudRole === 'owner' || cloudRole === 'admin') finalRole = cloudRole
       }
+
+      const syncedUser = await syncLocalUserFromCloud(email, password)
+      if (!syncedUser) {
+        return NextResponse.json(
+          { error: 'Cloud signup succeeded, but the local desktop copy of this account could not be initialized.' },
+          { status: 503 },
+        )
+      }
+
+      return NextResponse.json(
+        {
+          message: cloudAccountCreated ? 'User created successfully' : 'User already exists and was linked successfully',
+          user: { id: syncedUser.id, name: syncedUser.name, email: syncedUser.email, role: syncedUser.role },
+        },
+        { status: cloudAccountCreated ? 201 : 200 },
+      )
     }
 
     const hashedPassword = await hash(password, 12)
@@ -145,10 +170,16 @@ export async function POST(request: NextRequest) {
         password: hashedPassword,
         role: finalRole,
         isActive: true,
+        trackingMode,
       },
     })
 
-    await ensureRestaurantForOwner(user.id)
+    const restaurant = await ensureRestaurantForOwner(user.id)
+
+    await prisma.restaurant.update({
+      where: { id: restaurant.id },
+      data: { qrOrderingMode },
+    })
 
     return NextResponse.json(
       {

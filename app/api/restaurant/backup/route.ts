@@ -7,6 +7,15 @@ import { hasBranchScopedBackupData } from '@/lib/backupUtils'
 
 export const dynamic = 'force-dynamic'
 
+const backupBranchPresentationSelect = {
+  id: true,
+  name: true,
+  code: true,
+  isMain: true,
+  isActive: true,
+  qrMenuHeroImageUrl: true,
+} as const
+
 // ── GET: export full data backup as JSON ──────────────────────────────────────
 export async function GET() {
   const session = await getServerSession(authOptions)
@@ -16,10 +25,14 @@ export async function GET() {
   const context = await getRestaurantContextForUser(userId)
   const restaurant = context?.restaurant ?? null
   const restaurantId = context?.restaurantId ?? null
-  const branch = context?.branch ?? null
   const branchId = context?.branchId ?? null
 
   if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant context' }, { status: 400 })
+
+  const branchPresentation = await prisma.branch.findUnique({
+    where: { id: branchId },
+    select: backupBranchPresentationSelect,
+  })
 
   const [
     orderItems,
@@ -39,7 +52,15 @@ export async function GET() {
   ] = await Promise.all([
     restaurant ? prisma.orderItem.findMany({ where: { order: { restaurantId: restaurant.id, branchId } } }) : Promise.resolve([]),
     restaurant ? prisma.restaurantOrder.findMany({ where: { restaurantId: restaurant.id, branchId } }) : Promise.resolve([]),
-    prisma.dish.findMany({ where: { restaurantId, branchId } }),
+    prisma.dish.findMany({
+      where: { restaurantId, branchId },
+      include: {
+        variants: {
+          where: { deletedAt: null },
+          orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        },
+      },
+    }),
     prisma.dishIngredient.findMany({ where: { dish: { restaurantId, branchId } } }),
     prisma.dishSale.findMany({ where: { restaurantId, branchId } }),
     prisma.dishSaleIngredient.findMany({ where: { dishSale: { restaurantId, branchId } } }),
@@ -54,7 +75,7 @@ export async function GET() {
   ])
 
   const backup = {
-    version: 7,
+    version: 8,
     exportedAt: new Date().toISOString(),
     restaurant: restaurant
       ? {
@@ -68,13 +89,14 @@ export async function GET() {
           updatedAt: restaurant.updatedAt,
         }
       : null,
-    branch: branch
+    branch: branchPresentation
       ? {
-          id: branch.id,
-          name: branch.name,
-          code: branch.code,
-          isMain: branch.isMain,
-          isActive: branch.isActive,
+          id: branchPresentation.id,
+          name: branchPresentation.name,
+          code: branchPresentation.code,
+          isMain: branchPresentation.isMain,
+          isActive: branchPresentation.isActive,
+          qrMenuHeroImageUrl: branchPresentation.qrMenuHeroImageUrl,
         }
       : null,
     tables,
@@ -153,6 +175,19 @@ export async function POST(req: Request) {
         })
       }
 
+      if (backup.branch && restaurant && restoreBranchId) {
+        await tx.branch.update({
+          where: { id: restoreBranchId },
+          data: {
+            name: backup.branch.name ?? undefined,
+            code: backup.branch.code ?? undefined,
+            isMain: typeof backup.branch.isMain === 'boolean' ? backup.branch.isMain : undefined,
+            isActive: typeof backup.branch.isActive === 'boolean' ? backup.branch.isActive : undefined,
+            qrMenuHeroImageUrl: backup.branch.qrMenuHeroImageUrl ?? undefined,
+          },
+        })
+      }
+
       // ── Tables ──
       if (restaurant) {
         for (const table of (backup.tables ?? [])) {
@@ -218,6 +253,8 @@ export async function POST(req: Request) {
             where: { id: item.id },
             update: {
               dishId: item.dishId,
+              dishVariantId: item.dishVariantId ?? null,
+              dishVariantName: item.dishVariantName ?? null,
               dishName: item.dishName,
               dishPrice: item.dishPrice,
               qty: item.qty,
@@ -231,6 +268,8 @@ export async function POST(req: Request) {
               id: item.id,
               orderId: item.orderId,
               dishId: item.dishId,
+              dishVariantId: item.dishVariantId ?? null,
+              dishVariantName: item.dishVariantName ?? null,
               dishName: item.dishName,
               dishPrice: item.dishPrice,
               qty: item.qty ?? 1,
@@ -262,8 +301,8 @@ export async function POST(req: Request) {
         for (const purchase of (backup.inventoryPurchases ?? [])) {
           await tx.inventoryPurchase.upsert({
             where: { id: purchase.id },
-            update: { restaurantId: rId, branchId: bId, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash' },
-            create: { id: purchase.id, restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, supplier: purchase.supplier ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash', purchasedAt: new Date(purchase.purchasedAt), createdAt: new Date(purchase.createdAt) },
+            update: { restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, batchId: purchase.batchId ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash' },
+            create: { id: purchase.id, restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, batchId: purchase.batchId ?? null, supplier: purchase.supplier ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash', purchasedAt: new Date(purchase.purchasedAt), createdAt: new Date(purchase.createdAt) },
           })
         }
 
@@ -289,9 +328,28 @@ export async function POST(req: Request) {
         for (const dish of (backup.dishes ?? [])) {
           await tx.dish.upsert({
             where: { id: dish.id },
-            update: { restaurantId: rId, branchId: bId, name: dish.name, sellingPrice: dish.sellingPrice, category: dish.category, isActive: dish.isActive },
-            create: { id: dish.id, restaurantId: rId, branchId: bId, name: dish.name, sellingPrice: dish.sellingPrice, category: dish.category ?? null, isActive: dish.isActive ?? true, createdAt: new Date(dish.createdAt), updatedAt: new Date(dish.updatedAt) },
+            update: { restaurantId: rId, branchId: bId, name: dish.name, sellingPrice: dish.sellingPrice, category: dish.category, menuType: dish.menuType ?? null, isActive: dish.isActive },
+            create: { id: dish.id, restaurantId: rId, branchId: bId, name: dish.name, sellingPrice: dish.sellingPrice, category: dish.category ?? null, menuType: dish.menuType ?? null, isActive: dish.isActive ?? true, createdAt: new Date(dish.createdAt), updatedAt: new Date(dish.updatedAt) },
           })
+
+          if (Array.isArray(dish.variants)) {
+            await tx.dishVariant.deleteMany({ where: { dishId: dish.id } })
+            if (dish.variants.length > 0) {
+              await tx.dishVariant.createMany({
+                data: dish.variants.map((variant: any, index: number) => ({
+                  id: variant.id,
+                  dishId: dish.id,
+                  name: variant.name,
+                  sellingPrice: variant.sellingPrice,
+                  sortOrder: variant.sortOrder ?? index,
+                  isActive: variant.isActive ?? true,
+                  createdAt: variant.createdAt ? new Date(variant.createdAt) : new Date(),
+                  updatedAt: variant.updatedAt ? new Date(variant.updatedAt) : new Date(),
+                  deletedAt: variant.deletedAt ? new Date(variant.deletedAt) : null,
+                })),
+              })
+            }
+          }
         }
 
         // ── Dish sales ──
@@ -300,8 +358,35 @@ export async function POST(req: Request) {
           if (!sale.orderId) { skippedDishSales += 1; continue }
           await tx.dishSale.upsert({
             where: { id: sale.id },
-            update: { restaurantId: rId, branchId: bId, orderId: sale.orderId, dishName: sale.dishName ?? sale.dishId ?? 'Unknown', quantitySold: sale.quantitySold, totalSaleAmount: sale.totalSaleAmount, calculatedFoodCost: sale.calculatedFoodCost },
-            create: { id: sale.id, restaurantId: rId, branchId: bId, orderId: sale.orderId, dishId: sale.dishId, dishName: sale.dishName ?? sale.dishId ?? 'Unknown', quantitySold: sale.quantitySold, saleDate: new Date(sale.saleDate), paymentMethod: sale.paymentMethod ?? 'Cash', totalSaleAmount: sale.totalSaleAmount, calculatedFoodCost: sale.calculatedFoodCost ?? 0, createdAt: new Date(sale.createdAt) },
+            update: {
+              restaurantId: rId,
+              branchId: bId,
+              orderId: sale.orderId,
+              orderItemId: sale.orderItemId ?? null,
+              dishVariantId: sale.dishVariantId ?? null,
+              dishVariantName: sale.dishVariantName ?? null,
+              dishName: sale.dishName ?? sale.dishId ?? 'Unknown',
+              quantitySold: sale.quantitySold,
+              totalSaleAmount: sale.totalSaleAmount,
+              calculatedFoodCost: sale.calculatedFoodCost,
+            },
+            create: {
+              id: sale.id,
+              restaurantId: rId,
+              branchId: bId,
+              orderId: sale.orderId,
+              orderItemId: sale.orderItemId ?? null,
+              dishId: sale.dishId,
+              dishVariantId: sale.dishVariantId ?? null,
+              dishVariantName: sale.dishVariantName ?? null,
+              dishName: sale.dishName ?? sale.dishId ?? 'Unknown',
+              quantitySold: sale.quantitySold,
+              saleDate: new Date(sale.saleDate),
+              paymentMethod: sale.paymentMethod ?? 'Cash',
+              totalSaleAmount: sale.totalSaleAmount,
+              calculatedFoodCost: sale.calculatedFoodCost ?? 0,
+              createdAt: new Date(sale.createdAt),
+            },
           })
           restoredDishSaleIds.add(sale.id)
         }

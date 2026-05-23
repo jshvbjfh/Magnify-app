@@ -341,6 +341,15 @@ function buildHistoryDateRows(activeTab: ReportTab, txs: any[] | null) {
   }))
 }
 
+function getTransactionFlow(tx: any): 'in' | 'out' {
+  if (tx.direction === 'in' || tx.direction === 'out') return tx.direction
+  return tx.type === 'credit' ? 'in' : 'out'
+}
+
+function usesCashSettlement(tx: any) {
+  return isCashEquivalentAccountName(tx.paymentMethod)
+}
+
 //  SHARED TABLE COMPONENT 
 
 function DataTable({ head, rows, foot }: { head: string[]; rows: (string|number)[][]; foot?: (string|number)[] }) {
@@ -455,9 +464,9 @@ function PayableTable({ txs }: { txs: any[] }) {
 }
 
 function CashFlowTable({ txs }: { txs: any[] }) {
-  const cash = txs.filter(t=>isCashEquivalentAccountName(t.account?.name))
-  const inflow  = cash.filter(t=>t.type==='debit').reduce((s,t)=>s+t.amount,0)
-  const outflow = cash.filter(t=>t.type==='credit').reduce((s,t)=>s+t.amount,0)
+  const cash = txs.filter(usesCashSettlement)
+  const inflow  = cash.filter(t=>getTransactionFlow(t)==='in').reduce((s,t)=>s+t.amount,0)
+  const outflow = cash.filter(t=>getTransactionFlow(t)==='out').reduce((s,t)=>s+t.amount,0)
   const net = inflow-outflow
   return (
     <>
@@ -476,7 +485,7 @@ function CashFlowTable({ txs }: { txs: any[] }) {
           <SectionTitle>Transaction Detail</SectionTitle>
           <DataTable
             head={['Date','Description','Flow','Amount (RWF)']}
-            rows={cash.map(t=>[t.date?.slice(0,10)??'',(t.description??'').slice(0,50),t.type==='debit'?'Inflow ':'Outflow ',fmt(t.amount)])}
+            rows={cash.map(t=>[t.date?.slice(0,10)??'',(t.description??'').slice(0,50),getTransactionFlow(t)==='in'?'Inflow ':'Outflow ',fmt(t.amount)])}
           />
         </>
       )}
@@ -992,12 +1001,12 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
 
       // 5. Cash Flow
       y=section('Cash Flow Statement',`Cash movements  ${label}`)
-      const cashTxs=txs.filter(t=>isCashEquivalentAccountName(t.account?.name))
-      const inf=cashTxs.filter(t=>t.type==='debit').reduce((s,t)=>s+t.amount,0)
-      const outf=cashTxs.filter(t=>t.type==='credit').reduce((s,t)=>s+t.amount,0)
+      const cashTxs=txs.filter(usesCashSettlement)
+      const inf=cashTxs.filter(t=>getTransactionFlow(t)==='in').reduce((s,t)=>s+t.amount,0)
+      const outf=cashTxs.filter(t=>getTransactionFlow(t)==='out').reduce((s,t)=>s+t.amount,0)
       autoTable(doc,{...td,startY:y,head:[['Cash Flow Summary','Amount (RWF)']],body:[['Total Cash Inflows',fmt(inf)],['Total Cash Outflows',fmt(outf)],['Net Cash Movement',fmt(inf-outf)]]})
       y=(doc as any).lastAutoTable.finalY+6
-      if(cashTxs.length>0){ y=sub('Transaction Detail',y); autoTable(doc,{...td,startY:y,head:[['Date','Description','Flow','Amount (RWF)']],body:cashTxs.map(t=>[t.date?.slice(0,10)??'',(t.description??'').slice(0,50),t.type==='debit'?'Inflow ':'Outflow ',fmt(t.amount)])}) }
+      if(cashTxs.length>0){ y=sub('Transaction Detail',y); autoTable(doc,{...td,startY:y,head:[['Date','Description','Flow','Amount (RWF)']],body:cashTxs.map(t=>[t.date?.slice(0,10)??'',(t.description??'').slice(0,50),getTransactionFlow(t)==='in'?'Inflow ':'Outflow ',fmt(t.amount)])}) }
 
       // 6. Balance Sheet
       y=section('Balance Sheet',`Account balances as of ${label}`)

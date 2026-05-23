@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { ensureMainBranchForRestaurant, normalizeLegacyAutoRestaurantName } from '@/lib/restaurantAccess'
 
+type PublicQrBranchPresentation = {
+  qrMenuHeroImageUrl?: string | null
+} | null
+
 export async function GET(req: Request, { params }: { params: Promise<{ restaurantId: string }> }) {
   const { restaurantId } = await params
 
@@ -11,6 +15,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
       id: true,
       name: true,
       ownerId: true,
+      qrOrderingMode: true,
       owner: { select: { name: true } },
     },
   })
@@ -33,21 +38,45 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
     resolvedBranchId = mainBranch?.id ?? null
   }
 
-  const dishes = await prisma.dish.findMany({
-    where: {
-      restaurantId: restaurant.id,
-      ...(resolvedBranchId ? { branchId: resolvedBranchId } : {}),
-      isActive: true,
-    },
-    select: { id: true, name: true, sellingPrice: true, category: true },
-    orderBy: [{ category: 'asc' }, { name: 'asc' }],
-  })
+  const [resolvedBranchRecord, dishes] = await Promise.all([
+    resolvedBranchId
+      ? prisma.branch.findUnique({ where: { id: resolvedBranchId } })
+      : Promise.resolve(null),
+    prisma.dish.findMany({
+      where: {
+        restaurantId: restaurant.id,
+        ...(resolvedBranchId ? { branchId: resolvedBranchId } : {}),
+        isActive: true,
+      },
+      select: {
+        id: true,
+        name: true,
+        sellingPrice: true,
+        category: true,
+        menuType: true,
+        description: true,
+        variants: {
+          where: { isActive: true, deletedAt: null },
+          select: { id: true, name: true, sellingPrice: true, sortOrder: true },
+          orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        },
+      },
+      orderBy: [{ menuType: 'asc' }, { category: 'asc' }, { name: 'asc' }],
+    }),
+  ])
+
+  const resolvedBranch = resolvedBranchRecord as PublicQrBranchPresentation
 
   return NextResponse.json({
     restaurant: {
       id: restaurant.id,
       name: normalizeLegacyAutoRestaurantName(restaurant.name, restaurant.owner?.name),
-      qrOrderingMode: 'order',
+      qrOrderingMode: restaurant.qrOrderingMode === 'view_only'
+        ? 'view_only'
+        : restaurant.qrOrderingMode === 'disabled'
+          ? 'disabled'
+          : 'order',
+      qrMenuHeroImageUrl: resolvedBranch?.qrMenuHeroImageUrl ?? null,
     },
     dishes,
   })

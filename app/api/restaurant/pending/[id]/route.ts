@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { ACTIVE_RESTAURANT_ORDER_STATUSES } from '@/lib/restaurantOrders'
 
 const VALID_STATUSES = ['new', 'in_kitchen', 'ready']
 
@@ -23,7 +24,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const { id } = await params
   const orderItem = await prisma.orderItem.findFirst({
-    where: { id, order: { restaurantId: context.restaurantId, branchId: context.branchId, status: 'PENDING' }, status: 'ACTIVE' },
+    where: { id, order: { restaurantId: context.restaurantId, branchId: context.branchId, status: { in: [...ACTIVE_RESTAURANT_ORDER_STATUSES] } }, status: 'ACTIVE' },
   })
   if (!orderItem) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
 

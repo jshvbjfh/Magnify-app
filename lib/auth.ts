@@ -66,30 +66,51 @@ async function attachLocalRestaurantFromCloud(
 ) {
   const ownerId = await ensureLocalRestaurantOwnerFromCloud(remoteRestaurant, user)
   const existingRestaurant = await findOwnedRestaurant(ownerId)
+  const normalizedJoinCode = String(remoteRestaurant.joinCode ?? '').trim().toUpperCase()
 
   const restaurantData = {
     ownerId,
     name: remoteRestaurant.name || 'My Restaurant',
     licenseActive: remoteRestaurant.licenseActive,
     licenseExpiry: remoteRestaurant.licenseExpiry ? new Date(remoteRestaurant.licenseExpiry) : null,
+    ...(remoteRestaurant.syncRestaurantId ? { syncRestaurantId: remoteRestaurant.syncRestaurantId } : {}),
   }
 
-  const restaurant = existingRestaurant
-    ? await prisma.restaurant.update({ where: { id: existingRestaurant.id }, data: restaurantData })
-    : await prisma.restaurant.create({
+  let restaurant
+
+  if (existingRestaurant) {
+    try {
+      restaurant = await prisma.restaurant.update({
+        where: { id: existingRestaurant.id },
         data: {
           ...restaurantData,
-          joinCode:
-            remoteRestaurant.joinCode ||
-            `SYNC${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+          ...(normalizedJoinCode ? { joinCode: normalizedJoinCode } : {}),
         },
       })
+    } catch (error) {
+      // If a stale local row already holds the cloud joinCode, keep the restaurant usable
+      // and let the explicit conflict be repaired separately instead of breaking sign-in.
+      restaurant = await prisma.restaurant.update({
+        where: { id: existingRestaurant.id },
+        data: restaurantData,
+      })
+    }
+  } else {
+    restaurant = await prisma.restaurant.create({
+      data: {
+        ...restaurantData,
+        joinCode:
+          normalizedJoinCode ||
+          `SYNC${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+      },
+    })
+  }
 
   await ensureMainBranchForRestaurant(restaurant.id)
   return restaurant
 }
 
-async function syncLocalUserFromCloud(email: string, password: string) {
+export async function syncLocalUserFromCloud(email: string, password: string) {
   if (!isLocalFirstDesktopAuthBridgeEnabled()) return null
 
   const remote = await verifyCloudCredentials(email, password)

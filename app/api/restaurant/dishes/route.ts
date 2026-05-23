@@ -3,7 +3,18 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { ensureMainBranchForRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { normalizeDishVariantPayload } from '@/lib/dishVariants'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
+
+const dishInclude = {
+  ingredients: {
+    include: { inventoryItem: true },
+  },
+  variants: {
+    where: { deletedAt: null },
+    orderBy: [{ sortOrder: 'asc' as const }, { createdAt: 'asc' as const }],
+  },
+}
 
 export async function GET() {
   const session = await getServerSession(authOptions)
@@ -22,11 +33,7 @@ export async function GET() {
 
   const dishes = await prisma.dish.findMany({
     where: { restaurantId, branchId, deletedAt: null },
-    include: {
-      ingredients: {
-        include: { inventoryItem: true },
-      },
-    },
+    include: dishInclude,
     orderBy: { createdAt: 'desc' },
   })
   return NextResponse.json(dishes)
@@ -53,20 +60,47 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'No branch configured for this restaurant. Contact support.' }, { status: 400 })
   }
 
-  const { name, sellingPrice, category } = await req.json()
+  const { name, sellingPrice, category, menuType, variants } = await req.json()
   if (!name || sellingPrice == null) {
     return NextResponse.json({ error: 'name and sellingPrice are required' }, { status: 400 })
   }
 
-  const dish = await prisma.dish.create({
-    data: {
-      restaurantId: context.restaurantId,
-      branchId: resolvedBranchId,
-      name,
-      sellingPrice: Number(sellingPrice),
-      category: category || null,
-    },
+  const normalizedVariants = normalizeDishVariantPayload(variants)
+
+  const dish = await prisma.$transaction(async (tx) => {
+    const createdDish = await tx.dish.create({
+      data: {
+        restaurantId: context.restaurantId,
+        branchId: resolvedBranchId,
+        name,
+        sellingPrice: Number(sellingPrice),
+        category: category || null,
+        menuType: menuType || null,
+      },
+    })
+
+    if (normalizedVariants.length > 0) {
+      await tx.dishVariant.createMany({
+        data: normalizedVariants.map((variant) => ({
+          ...(variant.id ? { id: variant.id } : {}),
+          dishId: createdDish.id,
+          name: variant.name,
+          sellingPrice: variant.sellingPrice,
+          sortOrder: variant.sortOrder,
+          isActive: variant.isActive,
+        })),
+      })
+    }
+
+    return tx.dish.findUnique({
+      where: { id: createdDish.id },
+      include: dishInclude,
+    })
   })
+
+  if (!dish) {
+    return NextResponse.json({ error: 'Failed to create dish' }, { status: 500 })
+  }
 
   await enqueueSyncChange(prisma, {
     restaurantId: context.restaurantId,

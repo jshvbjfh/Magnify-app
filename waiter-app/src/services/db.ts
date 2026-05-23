@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS dishes (
   name TEXT NOT NULL,
   selling_price REAL NOT NULL,
   category TEXT,
+  menu_type TEXT,
   is_active INTEGER DEFAULT 1,
   branch_id TEXT,
   restaurant_id TEXT
@@ -95,8 +96,10 @@ CREATE TABLE IF NOT EXISTS cancellation_approvers (
 );
 `,
   },
-  // To add a migration, append a new entry here:
-  // { version: 2, sql: 'ALTER TABLE orders ADD COLUMN kitchen_note TEXT;' },
+  {
+    version: 2,
+    sql: 'ALTER TABLE dishes ADD COLUMN menu_type TEXT;',
+  },
 ]
 
 export async function initDB(): Promise<void> {
@@ -216,6 +219,7 @@ export interface Dish {
   name: string
   selling_price: number
   category: string | null
+  menu_type: string | null
   is_active: number
   branch_id: string | null
   restaurant_id: string | null
@@ -243,8 +247,8 @@ export async function replaceDishes(dishes: Dish[]): Promise<void> {
       { statement: 'BEGIN', values: [] },
       { statement: 'DELETE FROM dishes WHERE branch_id = ?', values: [pullBranchId] },
       ...dishes.map(dish => ({
-        statement: 'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        values: [dish.id, dish.name, dish.selling_price, dish.category, dish.is_active ? 1 : 0, dish.branch_id, dish.restaurant_id],
+        statement: 'INSERT INTO dishes (id, name, selling_price, category, menu_type, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        values: [dish.id, dish.name, dish.selling_price, dish.category, dish.menu_type, dish.is_active ? 1 : 0, dish.branch_id, dish.restaurant_id],
       })),
       { statement: 'COMMIT', values: [] },
     ])
@@ -254,8 +258,8 @@ export async function replaceDishes(dishes: Dish[]): Promise<void> {
       { statement: 'BEGIN', values: [] },
       { statement: 'DELETE FROM dishes', values: [] },
       ...dishes.map(dish => ({
-        statement: 'INSERT INTO dishes (id, name, selling_price, category, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        values: [dish.id, dish.name, dish.selling_price, dish.category, dish.is_active ? 1 : 0, dish.branch_id, dish.restaurant_id],
+        statement: 'INSERT INTO dishes (id, name, selling_price, category, menu_type, is_active, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        values: [dish.id, dish.name, dish.selling_price, dish.category, dish.menu_type, dish.is_active ? 1 : 0, dish.branch_id, dish.restaurant_id],
       })),
       { statement: 'COMMIT', values: [] },
     ])
