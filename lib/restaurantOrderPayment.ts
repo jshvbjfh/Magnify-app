@@ -32,6 +32,7 @@ export async function finalizeRestaurantOrderPayment(
     sourceDeviceId?: string | null
     orderId: string
     paymentMethod?: string | null
+    arCustomerName?: string | null
     paidAt?: Date
   },
 ) {
@@ -100,6 +101,7 @@ export async function finalizeRestaurantOrderPayment(
       status: 'PAID',
       paymentMethod: normalizedPaymentMethod,
       paidAt,
+      ...(params.arCustomerName ? { arCustomerName: params.arCustomerName } : {}),
       canceledAt: null,
       cancelReason: null,
     },

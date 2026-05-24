@@ -68,7 +68,18 @@ type RestaurantOrdersSnapshot = {
   billHeader?: string
 }
 
-const PAY_METHODS  = ['Cash', 'MoMo', 'Card', 'Bank Transfer']
+const PAY_METHODS  = ['Cash', 'MoMo', 'Card', 'Bank Transfer', 'Credit']
+const AR_COLLECT_METHODS = ['Cash', 'Bank Transfer', 'MoMo']
+
+type ArOrder = {
+  id: string
+  orderNumber: string
+  tableName: string | null
+  totalAmount: number
+  paidAt: string | null
+  arCustomerName: string | null
+  arCollectedAt: string | null
+}
 const VAT_RATE     = 0.18
 const COLOR_POOL   = [
   ['bg-rose-400',    'text-white', 'bg-rose-700'],
@@ -146,7 +157,14 @@ export default function RestaurantOrders({
   // Payment state
   const [payingTableKey, setPayingTableKey] = useState<string | null>(null)
   const [payMethod,      setPayMethod]      = useState('Cash')
+  const [arCustomerName, setArCustomerName] = useState('')
   const [payingSaving,   setPayingSaving]   = useState(false)
+  // A/R state
+  const [arOrders,       setArOrders]       = useState<ArOrder[]>([])
+  const [arCollectingId, setArCollectingId] = useState<string | null>(null)
+  const [arCollectMethod,setArCollectMethod]= useState('Cash')
+  const [arCollecting,   setArCollecting]   = useState(false)
+  const [arError,        setArError]        = useState<string | null>(null)
   const [confirmingOrder, setConfirmingOrder] = useState(false)
   const [submitError,    setSubmitError]    = useState<string | null>(null)
   // When true: show empty build-mode panel even if confirmed orders exist
@@ -243,6 +261,14 @@ export default function RestaurantOrders({
     } catch {}
     setLoading(false)
   }, [persistSnapshot, sales.length])
+
+  const loadArOrders = useCallback(async () => {
+    try {
+      const res = await fetch('/api/restaurant/orders/ar', { credentials: 'include' })
+      const data = await res.json()
+      setArOrders(Array.isArray(data) ? data : [])
+    } catch {}
+  }, [])
 
   const loadOrders = useCallback(async () => {
     try {
@@ -352,7 +378,7 @@ export default function RestaurantOrders({
       }
     }
 
-    loadTables(); loadPending(); loadSales()
+    loadTables(); loadPending(); loadSales(); loadArOrders()
     fetch('/api/restaurant/setup', { credentials: 'include' })
       .then(r => r.json())
       .then(data => {
@@ -833,13 +859,13 @@ ${headerLines}
     try {
       const res = await fetch(`/api/restaurant/orders/${orderId}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-        body: JSON.stringify({ action: 'pay', paymentMethod: payMethod, actionKey })
+        body: JSON.stringify({ action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, actionKey })
       })
       if (!res.ok) {
         const payload = await res.json().catch(() => null)
         throw new Error(payload?.error || 'Payment failed.')
       }
-      await Promise.all([loadPending(), loadSales(), loadTables()])
+      await Promise.all([loadPending(), loadSales(), loadTables(), loadArOrders()])
       window.dispatchEvent(new CustomEvent('refreshTables'))
       window.dispatchEvent(new CustomEvent('refreshInventory', {
         detail: { source: 'restaurant_order_payment' },
@@ -847,7 +873,7 @@ ${headerLines}
       window.dispatchEvent(new CustomEvent('refreshTransactions', {
         detail: { count: 2, source: 'restaurant_order_payment' }
       }))
-      setPayingTableKey(null); setPayMethod('Cash')
+      setPayingTableKey(null); setPayMethod('Cash'); setArCustomerName('')
     } catch (error) {
       if ((typeof navigator !== 'undefined' && navigator.onLine === false) || isLikelyOfflineError(error)) {
         await queueLifecycleActionOffline({
@@ -860,7 +886,7 @@ ${headerLines}
           request: {
             url: `/api/restaurant/orders/${orderId}`,
             method: 'PATCH',
-            body: { action: 'pay', paymentMethod: payMethod, actionKey },
+            body: { action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, actionKey },
           },
           projection: {
             type: 'remove-order',
@@ -875,6 +901,31 @@ ${headerLines}
     } finally {
       paymentLockRef.current = false
       setPayingSaving(false)
+    }
+  }
+
+  async function collectArReceivable(orderId: string) {
+    setArCollecting(true)
+    setArError(null)
+    try {
+      const res = await fetch(`/api/restaurant/orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ action: 'collect-ar', paymentMethod: arCollectMethod }),
+      })
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null)
+        setArError(payload?.error || 'Collection failed.')
+        return
+      }
+      setArOrders(current => current.filter(o => o.id !== orderId))
+      setArCollectingId(null)
+      window.dispatchEvent(new CustomEvent('refreshTransactions'))
+    } catch (error) {
+      setArError(error instanceof Error ? error.message : 'Collection failed.')
+    } finally {
+      setArCollecting(false)
     }
   }
 
@@ -994,16 +1045,28 @@ ${headerLines}
             <label className="text-xs font-semibold text-gray-600 mb-2 block">Payment Method</label>
             <div className="grid grid-cols-2 gap-2">
               {PAY_METHODS.map(m => (
-                <button key={m} type="button" onClick={() => setPayMethod(m)}
-                  className={`py-2.5 rounded-lg text-sm font-medium border transition-all ${payMethod === m ? 'bg-green-500 text-white border-green-500' : 'bg-white text-gray-700 border-gray-300 hover:border-green-400'}`}>
+                <button key={m} type="button" onClick={() => { setPayMethod(m); if (m !== 'Credit') setArCustomerName('') }}
+                  className={`py-2.5 rounded-lg text-sm font-medium border transition-all ${payMethod === m ? (m === 'Credit' ? 'bg-amber-500 text-white border-amber-500' : 'bg-green-500 text-white border-green-500') : 'bg-white text-gray-700 border-gray-300 hover:border-green-400'}`}>
                   {m}
                 </button>
               ))}
             </div>
           </div>
+          {payMethod === 'Credit' && (
+            <div>
+              <label className="text-xs font-semibold text-gray-600 mb-1.5 block">Customer / Account Name <span className="text-red-500">*</span></label>
+              <input
+                value={arCustomerName}
+                onChange={e => setArCustomerName(e.target.value)}
+                placeholder="e.g. Acme Corp, John Doe…"
+                className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-amber-300 ${!arCustomerName.trim() ? 'border-red-300' : 'border-gray-300'}`}
+              />
+              <p className="mt-1 text-xs text-amber-700">Credit sale records as Accounts Receivable. You can collect later.</p>
+            </div>
+          )}
           <div className="flex gap-2 pt-1">
             <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2.5 rounded-xl hover:bg-gray-50">Cancel</button>
-            <button onClick={() => collectPayment(tableKey)} disabled={payingSaving}
+            <button onClick={() => collectPayment(tableKey)} disabled={payingSaving || (payMethod === 'Credit' && !arCustomerName.trim())}
               className="flex-1 bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl">
               {payingSaving ? 'Processing…' : `Confirm ${payMethod}`}
             </button>
@@ -1103,7 +1166,76 @@ ${headerLines}
             })}
           </div>
         )}
-        {payingTableKey && <PayModal tableKey={payingTableKey} onClose={() => { setPayingTableKey(null); setPayMethod('Cash') }} />}
+        {payingTableKey && <PayModal tableKey={payingTableKey} onClose={() => { setPayingTableKey(null); setPayMethod('Cash'); setArCustomerName('') }} />}
+
+        {/* ── ACCOUNTS RECEIVABLE PANEL ── */}
+        {arOrders.length > 0 && (
+          <div className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-amber-100 bg-amber-50 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-amber-900 text-sm">Accounts Receivable</h3>
+                <p className="text-xs text-amber-700 mt-0.5">Credit sales awaiting cash collection</p>
+              </div>
+              <span className="text-xs font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
+                {arOrders.length} outstanding · {fmtRWF(arOrders.reduce((s, o) => s + o.totalAmount, 0))} RWF
+              </span>
+            </div>
+            {arError && (
+              <div className="px-4 py-2 text-xs text-red-600 bg-red-50 border-b border-red-100">{arError}</div>
+            )}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[560px]">
+                <thead>
+                  <tr className="border-b border-gray-100 text-xs text-gray-500">
+                    <th className="px-4 py-2 text-left font-medium">Customer</th>
+                    <th className="px-4 py-2 text-left font-medium">Order</th>
+                    <th className="px-4 py-2 text-left font-medium">Date</th>
+                    <th className="px-4 py-2 text-right font-medium">Amount</th>
+                    <th className="px-4 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {arOrders.map(order => (
+                    <tr key={order.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3 font-medium text-gray-900">{order.arCustomerName || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">
+                        <p>{order.orderNumber}</p>
+                        {order.tableName && <p className="text-gray-400">{order.tableName}</p>}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-gray-500">
+                        {order.paidAt ? new Date(order.paidAt).toLocaleDateString('en-RW', { day: '2-digit', month: 'short' }) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold text-gray-900">{fmtRWF(order.totalAmount)} RWF</td>
+                      <td className="px-4 py-3">
+                        {arCollectingId === order.id ? (
+                          <div className="flex items-center gap-2">
+                            <select value={arCollectMethod} onChange={e => setArCollectMethod(e.target.value)}
+                              className="rounded border border-gray-200 px-2 py-1 text-xs bg-white outline-none focus:ring-2 focus:ring-orange-400">
+                              {AR_COLLECT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                            </select>
+                            <button onClick={() => void collectArReceivable(order.id)} disabled={arCollecting}
+                              className="rounded bg-green-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-50 transition-colors">
+                              Confirm
+                            </button>
+                            <button onClick={() => { setArCollectingId(null); setArError(null) }} disabled={arCollecting}
+                              className="rounded border border-gray-200 px-2.5 py-1 text-xs text-gray-500 hover:bg-gray-50 disabled:opacity-50 transition-colors">
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button onClick={() => { setArCollectingId(order.id); setArCollectMethod('Cash'); setArError(null) }}
+                            className="rounded-md bg-orange-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">
+                            Collect?
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     )
   }

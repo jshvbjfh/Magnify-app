@@ -32,6 +32,7 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [pasteUrl, setPasteUrl] = useState('')
 
   useEffect(() => {
     setQrMenuItems(menuItems)
@@ -229,6 +230,38 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
               Best results: a wide image with strong contrast, sized for mobile first. PNG and JPG work well. Maximum 10MB.
             </p>
           </div>
+
+          <div className="rounded-2xl border border-gray-200 bg-gray-50/60 p-4 space-y-2">
+            <p className="text-xs font-semibold text-gray-700">Or paste a public image URL</p>
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={pasteUrl}
+                onChange={e => setPasteUrl(e.target.value)}
+                placeholder="https://example.com/your-image.jpg"
+                className="flex-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-orange-300"
+              />
+              <button
+                type="button"
+                disabled={!pasteUrl.trim().startsWith('https://') || saving}
+                onClick={() => { void persistQrMenuHeroImage(pasteUrl.trim()); setPasteUrl('') }}
+                className="rounded-xl border border-orange-200 bg-white px-3 py-2 text-xs font-semibold text-orange-600 hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Use URL
+              </button>
+            </div>
+            <p className="text-[11px] text-gray-400">Upload to Imgur or any public host, then paste the direct image link here. Must start with https://</p>
+          </div>
+
+          {qrMenuHeroImageUrl && !qrMenuHeroImageUrl.startsWith('https://') && (
+            <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
+              <div>
+                <p className="font-semibold">Image only visible locally</p>
+                <p className="mt-0.5 text-xs">This image was uploaded on your local machine and won&apos;t appear on the live Vercel QR page. Upload a new image from the live manager portal, or paste a public HTTPS image URL above.</p>
+              </div>
+            </div>
+          )}
 
           {error ? (
             <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

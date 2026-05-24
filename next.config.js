@@ -5,14 +5,10 @@ const nextConfig = {
 
   images: {
     remotePatterns: [
-      // Vercel Blob CDN — used for QR menu hero images in production
+      // Allow any public HTTPS image (Vercel Blob, Imgur, Cloudinary, etc.)
       {
         protocol: 'https',
-        hostname: '**.vercel-storage.com',
-      },
-      {
-        protocol: 'https',
-        hostname: '**.public.blob.vercel-storage.com',
+        hostname: '**',
       },
     ],
   },

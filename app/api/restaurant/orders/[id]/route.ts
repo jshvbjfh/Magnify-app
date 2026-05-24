@@ -44,7 +44,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const branchId = context.branchId
 
   const { id } = await params
-  const { action, cancelReason, paymentMethod, supervisorPin, actionKey } = await req.json()
+  const { action, cancelReason, paymentMethod, customerName, supervisorPin, actionKey } = await req.json()
   const normalizedActionKey = normalizeRestaurantActionKey(actionKey)
 
   const order = await prisma.restaurantOrder.findFirst({
@@ -112,6 +112,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
           branchId,
           orderId: id,
           paymentMethod: normalizedPaymentMethod,
+          arCustomerName: customerName || null,
         })
 
         if (normalizedActionKey) {
@@ -136,6 +137,55 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         return buildStockShortageResponse(error)
       }
 
+      if (!normalizedActionKey || !isRestaurantActionConflict(error)) throw error
+      return (await resolveDuplicateActionResponse()) ?? NextResponse.json(order)
+    }
+  }
+
+  if (action === 'collect-ar') {
+    if (order.status !== 'PAID' || order.paymentMethod !== 'Credit') {
+      return NextResponse.json({ error: 'Order is not an outstanding credit sale' }, { status: 400 })
+    }
+    if (order.arCollectedAt) {
+      return NextResponse.json({ error: 'This receivable has already been collected' }, { status: 409 })
+    }
+
+    const collectPaymentMethod = paymentMethod || 'Cash'
+    try {
+      const updated = await prisma.$transaction(async (tx) => {
+        const { ensureCoreCategories, ensureAccount, resolveSettlementAccount } = await import('@/lib/accounting')
+        const categories = await ensureCoreCategories(tx, restaurantId)
+        const arAccount = await ensureAccount(tx, {
+          restaurantId, name: 'Accounts Receivable', type: 'asset',
+          categoryId: categories.asset.id, code: '1200',
+        })
+        const { account: cashAccount } = await resolveSettlementAccount(tx, collectPaymentMethod, 'out', categories, restaurantId)
+
+        await tx.journalEntry.create({
+          data: {
+            restaurantId,
+            branchId,
+            description: `A/R Collected: Order ${order.orderNumber}${order.arCustomerName ? ` (${order.arCustomerName})` : ''} via ${collectPaymentMethod}`,
+            reference: `AR-${order.id.slice(-8).toUpperCase()}`,
+            entryDate: new Date(),
+            lines: {
+              create: [
+                { accountId: cashAccount.id, debit: order.totalAmount, credit: 0, description: `Collect A/R: Order ${order.orderNumber}` },
+                { accountId: arAccount.id, debit: 0, credit: order.totalAmount, description: `Clear A/R: ${order.arCustomerName || 'customer'}` },
+              ],
+            },
+          },
+        })
+
+        return tx.restaurantOrder.update({
+          where: { id },
+          data: { arCollectedAt: new Date() },
+          include: { items: { where: { status: 'ACTIVE' } } },
+        })
+      }, ORDER_TRANSACTION_OPTIONS)
+
+      return NextResponse.json(updated)
+    } catch (error) {
       if (!normalizedActionKey || !isRestaurantActionConflict(error)) throw error
       return (await resolveDuplicateActionResponse()) ?? NextResponse.json(order)
     }

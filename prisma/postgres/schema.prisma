@@ -206,6 +206,10 @@ model RestaurantOrder {
   updatedAt      DateTime         @updatedAt
   deletedAt      DateTime?
 
+  // Accounts Receivable: customer name when paid on credit, and when the A/R was collected in cash
+  arCustomerName String?
+  arCollectedAt  DateTime?
+
   // Linked to the accounting entry created when this order is paid
   journalEntryId String?
   journalEntry   JournalEntry?    @relation(fields: [journalEntryId], references: [id])
