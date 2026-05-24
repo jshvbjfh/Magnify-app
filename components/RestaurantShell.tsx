@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Image from 'next/image'
-import { LayoutDashboard, UtensilsCrossed, Layout, ClipboardList, ChefHat, Package, BarChart3, Users, LogOut, Sparkles, Bell, X, ArrowLeftRight, BrainCircuit, Settings, Radio, Menu, RefreshCw, Plus } from 'lucide-react'
+import { LayoutDashboard, UtensilsCrossed, Layout, ClipboardList, ChefHat, Package, BarChart3, Users, LogOut, Sparkles, Bell, X, ArrowLeftRight, BrainCircuit, Settings, Radio, Menu, RefreshCw, Plus, Edit2 } from 'lucide-react'
 import { signOut, useSession, signIn } from 'next-auth/react'
 import AIChat from '@/components/AIChat'
 import RestaurantDashboard from '@/components/restaurant/RestaurantDashboard'
@@ -101,6 +101,9 @@ export default function RestaurantShell() {
   const [branchCreateOpen, setBranchCreateOpen] = useState(false)
   const [branchCreating, setBranchCreating] = useState(false)
   const [branchForm, setBranchForm] = useState({ name: '', code: '' })
+  const [branchEditId, setBranchEditId] = useState<string | null>(null)
+  const [branchEditForm, setBranchEditForm] = useState({ name: '', code: '' })
+  const [branchEditing, setBranchEditing] = useState(false)
 
   const userRole = (session?.user as any)?.role
 
@@ -232,6 +235,36 @@ export default function RestaurantShell() {
       setBranchError(error instanceof Error ? error.message : 'Failed to create branch')
     } finally {
       setBranchCreating(false)
+    }
+  }
+
+  const handleBranchEdit = async () => {
+    const name = branchEditForm.name.trim()
+    const code = branchEditForm.code.trim()
+    if (!name || !branchEditId || branchEditing) return
+
+    setBranchEditing(true)
+    setBranchError(null)
+
+    try {
+      const res = await fetch(`/api/restaurant/branches/${branchEditId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name, code: code || undefined }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error || 'Failed to update branch')
+
+      const nextBranches = Array.isArray(data?.branches) ? data.branches : branches
+      setBranches(nextBranches)
+      setBranchEditId(null)
+      setBranchNotice(`"${name}" updated.`)
+      window.dispatchEvent(new CustomEvent('branchNameChanged', { detail: { branches: nextBranches } }))
+    } catch (error) {
+      setBranchError(error instanceof Error ? error.message : 'Failed to update branch')
+    } finally {
+      setBranchEditing(false)
     }
   }
 
@@ -376,7 +409,7 @@ export default function RestaurantShell() {
   return (
     <div className="min-h-screen bg-gray-50 flex overflow-x-hidden">
       <RestaurantCloudSync key={activeBranchId ?? 'no-branch'} />
-      {/* â”€â”€ Mobile backdrop â”€â”€ */}
+      {/* Mobile backdrop */}
       {sidebarOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/50 lg:hidden"
@@ -522,21 +555,36 @@ export default function RestaurantShell() {
                     const isSwitching = branch.id === branchSwitchingId
 
                     return (
-                      <button
-                        key={branch.id}
-                        onClick={() => void handleBranchSelect(branch.id)}
-                        disabled={isSwitching || isActive}
-                        className={`min-w-[10rem] rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${isActive ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100'}`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-sm font-semibold">{branch.name}</span>
-                          {isSwitching ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : null}
-                        </div>
-                        <div className="mt-1 flex items-center gap-2 text-[11px] text-gray-500">
-                          <span className="truncate">{branch.code}</span>
-                          {branch.isMain ? <span className="rounded-full bg-white px-1.5 py-0.5">Main</span> : null}
-                        </div>
-                      </button>
+                      <div key={branch.id} className="relative group flex-shrink-0">
+                        <button
+                          onClick={() => void handleBranchSelect(branch.id)}
+                          disabled={isSwitching || isActive}
+                          className={`min-w-[10rem] rounded-xl border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${isActive ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100'}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-sm font-semibold">{branch.name}</span>
+                            {isSwitching ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : null}
+                          </div>
+                          <div className="mt-1 flex items-center gap-2 text-[11px] text-gray-500">
+                            <span className="truncate">{branch.code}</span>
+                            {branch.isMain ? <span className="rounded-full bg-white px-1.5 py-0.5">Main</span> : null}
+                          </div>
+                        </button>
+                        {/* Edit pencil — visible on hover or when active */}
+                        <button
+                          type="button"
+                          title="Rename branch"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setBranchEditId(branch.id)
+                            setBranchEditForm({ name: branch.name, code: branch.code })
+                            setBranchError(null)
+                          }}
+                          className="absolute -top-1.5 -right-1.5 h-6 w-6 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-gray-400 hover:text-orange-500 hover:border-orange-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <Edit2 className="h-3 w-3" />
+                        </button>
+                      </div>
                     )
                   }).concat(
                     <button
@@ -614,7 +662,7 @@ export default function RestaurantShell() {
                     <input
                       value={branchForm.name}
                       onChange={(event) => setBranchForm((current) => ({ ...current, name: event.target.value }))}
-                      placeholder="Kigali Downtown"
+                      placeholder="e.g. BBQ, Bar, Lounge, Bakery"
                       className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
                       disabled={branchCreating}
                     />
@@ -625,7 +673,7 @@ export default function RestaurantShell() {
                     <input
                       value={branchForm.code}
                       onChange={(event) => setBranchForm((current) => ({ ...current, code: event.target.value.toUpperCase() }))}
-                      placeholder="KGLDT"
+                      placeholder="e.g. BBQ"
                       className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
                       disabled={branchCreating}
                     />
@@ -658,7 +706,53 @@ export default function RestaurantShell() {
             </div>
           ) : null}
 
-          {/* Jesse AI Modal â€” centered like a dialog */}
+          {/* Branch edit modal */}
+          {branchEditId ? (
+            <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-black/40" onClick={() => { if (!branchEditing) setBranchEditId(null) }} />
+              <div className="relative w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-5 shadow-2xl">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-lg font-bold text-gray-900">Rename branch</p>
+                  <button type="button" onClick={() => setBranchEditId(null)} className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"><X className="h-4 w-4" /></button>
+                </div>
+                <div className="mt-4 space-y-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Branch name</label>
+                    <input
+                      value={branchEditForm.name}
+                      onChange={(e) => setBranchEditForm(f => ({ ...f, name: e.target.value }))}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void handleBranchEdit() }}
+                      placeholder="e.g. BBQ, Bar, Lounge"
+                      className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+                      disabled={branchEditing}
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Code (optional)</label>
+                    <input
+                      value={branchEditForm.code}
+                      onChange={(e) => setBranchEditForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void handleBranchEdit() }}
+                      placeholder="e.g. BBQ"
+                      className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
+                      disabled={branchEditing}
+                    />
+                  </div>
+                  {branchError ? <p className="text-sm text-red-600">{branchError}</p> : null}
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button type="button" onClick={() => setBranchEditId(null)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50" disabled={branchEditing}>Cancel</button>
+                    <button type="button" onClick={() => void handleBranchEdit()} className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-70" disabled={branchEditing}>
+                      {branchEditing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Edit2 className="h-4 w-4" />}
+                      <span>{branchEditing ? 'Saving…' : 'Save'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {/* Jesse AI Modal */}
           {showJesse && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
               <div className="absolute inset-0 bg-black/50" onClick={() => setShowJesse(false)} />
@@ -682,7 +776,7 @@ export default function RestaurantShell() {
             </div>
           )}
           <RestaurantBranchProvider value={restaurantBranchContextValue}>
-            <div key={`${activeTab}:${activeBranchId ?? 'no-branch'}`}>
+            <div key={activeBranchId ?? 'no-branch'}>
               {renderActiveTab()}
             </div>
           </RestaurantBranchProvider>

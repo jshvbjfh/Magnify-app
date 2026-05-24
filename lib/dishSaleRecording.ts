@@ -28,18 +28,6 @@ function roundQuantity(value: number) {
   return Math.round(value * 1000) / 1000
 }
 
-function buildRestaurantScopedDishWhere(params: {
-  requestedDishIds: string[]
-  restaurantId: string
-  branchId: string
-}): Prisma.DishWhereInput {
-  return {
-    id: { in: params.requestedDishIds },
-    restaurantId: params.restaurantId,
-    branchId: params.branchId,
-  }
-}
-
 export async function recordDishSalesForPaidOrder(
   db: PrismaDb,
   params: {
@@ -56,12 +44,13 @@ export async function recordDishSalesForPaidOrder(
 
   const fifoEnabled = getRestaurantFifoEnabled()
   const requestedDishIds = Array.from(new Set(params.items.map((item) => item.dishId)))
+  // Look up dishes across ALL branches by restaurantId — each dish carries its own branchId.
+  // Do NOT filter by params.branchId here: an order can contain dishes from multiple branches.
   const dishes = await db.dish.findMany({
-    where: buildRestaurantScopedDishWhere({
-      requestedDishIds,
+    where: {
+      id: { in: requestedDishIds },
       restaurantId: params.restaurantId,
-      branchId: params.branchId,
-    }),
+    },
     include: {
       ingredients: {
         include: {
@@ -101,11 +90,15 @@ export async function recordDishSalesForPaidOrder(
       if (existingSale) continue
     }
 
+    // Use the dish's own branchId so sales are always attributed to the owning branch,
+    // even when the order was created under a different branch (cross-branch ordering).
+    const dishBranchId = dish.branchId ?? params.branchId
+
     const totalSaleAmount = Number(item.dishPrice) * quantitySold
     const dishSale = await db.dishSale.create({
       data: {
         restaurantId: params.restaurantId,
-        branchId: params.branchId,
+        branchId: dishBranchId,
         orderId: params.orderId ?? null,
         orderItemId: item.orderItemId ?? null,
         dishId: item.dishId,
@@ -134,7 +127,7 @@ export async function recordDishSalesForPaidOrder(
       try {
         const consumption = await consumeIngredientStock(db, {
           restaurantId: params.restaurantId,
-          branchId: params.branchId,
+          branchId: dishBranchId,
           ingredientId: row.inventoryItemId,
           quantity: totalNeeded,
           fifoEnabled,
@@ -195,7 +188,7 @@ export async function recordDishSalesForPaidOrder(
 
     await enqueueSyncChange(db, {
       restaurantId: params.restaurantId,
-      branchId: params.branchId,
+      branchId: dishBranchId,
       entityType: 'dishSale',
       entityId: updatedDishSale.id,
       operation: 'upsert',
@@ -225,11 +218,7 @@ export async function recordDishWasteForOrderItems(
   const fifoEnabled = getRestaurantFifoEnabled()
   const requestedDishIds = Array.from(new Set(params.items.map((item) => item.dishId)))
   const dishes = await db.dish.findMany({
-    where: buildRestaurantScopedDishWhere({
-      requestedDishIds,
-      restaurantId: params.restaurantId,
-      branchId: params.branchId,
-    }),
+    where: { id: { in: requestedDishIds }, restaurantId: params.restaurantId },
     include: {
       ingredients: {
         include: {

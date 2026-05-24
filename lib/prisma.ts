@@ -1,5 +1,7 @@
 import { Prisma, PrismaClient } from '@prisma/client'
 
+import { buildPrismaClientOptions } from '@/lib/prismaConfig'
+
 declare global {
   // eslint-disable-next-line no-var
   var prisma: PrismaClient | undefined
@@ -72,7 +74,7 @@ function attachConnectionRetry(client: PrismaClient) {
     try {
       return await next(params)
     } catch (error) {
-      if (!isTransientConnectionError(error)) {
+      if (params.runInTransaction || !isTransientConnectionError(error)) {
         throw error
       }
 
@@ -87,7 +89,7 @@ function attachConnectionRetry(client: PrismaClient) {
   })
 }
 
-const prismaClient = global.prisma ?? new PrismaClient()
+const prismaClient = global.prisma ?? new PrismaClient(buildPrismaClientOptions())
 
 if (!global.prismaConnectionRetryAttached) {
   attachConnectionRetry(prismaClient)

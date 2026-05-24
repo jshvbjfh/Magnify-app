@@ -10,7 +10,7 @@ import { toUsageQuantity, toUsageUnitCost, normalizeUnitsPerPurchaseUnit } from 
 import type { Prisma } from '@prisma/client'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
-const INVENTORY_TRANSACTION_OPTIONS = { maxWait: 10000, timeout: 20000 } as const
+const INVENTORY_TRANSACTION_OPTIONS = { maxWait: 15000, timeout: 60000 } as const
 
 type ResolvedInventoryIngredient = {
   id: string
@@ -226,7 +226,7 @@ export async function POST(req: Request) {
     const totalCost = quantityPurchased * unitCost
     const normalizedPaymentMethod = typeof paymentMethod === 'string' && paymentMethod.trim() ? paymentMethod.trim() : 'Cash'
 
-    const purchase = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const ingredient = await resolveInventoryIngredient(tx, {
         restaurantId,
         branchId,
@@ -269,6 +269,18 @@ export async function POST(req: Request) {
         },
       })
 
+      const hydratedPurchase = await tx.inventoryPurchase.findUnique({
+        where: { id: createdPurchase.id },
+        include: {
+          ingredient: {
+            select: {
+              name: true,
+              unit: true,
+            },
+          },
+        },
+      })
+
       await tx.inventoryItem.update({
         where: { id: ingredient.id },
         data: { quantity: { increment: quantityPurchased } },
@@ -280,10 +292,13 @@ export async function POST(req: Request) {
       await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryPurchase', entityId: createdPurchase.id, operation: 'upsert', payload: createdPurchase })
       await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryItem', entityId: updatedIngredient.id, operation: 'upsert', payload: updatedIngredient })
 
-      return createdPurchase
+      return {
+        purchase: hydratedPurchase ?? createdPurchase,
+        ingredient: updatedIngredient,
+      }
     }, INVENTORY_TRANSACTION_OPTIONS)
 
-    return NextResponse.json({ purchase, totalCost, batchId: normalizedBatchId }, { status: 201 })
+    return NextResponse.json({ purchase: result.purchase, ingredient: result.ingredient, totalCost, batchId: normalizedBatchId }, { status: 201 })
   } catch (error: any) {
     console.error('Failed to record inventory purchase:', error)
     const status = ['Ingredient not found', 'itemName is required', 'unit is required when recording a new item'].includes(error?.message)

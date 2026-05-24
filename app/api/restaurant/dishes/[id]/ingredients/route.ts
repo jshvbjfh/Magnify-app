@@ -53,6 +53,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     create: { dishId: id, inventoryItemId, quantityRequired: Number(quantityRequired) },
   })
 
+  const updatedDish = await prisma.dish.findFirst({
+    where: { id, restaurantId: context.restaurantId, branchId: context.branchId },
+    include: {
+      ingredients: {
+        include: { inventoryItem: true },
+      },
+      variants: {
+        where: { deletedAt: null },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      },
+    },
+  })
+
   await enqueueSyncChange(prisma, {
     restaurantId: context.restaurantId,
     branchId: context.branchId,
@@ -62,7 +75,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     payload: row,
   })
 
-  return NextResponse.json(row, { status: 201 })
+  return NextResponse.json({ row, dish: updatedDish }, { status: 201 })
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -85,6 +98,19 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     },
   })
 
+  const updatedDish = await prisma.dish.findFirst({
+    where: { id, restaurantId: context.restaurantId, branchId: context.branchId },
+    include: {
+      ingredients: {
+        include: { inventoryItem: true },
+      },
+      variants: {
+        where: { deletedAt: null },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      },
+    },
+  })
+
   await enqueueSyncChange(prisma, {
     restaurantId: context.restaurantId,
     branchId: context.branchId,
@@ -94,5 +120,5 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     payload: { dishId: id, inventoryItemId },
   })
 
-  return NextResponse.json({ success: true })
+  return NextResponse.json({ success: true, dish: updatedDish })
 }

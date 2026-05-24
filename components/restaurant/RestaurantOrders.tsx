@@ -20,7 +20,7 @@ import {
 } from '@/lib/restaurantOfflineQueue'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
-type Dish        = { id: string; name: string; sellingPrice: number; category: string | null; isActive: boolean }
+type Dish        = { id: string; name: string; sellingPrice: number; category: string | null; isActive: boolean; branchId?: string | null }
 type Sale        = {
   id: string
   dishName?: string
@@ -232,7 +232,7 @@ export default function RestaurantOrders({
     setLoading(sales.length === 0)
     try {
       const [d, s] = await Promise.all([
-        fetch('/api/restaurant/dishes').then(r=>r.json()),
+        fetch('/api/restaurant/dishes?scope=restaurant').then(r=>r.json()),
         fetch('/api/restaurant/dish-sales').then(r=>r.json()),
       ])
       const nextDishes = (Array.isArray(d)?d:[]).filter((x:Dish)=>x.isActive)

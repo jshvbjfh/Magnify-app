@@ -449,6 +449,50 @@ export async function reconcileOrderStatuses(remoteOrders: RemoteOrderStatus[]):
   }
 }
 
+// Inserts cloud-originated orders (QR/guest) the waiter device doesn't have locally.
+// INSERT OR IGNORE preserves any locally-created order with the same ID.
+// synced=1 so these are never re-pushed to the server.
+export interface IncomingOrderItem {
+  id: string; order_id: string; dish_id: string; dish_name: string
+  dish_price: number; qty: number; status: string; created_at: string; updated_at: string
+}
+export interface IncomingOrder {
+  id: string; restaurant_id: string; branch_id: string | null; table_id: string | null
+  table_name: string | null; order_number: string; status: string; payment_method: string | null
+  subtotal_amount: number; vat_amount: number; total_amount: number; created_by_name: string | null
+  paid_at: string | null; canceled_at: string | null; cancel_reason: string | null
+  created_at: string; updated_at: string; items: IncomingOrderItem[]
+}
+export async function upsertIncomingOrders(orders: IncomingOrder[]): Promise<void> {
+  if (!orders.length) return
+  const db = getDB()
+  for (const order of orders) {
+    const statements: StatementSet = [
+      {
+        statement: `INSERT OR IGNORE INTO orders
+          (id, restaurant_id, branch_id, table_id, table_name, order_number, status,
+           payment_method, subtotal_amount, vat_amount, total_amount, created_by_name,
+           served_at, paid_at, canceled_at, cancel_reason, synced, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, ?)`,
+        values: [
+          order.id, order.restaurant_id, order.branch_id, order.table_id, order.table_name,
+          order.order_number, order.status, order.payment_method, order.subtotal_amount,
+          order.vat_amount, order.total_amount, order.created_by_name,
+          order.paid_at, order.canceled_at, order.cancel_reason,
+          order.created_at, order.updated_at,
+        ],
+      },
+      ...order.items.map((item) => ({
+        statement: `INSERT OR IGNORE INTO order_items
+          (id, order_id, dish_id, dish_name, dish_price, qty, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.created_at, item.updated_at],
+      })),
+    ]
+    await db.executeSet(statements)
+  }
+}
+
 // ---- cancellation_approvers ------------------------------------------------
 // Pulled from server on every pullSync. Stores id, name, and bcrypt hash only.
 // No PINs in plaintext — offline validation uses bcrypt.compare() locally.

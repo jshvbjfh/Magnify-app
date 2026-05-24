@@ -23,6 +23,19 @@ const branchPresentationSelect = {
   qrMenuHeroImageUrl: true,
 } as const
 
+const branchSyncSelect = {
+  id: true,
+  restaurantId: true,
+  name: true,
+  code: true,
+  isMain: true,
+  isActive: true,
+  billHeader: true,
+  qrMenuHeroImageUrl: true,
+  createdAt: true,
+  updatedAt: true,
+} as const
+
 /** GET — fetch the admin's restaurant (creates one if missing) */
 export async function GET() {
   const session = await getServerSession(authOptions)
@@ -185,8 +198,19 @@ export async function POST(req: Request) {
   })
 
   const activeBranch = activeBranchId
-    ? await prisma.branch.findUnique({ where: { id: activeBranchId }, select: branchPresentationSelect })
+    ? await prisma.branch.findUnique({ where: { id: activeBranchId }, select: branchSyncSelect })
     : null
+
+  if (activeBranch && (billHeader !== undefined || qrMenuHeroImageUrl !== undefined)) {
+    await enqueueSyncChange(prisma, {
+      restaurantId: restaurant.id,
+      entityType: 'branch',
+      entityId: activeBranch.id,
+      operation: 'upsert',
+      payload: activeBranch,
+    })
+  }
+
   const effectiveBillHeader = activeBranch?.billHeader ?? restaurant.billHeader ?? ''
   const billHeaderInherited = activeBranch !== null && (activeBranch.billHeader === null || activeBranch.billHeader === '')
 

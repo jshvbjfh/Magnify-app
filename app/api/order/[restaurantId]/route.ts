@@ -45,8 +45,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
     prisma.dish.findMany({
       where: {
         restaurantId: restaurant.id,
-        ...(resolvedBranchId ? { branchId: resolvedBranchId } : {}),
         isActive: true,
+        deletedAt: null,
       },
       select: {
         id: true,
@@ -76,7 +76,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
         : restaurant.qrOrderingMode === 'disabled'
           ? 'disabled'
           : 'order',
-      qrMenuHeroImageUrl: resolvedBranch?.qrMenuHeroImageUrl ?? null,
+      // Only expose absolute HTTPS URLs (Vercel Blob). Local/relative paths from
+      // Electron or dev-server uploads are not accessible from Vercel and would
+      // produce a broken image icon on the live QR menu.
+      qrMenuHeroImageUrl: (() => {
+        const url = resolvedBranch?.qrMenuHeroImageUrl ?? null
+        return typeof url === 'string' && url.startsWith('https://') ? url : null
+      })(),
     },
     dishes,
   })

@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     const filePath = path.join(uploadDir, filename)
     const bytes = await file.arrayBuffer()
     await writeFile(filePath, Buffer.from(bytes))
-    return NextResponse.json({ ok: true, path: `/uploads/qr-menu/${filename}`, filename })
+    return NextResponse.json({ ok: true, path: `/api/uploads/qr-menu/${filename}`, filename })
   } catch (error) {
     console.error('[restaurant/qr-menu-image] upload failed', error)
     return NextResponse.json({ error: 'Upload failed.' }, { status: 500 })

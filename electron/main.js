@@ -1,5 +1,4 @@
 ﻿const { app, BrowserWindow, dialog, ipcMain, shell, screen } = require('electron')
-const { autoUpdater } = require('electron-updater')
 const path = require('path')
 const http = require('http')
 const fs = require('fs')
@@ -7,13 +6,19 @@ const os = require('os')
 const net = require('net')
 const { createHash, randomBytes } = require('crypto')
 
+// Defer electron-updater import — it calls app.getVersion() at module load time,
+// which throws when Electron hasn't initialized yet (dev mode / direct launch).
+let autoUpdater = null
+function getAutoUpdater() {
+  if (!autoUpdater) {
+    try { autoUpdater = require('electron-updater').autoUpdater } catch { return null }
+  }
+  return autoUpdater
+}
+
 function getStartupLogPath() {
 	return path.join(app.getPath('userData'), 'startup.log')
 }
-
-autoUpdater.autoDownload = true
-autoUpdater.autoInstallOnAppQuit = true
-autoUpdater.allowPrerelease = false
 
 const DESKTOP_UPDATE_INITIAL_DELAY_MS = 5000
 const DESKTOP_UPDATE_RETRY_DELAYS_MS = [30000, 120000]
@@ -153,7 +158,7 @@ async function checkForDesktopUpdates(reason, attempt = 1) {
 	appendStartupLog(`Checking for desktop updates (${reason}, attempt ${attempt})`)
 
 	try {
-		const result = await autoUpdater.checkForUpdates()
+		const result = await getAutoUpdater()?.checkForUpdates()
 		const latestVersion = result?.updateInfo?.version
 		appendStartupLog(`Desktop update check completed (${reason})${latestVersion ? ` latest=${latestVersion}` : ''}`)
 	} catch (error) {
@@ -1293,7 +1298,7 @@ function createMaintenanceWindow(message) {
 	})
 }
 
-autoUpdater.on('checking-for-update', () => {
+getAutoUpdater()?.on('checking-for-update', () => {
 	appendStartupLog('Electron updater: checking for update')
 })
 
@@ -1338,17 +1343,17 @@ function showDownloadingBanner(version) {
 	)
 }
 
-autoUpdater.on('update-available', (info) => {
+getAutoUpdater()?.on('update-available', (info) => {
 	appendStartupLog(`Electron updater: update available ${info?.version || 'unknown'}`)
 	pendingUpdateVersion = info?.version ? ' v' + info.version : ''
 	showDownloadingBanner(pendingUpdateVersion)
 })
 
-autoUpdater.on('update-not-available', (info) => {
+getAutoUpdater()?.on('update-not-available', (info) => {
 	appendStartupLog(`Electron updater: no update available (current ${app.getVersion()}, latest ${info?.version || app.getVersion()})`)
 })
 
-autoUpdater.on('download-progress', (progress) => {
+getAutoUpdater()?.on('download-progress', (progress) => {
 	const pct = Math.round(progress.percent || 0)
 	appendStartupLog(`Electron updater: download ${pct}%`)
 	if (!mainWindow) return
@@ -1364,12 +1369,12 @@ autoUpdater.on('download-progress', (progress) => {
 	}).catch(() => {})
 })
 
-autoUpdater.on('error', (error) => {
+getAutoUpdater()?.on('error', (error) => {
 	appendStartupLog(`Electron updater error: ${error?.message || error}`)
 })
 
 // Prompt user to restart when an update has finished downloading
-autoUpdater.on('update-downloaded', () => {
+getAutoUpdater()?.on('update-downloaded', () => {
 	desktopUpdateDownloaded = true
 	clearDesktopUpdateSchedule()
 	appendStartupLog('Electron updater: update downloaded')
@@ -1410,7 +1415,7 @@ autoUpdater.on('update-downloaded', () => {
 						const newVersion = String(pendingUpdateVersion || '').replace(/^\s*v/i, '').trim()
 						fs.writeFileSync(flagPath, JSON.stringify({ version: newVersion }), 'utf8')
 					} catch {}
-					autoUpdater.quitAndInstall()
+					getAutoUpdater()?.quitAndInstall()
 				}
 			}).catch(() => clearInterval(restartPoll))
 		}, 500)

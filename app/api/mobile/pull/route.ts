@@ -71,15 +71,18 @@ export async function GET(req: Request) {
       effectiveBranchId = requestedBranchId
     }
 
-    const dishWhere = { restaurantId, branchId: effectiveBranchId, isActive: true }
+    // Dishes are shared across all branches on the unified waiter menu.
+    // Each dish retains its branchId for sale attribution — do not filter here.
+    const dishWhere = { restaurantId, isActive: true }
 
+    // Tables remain branch-scoped: the waiter only sees tables in their department.
     const tableWhere = { restaurantId, branchId: effectiveBranchId }
 
     // Recent orders window: last 3 days so waiter sees status changes (PAID/CANCELLED)
     // made by the manager without re-pushing. Scoped to the waiter's branch.
     const recentOrderSince = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
 
-    const [dishes, tables, restaurant, approverEmployees, allBranches, recentOrders] = await Promise.all([
+    const [dishes, tables, restaurant, approverEmployees, allBranches, recentOrders, incomingOrders] = await Promise.all([
       prisma.dish.findMany({
         where: dishWhere,
         select: {
@@ -140,6 +143,52 @@ export async function GET(req: Request) {
         orderBy: { updatedAt: 'desc' },
         take: 200,
       }),
+
+      // Full active orders (including QR/guest orders) so the waiter app can
+      // receive orders it didn't create itself. Status-filtered to active only
+      // so the list stays small without needing a time window.
+      prisma.restaurantOrder.findMany({
+        where: {
+          restaurantId,
+          branchId: effectiveBranchId,
+          status: { in: ['PENDING', 'OPEN'] },
+        },
+        select: {
+          id: true,
+          restaurantId: true,
+          branchId: true,
+          tableId: true,
+          tableName: true,
+          orderNumber: true,
+          status: true,
+          paymentMethod: true,
+          subtotalAmount: true,
+          vatAmount: true,
+          totalAmount: true,
+          createdByName: true,
+          paidAt: true,
+          canceledAt: true,
+          cancelReason: true,
+          createdAt: true,
+          updatedAt: true,
+          items: {
+            where: { status: 'ACTIVE' },
+            select: {
+              id: true,
+              orderId: true,
+              dishId: true,
+              dishName: true,
+              dishPrice: true,
+              qty: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+        take: 100,
+      }),
     ])
 
     // Normalise Prisma Decimal → number for SQLite
@@ -193,6 +242,39 @@ export async function GET(req: Request) {
         canceled_at: o.canceledAt?.toISOString() ?? null,
         cancel_reason: o.cancelReason ?? null,
         updated_at: o.updatedAt.toISOString(),
+      })),
+
+      // Full active orders the waiter app may not have locally (e.g. QR/guest orders).
+      // Same shape as the push payload so the waiter app can upsert them into SQLite.
+      incomingOrders: incomingOrders.map(o => ({
+        id: o.id,
+        restaurant_id: o.restaurantId,
+        branch_id: o.branchId,
+        table_id: o.tableId ?? null,
+        table_name: o.tableName ?? null,
+        order_number: o.orderNumber,
+        status: o.status,
+        payment_method: o.paymentMethod ?? null,
+        subtotal_amount: Number(o.subtotalAmount),
+        vat_amount: Number(o.vatAmount),
+        total_amount: Number(o.totalAmount),
+        created_by_name: o.createdByName ?? null,
+        paid_at: o.paidAt?.toISOString() ?? null,
+        canceled_at: o.canceledAt?.toISOString() ?? null,
+        cancel_reason: o.cancelReason ?? null,
+        created_at: o.createdAt.toISOString(),
+        updated_at: o.updatedAt.toISOString(),
+        items: o.items.map(item => ({
+          id: item.id,
+          order_id: item.orderId,
+          dish_id: item.dishId,
+          dish_name: item.dishName,
+          dish_price: Number(item.dishPrice),
+          qty: item.qty,
+          status: item.status,
+          created_at: item.createdAt.toISOString(),
+          updated_at: item.updatedAt.toISOString(),
+        })),
       })),
     })
   } catch (err: any) {

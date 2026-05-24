@@ -3,8 +3,8 @@ import {
   replaceDishes, replaceTables, setConfig, getConfig,
   getDishes, getTables, getUnsyncedOrders, markOrdersSynced,
   replaceCancellationApprovers, getCancellationApprovers,
-  reconcileOrderStatuses,
-  type Dish, type RestaurantTable, type CancellationApprover, type RemoteOrderStatus,
+  reconcileOrderStatuses, upsertIncomingOrders,
+  type Dish, type RestaurantTable, type CancellationApprover, type RemoteOrderStatus, type IncomingOrder,
 } from './db'
 import { getToken, invalidateSession, SESSION_INVALID_MESSAGE } from './auth'
 import { API } from '../config'
@@ -159,6 +159,13 @@ export async function pullSync(): Promise<PullResult> {
   const recentOrders = (payload as unknown as { recentOrders?: RemoteOrderStatus[] }).recentOrders
   if (Array.isArray(recentOrders) && recentOrders.length > 0) {
     await reconcileOrderStatuses(recentOrders)
+  }
+
+  // Pull full active orders from the server (e.g. QR/guest orders) and insert
+  // any that don't exist locally so the waiter sees them in their order list.
+  const incomingOrders = (payload as unknown as { incomingOrders?: IncomingOrder[] }).incomingOrders
+  if (Array.isArray(incomingOrders) && incomingOrders.length > 0) {
+    await upsertIncomingOrders(incomingOrders)
   }
 
   if (warnings.length > 0) {

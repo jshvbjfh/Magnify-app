@@ -262,6 +262,19 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     }
   }, [restaurantBranch?.branchId])
 
+  function upsertIngredient(nextIngredient: Ingredient | null | undefined) {
+    if (!nextIngredient) return
+
+    setItems((current) => {
+      const existingIndex = current.findIndex((item) => item.id === nextIngredient.id)
+      if (existingIndex === -1) {
+        return [...current, nextIngredient].sort((left, right) => left.name.localeCompare(right.name))
+      }
+
+      return current.map((item) => item.id === nextIngredient.id ? nextIngredient : item)
+    })
+  }
+
   function resolvePurchaseFormUnits() {
     const purchaseUnit = pForm.purchaseUnit.trim()
     const usageUnit = (pForm.usageUnit.trim() || purchaseUnit).trim()
@@ -494,7 +507,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         setPurchaseError(err?.error || 'Save failed')
         return
       }
-      await Promise.all([load(), loadPurchases()])
+      const payload = await res.json().catch(() => null)
+      if (payload?.purchase) {
+        setPurchases((current) => [payload.purchase as Purchase, ...current])
+      }
+      upsertIngredient((payload?.ingredient ?? null) as Ingredient | null)
       window.dispatchEvent(new CustomEvent('refreshTransactions'))
       setShowPurchaseRecorder(false)
       setPurchaseAutofillNotice(null)

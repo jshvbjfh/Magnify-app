@@ -237,6 +237,49 @@ describe('applyResolvedSyncChange', () => {
     })
   })
 
+  describe('branch', () => {
+    it('persists branch presentation fields needed by the QR menu', async () => {
+      const db = makeMockDb({
+        branch: {
+          findFirst: vi.fn().mockResolvedValue({ id: 'branch-1' }),
+          findMany: vi.fn().mockResolvedValue([]),
+          deleteMany: vi.fn().mockResolvedValue({}),
+          upsert: vi.fn().mockResolvedValue({ id: 'branch-1' }),
+        },
+      })
+
+      const change = makeChange('branch', 'upsert', {
+        id: 'branch-1',
+        restaurantId: 'rest-1',
+        name: 'Bar',
+        code: 'BAR',
+        isMain: false,
+        isActive: true,
+        billHeader: 'High 5ive',
+        qrMenuHeroImageUrl: 'https://example.com/hero.jpg',
+      }, {
+        entityId: 'branch-1',
+        branchId: null,
+      })
+
+      await applyResolvedSyncChange(db, change)
+
+      expect(db.branch.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'branch-1' },
+          update: expect.objectContaining({
+            billHeader: 'High 5ive',
+            qrMenuHeroImageUrl: 'https://example.com/hero.jpg',
+          }),
+          create: expect.objectContaining({
+            billHeader: 'High 5ive',
+            qrMenuHeroImageUrl: 'https://example.com/hero.jpg',
+          }),
+        }),
+      )
+    })
+  })
+
   // ── dish ───────────────────────────────────────────────────────────────────
 
   describe('dish', () => {

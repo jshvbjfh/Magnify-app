@@ -92,7 +92,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     })
   }
 
-  return NextResponse.json(dish.updated)
+  if (!updatedDish) {
+    return NextResponse.json({ error: 'Dish not found' }, { status: 404 })
+  }
+
+  return NextResponse.json(updatedDish)
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {

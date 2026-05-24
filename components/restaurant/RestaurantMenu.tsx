@@ -21,7 +21,7 @@ type PurchaseLayer = { id: string; ingredientId: string; remainingQuantity: numb
 const DEFAULT_VARIANT_NAMES = ['Regular', 'Medium', 'Large', 'Mega'] as const
 
 function createEmptyDishForm(): DishFormState {
-  return { name: '', sellingPrice: '', category: '', menuType: '', variants: [] }
+  return { name: '', sellingPrice: '', category: '', menuType: '', variants: [{ name: '', sellingPrice: '' }] }
 }
 
 function getSuggestedVariantName(currentVariants: DishVariantFormRow[]) {
@@ -96,7 +96,6 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   })
 
   async function load() {
-    setLoading(dishes.length === 0 && ingredients.length === 0 && purchases.length === 0)
     try {
       const [d, i, p] = await Promise.all([
         fetch('/api/restaurant/dishes').then(r => r.json()),
@@ -140,6 +139,26 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
     setForm(createEmptyDishForm())
   }
 
+  function upsertDish(nextDish: Dish | null | undefined) {
+    if (!nextDish) return
+
+    setDishes((current) => {
+      const existingIndex = current.findIndex((dish) => dish.id === nextDish.id)
+      if (existingIndex === -1) {
+        return [nextDish, ...current]
+      }
+
+      return current.map((dish) => dish.id === nextDish.id ? nextDish : dish)
+    })
+
+    setSelectedDish((current) => current?.id === nextDish.id ? nextDish : current)
+  }
+
+  function removeDishFromState(dishId: string) {
+    setDishes((current) => current.filter((dish) => dish.id !== dishId))
+    setSelectedDish((current) => current?.id === dishId ? null : current)
+  }
+
   function addVariantRow() {
     setForm((current) => ({
       ...current,
@@ -170,7 +189,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
       sellingPrice: Number(form.sellingPrice),
       category: form.category.trim() || null,
       menuType: normalizeDishMenuType(form.menuType) ?? null,
-      variants: form.variants.map((variant, index) => ({
+      variants: form.variants.filter((v) => v.name.trim()).map((variant, index) => ({
         ...(variant.id ? { id: variant.id } : {}),
         name: variant.name.trim(),
         sellingPrice: Number(variant.sellingPrice),
@@ -178,42 +197,62 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
       })),
     }
 
-    if (editDish) {
-      await fetch(`/api/restaurant/dishes/${editDish.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
-    } else {
-      await fetch('/api/restaurant/dishes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    const response = editDish
+      ? await fetch(`/api/restaurant/dishes/${editDish.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+      : await fetch('/api/restaurant/dishes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+
+    const savedDish = await response.json().catch(() => null)
+    if (!response.ok) return
+
+    // Persist used size names to localStorage for future autocomplete
+    const usedSizeNames = form.variants.map((v) => v.name.trim()).filter(Boolean)
+    if (usedSizeNames.length > 0 && typeof window !== 'undefined') {
+      try {
+        const existing = JSON.parse(localStorage.getItem('magnify:savedSizeNames') ?? '[]') as string[]
+        const merged = Array.from(new Set([...existing, ...usedSizeNames]))
+        localStorage.setItem('magnify:savedSizeNames', JSON.stringify(merged))
+      } catch {}
     }
-    resetDishForm(); load()
+
+    upsertDish(savedDish as Dish | null)
+    if (editDish) {
+      setSelectedDish(savedDish as Dish | null)
+    }
+
+    resetDishForm()
   }
 
   async function deleteDish(id: string) {
     if (!confirm('Delete this dish?')) return
     await fetch(`/api/restaurant/dishes/${id}`,{method:'DELETE'})
-    if (selectedDish?.id===id) setSelectedDish(null)
-    load()
+    removeDishFromState(id)
   }
 
   async function toggleActive(dish: Dish) {
-    await fetch(`/api/restaurant/dishes/${dish.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({isActive:!dish.isActive})})
-    load()
+    const response = await fetch(`/api/restaurant/dishes/${dish.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({isActive:!dish.isActive})})
+    const updatedDish = await response.json().catch(() => null)
+    if (!response.ok) return
+    upsertDish(updatedDish as Dish | null)
   }
 
   async function addIngredient(e: React.FormEvent) {
     e.preventDefault()
     if (!selectedDish||!recipeForm.ingredientId||!recipeForm.quantityRequired) return
-    await fetch(`/api/restaurant/dishes/${selectedDish.id}/ingredients`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({inventoryItemId:recipeForm.ingredientId,quantityRequired:Number(recipeForm.quantityRequired)})})
-    setRecipeForm({ingredientId:'',quantityRequired:''}); setIngSearch(''); setIngDropOpen(false); load()
-    // refresh selected dish
-    const updated = await fetch('/api/restaurant/dishes').then(r=>r.json())
-    setSelectedDish(updated.find((d:Dish)=>d.id===selectedDish.id)||null)
+    const response = await fetch(`/api/restaurant/dishes/${selectedDish.id}/ingredients`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({inventoryItemId:recipeForm.ingredientId,quantityRequired:Number(recipeForm.quantityRequired)})})
+    const payload = await response.json().catch(() => null)
+    if (!response.ok) return
+
+    setRecipeForm({ingredientId:'',quantityRequired:''})
+    setIngSearch('')
+    setIngDropOpen(false)
+    upsertDish((payload?.dish ?? null) as Dish | null)
   }
 
   async function removeIngredient(dishId: string, ingredientId: string) {
-    await fetch(`/api/restaurant/dishes/${dishId}/ingredients`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({inventoryItemId:ingredientId})})
-    const updated = await fetch('/api/restaurant/dishes').then(r=>r.json())
-    const all: Dish[] = Array.isArray(updated)?updated:[]
-    setDishes(all)
-    setSelectedDish(all.find(d=>d.id===dishId)||null)
+    const response = await fetch(`/api/restaurant/dishes/${dishId}/ingredients`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({inventoryItemId:ingredientId})})
+    const payload = await response.json().catch(() => null)
+    if (!response.ok) return
+    upsertDish((payload?.dish ?? null) as Dish | null)
   }
 
   function openEdit(dish: Dish) {
@@ -223,11 +262,13 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
       sellingPrice: String(dish.sellingPrice),
       category: dish.category || '',
       menuType: resolveDishMenuType(dish.menuType, dish.category) || '',
-      variants: getActiveDishVariants(dish.variants).map((variant) => ({
-        id: variant.id,
-        name: variant.name,
-        sellingPrice: String(variant.sellingPrice),
-      })),
+      variants: getActiveDishVariants(dish.variants).length > 0
+        ? getActiveDishVariants(dish.variants).map((variant) => ({
+            id: variant.id,
+            name: variant.name,
+            sellingPrice: String(variant.sellingPrice),
+          }))
+        : [{ name: '', sellingPrice: '' }],
     })
     setShowForm(true)
   }
@@ -247,6 +288,15 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
     ...DEFAULT_MENU_CATEGORY_SUGGESTIONS,
     ...dishes.map((dish) => String(dish.category ?? '').trim()).filter(Boolean),
   ])).sort((left, right) => left.localeCompare(right))
+
+  // Collect all variant/size names used across dishes + saved in localStorage
+  const variantNameSuggestions = Array.from(new Set([
+    ...DEFAULT_VARIANT_NAMES,
+    ...dishes.flatMap((dish) => (dish.variants ?? []).map((v) => v.name.trim()).filter(Boolean)),
+    ...(typeof window !== 'undefined'
+      ? (JSON.parse(localStorage.getItem('magnify:savedSizeNames') ?? '[]') as string[])
+      : []),
+  ])).sort((a, b) => a.localeCompare(b))
 
   const categoryFilterOptions = Array.from(new Set(
     dishes.map((dish) => String(dish.category ?? '').trim()).filter(Boolean),
@@ -335,44 +385,39 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                 <p className="text-xs text-orange-700">VAT included: {previewVatAmount.toLocaleString()} RWF</p>
               </div>
               <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Size / Variant Prices</p>
-                    <p className="mt-1 text-xs text-gray-500">Optional. Use this when one dish has prices like Regular, Medium, Large, or Mega.</p>
-                  </div>
-                  <button type="button" onClick={addVariantRow} className="rounded-lg border border-orange-200 bg-white px-3 py-1.5 text-xs font-semibold text-orange-600 hover:border-orange-300 hover:bg-orange-50">
-                    Add size
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-600 mb-0.5">Sizes</p>
+                <p className="text-xs text-gray-500 mb-3">Optional — type a size name and its price. Leave blank to skip.</p>
+                <datalist id="variant-name-suggestions">
+                  {variantNameSuggestions.map((s) => <option key={s} value={s} />)}
+                </datalist>
+                <div className="space-y-2">
+                  {form.variants.map((variant, index) => (
+                    <div key={`${variant.id ?? 'new'}:${index}`} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_160px_auto]">
+                      <input
+                        list="variant-name-suggestions"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none bg-white"
+                        value={variant.name}
+                        onChange={(event) => updateVariantRow(index, 'name', event.target.value)}
+                        placeholder="e.g. Regular, Large, Mega"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none bg-white"
+                        value={variant.sellingPrice}
+                        onChange={(event) => updateVariantRow(index, 'sellingPrice', event.target.value)}
+                        placeholder="Price"
+                      />
+                      <button type="button" onClick={() => removeVariantRow(index)} className="inline-flex items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-400 hover:bg-gray-100 hover:text-red-500">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                  <button type="button" onClick={addVariantRow} className="text-xs text-orange-500 hover:text-orange-700 font-medium mt-1">
+                    + Add another size
                   </button>
                 </div>
-                {form.variants.length === 0 ? (
-                  <p className="mt-3 text-xs text-gray-400">No extra sizes yet. The base price above will be used on its own.</p>
-                ) : (
-                  <div className="mt-3 space-y-2">
-                    {form.variants.map((variant, index) => (
-                      <div key={`${variant.id ?? 'new'}:${index}`} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_160px_auto]">
-                        <input
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none"
-                          value={variant.name}
-                          onChange={(event) => updateVariantRow(index, 'name', event.target.value)}
-                          placeholder="e.g. Large"
-                        />
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none"
-                          value={variant.sellingPrice}
-                          onChange={(event) => updateVariantRow(index, 'sellingPrice', event.target.value)}
-                          placeholder="6500"
-                        />
-                        <button type="button" onClick={() => removeVariantRow(index)} className="inline-flex items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-500 hover:bg-gray-100 hover:text-red-500">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                    <p className="text-[11px] text-gray-500">Keep the base price as your default size. The QR menu will show these extra size prices as separate choices.</p>
-                  </div>
-                )}
               </div>
               <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Category</label>
                 <input list="menu-category-suggestions" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} placeholder="e.g. Pizzas, Burgers, Soft Drinks" />
