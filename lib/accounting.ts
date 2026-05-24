@@ -12,6 +12,7 @@ export function normalizePaymentMethod(paymentMethod?: string): string {
   if (raw.includes('internal')) return 'Internal'
   if (raw.includes('note')) return 'Notes Payable'
   if (raw === 'credit' || raw.includes('accounts payable') || raw.includes('payable')) return 'Credit'
+  if (raw.includes('cheque') || raw.includes('check')) return 'Cheque'
   if (raw.includes('mobile') || raw.includes('momo')) return raw.includes('owner') ? 'Owner Momo' : 'Mobile Money'
   if (raw.includes('bank') || raw.includes('transfer') || raw.includes('current account')) return 'Bank'
   return 'Cash'
@@ -109,7 +110,7 @@ export async function resolveSettlementAccount(
     }
   }
 
-  if (normalizedPaymentMethod === 'Bank') {
+  if (normalizedPaymentMethod === 'Bank' || normalizedPaymentMethod === 'Cheque') {
     return {
       paymentMethod: normalizedPaymentMethod,
       account: await ensureAccount(db, {

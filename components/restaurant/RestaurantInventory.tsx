@@ -30,6 +30,8 @@ type Purchase = {
   batchId: string | null
   ingredientId: string
   supplier: string | null
+  paymentMethod: string
+  paidAt: string | null
   purchaseQuantity: number | null
   purchaseUnit: string | null
   unitsPerPurchaseUnit: number | null
@@ -56,12 +58,15 @@ const todayInputValue = () => {
   const day = String(now.getDate()).padStart(2, '0')
   return `${now.getFullYear()}-${month}-${day}`
 }
+const PURCHASE_PAYMENT_OPTIONS = ['Cash', 'Bank', 'Cheque', 'Credit'] as const
+
 const createEmptyPurchaseForm = (purchasedAt = todayInputValue()) => ({
   itemName: '',
   usageUnit: '',
   purchaseUnit: '',
   unitsPerPurchaseUnit: '',
   supplier: '',
+  paymentMethod: 'Cash',
   purchaseQuantity: '',
   purchaseUnitCost: '',
   purchasedAt,
@@ -231,6 +236,10 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const [purchaseAutofillMatchKey, setPurchaseAutofillMatchKey] = useState('')
   const [pForm, setPForm] = useState(createEmptyPurchaseForm())
   const [pSaving, setPSaving] = useState(false)
+  const [apPayingId, setApPayingId] = useState<string | null>(null)
+  const [apPayMethod, setApPayMethod] = useState('Cash')
+  const [apPaying, setApPaying] = useState(false)
+  const [apError, setApError] = useState<string | null>(null)
 
   async function load() {
     setItemsLoading(true)
@@ -466,6 +475,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       purchaseUnit: purchaseMeta.purchaseUnit,
       unitsPerPurchaseUnit: purchaseMeta.unitsPerPurchaseUnit === 1 ? '' : String(purchaseMeta.unitsPerPurchaseUnit),
       supplier: purchase.supplier || '',
+      paymentMethod: purchase.paymentMethod || 'Cash',
       purchaseQuantity: String(purchaseMeta.purchaseQuantity),
       purchaseUnitCost: String(purchaseMeta.purchaseUnitCost),
       purchasedAt: formatDateInput(purchase.purchasedAt),
@@ -478,6 +488,10 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     if (!pForm.itemName || !unitConfig.purchaseUnit || !unitConfig.usageUnit || !pForm.purchaseQuantity || !pForm.purchaseUnitCost) return
     if (!unitConfig.sameUnit && (!Number.isFinite(unitConfig.unitsPerPurchaseUnit) || unitConfig.unitsPerPurchaseUnit <= 0)) {
       setPurchaseError('Enter how many usage units exist in one purchase unit.')
+      return
+    }
+    if (pForm.paymentMethod === 'Credit' && !pForm.supplier.trim()) {
+      setPurchaseError('Supplier name is required when purchasing on credit.')
       return
     }
 
@@ -497,6 +511,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           purchaseUnit: unitConfig.purchaseUnit,
           unitsPerPurchaseUnit: unitConfig.sameUnit ? 1 : unitConfig.unitsPerPurchaseUnit,
           supplier: pForm.supplier || null,
+          paymentMethod: pForm.paymentMethod || 'Cash',
           purchaseQuantity: Number(pForm.purchaseQuantity),
           purchaseUnitCost: Number(pForm.purchaseUnitCost),
           purchasedAt: activeBatchDate,
@@ -530,6 +545,10 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       setPurchaseError('Enter how many usage units exist in one purchase unit.')
       return
     }
+    if (pForm.paymentMethod === 'Credit' && !pForm.supplier.trim()) {
+      setPurchaseError('Supplier name is required when purchasing on credit.')
+      return
+    }
     setPSaving(true)
     setPurchaseError(null)
     try {
@@ -543,6 +562,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           purchaseUnit: unitConfig.purchaseUnit,
           unitsPerPurchaseUnit: unitConfig.sameUnit ? 1 : unitConfig.unitsPerPurchaseUnit,
           supplier: pForm.supplier || null,
+          paymentMethod: pForm.paymentMethod || 'Cash',
           purchaseQuantity: Number(pForm.purchaseQuantity),
           purchaseUnitCost: Number(pForm.purchaseUnitCost),
           purchasedAt: pForm.purchasedAt,
@@ -582,6 +602,29 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       window.dispatchEvent(new CustomEvent('refreshTransactions'))
     } finally {
       setPSaving(false)
+    }
+  }
+
+  async function payApEntry(purchaseId: string) {
+    setApPaying(true)
+    setApError(null)
+    try {
+      const res = await fetch('/api/restaurant/inventory-purchases/pay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ purchaseId, paymentMethod: apPayMethod }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => null)
+        setApError(err?.error || 'Payment failed')
+        return
+      }
+      const { purchase: updated } = await res.json()
+      setPurchases(current => current.map(p => p.id === purchaseId ? { ...p, paidAt: updated.paidAt } : p))
+      setApPayingId(null)
+      window.dispatchEvent(new CustomEvent('refreshTransactions'))
+    } finally {
+      setApPaying(false)
     }
   }
 
@@ -681,6 +724,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     ...items.map(item => item.name.trim()).filter(Boolean),
     ...purchases.map(purchase => purchase.ingredient.name.trim()).filter(Boolean),
   ])).sort((left, right) => left.localeCompare(right))
+  const knownSupplierNames = Array.from(new Set(
+    purchases.map(p => p.supplier?.trim()).filter((s): s is string => Boolean(s))
+  )).sort((a, b) => a.localeCompare(b))
+  const outstandingPayables = purchases.filter(p => p.paymentMethod === 'Credit' && !p.paidAt)
+  const totalPayables = outstandingPayables.reduce((s, p) => s + p.totalCost, 0)
   const purchaseUnitOptions = pForm.purchaseUnit && !INVENTORY_UNITS.some(option => option.value === pForm.purchaseUnit)
     ? [{ value: pForm.purchaseUnit, label: pForm.purchaseUnit }, ...INVENTORY_UNITS]
     : INVENTORY_UNITS
@@ -711,8 +759,13 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
             </td>
             <td className="px-3 py-2 align-top">
               <input value={pForm.supplier} onChange={e=>setPForm(f=>({...f,supplier:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
-                className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
-                placeholder="Supplier (optional)"/>
+                list="inventory-known-suppliers"
+                className={`w-full rounded-md border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300 ${pForm.paymentMethod==='Credit'&&!pForm.supplier.trim()?'border-red-300':'border-gray-200'}`}
+                placeholder={pForm.paymentMethod==='Credit'?'Supplier (required)':'Supplier (optional)'}/>
+              <select value={pForm.paymentMethod} onChange={e=>setPForm(f=>({...f,paymentMethod:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                className="mt-1.5 w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-amber-300">
+                {PURCHASE_PAYMENT_OPTIONS.map(m=><option key={m} value={m}>{m}</option>)}
+              </select>
             </td>
             <td className="px-3 py-2 align-top">
               <div className="space-y-2">
@@ -773,7 +826,18 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     return (
       <tr key={purchase.id} className="hover:bg-gray-50 transition-colors">
         <td className="px-4 py-3 font-medium text-gray-900">{purchase.ingredient.name}</td>
-        <td className="px-4 py-3 text-gray-500">{purchase.supplier||'—'}</td>
+        <td className="px-4 py-3">
+          <p className="text-gray-500">{purchase.supplier||'—'}</p>
+          {purchase.paymentMethod && purchase.paymentMethod !== 'Cash' && (
+            <span className={`mt-0.5 inline-block text-xs px-1.5 py-0.5 rounded font-medium ${
+              purchase.paymentMethod === 'Credit'
+                ? (purchase.paidAt ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700')
+                : 'bg-blue-100 text-blue-700'
+            }`}>
+              {purchase.paymentMethod === 'Credit' && purchase.paidAt ? 'Credit · Paid' : purchase.paymentMethod}
+            </span>
+          )}
+        </td>
         <td className="px-4 py-3 text-gray-700">
           <p>{formatUnitSummary(purchaseMeta.purchaseUnit, purchaseMeta.usageUnit, purchaseMeta.unitsPerPurchaseUnit)}</p>
           {purchaseMeta.purchaseUnit.toLowerCase() !== purchaseMeta.usageUnit.toLowerCase() && (
@@ -875,6 +939,13 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           ))}
         </datalist>
       )}
+      {knownSupplierNames.length > 0 && (
+        <datalist id="inventory-known-suppliers">
+          {knownSupplierNames.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+      )}
 
       {purchaseError && (
         <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
@@ -946,8 +1017,13 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                     </td>
                     <td className="px-3 py-2 align-top">
                       <input value={pForm.supplier} onChange={e=>setPForm(f=>({...f,supplier:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
-                        className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"
-                        placeholder="Supplier (optional)"/>
+                        list="inventory-known-suppliers"
+                        className={`w-full rounded-md border bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300 ${pForm.paymentMethod==='Credit'&&!pForm.supplier.trim()?'border-red-300':'border-gray-200'}`}
+                        placeholder={pForm.paymentMethod==='Credit'?'Supplier (required)':'Supplier (optional)'}/>
+                      <select value={pForm.paymentMethod} onChange={e=>setPForm(f=>({...f,paymentMethod:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                        className="mt-1.5 w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-emerald-300">
+                        {PURCHASE_PAYMENT_OPTIONS.map(m=><option key={m} value={m}>{m}</option>)}
+                      </select>
                     </td>
                     <td className="px-3 py-2 align-top">
                       <div className="space-y-2">
@@ -1039,8 +1115,66 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         </div>
       )}
 
+      {outstandingPayables.length > 0 && (
+        <div className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+          <div className="px-4 py-3 border-b border-amber-100 bg-amber-50 flex items-center justify-between">
+            <h3 className="font-semibold text-amber-900 text-sm">Accounts Payable</h3>
+            <span className="text-xs text-amber-700">{outstandingPayables.length} outstanding · {fmt(totalPayables)} RWF</span>
+          </div>
+          {apError && (
+            <div className="px-4 py-2 text-xs text-red-600 bg-red-50 border-b border-red-100">{apError}</div>
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[640px]">
+              <thead>
+                <tr className="border-b border-gray-100 text-xs text-gray-500">
+                  <th className="px-4 py-2 text-left font-medium">Supplier</th>
+                  <th className="px-4 py-2 text-left font-medium">Item</th>
+                  <th className="px-4 py-2 text-left font-medium">Qty</th>
+                  <th className="px-4 py-2 text-left font-medium">Date</th>
+                  <th className="px-4 py-2 text-right font-medium">Amount</th>
+                  <th className="px-4 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {outstandingPayables.map(p => (
+                  <tr key={p.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 font-medium text-gray-900">{p.supplier || '—'}</td>
+                    <td className="px-4 py-3 text-gray-700">{p.ingredient.name}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{fmtQty(p.quantityPurchased)} {p.ingredient.unit}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{formatBatchDateLabel(p.purchasedAt)}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-gray-900">{fmt(p.totalCost)} RWF</td>
+                    <td className="px-4 py-3">
+                      {apPayingId === p.id ? (
+                        <div className="flex items-center gap-2">
+                          <select value={apPayMethod} onChange={e=>setApPayMethod(e.target.value)}
+                            className="rounded border border-gray-200 px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-orange-400 bg-white">
+                            {(['Cash','Bank','Cheque'] as const).map(m=><option key={m} value={m}>{m}</option>)}
+                          </select>
+                          <button onClick={()=>void payApEntry(p.id)} disabled={apPaying}
+                            className="rounded bg-green-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-50 transition-colors">
+                            Confirm
+                          </button>
+                          <button onClick={()=>{setApPayingId(null);setApError(null)}} disabled={apPaying}
+                            className="rounded border border-gray-200 px-2.5 py-1 text-xs text-gray-500 hover:bg-gray-50 disabled:opacity-50 transition-colors">
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={()=>{setApPayingId(p.id);setApPayMethod('Cash');setApError(null)}}
+                          className="rounded-md bg-orange-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">
+                          Paid?
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
-
-
