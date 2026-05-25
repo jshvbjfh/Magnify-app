@@ -129,10 +129,12 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
 
   const payload = payloadBody as unknown as PullPayload
   const currentRestaurantId = payload.restaurant?.id ?? null
-  const replaceScope = {
-    branchId: effectiveBranchId ?? null,
-    restaurantId: currentRestaurantId,
-  }
+  // Dishes are restaurant-wide (all branches); delete by restaurant only so the
+  // full fresh set can be inserted without UNIQUE conflicts from stale branch rows.
+  const dishReplaceScope = { restaurantId: currentRestaurantId }
+  // Tables are now restaurant-wide (all branches shown at once), so delete/replace
+  // by restaurant only — same approach as dishes.
+  const replaceScope = { restaurantId: currentRestaurantId }
 
   // Only treat dishes/tables from THIS restaurant as a valid offline cache.
   // Data from a previous restaurant login is stale foreign data, not a fallback.
@@ -149,14 +151,14 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   let didRefreshLocalSnapshot = false
 
   if (payload.dishes.length === 0) {
-    await replaceDishes([], replaceScope)
+    await replaceDishes([], dishReplaceScope)
     didRefreshLocalSnapshot = true
 
     if (existingDishes.length > 0) {
       warnings.push('This branch currently has no menu.')
     }
   } else {
-    await replaceDishes(payload.dishes, replaceScope)
+    await replaceDishes(payload.dishes, dishReplaceScope)
     didRefreshLocalSnapshot = true
   }
 

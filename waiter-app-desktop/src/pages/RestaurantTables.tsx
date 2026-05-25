@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { CheckCircle2, Users, Clock, XCircle, RefreshCw } from 'lucide-react'
-import { getTables, getOrders, type RestaurantTable, type Order } from '../services/db'
+import { getTables, getOrders, getConfig, type RestaurantTable, type Order } from '../services/db'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -38,23 +38,33 @@ interface Props {
   activeBranchId?: string | null
 }
 
-export default function RestaurantTables({ waiterName: _waiterName, activeBranchId = null }: Props) {
+export default function RestaurantTables({ waiterName: _waiterName, activeBranchId: _activeBranchId = null }: Props) {
   const [tables,        setTables]        = useState<RestaurantTable[]>([])
   const [pendingOrders, setPendingOrders] = useState<Order[]>([])
   const [loading,       setLoading]       = useState(true)
   const [filter,        setFilter]        = useState<TableStatus | 'all'>('all')
+  const [branchNames,   setBranchNames]   = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
     try {
-      const [t, o] = await Promise.all([
-        getTables(activeBranchId),
-        getOrders({ status: 'PENDING', branchId: activeBranchId }),
+      const [t, o, rawBranches] = await Promise.all([
+        getTables(),
+        getOrders({ status: 'PENDING' }),
+        getConfig('branches'),
       ])
       setTables(t)
       setPendingOrders(o)
+      if (rawBranches) {
+        try {
+          const branches: { id: string; name: string }[] = JSON.parse(rawBranches)
+          const map: Record<string, string> = {}
+          for (const b of branches) map[b.id] = b.name
+          setBranchNames(map)
+        } catch {}
+      }
     } catch {}
     setLoading(false)
-  }, [activeBranchId])
+  }, [])
 
   useEffect(() => { load() }, [load])
 
@@ -157,6 +167,9 @@ export default function RestaurantTables({ waiterName: _waiterName, activeBranch
                     <p className="text-base font-bold text-gray-900 truncate">{table.name}</p>
                     {table.seats != null && (
                       <p className="text-xs text-gray-500 mt-0.5">{table.seats} seats</p>
+                    )}
+                    {table.branch_id && branchNames[table.branch_id] && (
+                      <p className="text-[11px] text-gray-400 mt-0.5 truncate">{branchNames[table.branch_id]}</p>
                     )}
                   </div>
                   <div className={`h-2.5 w-2.5 rounded-full mt-1.5 flex-shrink-0 ${cfg.dot}`} />

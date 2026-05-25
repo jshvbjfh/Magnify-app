@@ -90,7 +90,7 @@ interface Props {
   syncVersion?: number
 }
 
-export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId = null, onPendingCountChange, syncVersion }: Props) {
+export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId: _activeBranchId = null, onPendingCountChange, syncVersion }: Props) {
   // ── Shared state ──
   const [dishes,        setDishes]        = useState<Dish[]>([])
   const [tables,        setTables]        = useState<RestaurantTable[]>([])
@@ -125,9 +125,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const loadPOS = useCallback(async () => {
     try {
       const [d, t, orders, rId, bId] = await Promise.all([
-        getDishes(activeBranchId),
-        getTables(activeBranchId),
-        getOrders({ status: 'PENDING', branchId: activeBranchId }),
+        getDishes(),
+        getTables(),
+        getOrders({ status: 'PENDING' }),
         getConfig('restaurantId'),
         getConfig('branchId'),
       ])
@@ -153,14 +153,14 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       setOrderItemsMap(itemsMap)
     } catch { /* DB not ready on first render — will retry */ }
     setLoading(false)
-  }, [activeBranchId])
+  }, [])
 
   const loadHistory = useCallback(async () => {
     try {
-      setAllOrders(await getOrders({ branchId: activeBranchId }))
+      setAllOrders(await getOrders())
     } catch {}
     setLoading(false)
-  }, [activeBranchId])
+  }, [])
 
   useEffect(() => {
     if (mode === 'pos') loadPOS()
