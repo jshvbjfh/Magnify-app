@@ -75,8 +75,8 @@ export async function GET(req: Request) {
     // Each dish retains its branchId for sale attribution — do not filter here.
     const dishWhere = { restaurantId, isActive: true }
 
-    // Tables remain branch-scoped: the waiter only sees tables in their department.
-    const tableWhere = { restaurantId, branchId: effectiveBranchId }
+    // Tables are restaurant-wide: all branch tables appear on the floor plan.
+    const tableWhere = { restaurantId }
 
     // Recent orders window: last 3 days so waiter sees status changes (PAID/CANCELLED)
     // made by the manager without re-pushing. Scoped to the waiter's branch.
@@ -124,11 +124,10 @@ export async function GET(req: Request) {
         orderBy: { name: 'asc' },
       }),
 
-      // Recent order status updates so the waiter app can reconcile local copies.
+      // Recent order status updates — restaurant-wide so any branch's changes reconcile locally.
       prisma.restaurantOrder.findMany({
         where: {
           restaurantId,
-          branchId: effectiveBranchId,
           updatedAt: { gte: recentOrderSince },
         },
         select: {
@@ -144,13 +143,11 @@ export async function GET(req: Request) {
         take: 200,
       }),
 
-      // Full active orders (including QR/guest orders) so the waiter app can
-      // receive orders it didn't create itself. Status-filtered to active only
-      // so the list stays small without needing a time window.
+      // Full active orders restaurant-wide (including QR/guest orders from any branch)
+      // so the waiter app receives orders regardless of which branch placed them.
       prisma.restaurantOrder.findMany({
         where: {
           restaurantId,
-          branchId: effectiveBranchId,
           status: { in: ['PENDING', 'OPEN'] },
         },
         select: {
