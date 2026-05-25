@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth/next'
 import { databaseUnavailableJson, isPrismaDatabaseUnavailableError, logDatabaseUnavailable } from '@/lib/apiDatabase'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { recordJournalEntry } from '@/lib/accounting'
+import { recordJournalEntry, recordVatJournalEntry } from '@/lib/accounting'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 
 class UnauthorizedError extends Error {
@@ -22,7 +22,10 @@ function parseAmount(raw: unknown): number {
 
 function parseDateOrNow(raw: unknown): Date {
   if (!raw) return new Date()
-  const d = new Date(String(raw))
+  const s = String(raw)
+  // YYYY-MM-DD from <input type="date"> — anchor to noon Kigali (UTC+2) to avoid date-shifting
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(`${s}T10:00:00Z`)
+  const d = new Date(s)
   return Number.isFinite(d.getTime()) ? d : new Date()
 }
 
@@ -84,6 +87,7 @@ export async function GET(req: Request) {
         const settlementAccount = isIncome ? (drLine?.account ?? null) : (crLine?.account ?? null)
         return {
           id: entry.id,
+          pairId: entry.id,
           date: entry.entryDate.toISOString(),
           createdAt: entry.createdAt.toISOString(),
           description: entry.description,
@@ -93,6 +97,10 @@ export async function GET(req: Request) {
           categoryType: mainAccount?.category?.type ?? 'expense',
           paymentMethod: settlementAccount?.name ?? null,
           reference: entry.reference ?? null,
+          isManual: entry.reference === 'manual',
+          sourceKind: null,
+          uploadId: null,
+          screenshotUrl: null,
         }
       }),
     })
@@ -128,23 +136,69 @@ export async function POST(req: Request) {
       return new NextResponse('Invalid amount', { status: 400 })
     }
 
-    const direction = body.direction === 'in' ? 'in' : 'out'
+    // Apply discount before recording
+    const discountPct = Number(body.discount ?? 0)
+    const effectiveAmount = discountPct > 0 && discountPct < 100
+      ? Math.round(amount * (1 - discountPct / 100) * 100) / 100
+      : amount
+
+    const rawDirection = body.direction
+    const direction: 'in' | 'out' | 'opening' =
+      rawDirection === 'opening' ? 'opening' : rawDirection === 'in' ? 'in' : 'out'
     const categoryType =
-      body.categoryType && typeof body.categoryType === 'string'
+      direction === 'opening' ? 'equity'
+      : body.categoryType && typeof body.categoryType === 'string'
         ? (body.categoryType as string)
-        : direction === 'out'
-          ? 'expense'
-          : 'income'
-    const description = String(body.description || 'Manual entry')
+        : direction === 'out' ? 'expense' : 'income'
+
+    const baseDescription = String(body.description || 'Manual entry')
+    const clientName = typeof body.clientName === 'string' ? body.clientName.trim() : ''
+    const description = clientName ? `${baseDescription} — ${clientName}` : baseDescription
+
     const date = parseDateOrNow(body.date)
     const paymentMethod = body.paymentMethod || 'Cash'
+    const vatEnabled = Boolean(body.vatEnabled)
 
+    // Opening balance: DR asset, CR Opening Balance (equity)
+    if (direction === 'opening') {
+      await recordJournalEntry(prisma, {
+        restaurantId: context.restaurantId,
+        branchId: context.branchId,
+        date,
+        description: description || 'Opening Balance',
+        reference: 'manual',
+        amount: effectiveAmount,
+        direction: 'in',
+        accountName: 'Opening Balance',
+        categoryType: 'equity',
+        paymentMethod,
+      })
+      return NextResponse.json({ ok: true })
+    }
+
+    // Income with VAT: 3-line entry
+    if (vatEnabled && direction === 'in') {
+      await recordVatJournalEntry(prisma, {
+        restaurantId: context.restaurantId,
+        branchId: context.branchId,
+        date,
+        description,
+        reference: 'manual',
+        netAmount: effectiveAmount,
+        paymentMethod,
+        accountName: body.accountName ? String(body.accountName) : undefined,
+      })
+      return NextResponse.json({ ok: true })
+    }
+
+    // Standard 2-line entry
     await recordJournalEntry(prisma, {
       restaurantId: context.restaurantId,
       branchId: context.branchId,
       date,
       description,
-      amount,
+      reference: 'manual',
+      amount: effectiveAmount,
       direction,
       accountName: body.accountName ? String(body.accountName) : undefined,
       categoryType,

@@ -25,14 +25,18 @@ interface Transaction {
   screenshotUrl: string | null
 }
 
-interface ManualFormState {
-  date: string
-  description: string
+interface ModalFormState {
+  direction: 'in' | 'out' | 'opening'
   amount: string
-  direction: 'in' | 'out'
-  accountName: string
+  description: string
+  date: string
   categoryType: string
+  accountName: string
   paymentMethod: string
+  vatEnabled: boolean
+  discountEnabled: boolean
+  discountPct: string
+  clientName: string
 }
 
 type RestaurantTransactionsSnapshot = {
@@ -136,7 +140,21 @@ function isWasteLikeTransaction(transaction: Pick<Transaction, 'description' | '
 }
 
 const CATEGORIES = ['income', 'expense', 'asset', 'liability', 'equity']
-const PAYMENT_METHODS = ['Cash', 'Bank', 'Mobile Money', 'Card', 'Other']
+const PAYMENT_METHODS = ['Cash', 'Mobile Money', 'Bank', 'Card', 'Credit', 'Owner Momo']
+
+const DEFAULT_MODAL_FORM: ModalFormState = {
+  direction: 'out',
+  amount: '',
+  description: '',
+  date: todayStr(),
+  categoryType: 'expense',
+  accountName: '',
+  paymentMethod: 'Cash',
+  vatEnabled: false,
+  discountEnabled: false,
+  discountPct: '',
+  clientName: '',
+}
 
 // â”€â”€â”€ Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: () => void }) {
@@ -147,12 +165,13 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   const [loadError, setLoadError] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string>(todayStr())
   const [search, setSearch] = useState('')
-  const [isAddingRow, setIsAddingRow] = useState(false)
+  const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
+  const [modalForm, setModalForm] = useState<ModalFormState>({ ...DEFAULT_MODAL_FORM, date: todayStr() })
   const initializedSelectedDateRef = useRef(false)
   const snapshotScopeId = buildRestaurantSnapshotScope({
     restaurantId: restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null,
@@ -171,17 +190,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     setShowingCachedSnapshot(false)
   }, [snapshotStorageScope])
 
-  const [form, setForm] = useState<ManualFormState>({
-    date: todayStr(),
-    description: '',
-    amount: '',
-    direction: 'out',
-    accountName: '',
-    categoryType: 'expense',
-    paymentMethod: 'Cash',
-  })
-
-  // â”€â”€ Fetch â”€â”€
+  //â”€â”€ Fetch â”€â”€
   const fetchTransactions = useCallback(async () => {
     setLoading(transactions.length === 0)
     setLoadError(null)
@@ -294,37 +303,37 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     .reduce((sum, transaction) => sum + transaction.amount, 0)
   const hasEntriesOnOtherDates = sortedDates.some((dateKey) => dateKey !== selectedDate && (entriesPerDate[dateKey]?.size ?? 0) > 0)
 
-  const openAddRow = () => {
+  const openModal = () => {
     setSaveError(null)
     setSaveSuccess(false)
-    setIsAddingRow(true)
-    setForm({ date: todayStr(), description: '', amount: '', direction: 'out', accountName: '', categoryType: 'expense', paymentMethod: 'Cash' })
+    setModalForm({ ...DEFAULT_MODAL_FORM, date: todayStr() })
+    setShowModal(true)
   }
 
-  const cancelAddRow = () => {
-    setIsAddingRow(false)
+  const closeModal = () => {
+    setShowModal(false)
     setSaveError(null)
-    setSaveSuccess(false)
-    setForm({ date: todayStr(), description: '', amount: '', direction: 'out', accountName: '', categoryType: 'expense', paymentMethod: 'Cash' })
   }
 
-  const handleRowKeyDown = (event: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) => {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      void handleSave()
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      cancelAddRow()
-    }
+  const handleCategoryChange = (nextCategoryType: string) => {
+    setModalForm(prev => ({
+      ...prev,
+      categoryType: nextCategoryType,
+      direction:
+        nextCategoryType === 'income' ? 'in'
+        : nextCategoryType === 'expense' ? 'out'
+        : prev.direction === 'opening' ? 'in' : prev.direction,
+    }))
   }
 
-  // â”€â”€ Save manual transaction â”€â”€
-  const handleSave = async () => {
+  // ── Save manual transaction ──
+  const handleModalSave = async () => {
     setSaveError(null)
-    const amt = parseFloat(form.amount)
-    if (!form.description.trim()) { setSaveError('Description is required'); return }
+    const amt = parseFloat(modalForm.amount)
+    if (!modalForm.description.trim()) { setSaveError('Description is required'); return }
     if (!Number.isFinite(amt) || amt <= 0) { setSaveError('Enter a valid positive amount'); return }
+
+    const discountPct = modalForm.discountEnabled ? parseFloat(modalForm.discountPct) || 0 : 0
 
     setSaving(true)
     try {
@@ -333,25 +342,28 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          date: form.date,
-          description: form.description,
+          date: modalForm.date,
+          description: modalForm.description,
           amount: amt,
-          direction: form.direction,
-          accountName: form.accountName || undefined,
-          categoryType: form.categoryType,
-          paymentMethod: form.paymentMethod,
-        })
+          direction: modalForm.direction,
+          accountName: modalForm.direction !== 'opening' ? (modalForm.accountName || undefined) : undefined,
+          categoryType: modalForm.direction !== 'opening' ? modalForm.categoryType : 'equity',
+          paymentMethod: modalForm.paymentMethod,
+          vatEnabled: modalForm.vatEnabled && modalForm.direction === 'in',
+          discount: discountPct,
+          clientName: modalForm.paymentMethod === 'Credit' && modalForm.direction === 'in'
+            ? modalForm.clientName : '',
+        }),
       })
       if (!res.ok) {
         const msg = await res.text()
         throw new Error(msg || 'Failed to save')
       }
       window.dispatchEvent(new Event('refreshTransactions'))
-      setForm({ date: todayStr(), description: '', amount: '', direction: 'out', accountName: '', categoryType: 'expense', paymentMethod: 'Cash' })
       await fetchTransactions()
       setSaveSuccess(true)
-      setIsAddingRow(false)
-      setTimeout(() => { setSaveSuccess(false) }, 1200)
+      setShowModal(false)
+      setTimeout(() => setSaveSuccess(false), 2000)
     } catch (e: any) {
       setSaveError(e?.message || 'Error saving transaction')
     } finally {
@@ -486,7 +498,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 />
               </div>
               <button
-                onClick={openAddRow}
+                onClick={openModal}
                 className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-semibold hover:bg-orange-600 transition-colors shadow-sm"
               >
                 <Plus className="h-4 w-4" />
@@ -508,7 +520,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <p className="text-red-600 font-medium">Transactions unavailable</p>
                 <p className="text-red-400 text-sm mt-1">The list could not be loaded from the server.</p>
               </div>
-            ) : rows.length === 0 && !isAddingRow ? (
+            ) : rows.length === 0 ? (
               <div className="text-center py-16">
                 <Calendar className="h-10 w-10 text-gray-300 mx-auto mb-3" />
                 <p className="text-gray-500 font-medium">No transactions found</p>
@@ -536,99 +548,6 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {isAddingRow && (
-                      <tr className="bg-orange-50">
-                        <td className="px-3 py-2 text-xs font-medium text-gray-400 whitespace-nowrap">On save</td>
-                        <td className="px-3 py-2">
-                          <input
-                            type="text"
-                            value={form.description}
-                            onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                            onKeyDown={handleRowKeyDown}
-                            placeholder="Description"
-                            className="w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
-                          />
-                        </td>
-                        <td className="px-3 py-2">
-                          <input
-                            type="text"
-                            value={form.accountName}
-                            onChange={e => setForm(f => ({ ...f, accountName: e.target.value }))}
-                            onKeyDown={handleRowKeyDown}
-                            placeholder={form.direction === 'in' ? 'Sales, Revenue' : 'Rent, Utilities'}
-                            className="w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
-                          />
-                        </td>
-                        <td className="px-3 py-2">
-                          <select
-                            value={form.categoryType}
-                            onChange={e => setForm(f => ({ ...f, categoryType: e.target.value }))}
-                            onKeyDown={handleRowKeyDown}
-                            className="w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
-                          >
-                            {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                          </select>
-                        </td>
-                        <td className="px-3 py-2">
-                          <select
-                            value={form.paymentMethod}
-                            onChange={e => setForm(f => ({ ...f, paymentMethod: e.target.value }))}
-                            onKeyDown={handleRowKeyDown}
-                            className="w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
-                          >
-                            {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
-                          </select>
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="flex rounded-lg overflow-hidden border border-orange-200 bg-white">
-                            <button
-                              type="button"
-                              onClick={() => setForm(f => ({ ...f, direction: 'in', categoryType: 'income' }))}
-                              className={`flex-1 px-2 py-2 text-xs font-semibold transition-colors ${form.direction === 'in' ? 'bg-green-500 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
-                            >
-                              In
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setForm(f => ({ ...f, direction: 'out', categoryType: 'expense' }))}
-                              className={`flex-1 px-2 py-2 text-xs font-semibold transition-colors ${form.direction === 'out' ? 'bg-red-500 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
-                            >
-                              Out
-                            </button>
-                          </div>
-                          <input
-                            type="date"
-                            value={form.date}
-                            onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
-                            onKeyDown={handleRowKeyDown}
-                            className="mt-2 w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"
-                          />
-                        </td>
-                        <td className="px-3 py-2">
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            value={form.amount}
-                            onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
-                            onKeyDown={handleRowKeyDown}
-                            placeholder="0"
-                            className="w-full rounded-lg border border-orange-200 bg-white px-3 py-2 text-right text-sm outline-none focus:ring-2 focus:ring-orange-200"
-                          />
-                          {saveError && <p className="mt-1 text-[11px] font-medium text-red-600">{saveError}</p>}
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="flex items-center gap-2">
-                            <button type="button" onClick={() => void handleSave()} disabled={saving} className="text-orange-600 transition-colors hover:text-orange-700 disabled:opacity-50">
-                              <Check className="h-4 w-4" />
-                            </button>
-                            <button type="button" onClick={cancelAddRow} className="text-gray-500 transition-colors hover:text-gray-700">
-                              <X className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
                     {rows.map(t => {
                       const isWasteEntry = isWasteLikeTransaction(t)
                       const isRevenueEntry = !isWasteEntry && normalizeCategoryType(t.categoryType) === 'income' && t.direction === 'in'
@@ -695,6 +614,263 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
 
         </div>{/* end main content */}
       </div>{/* end two-column */}
+
+      {/* ── Add Transaction Modal ── */}
+      {showModal && (() => {
+        const amt = parseFloat(modalForm.amount) || 0
+        const discountPct = modalForm.discountEnabled ? parseFloat(modalForm.discountPct) || 0 : 0
+        const effectiveAmt = discountPct > 0 ? Math.round(amt * (1 - discountPct / 100)) : amt
+        const vatAmt = Math.round(effectiveAmt * 0.18)
+        const totalFromCustomer = effectiveAmt + vatAmt
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/50" onClick={closeModal} />
+            <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <h3 className="text-base font-bold text-gray-900">Add Transaction</h3>
+                <button onClick={closeModal} className="p-1 rounded-lg hover:bg-gray-100 transition-colors">
+                  <X className="h-5 w-5 text-gray-500" />
+                </button>
+              </div>
+
+              <div className="px-6 py-5 space-y-5">
+                {/* Transaction type */}
+                <div className="grid grid-cols-3 gap-2">
+                  {([
+                    { dir: 'out' as const,      cat: 'expense', emoji: '💸', label: 'Money Out', sub: 'Expense',  active: 'border-red-500 bg-red-50 text-red-700' },
+                    { dir: 'in' as const,       cat: 'income',  emoji: '💰', label: 'Money In',  sub: 'Income',   active: 'border-green-500 bg-green-50 text-green-700' },
+                    { dir: 'opening' as const,  cat: 'equity',  emoji: '🏦', label: 'Opening',   sub: 'Equity',   active: 'border-blue-500 bg-blue-50 text-blue-700' },
+                  ] as const).map(btn => (
+                    <button
+                      key={btn.dir}
+                      type="button"
+                      onClick={() => setModalForm(f => ({
+                        ...f,
+                        direction: btn.dir,
+                        categoryType: btn.cat,
+                        accountName: btn.dir === 'opening' ? 'Opening Balance' : '',
+                        vatEnabled: false,
+                        discountEnabled: false,
+                      }))}
+                      className={`flex flex-col items-center gap-1 py-3 px-2 rounded-xl border-2 text-sm font-semibold transition-all ${
+                        modalForm.direction === btn.dir
+                          ? btn.active
+                          : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span className="text-lg">{btn.emoji}</span>
+                      <span>{btn.label}</span>
+                      <span className="text-[10px] font-normal opacity-60">{btn.sub}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Amount */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Amount (RWF)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    autoFocus
+                    value={modalForm.amount}
+                    onChange={e => setModalForm(f => ({ ...f, amount: e.target.value }))}
+                    placeholder="0"
+                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-lg font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-300"
+                  />
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                  <input
+                    type="text"
+                    value={modalForm.description}
+                    onChange={e => setModalForm(f => ({ ...f, description: e.target.value }))}
+                    placeholder={
+                      modalForm.direction === 'out' ? 'e.g. Fuel, Rent, Supplies'
+                      : modalForm.direction === 'in' ? 'e.g. Sales, Service fee'
+                      : 'Opening Balance'
+                    }
+                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                  />
+                </div>
+
+                {/* Date */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={modalForm.date}
+                    onChange={e => setModalForm(f => ({ ...f, date: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                  />
+                </div>
+
+                {/* Category + Account — hidden for opening balance */}
+                {modalForm.direction !== 'opening' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                      <select
+                        value={modalForm.categoryType}
+                        onChange={e => handleCategoryChange(e.target.value)}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                      >
+                        {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Account Name</label>
+                      <input
+                        type="text"
+                        value={modalForm.accountName}
+                        onChange={e => setModalForm(f => ({ ...f, accountName: e.target.value }))}
+                        placeholder={modalForm.direction === 'in' ? 'Sales, Revenue…' : 'Rent, Fuel…'}
+                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Payment Method */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {PAYMENT_METHODS.map(pm => (
+                      <button
+                        key={pm}
+                        type="button"
+                        onClick={() => setModalForm(f => ({ ...f, paymentMethod: pm }))}
+                        className={`py-2 px-2 rounded-xl border text-xs font-semibold transition-all ${
+                          modalForm.paymentMethod === pm
+                            ? 'border-orange-500 bg-orange-50 text-orange-700'
+                            : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                        }`}
+                      >
+                        {pm}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* A/R client name — only for Credit income */}
+                {modalForm.paymentMethod === 'Credit' && modalForm.direction === 'in' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Client Name (A/R)</label>
+                    <input
+                      type="text"
+                      value={modalForm.clientName}
+                      onChange={e => setModalForm(f => ({ ...f, clientName: e.target.value }))}
+                      placeholder="Customer name"
+                      className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                    />
+                  </div>
+                )}
+
+                {/* VAT toggle — income only */}
+                {modalForm.direction === 'in' && (
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={modalForm.vatEnabled}
+                        onChange={e => setModalForm(f => ({ ...f, vatEnabled: e.target.checked }))}
+                        className="h-4 w-4 rounded border-gray-300 accent-orange-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700">Include VAT 18%</span>
+                    </label>
+                    {modalForm.vatEnabled && amt > 0 && (
+                      <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-sm space-y-1">
+                        <div className="flex justify-between text-gray-600">
+                          <span>Net income</span>
+                          <span className="font-medium">{fmtRWF(effectiveAmt)}</span>
+                        </div>
+                        <div className="flex justify-between text-gray-600">
+                          <span>VAT 18%</span>
+                          <span className="font-medium">{fmtRWF(vatAmt)}</span>
+                        </div>
+                        <div className="flex justify-between font-bold text-green-700 border-t border-green-200 pt-1">
+                          <span>Customer pays</span>
+                          <span>{fmtRWF(totalFromCustomer)}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Discount toggle */}
+                {modalForm.direction !== 'opening' && (
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={modalForm.discountEnabled}
+                        onChange={e => setModalForm(f => ({ ...f, discountEnabled: e.target.checked }))}
+                        className="h-4 w-4 rounded border-gray-300 accent-orange-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700">Discount</span>
+                    </label>
+                    {modalForm.discountEnabled && (
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={modalForm.discountPct}
+                          onChange={e => setModalForm(f => ({ ...f, discountPct: e.target.value }))}
+                          placeholder="0"
+                          className="w-24 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
+                        />
+                        <span className="text-gray-500 text-sm">%</span>
+                        {discountPct > 0 && amt > 0 && (
+                          <span className="text-gray-500 text-sm">→ effective {fmtRWF(effectiveAmt)}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Error */}
+                {saveError && (
+                  <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{saveError}</div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleModalSave()}
+                  disabled={saving}
+                  className="px-5 py-2.5 rounded-xl bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 transition-colors disabled:opacity-50 flex items-center gap-2"
+                >
+                  {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Save Transaction
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Success toast */}
+      {saveSuccess && (
+        <div className="fixed bottom-6 right-6 z-50 bg-green-600 text-white px-5 py-3 rounded-xl shadow-lg text-sm font-semibold flex items-center gap-2">
+          <Check className="h-4 w-4" />
+          Transaction saved
+        </div>
+      )}
     </div>
   )
 }

@@ -14,6 +14,7 @@ export function normalizePaymentMethod(paymentMethod?: string): string {
   if (raw === 'credit' || raw.includes('accounts payable') || raw.includes('payable')) return 'Credit'
   if (raw.includes('cheque') || raw.includes('check')) return 'Cheque'
   if (raw.includes('mobile') || raw.includes('momo')) return raw.includes('owner') ? 'Owner Momo' : 'Mobile Money'
+  if (raw.includes('card')) return 'Card'
   if (raw.includes('bank') || raw.includes('transfer') || raw.includes('current account')) return 'Bank'
   return 'Cash'
 }
@@ -106,6 +107,16 @@ export async function resolveSettlementAccount(
       account: await ensureAccount(db, {
         restaurantId, name: 'Accounts Receivable', type: 'asset',
         categoryId: categories.asset.id, code: '1200',
+      }),
+    }
+  }
+
+  if (normalizedPaymentMethod === 'Card') {
+    return {
+      paymentMethod: normalizedPaymentMethod,
+      account: await ensureAccount(db, {
+        restaurantId, name: 'Current Account', type: 'asset',
+        categoryId: categories.asset.id, code: '1010',
       }),
     }
   }
@@ -248,4 +259,67 @@ export async function recordJournalEntry(
   })
 
   return journalEntry
+}
+
+// ─── VAT journal entry (3 lines) ────────────────────────────────────────────
+//
+// Income with VAT: DR settlement (net + VAT), CR revenue (net), CR VAT Payable (VAT)
+// The caller passes the NET amount; total received from customer = net × (1 + rate).
+
+export async function recordVatJournalEntry(
+  db: PrismaDb,
+  params: {
+    restaurantId: string
+    branchId?: string | null
+    date: Date
+    description: string
+    reference?: string | null
+    netAmount: number
+    vatRate?: number
+    paymentMethod?: string
+    accountName?: string
+  },
+) {
+  const vatRate = params.vatRate ?? 0.18
+  const net = Math.round(params.netAmount * 100) / 100
+  const vat = Math.round(net * vatRate * 100) / 100
+  const total = net + vat
+
+  const categories = await ensureCoreCategories(db, params.restaurantId)
+
+  const settlement = await resolveSettlementAccount(
+    db, params.paymentMethod || 'Cash', 'in', categories, params.restaurantId,
+  )
+
+  const revenueAccount = await ensureAccount(db, {
+    restaurantId: params.restaurantId,
+    name: params.accountName || 'Sales',
+    type: 'revenue',
+    categoryId: categories.income.id,
+  })
+
+  const vatAccount = await ensureAccount(db, {
+    restaurantId: params.restaurantId,
+    name: 'VAT Payable',
+    type: 'liability',
+    categoryId: categories.liability.id,
+    code: '2200',
+  })
+
+  return db.journalEntry.create({
+    data: {
+      restaurantId: params.restaurantId,
+      branchId: params.branchId ?? null,
+      description: params.description,
+      reference: params.reference ?? null,
+      entryDate: params.date,
+      lines: {
+        create: [
+          { accountId: settlement.account.id, debit: total,  credit: 0,   description: params.description },
+          { accountId: revenueAccount.id,      debit: 0,     credit: net,  description: params.description },
+          { accountId: vatAccount.id,           debit: 0,     credit: vat,  description: params.description },
+        ],
+      },
+    },
+  })
 }
