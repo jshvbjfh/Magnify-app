@@ -88,6 +88,7 @@ const mobileTabMeta: Record<TabId, { label: string; icon: React.ReactNode }> = {
 export default function RestaurantShell() {
   const { data: session, status, update } = useSession()
   const [activeTab, setActiveTab] = useState<TabId>('transactions')
+  const [mountedTabs, setMountedTabs] = useState<Set<TabId>>(() => new Set<TabId>(['transactions']))
   const [showJesse, setShowJesse] = useState(false)
   const [trackingMode, setTrackingMode] = useState<'simple' | 'dish_tracking'>('simple')
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -109,6 +110,11 @@ export default function RestaurantShell() {
 
   const canQueryServer = () => typeof navigator === 'undefined' || navigator.onLine !== false
 
+  const handleTabChange = (tab: TabId) => {
+    setActiveTab(tab)
+    setMountedTabs(prev => { const next = new Set(prev); next.add(tab); return next })
+  }
+
   useEffect(() => {
     if (status !== 'authenticated') return
     if (userRole === 'admin') return
@@ -118,7 +124,7 @@ export default function RestaurantShell() {
     window.location.replace('/restaurant')
   }, [status, userRole])
 
-  useEffect(() => {
+useEffect(() => {
     if (status !== 'authenticated' || userRole !== 'admin') {
       setBranches([])
       setActiveBranchId(null)
@@ -391,20 +397,28 @@ export default function RestaurantShell() {
     branchName: activeBranch?.name ?? null,
   }
 
-  const renderActiveTab = () => {
-    if (activeTab === 'dashboard') return <RestaurantDashboard onAskJesse={() => setShowJesse(true)} />
-    if (activeTab === 'live') return <RestaurantLive />
-    if (activeTab === 'menu') return <RestaurantMenu onAskJesse={() => setShowJesse(true)} />
-    if (activeTab === 'tables') return <RestaurantTables onAskJesse={() => setShowJesse(true)} restaurantId={(session?.user as any)?.restaurantId} />
-    if (activeTab === 'orders') return <RestaurantOrders onAskJesse={() => setShowJesse(true)} />
-    if (activeTab === 'kitchen') return <RestaurantKitchen onAskJesse={() => setShowJesse(true)} />
-    if (activeTab === 'inventory') return <RestaurantInventory onAskJesse={() => setShowJesse(true)} />
-    if (activeTab === 'reports') return <RestaurantReports onAskJesse={() => setShowJesse(true)} />
-    if (activeTab === 'staff') return <RestaurantStaff onAskJesse={() => setShowJesse(true)} />
-    if (activeTab === 'transactions') return <RestaurantTransactions onAskJesse={() => setShowJesse(true)} />
-    if (activeTab === 'analytics') return <RestaurantAnalytics onAskJesse={() => setShowJesse(true)} />
-    return <RestaurantSettings />
-  }
+  const sessionRestaurantId = typeof (session?.user as any)?.restaurantId === 'string'
+    ? (session?.user as any).restaurantId as string
+    : undefined
+
+  // Render each tab once it has been visited, then keep it mounted and hidden.
+  // This prevents re-fetching data every time the user switches tabs.
+  const renderPersistentTabs = () => (
+    <>
+      {mountedTabs.has('dashboard') && <div style={{ display: activeTab === 'dashboard' ? undefined : 'none' }}><RestaurantDashboard onAskJesse={() => setShowJesse(true)} /></div>}
+      {mountedTabs.has('live') && <div style={{ display: activeTab === 'live' ? undefined : 'none' }}><RestaurantLive /></div>}
+      {mountedTabs.has('menu') && <div style={{ display: activeTab === 'menu' ? undefined : 'none' }}><RestaurantMenu onAskJesse={() => setShowJesse(true)} /></div>}
+      {mountedTabs.has('tables') && <div style={{ display: activeTab === 'tables' ? undefined : 'none' }}><RestaurantTables onAskJesse={() => setShowJesse(true)} restaurantId={sessionRestaurantId} /></div>}
+      {mountedTabs.has('orders') && <div style={{ display: activeTab === 'orders' ? undefined : 'none' }}><RestaurantOrders onAskJesse={() => setShowJesse(true)} /></div>}
+      {mountedTabs.has('kitchen') && <div style={{ display: activeTab === 'kitchen' ? undefined : 'none' }}><RestaurantKitchen onAskJesse={() => setShowJesse(true)} /></div>}
+      {mountedTabs.has('inventory') && <div style={{ display: activeTab === 'inventory' ? undefined : 'none' }}><RestaurantInventory onAskJesse={() => setShowJesse(true)} /></div>}
+      {mountedTabs.has('reports') && <div style={{ display: activeTab === 'reports' ? undefined : 'none' }}><RestaurantReports onAskJesse={() => setShowJesse(true)} /></div>}
+      {mountedTabs.has('staff') && <div style={{ display: activeTab === 'staff' ? undefined : 'none' }}><RestaurantStaff onAskJesse={() => setShowJesse(true)} /></div>}
+      {mountedTabs.has('transactions') && <div style={{ display: activeTab === 'transactions' ? undefined : 'none' }}><RestaurantTransactions onAskJesse={() => setShowJesse(true)} /></div>}
+      {mountedTabs.has('analytics') && <div style={{ display: activeTab === 'analytics' ? undefined : 'none' }}><RestaurantAnalytics onAskJesse={() => setShowJesse(true)} /></div>}
+      {mountedTabs.has('settings') && <div style={{ display: activeTab === 'settings' ? undefined : 'none' }}><RestaurantSettings /></div>}
+    </>
+  )
 
   return (
     <div className="min-h-screen bg-gray-50 flex overflow-x-hidden">
@@ -462,7 +476,7 @@ export default function RestaurantShell() {
                 {group.items.map(item => (
                   <button
                     key={item.id}
-                    onClick={() => { setActiveTab(item.id); setSidebarOpen(false) }}
+                    onClick={() => { handleTabChange(item.id); setSidebarOpen(false) }}
                     className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-all text-left ${
                       activeTab === item.id
                         ? 'bg-orange-500 text-white shadow-md'
@@ -776,9 +790,7 @@ export default function RestaurantShell() {
             </div>
           )}
           <RestaurantBranchProvider value={restaurantBranchContextValue}>
-            <div key={activeBranchId ?? 'no-branch'}>
-              {renderActiveTab()}
-            </div>
+            {renderPersistentTabs()}
           </RestaurantBranchProvider>
         </main>
 
@@ -790,7 +802,7 @@ export default function RestaurantShell() {
               return (
                 <button
                   key={tab}
-                  onClick={() => setActiveTab(tab)}
+                  onClick={() => handleTabChange(tab)}
                   className={`flex flex-col items-center justify-center gap-1 rounded-xl py-2 text-[11px] font-medium transition-colors ${isActive ? 'bg-orange-50 text-orange-600' : 'text-gray-500 hover:bg-gray-50'}`}
                 >
                   {meta.icon}

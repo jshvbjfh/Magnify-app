@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback } from 'react'
 import { CheckCircle2, Users, Clock, XCircle, RefreshCw } from 'lucide-react'
 import { getTables, getOrders, getConfig, type RestaurantTable, type Order } from '../services/db'
 
+// Module-level cache — survives tab switches, cleared only on app restart.
+type TablesSnapshot = { tables: RestaurantTable[]; pendingOrders: Order[]; branchNames: Record<string, string> }
+let tablesCache: TablesSnapshot | null = null
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type TableStatus = 'available' | 'occupied' | 'reserved' | 'cleaning'
@@ -39,31 +43,42 @@ interface Props {
 }
 
 export default function RestaurantTables({ waiterName: _waiterName, activeBranchId: _activeBranchId = null }: Props) {
-  const [tables,        setTables]        = useState<RestaurantTable[]>([])
-  const [pendingOrders, setPendingOrders] = useState<Order[]>([])
-  const [loading,       setLoading]       = useState(true)
+  const [tables,        setTables]        = useState<RestaurantTable[]>(tablesCache?.tables ?? [])
+  const [pendingOrders, setPendingOrders] = useState<Order[]>(tablesCache?.pendingOrders ?? [])
+  const [loading,       setLoading]       = useState(!tablesCache)
+  const [isRefreshing,  setIsRefreshing]  = useState(false)
   const [filter,        setFilter]        = useState<TableStatus | 'all'>('all')
-  const [branchNames,   setBranchNames]   = useState<Record<string, string>>({})
+  const [branchNames,   setBranchNames]   = useState<Record<string, string>>(tablesCache?.branchNames ?? {})
 
   const load = useCallback(async () => {
+    if (tablesCache) {
+      setTables(tablesCache.tables)
+      setPendingOrders(tablesCache.pendingOrders)
+      setBranchNames(tablesCache.branchNames)
+      setLoading(false)
+    }
+    setIsRefreshing(true)
     try {
+      const rId = await getConfig('restaurantId')
       const [t, o, rawBranches] = await Promise.all([
         getTables(),
-        getOrders({ status: 'PENDING' }),
+        getOrders({ status: 'PENDING', restaurantId: rId }),
         getConfig('branches'),
       ])
       setTables(t)
       setPendingOrders(o)
+      let branchMap: Record<string, string> = {}
       if (rawBranches) {
         try {
           const branches: { id: string; name: string }[] = JSON.parse(rawBranches)
-          const map: Record<string, string> = {}
-          for (const b of branches) map[b.id] = b.name
-          setBranchNames(map)
+          for (const b of branches) branchMap[b.id] = b.name
+          setBranchNames(branchMap)
         } catch {}
       }
+      tablesCache = { tables: t, pendingOrders: o, branchNames: branchMap }
     } catch {}
     setLoading(false)
+    setIsRefreshing(false)
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -103,7 +118,7 @@ export default function RestaurantTables({ waiterName: _waiterName, activeBranch
           </p>
         </div>
         <button onClick={load} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" title="Refresh">
-          <RefreshCw className="h-4 w-4 text-gray-500" />
+          <RefreshCw className={`h-4 w-4 text-gray-500 ${isRefreshing ? 'animate-spin' : ''}`} />
         </button>
       </div>
 

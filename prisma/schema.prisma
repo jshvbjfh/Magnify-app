@@ -205,6 +205,10 @@ model RestaurantOrder {
   updatedAt      DateTime         @updatedAt
   deletedAt      DateTime?
 
+  // Accounts Receivable: customer name when paid on credit, and when the A/R was collected
+  arCustomerName String?
+  arCollectedAt  DateTime?
+
   // Linked to the accounting entry created when this order is paid
   journalEntryId String?
   journalEntry   JournalEntry?    @relation(fields: [journalEntryId], references: [id])
@@ -351,6 +355,7 @@ model InventoryPurchase {
   unitCost             Float
   totalCost            Float
   paymentMethod        String        @default("Cash")
+  paidAt               DateTime?
   purchasedAt          DateTime      @default(now())
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt

@@ -206,7 +206,7 @@ model RestaurantOrder {
   updatedAt      DateTime         @updatedAt
   deletedAt      DateTime?
 
-  // Accounts Receivable: customer name when paid on credit, and when the A/R was collected in cash
+  // Accounts Receivable: customer name when paid on credit, and when the A/R was collected
   arCustomerName String?
   arCollectedAt  DateTime?
 

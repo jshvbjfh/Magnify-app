@@ -134,15 +134,20 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
       return
     }
 
+    // Optimistic switch: persist the new branch and update UI immediately,
+    // then sync in the background so the user isn't blocked waiting for the network.
+    await setConfig('activeBranchId', branchId)
+    await setConfig('branchId', branchId)
+    setActiveBranchId(branchId)
+    setSyncVersion(v => v + 1)
+
     setBranchSwitchingId(branchId)
     try {
-      // If a background sync is in progress, wait up to 10 s for it to finish
-      // so the branch-switch sync is not silently dropped by the runSync guard.
       const deadline = Date.now() + 10_000
       while (syncingRef.current && Date.now() < deadline) {
         await new Promise<void>(r => setTimeout(r, 150))
       }
-      await runSync({ branchId, persistBranch: true })
+      await runSync({ branchId, persistBranch: false })
     } finally {
       setBranchSwitchingId(null)
     }
@@ -246,14 +251,13 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
                 type="button"
                 onClick={() => { void handleBranchSelect(branch.id) }}
                 disabled={isSwitching}
-                title={branch.name}
                 className={`flex-shrink-0 rounded-full border px-4 py-1.5 text-sm font-semibold transition-colors ${
                   isActive
                     ? 'border-orange-500 bg-orange-500 text-white'
                     : 'border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100'
                 } ${isSwitching ? 'cursor-wait opacity-70' : ''}`}
               >
-                {branch.code?.trim() || branch.name}
+                {branch.name}
               </button>
             )
           })}

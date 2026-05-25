@@ -36,7 +36,8 @@ export async function POST(req: NextRequest) {
     const filename = `qr-menu-${context.branchId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${extension}`
 
     // Use Vercel Blob when the token is available (production/Vercel),
-    // fall back to local filesystem for Electron and local dev.
+    // fall back to base64 data URL on Vercel without Blob (ephemeral fs can't persist),
+    // and local filesystem for Electron / local dev.
     if (process.env.BLOB_READ_WRITE_TOKEN) {
       const { put } = await import('@vercel/blob')
       const blob = await put(`qr-menu/${filename}`, file, {
@@ -46,12 +47,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, path: blob.url, filename })
     }
 
+    const bytes = await file.arrayBuffer()
+
+    // On Vercel without Blob token the filesystem is ephemeral — encode to base64
+    // data URL so the image is stored directly in the database and always accessible.
+    if (process.env.VERCEL) {
+      const base64 = Buffer.from(bytes).toString('base64')
+      const dataUrl = `data:${file.type};base64,${base64}`
+      return NextResponse.json({ ok: true, path: dataUrl, filename })
+    }
+
     // Local filesystem fallback (Electron / dev without Vercel Blob)
     const { mkdir, writeFile } = await import('node:fs/promises')
     const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'qr-menu')
     await mkdir(uploadDir, { recursive: true })
     const filePath = path.join(uploadDir, filename)
-    const bytes = await file.arrayBuffer()
     await writeFile(filePath, Buffer.from(bytes))
     return NextResponse.json({ ok: true, path: `/api/uploads/qr-menu/${filename}`, filename })
   } catch (error) {

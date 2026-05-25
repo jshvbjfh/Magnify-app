@@ -1238,16 +1238,6 @@ function createWindow(localIP, serverPort) {
 
 		mainWindow.show()
 
-		// Show the LAN address so the manager knows what to tell waiters
-		if (localIP && localIP !== 'localhost') {
-			dialog.showMessageBox(mainWindow, {
-				type: 'info',
-				title: 'Waiter Access URL',
-				message: `Server is running on your network.\n\nWaiters can connect from any device on the same WiFi:\n\nhttp://${localIP}:${serverPort}\n\nShare this address with your waiters.`,
-				buttons: ['Got it']
-			})
-		}
-
 		startDesktopUpdateChecks()
 	})
 

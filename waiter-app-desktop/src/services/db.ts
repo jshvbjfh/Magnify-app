@@ -170,9 +170,13 @@ export interface Dish {
 }
 
 export async function replaceDishes(dishes: Dish[], scope: ReplaceScope = {}): Promise<void> {
+  // Use explicit scope for the delete — never derive branchId from dishes[0] because the
+  // pull API returns all restaurant dishes (spanning every branch). Scoping the delete to
+  // one arbitrary branch leaves other branches' dishes in SQLite and causes UNIQUE failures
+  // on the next sync when we try to re-insert them.
   const deleteStatement = buildScopedDeleteStatement('dishes', {
-    branchId: dishes[0]?.branch_id ?? scope.branchId,
-    restaurantId: dishes[0]?.restaurant_id ?? scope.restaurantId,
+    branchId: scope.branchId ?? null,
+    restaurantId: scope.restaurantId ?? dishes[0]?.restaurant_id ?? null,
   })
 
   if (!dishes.length) {
@@ -234,9 +238,12 @@ export interface RestaurantTable {
 }
 
 export async function replaceTables(tables: RestaurantTable[], scope: ReplaceScope = {}): Promise<void> {
+  // Always scope DELETE by restaurant only — never by branch — so that all
+  // branches for this restaurant are replaced atomically and stale tables from
+  // a previous login to a different restaurant are never left behind.
+  const restaurantId = scope.restaurantId ?? tables[0]?.restaurant_id ?? null
   const deleteStatement = buildScopedDeleteStatement('restaurant_tables', {
-    branchId: tables[0]?.branch_id ?? scope.branchId,
-    restaurantId: tables[0]?.restaurant_id ?? scope.restaurantId,
+    restaurantId,
   })
 
   if (!tables.length) {
@@ -365,10 +372,16 @@ export async function updateOrder(
   await db.run(`UPDATE orders SET ${setClauses} WHERE id = ?`, [...values, orderId])
 }
 
-export async function getOrders(filter?: { status?: string; branchId?: string | null }): Promise<Order[]> {
+export async function getOrders(filter?: { status?: string; branchId?: string | null; restaurantId?: string | null }): Promise<Order[]> {
   const db = getDB()
   const clauses: string[] = []
   const values: unknown[] = []
+
+  const normalizedRestaurantId = typeof filter?.restaurantId === 'string' ? filter.restaurantId.trim() : ''
+  if (normalizedRestaurantId) {
+    clauses.push('restaurant_id = ?')
+    values.push(normalizedRestaurantId)
+  }
 
   if (filter?.status) {
     clauses.push('status = ?')

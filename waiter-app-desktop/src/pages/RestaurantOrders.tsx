@@ -80,6 +80,20 @@ function getDisplayStatus(order: Order) {
   return 'PENDING'
 }
 
+// ─── Module-level stale-while-revalidate caches ──────────────────────────────
+// Survive tab switches; cleared only on app restart.
+
+type PosSnapshot = {
+  dishes: Dish[]
+  tables: RestaurantTable[]
+  pendingOrders: Order[]
+  orderItemsMap: Record<string, OrderItem[]>
+  restaurantId: string | null
+  branchId: string | null
+}
+let posCache: PosSnapshot | null = null
+let historyCache: Order[] | null = null
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 interface Props {
@@ -90,14 +104,15 @@ interface Props {
   syncVersion?: number
 }
 
-export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId: _activeBranchId = null, onPendingCountChange, syncVersion }: Props) {
+export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId = null, onPendingCountChange, syncVersion }: Props) {
   // ── Shared state ──
   const [dishes,        setDishes]        = useState<Dish[]>([])
   const [tables,        setTables]        = useState<RestaurantTable[]>([])
   const [pendingOrders, setPendingOrders] = useState<Order[]>([])
   const [orderItemsMap, setOrderItemsMap] = useState<Record<string, OrderItem[]>>({})
   const [allOrders,     setAllOrders]     = useState<Order[]>([])
-  const [loading,       setLoading]       = useState(true)
+  const [loading,       setLoading]       = useState(mode === 'pos' ? !posCache : !historyCache)
+  const [isRefreshing,  setIsRefreshing]  = useState(false)
   const [restaurantId,  setRestaurantId]  = useState<string | null>(null)
   const [branchId,      setBranchId]      = useState<string | null>(null)
 
@@ -123,12 +138,26 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   // ── Data loaders ──
 
   const loadPOS = useCallback(async () => {
+    // Show cached data immediately so the user never stares at a blank screen.
+    if (posCache) {
+      setDishes(posCache.dishes)
+      setTables(posCache.tables)
+      setPendingOrders(posCache.pendingOrders)
+      setOrderItemsMap(posCache.orderItemsMap)
+      setRestaurantId(posCache.restaurantId)
+      setBranchId(posCache.branchId)
+      setLoading(false)
+    }
+    setIsRefreshing(true)
     try {
-      const [d, t, orders, rId, bId] = await Promise.all([
-        getDishes(),
-        getTables(),
-        getOrders({ status: 'PENDING' }),
+      const [rId, activeBranch] = await Promise.all([
         getConfig('restaurantId'),
+        getConfig('activeBranchId'),
+      ])
+      const [d, t, orders, bId] = await Promise.all([
+        getDishes(activeBranch),
+        getTables(),
+        getOrders({ status: 'PENDING', restaurantId: rId }),
         getConfig('branchId'),
       ])
       setDishes(d)
@@ -151,16 +180,37 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         itemsMap[o.id] = await getOrderItems(o.id)
       }))
       setOrderItemsMap(itemsMap)
+      posCache = { dishes: d, tables: t, pendingOrders: orders, orderItemsMap: itemsMap, restaurantId: rId, branchId: bId }
     } catch { /* DB not ready on first render — will retry */ }
     setLoading(false)
+    setIsRefreshing(false)
   }, [])
 
   const loadHistory = useCallback(async () => {
+    if (historyCache) {
+      setAllOrders(historyCache)
+      setLoading(false)
+    }
+    setIsRefreshing(true)
     try {
-      setAllOrders(await getOrders())
+      const rId = await getConfig('restaurantId')
+      const orders = await getOrders({ restaurantId: rId })
+      setAllOrders(orders)
+      historyCache = orders
     } catch {}
     setLoading(false)
+    setIsRefreshing(false)
   }, [])
+
+  // Clear POS cache when branch changes so the new branch's menu loads fresh.
+  const prevBranchRef = useRef(activeBranchId)
+  useEffect(() => {
+    if (prevBranchRef.current !== activeBranchId) {
+      posCache = null
+      prevBranchRef.current = activeBranchId
+      setLoading(true)
+    }
+  }, [activeBranchId])
 
   useEffect(() => {
     if (mode === 'pos') loadPOS()
@@ -470,7 +520,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
             </p>
           </div>
           <button onClick={loadHistory} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50">
-            <RefreshCw className="h-4 w-4 text-gray-500" />
+            <RefreshCw className={`h-4 w-4 text-gray-500 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
         </div>
 
@@ -574,7 +624,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
               />
               <button onClick={() => { loadPOS(); setShowPanel('dishes') }}
                 className="p-2 rounded-lg hover:bg-gray-100 transition-colors" title="Refresh">
-                <RefreshCw className="h-4 w-4 text-gray-500" />
+                <RefreshCw className={`h-4 w-4 text-gray-500 ${isRefreshing ? 'animate-spin' : ''}`} />
               </button>
             </div>
           </div>

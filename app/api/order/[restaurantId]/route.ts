@@ -76,12 +76,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
         : restaurant.qrOrderingMode === 'disabled'
           ? 'disabled'
           : 'order',
-      // Only expose absolute HTTPS URLs (Vercel Blob). Local/relative paths from
-      // Electron or dev-server uploads are not accessible from Vercel and would
-      // produce a broken image icon on the live QR menu.
+      // Accept Vercel Blob HTTPS URLs and base64 data URLs (Vercel fallback).
+      // Filter out local /api/uploads/... paths — they're not accessible on Vercel.
       qrMenuHeroImageUrl: (() => {
         const url = resolvedBranch?.qrMenuHeroImageUrl ?? null
-        return typeof url === 'string' && url.startsWith('https://') ? url : null
+        if (typeof url !== 'string') return null
+        if (url.startsWith('https://') || url.startsWith('data:image/')) return url
+        return null
       })(),
     },
     dishes,

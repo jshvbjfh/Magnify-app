@@ -151,11 +151,10 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   let didRefreshLocalSnapshot = false
 
   if (payload.dishes.length === 0) {
-    await replaceDishes([], dishReplaceScope)
-    didRefreshLocalSnapshot = true
-
+    // Don't wipe the local cache on an empty response — a transient server error
+    // or misconfiguration could cause 0 dishes, and clearing would break offline use.
     if (existingDishes.length > 0) {
-      warnings.push('This branch currently has no menu.')
+      warnings.push('This branch currently has no menu. Showing your cached menu.')
     }
   } else {
     await replaceDishes(payload.dishes, dishReplaceScope)
@@ -163,9 +162,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   }
 
   if (payload.tables.length === 0) {
-    await replaceTables([], replaceScope)
-    didRefreshLocalSnapshot = true
-
+    // Same defensive approach for tables — preserve local cache on empty pull.
     if (existingTables.length > 0) {
       warnings.push('This branch currently has no tables.')
     }
