@@ -8,20 +8,25 @@ import { consumeIngredientStock, InsufficientFifoStockError, InsufficientInvento
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 export async function GET() {
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = await getRestaurantContextForUser(session.user.id)
-  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
-  const restaurantId = context.restaurantId
-  const branchId = context.branchId
+    const context = await getRestaurantContextForUser(session.user.id)
+    if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+    const restaurantId = context.restaurantId
+    const branchId = context.branchId
 
-  const logs = await prisma.wasteLog.findMany({
-    where: { restaurantId, branchId },
-    include: { ingredient: true },
-    orderBy: { date: 'desc' }
-  })
-  return NextResponse.json(logs)
+    const logs = await prisma.wasteLog.findMany({
+      where: { restaurantId, branchId },
+      include: { ingredient: true },
+      orderBy: { date: 'desc' }
+    })
+    return NextResponse.json(logs)
+  } catch (error) {
+    console.error('GET /api/restaurant/waste:', error)
+    return NextResponse.json({ error: 'Failed to load waste logs' }, { status: 500 })
+  }
 }
 
 export async function POST(req: Request) {
