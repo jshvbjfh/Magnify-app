@@ -85,6 +85,8 @@ const mobileTabMeta: Record<TabId, { label: string; icon: React.ReactNode }> = {
   settings: { label: 'Settings', icon: <Settings className="h-4 w-4" /> },
 }
 
+const confirmedBranchCookies = new Set<string>()
+
 export default function RestaurantShell() {
   const { data: session, status, update } = useSession()
   const [activeTab, setActiveTab] = useState<TabId>('transactions')
@@ -147,8 +149,10 @@ useEffect(() => {
 
         if (cancelled) return
 
+        const nextActiveBranchId = typeof data?.activeBranchId === 'string' ? data.activeBranchId : null
+        if (nextActiveBranchId) confirmedBranchCookies.add(nextActiveBranchId)
         setBranches(Array.isArray(data?.branches) ? data.branches : [])
-        setActiveBranchId(typeof data?.activeBranchId === 'string' ? data.activeBranchId : null)
+        setActiveBranchId(nextActiveBranchId)
         setBranchError(null)
       } catch (error) {
         if (cancelled) return
@@ -171,6 +175,26 @@ useEffect(() => {
 
     setBranchError(null)
     setBranchNotice(null)
+
+    if (confirmedBranchCookies.has(branchId)) {
+      // Revisit: restore cached UI immediately, update server cookie in background
+      setActiveBranchId(branchId)
+      fetch('/api/restaurant/branches', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ branchId }),
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data?.activeBranchId) update({ branchId: data.activeBranchId }).catch(() => undefined)
+          window.dispatchEvent(new Event('refreshWastePending'))
+        })
+        .catch(() => { window.dispatchEvent(new Event('refreshWastePending')) })
+      return
+    }
+
+    // First visit: show spinner, await PATCH so cookie is set before components fetch
     setBranchSwitchingId(branchId)
 
     try {
@@ -186,7 +210,8 @@ useEffect(() => {
       }
 
       const nextActiveBranchId = typeof data?.activeBranchId === 'string' ? data.activeBranchId : branchId
-      await update({ branchId: nextActiveBranchId }).catch(() => undefined)
+      confirmedBranchCookies.add(nextActiveBranchId)
+      update({ branchId: nextActiveBranchId }).catch(() => undefined)
       setActiveBranchId(nextActiveBranchId)
       window.dispatchEvent(new Event('refreshWastePending'))
     } catch (error) {
