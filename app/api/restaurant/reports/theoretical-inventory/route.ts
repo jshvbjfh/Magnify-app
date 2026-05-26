@@ -61,7 +61,7 @@ export async function GET(req: Request) {
   const endDate = to ? new Date(`${to}T23:59:59.999`) : null
   const effectiveEndDate = endDate ?? new Date()
 
-  const [ingredients, purchases, wasteLogs, layerSnapshot, dishSaleUsage] = await Promise.all([
+  const [ingredients, purchases, wasteLogs, layerSnapshot, dishSaleUsage, rawStockTakes] = await Promise.all([
     prisma.inventoryItem.findMany({
       where: { restaurantId, branchId },
       select: { id: true, name: true, unit: true, quantity: true, unitCost: true, reorderLevel: true, createdAt: true },
@@ -85,7 +85,22 @@ export async function GET(req: Request) {
     }),
     getIngredientLayerSnapshotAsOf(prisma, { restaurantId, branchId, endDate: effectiveEndDate }),
     getDishSaleUsageBreakdown(prisma, { restaurantId, branchId, startDate, endDate }),
+    prisma.stockTake.findMany({
+      where: {
+        restaurantId,
+        branchId,
+        takenAt: { lte: effectiveEndDate },
+      },
+      orderBy: { takenAt: 'desc' },
+      select: { ingredientId: true, quantity: true, takenAt: true },
+    }),
   ])
+
+  // Deduplicate to the latest stock take per ingredient within the report window
+  const stockTakeMap = new Map<string, { quantity: number; takenAt: Date }>()
+  for (const t of rawStockTakes) {
+    if (!stockTakeMap.has(t.ingredientId)) stockTakeMap.set(t.ingredientId, t)
+  }
 
   const beforePurchases = new Map<string, QtyCost>()
   const periodPurchases = new Map<string, QtyCost>()
@@ -135,18 +150,19 @@ export async function GET(req: Request) {
 
     const openingQty = roundQty(beforePurchase.qty - beforeUsage.qty - beforeWasteQty.qty)
     const theoreticalQty = roundQty(openingQty + periodPurchase.qty - periodUsage.qty - periodWasteQty.qty)
-    const hasBatchHistory = layerSnapshot.hasPurchaseHistory.has(ingredient.id)
-    const layerTotals = layerSnapshot.ingredientTotals.get(ingredient.id)
-    const actualQty = hasBatchHistory
-      ? roundQty(Number(layerTotals?.quantity ?? 0))
-      : roundQty(ingredient.quantity)
-    const varianceQty = roundQty(actualQty - theoreticalQty)
-    const varianceCost = roundQty(varianceQty * (ingredient.unitCost ?? 0))
-    const wasteCost = roundQty(periodWasteQty.cost)
     const theoreticalStockValue = roundQty(theoreticalQty * (ingredient.unitCost ?? 0))
-    const actualStockValue = hasBatchHistory
-      ? roundQty(Number(layerTotals?.value ?? 0))
-      : roundQty(actualQty * (ingredient.unitCost ?? 0))
+    const wasteCost = roundQty(periodWasteQty.cost)
+
+    const stockTake = stockTakeMap.get(ingredient.id) ?? null
+    const hasCount = stockTake !== null
+    const actualQty = hasCount ? roundQty(stockTake.quantity) : null
+    const varianceQty = hasCount ? roundQty(actualQty! - theoreticalQty) : null
+    const varianceCost = hasCount ? roundQty(varianceQty! * (ingredient.unitCost ?? 0)) : null
+    const actualStockValue = hasCount ? roundQty(actualQty! * (ingredient.unitCost ?? 0)) : null
+    const varianceStatus = !hasCount
+      ? 'No Count'
+      : Math.abs(varianceQty!) < 0.001 ? 'Matched'
+      : varianceQty! > 0 ? 'Over' : 'Short'
 
     return {
       id: ingredient.id,
@@ -161,16 +177,17 @@ export async function GET(req: Request) {
       wasteQty: roundQty(periodWasteQty.qty),
       wasteCost,
       theoreticalQty,
+      theoreticalStockValue,
       actualQty,
       varianceQty,
       varianceCost,
-      theoreticalStockValue,
       actualStockValue,
-      isLow: actualQty <= ingredient.reorderLevel,
-      varianceStatus: Math.abs(varianceQty) < 0.001 ? 'Matched' : varianceQty > 0 ? 'Over' : 'Short',
+      hasCount,
+      countedAt: stockTake?.takenAt ?? null,
+      isLow: (actualQty ?? 0) <= ingredient.reorderLevel,
+      varianceStatus,
       usageSource: hasFifoUsage ? 'fifo' : 'recipe',
       usageMode,
-      actualStockValueMode: hasBatchHistory ? 'fifo_layers' : 'unit_cost_fallback',
     }
   })
 
@@ -179,10 +196,12 @@ export async function GET(req: Request) {
     totalUsedCost: acc.totalUsedCost + item.usedCost,
     totalWasteCost: acc.totalWasteCost + item.wasteCost,
     totalTheoreticalStockValue: acc.totalTheoreticalStockValue + item.theoreticalStockValue,
-    totalActualStockValue: acc.totalActualStockValue + item.actualStockValue,
-    totalVarianceCost: acc.totalVarianceCost + item.varianceCost,
+    totalActualStockValue: acc.totalActualStockValue + (item.actualStockValue ?? 0),
+    totalVarianceCost: acc.totalVarianceCost + (item.varianceCost ?? 0),
     matchedCount: acc.matchedCount + (item.varianceStatus === 'Matched' ? 1 : 0),
-    varianceCount: acc.varianceCount + (item.varianceStatus === 'Matched' ? 0 : 1),
+    varianceCount: acc.varianceCount + (item.varianceStatus !== 'Matched' && item.varianceStatus !== 'No Count' ? 1 : 0),
+    noCountCount: acc.noCountCount + (item.varianceStatus === 'No Count' ? 1 : 0),
+    countedCount: acc.countedCount + (item.hasCount ? 1 : 0),
   }), {
     totalPurchaseCost: 0,
     totalUsedCost: 0,
@@ -192,6 +211,8 @@ export async function GET(req: Request) {
     totalVarianceCost: 0,
     matchedCount: 0,
     varianceCount: 0,
+    noCountCount: 0,
+    countedCount: 0,
   })
 
   return NextResponse.json({
@@ -205,6 +226,6 @@ export async function GET(req: Request) {
       totalActualStockValue: roundQty(totals.totalActualStockValue),
       totalVarianceCost: roundQty(totals.totalVarianceCost),
     },
-    meta: { fifoEnabled: true, fifoCutoverAt: null },
+    meta: { fifoEnabled: true, fifoCutoverAt: null, stockTakeMode: true },
   })
 }

@@ -85,6 +85,7 @@ model Branch {
   purchases      InventoryPurchase[]
   dishSales      DishSale[]
   wasteLogs      WasteLog[]
+  stockTakes     StockTake[]
   adjustmentLogs InventoryAdjustmentLog[]
   staffBranches  StaffBranch[]
   shifts         EmployeeShift[]
@@ -331,6 +332,7 @@ model InventoryItem {
   wasteLogs         WasteLog[]
   adjustmentLogs    InventoryAdjustmentLog[]
   batchUsageLedgers InventoryBatchUsageLedger[]
+  stockTakes        StockTake[]
 
   @@unique([restaurantId, branchId, name])
   @@index([branchId])
@@ -483,6 +485,24 @@ model WasteLog {
 
   @@index([branchId])
   @@map("waste_logs")
+}
+
+model StockTake {
+  id           String        @id @default(cuid())
+  restaurantId String
+  branchId     String
+  branch       Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  ingredientId String
+  ingredient   InventoryItem @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  quantity     Float
+  takenAt      DateTime      @default(now())
+  notes        String?
+  recordedBy   String?
+  createdAt    DateTime      @default(now())
+
+  @@index([branchId])
+  @@index([ingredientId, takenAt])
+  @@map("stock_takes")
 }
 
 // ─── ACCOUNTING ────────────────────────────────────────────────────────────

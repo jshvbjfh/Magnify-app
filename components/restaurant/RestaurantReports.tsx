@@ -742,10 +742,39 @@ function InventoryMovementTable({ data }: { data: any }) {
   )
 }
 
-function TheoreticalInventoryTable({ data }: { data: any }) {
+function TheoreticalInventoryTable({ data, onCountSaved }: { data: any; onCountSaved?: () => void }) {
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [draftQty, setDraftQty] = useState('')
+  const [saving, setSaving] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (editingId && inputRef.current) inputRef.current.focus()
+  }, [editingId])
+
+  const saveCount = async (ingredientId: string) => {
+    const qty = parseFloat(draftQty)
+    if (!Number.isFinite(qty) || qty < 0) { setEditingId(null); return }
+    setSaving(true)
+    try {
+      const res = await fetch('/api/restaurant/stock-take', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ ingredientId, quantity: qty }),
+      })
+      if (res.ok) onCountSaved?.()
+    } finally {
+      setSaving(false)
+      setEditingId(null)
+    }
+  }
+
   if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading theoretical inventory data…</div>
   const items: any[] = data.items ?? []
   const totals: any = data.totals ?? {}
+  const noCountCount: number = totals.noCountCount ?? items.length
+
   return (
     <>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
@@ -755,34 +784,95 @@ function TheoreticalInventoryTable({ data }: { data: any }) {
         <StatCard label="Variance Cost" value={`${fmt(totals.totalVarianceCost ?? 0)} RWF`} color="bg-amber-50 border-amber-200" />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <StatCard label="Matched Items" value={(totals.matchedCount ?? 0).toString()} color="bg-green-50 border-green-200" />
+        <StatCard label="Counted Items" value={`${totals.countedCount ?? 0} / ${items.length}`} color="bg-green-50 border-green-200" />
         <StatCard label="Variance Items" value={(totals.varianceCount ?? 0).toString()} color="bg-amber-50 border-amber-200" />
         <StatCard label="Theoretical Stock Value" value={`${fmt(totals.totalTheoreticalStockValue ?? 0)} RWF`} color="bg-blue-50 border-blue-200" />
-        <StatCard label="Actual Stock Value" value={`${fmt(totals.totalActualStockValue ?? 0)} RWF`} color="bg-green-50 border-green-200" />
+        <StatCard label="Actual Stock Value" value={totals.countedCount > 0 ? `${fmt(totals.totalActualStockValue ?? 0)} RWF` : '—'} color="bg-green-50 border-green-200" />
       </div>
-      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 mb-4">
-        Theoretical stock is based on recorded purchases, recipe usage, and waste. Variance appears when stock was changed outside those records.
-      </div>
+      {noCountCount > 0 && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-800 mb-4">
+          <strong>{noCountCount} ingredient{noCountCount !== 1 ? 's' : ''} not yet counted.</strong> Click the <strong>Actual</strong> cell for any ingredient to enter your physical count. Variance calculates automatically.
+        </div>
+      )}
       {items.length === 0 ? (
         <div className="py-8 text-center text-gray-400 text-sm">No theoretical inventory data found for this period.</div>
       ) : (
-        <DataTable
-          head={['Ingredient', 'Unit', 'Opening', 'Bought', 'Used', 'Waste', 'Theoretical', 'Actual', 'Variance', 'Variance Cost', 'Status']}
-          rows={items.map((i:any) => [
-            i.ingredientName,
-            i.unit,
-            i.openingQty,
-            i.purchasedQty,
-            i.usedQty,
-            i.wasteQty,
-            i.theoreticalQty,
-            i.actualQty,
-            i.varianceQty,
-            fmt(i.varianceCost),
-            i.varianceStatus,
-          ])}
-          foot={['TOTALS', '', '', '', '', '', '', '', '', fmt(totals.totalVarianceCost ?? 0), `${totals.varianceCount ?? 0} items`]}
-        />
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-200 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                {['Ingredient', 'Unit', 'Opening', 'Bought', 'Used', 'Waste', 'Theoretical', 'Actual ✎', 'Variance', 'Variance Cost', 'Status'].map(h => (
+                  <th key={h} className="px-3 py-2 whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((i: any) => {
+                const isEditing = editingId === i.id
+                const statusColor = i.varianceStatus === 'Matched' ? 'text-green-700 bg-green-50' :
+                  i.varianceStatus === 'No Count' ? 'text-gray-500 bg-gray-50' :
+                  i.varianceStatus === 'Over' ? 'text-blue-700 bg-blue-50' : 'text-red-700 bg-red-50'
+                return (
+                  <tr key={i.id} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{i.ingredientName}</td>
+                    <td className="px-3 py-2 text-gray-500">{i.unit}</td>
+                    <td className="px-3 py-2 text-gray-700">{i.openingQty}</td>
+                    <td className="px-3 py-2 text-gray-700">{i.purchasedQty}</td>
+                    <td className="px-3 py-2 text-gray-700">{i.usedQty}</td>
+                    <td className="px-3 py-2 text-gray-700">{i.wasteQty}</td>
+                    <td className="px-3 py-2 font-semibold text-gray-900">{i.theoreticalQty}</td>
+                    <td
+                      className="px-3 py-2 cursor-pointer"
+                      onClick={() => { if (!isEditing) { setEditingId(i.id); setDraftQty(i.actualQty != null ? String(i.actualQty) : '') } }}
+                    >
+                      {isEditing ? (
+                        <div className="flex items-center gap-1">
+                          <input
+                            ref={inputRef}
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={draftQty}
+                            onChange={e => setDraftQty(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') void saveCount(i.id)
+                              if (e.key === 'Escape') setEditingId(null)
+                            }}
+                            onBlur={() => void saveCount(i.id)}
+                            className="w-20 rounded border border-orange-400 px-1.5 py-0.5 text-xs outline-none focus:ring-1 focus:ring-orange-300"
+                            disabled={saving}
+                          />
+                        </div>
+                      ) : i.actualQty != null ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-orange-50 border border-orange-200 px-2 py-0.5 text-orange-800 font-semibold hover:bg-orange-100 transition-colors">
+                          {i.actualQty}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-md border border-dashed border-gray-300 px-2 py-0.5 text-gray-400 hover:border-orange-400 hover:text-orange-500 transition-colors">
+                          — Enter count
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-gray-700">{i.varianceQty != null ? i.varianceQty : '—'}</td>
+                    <td className="px-3 py-2 text-gray-700">{i.varianceCost != null ? fmt(i.varianceCost) : '—'}</td>
+                    <td className="px-3 py-2">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusColor}`}>
+                        {i.varianceStatus}
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold text-gray-700">
+                <td className="px-3 py-2" colSpan={9}>TOTALS</td>
+                <td className="px-3 py-2">{fmt(totals.totalVarianceCost ?? 0)}</td>
+                <td className="px-3 py-2 text-xs text-gray-500">{totals.varianceCount ?? 0} variance</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
       )}
     </>
   )
@@ -1290,7 +1380,11 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
               {activeTab==='payment_methods' &&<PaymentMethodsTable txs={txData??[]}/>} 
               {activeTab==='dish_profit'        &&<DishProfitTable        data={dishProfitData}/>}
               {activeTab==='inventory_movement' &&<InventoryMovementTable data={invMovementData}/>}
-              {activeTab==='theoretical_inventory' &&<TheoreticalInventoryTable data={theoreticalInvData}/>}
+              {activeTab==='theoretical_inventory' &&<TheoreticalInventoryTable data={theoreticalInvData} onCountSaved={() => {
+                const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)
+                fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, { credentials: 'include', cache: 'no-store' })
+                  .then(r => r.ok ? r.json() : null).then(d => { if (d) setTheoreticalInvData(d) }).catch(() => undefined)
+              }} />}
             </div>
           )}
         </div>
