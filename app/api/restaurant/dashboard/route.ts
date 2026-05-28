@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { cached } from '@/lib/apiCache'
 
 function toDateKey(date: Date) {
   // Africa/Kigali = UTC+2; prevents early-morning sales being pushed to the previous UTC day
@@ -215,7 +216,7 @@ export async function GET(req: Request) {
   if (wastePct > 5) alerts.push({ type: 'warning', message: `Waste at ${wastePct.toFixed(1)}% of revenue — investigate losses` })
   if (foodCostPct > 35) alerts.push({ type: 'warning', message: `Food Cost at ${foodCostPct.toFixed(1)}% — above 35% target` })
 
-  return NextResponse.json({
+  return cached({
     period: hasCustomRange ? 'custom' : period,
     from: toDateKey(from),
     to: toDateKey(to),
@@ -234,5 +235,5 @@ export async function GET(req: Request) {
     alerts,
     salesCount: sales.length,
     dailyHistory,
-  })
+  }, 60)
 }

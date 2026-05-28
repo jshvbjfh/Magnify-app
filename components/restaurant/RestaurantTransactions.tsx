@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession } from 'next-auth/react'
@@ -6,7 +6,7 @@ import { Plus, ArrowDownLeft, ArrowUpRight, RefreshCw, Search, X, Calendar, Tren
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
-// â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Types ---
 interface Transaction {
   id: string
   date: string
@@ -25,18 +25,14 @@ interface Transaction {
   screenshotUrl: string | null
 }
 
-interface ModalFormState {
-  direction: 'in' | 'out' | 'opening'
+interface NewTxRowState {
+  direction: 'in' | 'out'
   amount: string
   description: string
   date: string
   categoryType: string
   accountName: string
   paymentMethod: string
-  vatEnabled: boolean
-  discountEnabled: boolean
-  discountPct: string
-  clientName: string
 }
 
 type RestaurantTransactionsSnapshot = {
@@ -87,7 +83,6 @@ function ordinal(n: number): string {
   }
 }
 
-/** Format as "Mon, 3rd Dec 2026" */
 function formatDateLabel(isoDate: string): string {
   const d = new Date(isoDate + 'T00:00:00')
   const dayName = d.toLocaleDateString('en-GB', { weekday: 'short' })
@@ -139,24 +134,17 @@ function isWasteLikeTransaction(transaction: Pick<Transaction, 'description' | '
   return transaction.description.trim().toLowerCase().startsWith('waste:')
 }
 
-const CATEGORIES = ['income', 'expense', 'asset', 'liability', 'equity']
 const PAYMENT_METHODS = ['Cash', 'Mobile Money', 'Bank', 'Card', 'Credit', 'Owner Momo']
 
-const DEFAULT_MODAL_FORM: ModalFormState = {
-  direction: 'out',
-  amount: '',
-  description: '',
-  date: todayStr(),
-  categoryType: 'expense',
-  accountName: '',
-  paymentMethod: 'Cash',
-  vatEnabled: false,
-  discountEnabled: false,
-  discountPct: '',
-  clientName: '',
+const ACCOUNT_OPTIONS: Record<string, string[]> = {
+  expense: ['Fuel Expense', 'Office Rent', 'Salaries & Wages', 'Utilities', 'Supplies & Materials', 'Marketing & Advertising', 'Transport & Logistics', 'Maintenance & Repairs', 'Insurance', 'Office Supplies', 'Other Expense'],
+  income: ['Sales Revenue', 'Service Revenue', 'Consultation Fee', 'Commission Income', 'Other Income'],
+  asset: ['Cash', 'Bank Account', 'Mobile Money', 'Inventory', 'Equipment', 'Other Asset'],
+  liability: ['Accounts Payable', 'Loan Payable', 'VAT Payable', 'Other Liability'],
+  equity: ["Owner's Equity", 'Retained Earnings', 'Other Equity'],
 }
 
-// â”€â”€â”€ Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// --- Component ---
 export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: () => void }) {
   const { data: session } = useSession()
   const restaurantBranch = useRestaurantBranch()
@@ -165,14 +153,15 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   const [loadError, setLoadError] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string>(todayStr())
   const [search, setSearch] = useState('')
-  const [showModal, setShowModal] = useState(false)
+  const [newTxRow, setNewTxRow] = useState<NewTxRowState | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
-  const [modalForm, setModalForm] = useState<ModalFormState>({ ...DEFAULT_MODAL_FORM, date: todayStr() })
   const initializedSelectedDateRef = useRef(false)
+  const descriptionRef = useRef<HTMLInputElement>(null)
+
   const snapshotScopeId = buildRestaurantSnapshotScope({
     restaurantId: restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null,
     branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
@@ -190,7 +179,6 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     setShowingCachedSnapshot(false)
   }, [snapshotStorageScope])
 
-  //â”€â”€ Fetch â”€â”€
   const fetchTransactions = useCallback(async () => {
     setLoading(transactions.length === 0)
     setLoadError(null)
@@ -219,10 +207,8 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
 
   useEffect(() => {
     if (!snapshotStorageScope) return
-
     const snapshot = loadRestaurantDeviceSnapshot<RestaurantTransactionsSnapshot>(snapshotStorageScope)
     if (!snapshot) return
-
     setTransactions(Array.isArray(snapshot.transactions) ? normalizeTransactions(snapshot.transactions) : [])
     setSnapshotUpdatedAt(snapshot.updatedAt ?? null)
     setShowingCachedSnapshot(true)
@@ -242,38 +228,34 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     }
   }, [fetchTransactions])
 
-  // Auto-refresh every 30 s so the tab never shows stale data after Jesse records
   useEffect(() => {
     const id = setInterval(() => fetchTransactions(), 30_000)
     return () => clearInterval(id)
   }, [fetchTransactions])
 
-  // â”€â”€ Build date sidebar â”€â”€
+  // --- Date sidebar ---
   const today = todayStr()
 
-  // Count unique journal entries per date (pairId = 1 entry; solo = 1 entry each)
   const entriesPerDate: Record<string, Set<string>> = {}
   for (const t of transactions) {
     const d = toKigaliDateKey(t.date)
     if (!entriesPerDate[d]) entriesPerDate[d] = new Set()
     entriesPerDate[d].add(t.pairId ?? t.id)
   }
-  if (!entriesPerDate[today]) entriesPerDate[today] = new Set() // always show today
+  if (!entriesPerDate[today]) entriesPerDate[today] = new Set()
 
   const sortedDates = Object.keys(entriesPerDate).sort((a, b) => b.localeCompare(a))
   const firstDateWithEntries = sortedDates.find((dateKey) => (entriesPerDate[dateKey]?.size ?? 0) > 0) ?? today
 
   useEffect(() => {
     if (initializedSelectedDateRef.current || loading) return
-
     if ((entriesPerDate[selectedDate]?.size ?? 0) === 0 && firstDateWithEntries !== selectedDate) {
       setSelectedDate(firstDateWithEntries)
     }
-
     initializedSelectedDateRef.current = true
   }, [entriesPerDate, firstDateWithEntries, loading, selectedDate])
 
-  // â”€â”€ Transactions for selected date â”€â”€
+  // --- Transactions for selected date ---
   const dateTransactions = transactions.filter(t => toKigaliDateKey(t.date) === selectedDate)
 
   const seen = new Set<string>()
@@ -296,63 +278,74 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   }
 
   const totalRevenue = dateTransactions
-    .filter((transaction) => !isWasteLikeTransaction(transaction) && normalizeCategoryType(transaction.categoryType) === 'income' && transaction.direction === 'in')
-    .reduce((sum, transaction) => sum + transaction.amount, 0)
+    .filter((t) => !isWasteLikeTransaction(t) && normalizeCategoryType(t.categoryType) === 'income' && t.direction === 'in')
+    .reduce((sum, t) => sum + t.amount, 0)
   const totalExpenses = dateTransactions
-    .filter((transaction) => !isWasteLikeTransaction(transaction) && normalizeCategoryType(transaction.categoryType) === 'expense' && transaction.direction === 'out')
-    .reduce((sum, transaction) => sum + transaction.amount, 0)
+    .filter((t) => !isWasteLikeTransaction(t) && normalizeCategoryType(t.categoryType) === 'expense' && t.direction === 'out')
+    .reduce((sum, t) => sum + t.amount, 0)
   const hasEntriesOnOtherDates = sortedDates.some((dateKey) => dateKey !== selectedDate && (entriesPerDate[dateKey]?.size ?? 0) > 0)
 
-  const openModal = () => {
+  // --- Row-entry actions ---
+  const openNewTxRow = () => {
     setSaveError(null)
-    setSaveSuccess(false)
-    setModalForm({ ...DEFAULT_MODAL_FORM, date: todayStr() })
-    setShowModal(true)
+    const accounts = ACCOUNT_OPTIONS['expense'] ?? []
+    setNewTxRow({
+      direction: 'out',
+      amount: '',
+      description: '',
+      date: todayStr(),
+      categoryType: 'expense',
+      accountName: accounts[accounts.length - 1] ?? 'Other Expense',
+      paymentMethod: 'Cash',
+    })
+    setTimeout(() => descriptionRef.current?.focus(), 50)
   }
 
-  const closeModal = () => {
-    setShowModal(false)
-    setSaveError(null)
-  }
-
-  const handleCategoryChange = (nextCategoryType: string) => {
-    setModalForm(prev => ({
+  const handleRowTypeChange = (type: string) => {
+    const accounts = ACCOUNT_OPTIONS[type] ?? []
+    const lastAccount = accounts[accounts.length - 1] ?? ''
+    setNewTxRow(prev => prev ? {
       ...prev,
-      categoryType: nextCategoryType,
-      direction:
-        nextCategoryType === 'income' ? 'in'
-        : nextCategoryType === 'expense' ? 'out'
-        : prev.direction === 'opening' ? 'in' : prev.direction,
-    }))
+      categoryType: type,
+      accountName: lastAccount,
+      direction: type === 'income' ? 'in' : 'out',
+    } : null)
   }
 
-  // ── Save manual transaction ──
-  const handleModalSave = async () => {
-    setSaveError(null)
-    const amt = parseFloat(modalForm.amount)
-    if (!modalForm.description.trim()) { setSaveError('Description is required'); return }
-    if (!Number.isFinite(amt) || amt <= 0) { setSaveError('Enter a valid positive amount'); return }
+  const handleRowKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void saveNewTxRow(true)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      setNewTxRow(null)
+    }
+  }
 
-    const discountPct = modalForm.discountEnabled ? parseFloat(modalForm.discountPct) || 0 : 0
+  const saveNewTxRow = async (keepOpen: boolean) => {
+    if (!newTxRow) return
+    const desc = newTxRow.description.trim()
+    if (!desc) return
+    const amt = parseFloat(newTxRow.amount)
+    if (!Number.isFinite(amt) || amt <= 0) return
 
     setSaving(true)
+    setSaveError(null)
     try {
       const res = await fetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          date: modalForm.date,
-          description: modalForm.description,
+          direction: newTxRow.direction,
+          categoryType: newTxRow.categoryType,
+          accountName: newTxRow.accountName,
+          description: desc,
           amount: amt,
-          direction: modalForm.direction,
-          accountName: modalForm.direction !== 'opening' ? (modalForm.accountName || undefined) : undefined,
-          categoryType: modalForm.direction !== 'opening' ? modalForm.categoryType : 'equity',
-          paymentMethod: modalForm.paymentMethod,
-          vatEnabled: modalForm.vatEnabled && modalForm.direction === 'in',
-          discount: discountPct,
-          clientName: modalForm.paymentMethod === 'Credit' && modalForm.direction === 'in'
-            ? modalForm.clientName : '',
+          paymentMethod: newTxRow.paymentMethod,
+          date: newTxRow.date,
+          vatEnabled: false,
+          discount: 0,
         }),
       })
       if (!res.ok) {
@@ -362,8 +355,13 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
       window.dispatchEvent(new Event('refreshTransactions'))
       await fetchTransactions()
       setSaveSuccess(true)
-      setShowModal(false)
       setTimeout(() => setSaveSuccess(false), 2000)
+      if (keepOpen) {
+        setNewTxRow(prev => prev ? { ...prev, amount: '', description: '' } : null)
+        setTimeout(() => descriptionRef.current?.focus(), 50)
+      } else {
+        setNewTxRow(null)
+      }
     } catch (e: any) {
       setSaveError(e?.message || 'Error saving transaction')
     } finally {
@@ -376,13 +374,14 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     ? new Date(snapshotUpdatedAt).toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
     : null
 
-  // â”€â”€ Render â”€â”€
+  // --- Render ---
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <h2 className="text-lg font-bold text-gray-800">Transactions</h2>
         <BranchBadge />
       </div>
+
       {showingCachedSnapshot && snapshotUpdatedLabel ? (
         <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
           <p className="font-semibold">Showing last synced transactions snapshot from this device</p>
@@ -390,10 +389,10 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
         </div>
       ) : null}
 
-      {/* â”€â”€ Two-column layout â”€â”€ */}
+      {/* Two-column layout */}
       <div className="flex gap-4 items-start">
 
-        {/* â”€â”€ Date sidebar â”€â”€ */}
+        {/* Date sidebar */}
         <div className="w-52 flex-shrink-0 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden sticky top-4 self-start">
           <div className="px-3 py-2.5 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
             <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Date History</p>
@@ -422,11 +421,9 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                       <p className={`text-[10px] mt-0.5 ${isSelected ? 'text-orange-500' : 'text-gray-400'}`}>{formatDateLabel(d)}</p>
                     </>
                   ) : (
-                    <>
-                      <p className={`text-[11px] font-semibold leading-snug ${isSelected ? 'text-orange-700' : 'text-gray-800'}`}>
-                        {formatDateLabel(d)}
-                      </p>
-                    </>
+                    <p className={`text-[11px] font-semibold leading-snug ${isSelected ? 'text-orange-700' : 'text-gray-800'}`}>
+                      {formatDateLabel(d)}
+                    </p>
                   )}
                   <p className={`text-[10px] font-medium mt-1 ${
                     count > 0
@@ -441,7 +438,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
           </div>
         </div>
 
-        {/* â”€â”€ Main content â”€â”€ */}
+        {/* Main content */}
         <div className="flex-1 min-w-0 space-y-4">
 
           {loadError && (
@@ -450,7 +447,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
             </div>
           )}
 
-          {/* â”€â”€ Summary cards â”€â”€ */}
+          {/* Summary cards */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
             <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
               <div className="flex items-center justify-between mb-2">
@@ -480,7 +477,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
             </div>
           </div>
 
-          {/* â”€â”€ Controls â”€â”€ */}
+          {/* Controls */}
           <div className="bg-white rounded-xl border border-gray-100 px-4 py-3 shadow-sm flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-bold text-gray-800">{dateLabel}</p>
@@ -491,28 +488,29 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
                 <input
                   type="text"
-                  placeholder="Searchâ€¦"
+                  placeholder="Search&hellip;"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   className="pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm w-36 focus:outline-none focus:ring-2 focus:ring-orange-300"
                 />
               </div>
               <button
-                onClick={openModal}
-                className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-semibold hover:bg-orange-600 transition-colors shadow-sm"
+                onClick={openNewTxRow}
+                disabled={!!newTxRow}
+                className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-semibold hover:bg-orange-600 transition-colors shadow-sm disabled:opacity-50"
               >
                 <Plus className="h-4 w-4" />
-                New
+                Add Transaction
               </button>
             </div>
           </div>
 
-          {/* â”€â”€ Transactions table â”€â”€ */}
+          {/* Transactions table */}
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
             {loading ? (
               <div className="flex items-center justify-center py-16">
                 <RefreshCw className="h-6 w-6 text-gray-400 animate-spin mr-2" />
-                <span className="text-gray-400 text-sm">Loading transactionsâ€¦</span>
+                <span className="text-gray-400 text-sm">Loading transactions&hellip;</span>
               </div>
             ) : loadError ? (
               <div className="text-center py-16">
@@ -520,7 +518,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <p className="text-red-600 font-medium">Transactions unavailable</p>
                 <p className="text-red-400 text-sm mt-1">The list could not be loaded from the server.</p>
               </div>
-            ) : rows.length === 0 ? (
+            ) : rows.length === 0 && !newTxRow ? (
               <div className="text-center py-16">
                 <Calendar className="h-10 w-10 text-gray-300 mx-auto mb-3" />
                 <p className="text-gray-500 font-medium">No transactions found</p>
@@ -537,17 +535,142 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100 bg-gray-50">
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Time</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Description</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Account</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Category</th>
-                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Method</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Type</th>
-                      <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Amount</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Category / Account</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Description</th>
+                      <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Amount (RWF)</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Received / Paid</th>
+                      <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Source</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
+
+                    {/* Inline row-entry form */}
+                    {newTxRow && (
+                      <>
+                        <tr className="bg-blue-50 border-t-2 border-blue-400">
+                          {/* 1. Type */}
+                          <td className="px-2 py-2">
+                            <select
+                              value={newTxRow.categoryType}
+                              onChange={e => handleRowTypeChange(e.target.value)}
+                              onKeyDown={handleRowKeyDown}
+                              disabled={saving}
+                              className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs font-medium bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 w-full"
+                            >
+                              {['expense', 'income', 'asset', 'liability', 'equity'].map(t => (
+                                <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
+                              ))}
+                            </select>
+                          </td>
+                          {/* 2. Category / Account */}
+                          <td className="px-2 py-2">
+                            <select
+                              value={newTxRow.accountName}
+                              onChange={e => setNewTxRow(prev => prev ? { ...prev, accountName: e.target.value } : null)}
+                              onKeyDown={handleRowKeyDown}
+                              disabled={saving}
+                              className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 w-full"
+                            >
+                              {(ACCOUNT_OPTIONS[newTxRow.categoryType] ?? []).map(a => (
+                                <option key={a} value={a}>{a}</option>
+                              ))}
+                            </select>
+                          </td>
+                          {/* 3. Description */}
+                          <td className="px-2 py-2">
+                            <input
+                              ref={descriptionRef}
+                              type="text"
+                              placeholder="e.g. Paid rent for May"
+                              value={newTxRow.description}
+                              onChange={e => setNewTxRow(prev => prev ? { ...prev, description: e.target.value } : null)}
+                              onKeyDown={handleRowKeyDown}
+                              disabled={saving}
+                              className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 w-full"
+                            />
+                          </td>
+                          {/* 4. Amount */}
+                          <td className="px-2 py-2">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              placeholder="0"
+                              value={newTxRow.amount}
+                              onChange={e => setNewTxRow(prev => prev ? { ...prev, amount: e.target.value } : null)}
+                              onKeyDown={handleRowKeyDown}
+                              disabled={saving}
+                              className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 w-full text-right"
+                            />
+                          </td>
+                          {/* 5. Received / Paid */}
+                          <td className="px-2 py-2">
+                            <select
+                              value={newTxRow.paymentMethod}
+                              onChange={e => setNewTxRow(prev => prev ? { ...prev, paymentMethod: e.target.value } : null)}
+                              onKeyDown={handleRowKeyDown}
+                              disabled={saving}
+                              className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 w-full"
+                            >
+                              {PAYMENT_METHODS.map(pm => <option key={pm} value={pm}>{pm}</option>)}
+                            </select>
+                          </td>
+                          {/* 6. Date */}
+                          <td className="px-2 py-2">
+                            <input
+                              type="date"
+                              value={newTxRow.date}
+                              onChange={e => setNewTxRow(prev => prev ? { ...prev, date: e.target.value } : null)}
+                              onKeyDown={handleRowKeyDown}
+                              disabled={saving}
+                              className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 w-full"
+                            />
+                          </td>
+                          {/* 7. Save / Discard */}
+                          <td className="px-2 py-2">
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => void saveNewTxRow(false)}
+                                disabled={saving}
+                                title="Save and close"
+                                className="p-1.5 rounded-lg bg-green-500 text-white hover:bg-green-600 transition-colors disabled:opacity-50 flex items-center"
+                              >
+                                {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                              </button>
+                              <button
+                                onClick={() => setNewTxRow(null)}
+                                disabled={saving}
+                                title="Discard"
+                                className="p-1.5 rounded-lg bg-gray-200 text-gray-600 hover:bg-gray-300 transition-colors disabled:opacity-50"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                        {/* Hints row */}
+                        <tr className="bg-blue-50 border-b-2 border-blue-400">
+                          <td colSpan={7} className="px-4 pb-2.5">
+                            <div className="flex items-center gap-4 flex-wrap">
+                              <button
+                                onClick={() => void saveNewTxRow(true)}
+                                disabled={saving}
+                                className="text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
+                              >
+                                Save &amp; add another
+                              </button>
+                              <span className="text-xs text-blue-400">Enter to save &amp; continue &middot; Esc to cancel</span>
+                              {saveError && (
+                                <span className="text-xs text-red-600 font-medium">{saveError}</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      </>
+                    )}
+
+                    {/* Transaction rows */}
                     {rows.map(t => {
                       const isWasteEntry = isWasteLikeTransaction(t)
                       const isRevenueEntry = !isWasteEntry && normalizeCategoryType(t.categoryType) === 'income' && t.direction === 'in'
@@ -563,39 +686,38 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                       const recordedAt = t.createdAt ?? t.date
                       return (
                         <tr key={t.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 py-3 text-xs font-medium text-gray-500 whitespace-nowrap" title={formatRecordedDateTime(recordedAt)}>
-                            {formatRecordedTime(recordedAt)}
-                          </td>
-                          <td className="px-4 py-3 text-gray-800 font-medium max-w-xs truncate" title={t.description}>
-                            {t.description}
-                          </td>
-                          <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{t.accountName}</td>
+                          {/* Type badge */}
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
                               isWasteEntry                   ? 'bg-amber-100 text-amber-700'    :
                               t.categoryType === 'income'    ? 'bg-green-100 text-green-700'    :
-                              t.categoryType === 'expense'   ? 'bg-red-100 text-red-700'       :
-                              t.categoryType === 'asset'     ? 'bg-orange-100 text-orange-700' :
-                              t.categoryType === 'liability' ? 'bg-yellow-100 text-yellow-700' :
+                              t.categoryType === 'expense'   ? 'bg-red-100 text-red-700'        :
+                              t.categoryType === 'asset'     ? 'bg-orange-100 text-orange-700'  :
+                              t.categoryType === 'liability' ? 'bg-yellow-100 text-yellow-700'  :
                               'bg-gray-100 text-gray-600'
                             }`}>
                               {isWasteEntry ? 'inventory loss' : t.categoryType}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{t.paymentMethod}</td>
-                          <td className="px-4 py-3">
-                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
-                              t.type === 'debit' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'
-                            }`}>
-                              {t.type === 'debit' ? <ArrowDownLeft className="h-3 w-3" /> : <ArrowUpRight className="h-3 w-3" />}
-                              {t.type === 'debit' ? 'DR' : 'CR'}
-                            </span>
+                          {/* Category / Account */}
+                          <td className="px-4 py-3 text-gray-600 whitespace-nowrap text-xs">{t.accountName}</td>
+                          {/* Description */}
+                          <td className="px-4 py-3 text-gray-800 font-medium max-w-xs truncate" title={t.description}>
+                            {t.description}
                           </td>
+                          {/* Amount */}
                           <td className={`px-4 py-3 font-semibold text-right whitespace-nowrap ${
                             isRevenueEntry ? 'text-green-600' : isExpenseEntry ? 'text-red-600' : 'text-gray-700'
                           }`}>
                             {isRevenueEntry ? '+' : isExpenseEntry ? '-' : ''}{fmtRWF(t.amount)}
                           </td>
+                          {/* Received / Paid */}
+                          <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{t.paymentMethod}</td>
+                          {/* Date */}
+                          <td className="px-4 py-3 text-xs font-medium text-gray-500 whitespace-nowrap" title={formatRecordedDateTime(recordedAt)}>
+                            {formatRecordedTime(recordedAt)}
+                          </td>
+                          {/* Source */}
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${originClass}`}>{originLabel}</span>
                           </td>
@@ -605,8 +727,8 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                   </tbody>
                 </table>
                 <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50 text-xs text-gray-400">
-                  {rows.length} {rows.length === 1 ? 'entry' : 'entries'} Â· {dateLabel}
-                  {search && ` Â· filtered by "${search}"`}
+                  {rows.length} {rows.length === 1 ? 'entry' : 'entries'} &middot; {dateLabel}
+                  {search && ` · filtered by “${search}”`}
                 </div>
               </div>
             )}
@@ -614,255 +736,6 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
 
         </div>{/* end main content */}
       </div>{/* end two-column */}
-
-      {/* ── Add Transaction Modal ── */}
-      {showModal && (() => {
-        const amt = parseFloat(modalForm.amount) || 0
-        const discountPct = modalForm.discountEnabled ? parseFloat(modalForm.discountPct) || 0 : 0
-        const effectiveAmt = discountPct > 0 ? Math.round(amt * (1 - discountPct / 100)) : amt
-        const vatAmt = Math.round(effectiveAmt * 0.18)
-        const totalFromCustomer = effectiveAmt + vatAmt
-
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/50" onClick={closeModal} />
-            <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-              {/* Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-                <h3 className="text-base font-bold text-gray-900">Add Transaction</h3>
-                <button onClick={closeModal} className="p-1 rounded-lg hover:bg-gray-100 transition-colors">
-                  <X className="h-5 w-5 text-gray-500" />
-                </button>
-              </div>
-
-              <div className="px-6 py-5 space-y-5">
-                {/* Transaction type */}
-                <div className="grid grid-cols-3 gap-2">
-                  {([
-                    { dir: 'out' as const,      cat: 'expense', emoji: '💸', label: 'Money Out', sub: 'Expense',  active: 'border-red-500 bg-red-50 text-red-700' },
-                    { dir: 'in' as const,       cat: 'income',  emoji: '💰', label: 'Money In',  sub: 'Income',   active: 'border-green-500 bg-green-50 text-green-700' },
-                    { dir: 'opening' as const,  cat: 'equity',  emoji: '🏦', label: 'Opening',   sub: 'Equity',   active: 'border-blue-500 bg-blue-50 text-blue-700' },
-                  ] as const).map(btn => (
-                    <button
-                      key={btn.dir}
-                      type="button"
-                      onClick={() => setModalForm(f => ({
-                        ...f,
-                        direction: btn.dir,
-                        categoryType: btn.cat,
-                        accountName: btn.dir === 'opening' ? 'Opening Balance' : '',
-                        vatEnabled: false,
-                        discountEnabled: false,
-                      }))}
-                      className={`flex flex-col items-center gap-1 py-3 px-2 rounded-xl border-2 text-sm font-semibold transition-all ${
-                        modalForm.direction === btn.dir
-                          ? btn.active
-                          : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                      }`}
-                    >
-                      <span className="text-lg">{btn.emoji}</span>
-                      <span>{btn.label}</span>
-                      <span className="text-[10px] font-normal opacity-60">{btn.sub}</span>
-                    </button>
-                  ))}
-                </div>
-
-                {/* Amount */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Amount (RWF)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    autoFocus
-                    value={modalForm.amount}
-                    onChange={e => setModalForm(f => ({ ...f, amount: e.target.value }))}
-                    placeholder="0"
-                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-lg font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-300"
-                  />
-                </div>
-
-                {/* Description */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                  <input
-                    type="text"
-                    value={modalForm.description}
-                    onChange={e => setModalForm(f => ({ ...f, description: e.target.value }))}
-                    placeholder={
-                      modalForm.direction === 'out' ? 'e.g. Fuel, Rent, Supplies'
-                      : modalForm.direction === 'in' ? 'e.g. Sales, Service fee'
-                      : 'Opening Balance'
-                    }
-                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
-                  />
-                </div>
-
-                {/* Date */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
-                  <input
-                    type="date"
-                    value={modalForm.date}
-                    onChange={e => setModalForm(f => ({ ...f, date: e.target.value }))}
-                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
-                  />
-                </div>
-
-                {/* Category + Account — hidden for opening balance */}
-                {modalForm.direction !== 'opening' && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                      <select
-                        value={modalForm.categoryType}
-                        onChange={e => handleCategoryChange(e.target.value)}
-                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
-                      >
-                        {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Account Name</label>
-                      <input
-                        type="text"
-                        value={modalForm.accountName}
-                        onChange={e => setModalForm(f => ({ ...f, accountName: e.target.value }))}
-                        placeholder={modalForm.direction === 'in' ? 'Sales, Revenue…' : 'Rent, Fuel…'}
-                        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Payment Method */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {PAYMENT_METHODS.map(pm => (
-                      <button
-                        key={pm}
-                        type="button"
-                        onClick={() => setModalForm(f => ({ ...f, paymentMethod: pm }))}
-                        className={`py-2 px-2 rounded-xl border text-xs font-semibold transition-all ${
-                          modalForm.paymentMethod === pm
-                            ? 'border-orange-500 bg-orange-50 text-orange-700'
-                            : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                        }`}
-                      >
-                        {pm}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* A/R client name — only for Credit income */}
-                {modalForm.paymentMethod === 'Credit' && modalForm.direction === 'in' && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Client Name (A/R)</label>
-                    <input
-                      type="text"
-                      value={modalForm.clientName}
-                      onChange={e => setModalForm(f => ({ ...f, clientName: e.target.value }))}
-                      placeholder="Customer name"
-                      className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
-                    />
-                  </div>
-                )}
-
-                {/* VAT toggle — income only */}
-                {modalForm.direction === 'in' && (
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={modalForm.vatEnabled}
-                        onChange={e => setModalForm(f => ({ ...f, vatEnabled: e.target.checked }))}
-                        className="h-4 w-4 rounded border-gray-300 accent-orange-500"
-                      />
-                      <span className="text-sm font-medium text-gray-700">Include VAT 18%</span>
-                    </label>
-                    {modalForm.vatEnabled && amt > 0 && (
-                      <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-sm space-y-1">
-                        <div className="flex justify-between text-gray-600">
-                          <span>Net income</span>
-                          <span className="font-medium">{fmtRWF(effectiveAmt)}</span>
-                        </div>
-                        <div className="flex justify-between text-gray-600">
-                          <span>VAT 18%</span>
-                          <span className="font-medium">{fmtRWF(vatAmt)}</span>
-                        </div>
-                        <div className="flex justify-between font-bold text-green-700 border-t border-green-200 pt-1">
-                          <span>Customer pays</span>
-                          <span>{fmtRWF(totalFromCustomer)}</span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Discount toggle */}
-                {modalForm.direction !== 'opening' && (
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={modalForm.discountEnabled}
-                        onChange={e => setModalForm(f => ({ ...f, discountEnabled: e.target.checked }))}
-                        className="h-4 w-4 rounded border-gray-300 accent-orange-500"
-                      />
-                      <span className="text-sm font-medium text-gray-700">Discount</span>
-                    </label>
-                    {modalForm.discountEnabled && (
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="1"
-                          value={modalForm.discountPct}
-                          onChange={e => setModalForm(f => ({ ...f, discountPct: e.target.value }))}
-                          placeholder="0"
-                          className="w-24 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300"
-                        />
-                        <span className="text-gray-500 text-sm">%</span>
-                        {discountPct > 0 && amt > 0 && (
-                          <span className="text-gray-500 text-sm">→ effective {fmtRWF(effectiveAmt)}</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Error */}
-                {saveError && (
-                  <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{saveError}</div>
-                )}
-              </div>
-
-              {/* Footer */}
-              <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-100">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="px-5 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleModalSave()}
-                  disabled={saving}
-                  className="px-5 py-2.5 rounded-xl bg-orange-500 text-white text-sm font-semibold hover:bg-orange-600 transition-colors disabled:opacity-50 flex items-center gap-2"
-                >
-                  {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                  Save Transaction
-                </button>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
 
       {/* Success toast */}
       {saveSuccess && (
@@ -874,4 +747,3 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     </div>
   )
 }
-

@@ -5,6 +5,7 @@ import { authOptions } from '@/lib/auth'
 import { getRestaurantFifoValidation } from '@/lib/fifoValidation'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { cached } from '@/lib/apiCache'
 
 export async function GET() {
 	const session = await getServerSession(authOptions)
@@ -28,5 +29,5 @@ export async function GET() {
 		branchId: context.branchId,
 	})
 
-	return NextResponse.json(validation)
+	return cached(validation)
 }

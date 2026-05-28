@@ -2,6 +2,7 @@ import { getServerSession } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { authOptions } from '@/lib/auth'
 import { databaseUnavailableJson, isPrismaDatabaseUnavailableError, logDatabaseUnavailable } from '@/lib/apiDatabase'
+import { cached } from '@/lib/apiCache'
 import { getEffectiveFifoEnabled, getStoredFifoEnabled } from '@/lib/fifoFeature'
 import { getRestaurantFifoAvailability, getRestaurantFifoRuntimeAvailability } from '@/lib/fifoRollout'
 import { prisma } from '@/lib/prisma'
@@ -80,7 +81,7 @@ export async function GET() {
 
 		const restaurant = await getRestaurantForProfile(session.user.id, user.role)
 
-		return NextResponse.json(buildProfilePayload(user, restaurant))
+		return cached(buildProfilePayload(user, restaurant), 120)
 	} catch (error) {
 		if (isPrismaDatabaseUnavailableError(error)) {
 			logDatabaseUnavailable('api/user/profile GET', error)

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import os from 'os'
 import { authOptions } from '@/lib/auth'
+import { cached } from '@/lib/apiCache'
 
 function isLoopbackHost(hostname: string) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
@@ -29,7 +30,7 @@ export async function GET(req: Request) {
 
   const publicOrigin = resolveAccessibleOrigin(req)
   if (publicOrigin) {
-    return NextResponse.json({ waiterUrl: publicOrigin, localIP: null, port: null, accessMode: 'public' })
+    return cached({ waiterUrl: publicOrigin, localIP: null, port: null, accessMode: 'public' }, 120)
   }
 
   const nets = os.networkInterfaces()
@@ -48,5 +49,5 @@ export async function GET(req: Request) {
   const port = process.env.PORT || '3001'
   const waiterUrl = `http://${localIP}:${port}`
 
-  return NextResponse.json({ waiterUrl, localIP, port, accessMode: 'lan' })
+  return cached({ waiterUrl, localIP, port, accessMode: 'lan' }, 120)
 }

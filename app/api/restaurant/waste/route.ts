@@ -6,6 +6,7 @@ import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { recordJournalEntry } from '@/lib/accounting'
 import { consumeIngredientStock, InsufficientFifoStockError, InsufficientInventoryStockError } from '@/lib/inventoryConsumption'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
+import { cached } from '@/lib/apiCache'
 
 export async function GET() {
   try {
@@ -22,7 +23,7 @@ export async function GET() {
       include: { ingredient: true },
       orderBy: { date: 'desc' }
     })
-    return NextResponse.json(logs)
+    return cached(logs)
   } catch (error) {
     console.error('GET /api/restaurant/waste:', error)
     return NextResponse.json({ error: 'Failed to load waste logs' }, { status: 500 })

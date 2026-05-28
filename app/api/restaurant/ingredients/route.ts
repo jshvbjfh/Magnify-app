@@ -5,6 +5,7 @@ import { normalizeInventoryUnit } from '@/lib/inventoryUnits'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
+import { cached } from '@/lib/apiCache'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
 
@@ -34,7 +35,7 @@ export async function GET() {
     where: { restaurantId, branchId },
     orderBy: { name: 'asc' },
   })
-  return NextResponse.json(ingredients)
+  return cached(ingredients)
 }
 
 export async function POST(req: Request) {

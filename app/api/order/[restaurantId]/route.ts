@@ -67,7 +67,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
 
   const resolvedBranch = resolvedBranchRecord as PublicQrBranchPresentation
 
-  return NextResponse.json({
+  const response = NextResponse.json({
     restaurant: {
       id: restaurant.id,
       name: normalizeLegacyAutoRestaurantName(restaurant.name, restaurant.owner?.name),
@@ -77,7 +77,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
           ? 'disabled'
           : 'order',
       // Accept Vercel Blob HTTPS URLs and base64 data URLs (Vercel fallback).
-      // Filter out local /api/uploads/... paths — they're not accessible on Vercel.
+      // Filter out local /uploads/... paths — they're not accessible on Vercel.
       qrMenuHeroImageUrl: (() => {
         const url = resolvedBranch?.qrMenuHeroImageUrl ?? null
         if (typeof url !== 'string') return null
@@ -87,4 +87,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ restaura
     },
     dishes,
   })
+  response.headers.set('Cache-Control', 'no-store')
+  return response
 }

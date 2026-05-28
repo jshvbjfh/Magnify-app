@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
         email,
         password: hashedPassword,
         role: finalRole,
-        isActive: true,
+        isActive: false,
         trackingMode,
       },
     })

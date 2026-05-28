@@ -12,6 +12,7 @@ export async function GET() {
   }
 
   const users = await prisma.user.findMany({
+    where: { isSuperAdmin: false },
     select: {
       id: true,
       name: true,
@@ -20,9 +21,27 @@ export async function GET() {
       isActive: true,
       isSuperAdmin: true,
       createdAt: true,
+      restaurants: {
+        where: { deletedAt: null },
+        select: { id: true, licenseExpiry: true, licenseActive: true },
+        orderBy: { createdAt: 'asc' },
+        take: 1,
+      },
     },
     orderBy: { createdAt: 'desc' },
   })
 
-  return NextResponse.json(users)
+  return NextResponse.json(
+    users.map(u => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      isActive: u.isActive,
+      isSuperAdmin: u.isSuperAdmin,
+      createdAt: u.createdAt.toISOString(),
+      licenseExpiry: u.restaurants[0]?.licenseExpiry?.toISOString() ?? null,
+      licenseActive: u.restaurants[0]?.licenseActive ?? true,
+    }))
+  )
 }

@@ -29,7 +29,7 @@ function listDateKeys(from: Date, to: Date) {
 function ownerDashboardJson(payload: unknown) {
   return NextResponse.json(payload, {
     headers: {
-      'Cache-Control': 'private, no-store, max-age=0, must-revalidate',
+      'Cache-Control': 'private, max-age=60, stale-while-revalidate=300',
       Vary: 'Cookie',
     },
   })
@@ -175,10 +175,14 @@ export async function GET(req: Request) {
     date: string
     description: string
     amount: number
+    type: 'credit' | 'debit'
     direction: 'in' | 'out'
+    paymentMethod: string
     accountName: string
     categoryName: string
     categoryType: string
+    sourceKind: null
+    isManual: boolean
   }> = []
 
   for (const entry of journalEntries) {
@@ -199,10 +203,14 @@ export async function GET(req: Request) {
       date: entry.entryDate.toISOString(),
       description: entry.description ?? '',
       amount,
+      type: categoryType === 'income' ? 'credit' : 'debit',
       direction: categoryType === 'income' ? 'in' : 'out',
+      paymentMethod: '',
       accountName: mainAccount?.name ?? '',
       categoryName: mainAccount?.category?.name ?? '',
       categoryType,
+      sourceKind: null,
+      isManual: false,
     })
   }
 
@@ -213,6 +221,50 @@ export async function GET(req: Request) {
   const totalStockValue = inventoryItems.reduce((sum, i) => sum + Number(i.quantity) * Number(i.unitCost), 0)
   const lowStockCount = inventoryItems.filter((i) => Number(i.quantity) <= Number(i.reorderLevel)).length
   const profit = totalRevenue - totalExpenses
+
+  // ── Per-ingredient purchase cost (for inventory watchlist) ────────────────
+  const purchaseCostByIngredientId = new Map<string, number>()
+  for (const p of inventoryPurchases) {
+    purchaseCostByIngredientId.set(p.ingredientId, (purchaseCostByIngredientId.get(p.ingredientId) ?? 0) + p.totalCost)
+  }
+
+  // ── Low stock list ─────────────────────────────────────────────────────────
+  const lowStock = inventoryItems
+    .filter((i) => Number(i.quantity) <= Number(i.reorderLevel))
+    .map((i) => ({
+      name: i.name,
+      quantity: Number(i.quantity),
+      reorderLevel: Number(i.reorderLevel),
+      unit: i.unit,
+    }))
+
+  // ── Branch activity status ─────────────────────────────────────────────────
+  const activityDates: Date[] = []
+  if (dishSales[0]?.saleDate) activityDates.push(dishSales[0].saleDate)
+  if (journalEntries[0]?.entryDate) activityDates.push(journalEntries[0].entryDate)
+  if (inventoryPurchases[0]?.purchasedAt) activityDates.push(inventoryPurchases[0].purchasedAt)
+  const lastActivityAt = activityDates.length > 0
+    ? new Date(Math.max(...activityDates.map((d) => d.getTime())))
+    : null
+  let statusLevel: 'live' | 'recent' | 'stale' = 'stale'
+  let statusLabel = 'Quiet'
+  let statusDetail = 'No recent branch activity yet.'
+  if (lastActivityAt) {
+    const minutesSince = (Date.now() - lastActivityAt.getTime()) / 60000
+    if (activeOrderCount > 0 || minutesSince <= 5) {
+      statusLevel = 'live'
+      statusLabel = 'Live now'
+      statusDetail = activeOrderCount > 0
+        ? `${activeOrderCount} order${activeOrderCount === 1 ? '' : 's'} currently active.`
+        : 'New business activity reached the system in the last few minutes.'
+    } else if (minutesSince <= 60) {
+      statusLevel = 'recent'
+      statusLabel = 'Recently active'
+      statusDetail = 'The branch has recent activity, but nothing is active right now.'
+    } else {
+      statusDetail = 'No recent activity has reached the system for a while.'
+    }
+  }
 
   // ── Daily history ──────────────────────────────────────────────────────────
   const dailySalesByDate = new Map<string, { revenue: number; cogs: number }>()
@@ -257,6 +309,7 @@ export async function GET(req: Request) {
   const topDishes = Array.from(dishTotals.values())
     .sort((a, b) => b.totalRevenue - a.totalRevenue)
     .slice(0, 10)
+    .map((d) => ({ name: d.dishName, qty: d.quantitySold, revenue: d.totalRevenue }))
 
   return ownerDashboardJson({
     restaurantName: restaurant.name,
@@ -268,6 +321,19 @@ export async function GET(req: Request) {
     rangeLabel: range.label,
     from: range.fromKey,
     to: range.toKey,
+    sync: {
+      source: 'live',
+      generatedAt: new Date().toISOString(),
+      detailLevel: 'full',
+      note: null,
+    },
+    status: {
+      level: statusLevel,
+      label: statusLabel,
+      detail: statusDetail,
+      lastActivityAt: lastActivityAt?.toISOString() ?? null,
+      activeOrders: activeOrderCount,
+    },
     summary: {
       revenue: totalRevenue,
       expenses: totalExpenses,
@@ -289,18 +355,22 @@ export async function GET(req: Request) {
     },
     inventory: {
       purchaseCost: totalPurchaseCost,
+      usedCost: 0,
       stockValue: totalStockValue,
       lowStockCount,
       items: inventoryItems.map((i) => ({
-        id: i.id,
         name: i.name,
         unit: i.unit,
-        quantity: i.quantity,
-        unitCost: i.unitCost,
-        reorderLevel: i.reorderLevel,
+        remainingQty: Number(i.quantity),
+        purchasedQty: 0,
+        purchaseCost: purchaseCostByIngredientId.get(i.id) ?? 0,
+        usedQty: 0,
+        usedCost: 0,
+        stockValue: Number(i.quantity) * Number(i.unitCost),
         isLow: Number(i.quantity) <= Number(i.reorderLevel),
       })),
     },
+    lowStock,
     transactions: transactionRows,
     dailyHistory,
     topDishes,

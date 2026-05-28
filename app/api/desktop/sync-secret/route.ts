@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import fs from 'fs'
 import path from 'path'
+import { cached } from '@/lib/apiCache'
 
 /**
  * Desktop-only endpoint for managing the OWNER_SYNC_SHARED_SECRET post-install.
@@ -35,7 +36,7 @@ export async function GET() {
   }
 
   const configured = Boolean(String(process.env.OWNER_SYNC_SHARED_SECRET ?? '').trim())
-  return NextResponse.json({ configured })
+  return cached({ configured }, 60)
 }
 
 export async function POST(request: Request) {

@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { ensureMainBranchForRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { normalizeDishVariantPayload } from '@/lib/dishVariants'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
+import { cached } from '@/lib/apiCache'
 
 const dishInclude = {
   ingredients: {
@@ -45,7 +46,7 @@ export async function GET(req: Request) {
       ? [{ menuType: 'asc' }, { category: 'asc' }, { name: 'asc' }]
       : { createdAt: 'desc' },
   })
-  return NextResponse.json(dishes)
+  return cached(dishes)
 }
 
 export async function POST(req: Request) {

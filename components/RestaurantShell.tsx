@@ -525,12 +525,11 @@ useEffect(() => {
         {/* Footer */}
         <div className="p-3 border-t border-gray-700 space-y-1">
           <button
-            disabled
-            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium bg-gradient-to-r from-orange-500 to-red-600 text-white opacity-60 cursor-not-allowed"
+            onClick={() => setShowJesse(true)}
+            className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium bg-gradient-to-r from-orange-500 to-red-600 text-white hover:from-orange-600 hover:to-red-700 transition-colors"
           >
             <Sparkles className="h-4 w-4" />
             Ask Jesse AI
-            <span className="ml-auto text-[10px] font-bold bg-white/25 rounded px-1.5 py-0.5 leading-none">Soon</span>
           </button>
           <button
             onClick={() => signOut({ callbackUrl: '/login' })}
@@ -658,12 +657,11 @@ useEffect(() => {
                 )}
               </div>
               <button
-                disabled
-                className="flex-shrink-0 inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white opacity-60 cursor-not-allowed"
+                onClick={() => setShowJesse(true)}
+                className="flex-shrink-0 inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600 transition-colors"
               >
                 <Sparkles className="h-4 w-4" />
                 Ask Jesse AI
-                <span className="text-[10px] font-bold bg-white/25 rounded px-1.5 py-0.5 leading-none">Soon</span>
               </button>
             </div>
           </div>

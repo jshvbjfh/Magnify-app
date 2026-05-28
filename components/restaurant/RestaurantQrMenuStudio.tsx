@@ -173,7 +173,7 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : 'Unable to upload QR menu image.')
     } finally {
-      event.target.value = ''
+      if (fileInputRef.current) fileInputRef.current.value = ''
       setUploading(false)
     }
   }
@@ -209,7 +209,12 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
               />
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => {
+                  if (fileInputRef.current) {
+                    fileInputRef.current.value = ''
+                    fileInputRef.current.click()
+                  }
+                }}
                 disabled={loading || uploading || saving}
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-orange-500/25 transition hover:from-orange-600 hover:to-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >

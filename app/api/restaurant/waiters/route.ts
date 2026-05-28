@@ -7,6 +7,7 @@ import { hash } from 'bcryptjs'
 import { provisionRestaurantAccountInCloud, resolveCloudRestaurantIdentity } from '@/lib/cloudRestaurantAccountProvision'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { ensureRestaurantStaffLoginUser } from '@/lib/restaurantStaffUsers'
+import { cached } from '@/lib/apiCache'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 async function requireAdmin() {
@@ -104,7 +105,7 @@ export async function GET() {
       createdAt: s.createdAt,
     }))
 
-    return NextResponse.json({ waiters, ownerAccounts, restaurant })
+    return cached({ waiters, ownerAccounts, restaurant })
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: e.message === 'Unauthorized' ? 401 : 403 })
   }

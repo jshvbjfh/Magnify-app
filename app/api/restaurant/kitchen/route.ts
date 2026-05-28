@@ -6,6 +6,7 @@ import { hash } from 'bcryptjs'
 import { provisionRestaurantAccountInCloud } from '@/lib/cloudRestaurantAccountProvision'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { ensureRestaurantStaffLoginUser } from '@/lib/restaurantStaffUsers'
+import { cached } from '@/lib/apiCache'
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions)
@@ -50,7 +51,7 @@ export async function GET() {
       createdAt: s.createdAt,
     }))
 
-    return NextResponse.json({ kitchenUsers, restaurant })
+    return cached({ kitchenUsers, restaurant })
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: e.message === 'Unauthorized' ? 401 : 403 })
   }

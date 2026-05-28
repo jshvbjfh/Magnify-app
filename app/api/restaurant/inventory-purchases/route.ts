@@ -8,6 +8,7 @@ import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 import { toUsageQuantity, toUsageUnitCost, normalizeUnitsPerPurchaseUnit } from '@/lib/inventoryUnits'
 import type { Prisma } from '@prisma/client'
+import { cached } from '@/lib/apiCache'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
 const INVENTORY_TRANSACTION_OPTIONS = { maxWait: 15000, timeout: 60000 } as const
@@ -179,7 +180,7 @@ export async function GET(req: Request) {
       orderBy: [{ createdAt: 'desc' }, { purchasedAt: 'desc' }],
     })
 
-    return NextResponse.json(purchases)
+    return cached(purchases)
   } catch (error: any) {
     console.error('Failed to load inventory purchases:', error)
     return NextResponse.json({ error: error?.message || 'Failed to load inventory purchases' }, { status: 500 })

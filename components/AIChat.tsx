@@ -5,9 +5,45 @@ import {
 	MessageCircle, Send, User, Calendar, Image as ImageIcon, X, Sparkles,
 	TrendingUp, TrendingDown, CheckCircle, XCircle, AlertTriangle,
 	Lightbulb, Target, Flame, Zap, Users, Clock, Banknote, Star,
-	ArrowRight, ChefHat, Award, BarChart2
+	ArrowRight, ChefHat, Award, BarChart2, Sheet
 } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import { useLanguage } from '@/contexts/LanguageContext'
+
+// Detect restaurant data questions that Jesse answers directly from the DB
+// (no Gemini API key needed — instant, offline-capable)
+const TIME_WORD   = /\b(today|yesterday|this\s*week|last\s*week|current\s*week|this\s*month|last\s*month|current\s*month|this\s*year|past\s+\d+\s*days?)\b/i
+const METRIC_WORD = /\b(revenue|sales|income|profit|loss|orders?|expenses?|waste|food\s*cost|cogs|earned|we\s+made|how much)\b/i
+const PAYMENT_W   = /\b(momo|mobile\s*money|cash\s+sales|bank\s+revenue|cheque\s+revenue|revenue\s+by|payment\s*(method|breakdown)|paid\s+by)\b/i
+const SOLO_RESTAURANT = /\b(low\s*stock|running\s*out|reorder|top\s*dish(es)?|best.?sell|most\s*ordered|popular\s*dish|best\s*drink|our\s+best|pending\s+orders?|open\s+orders?|outstanding\s+orders?|which\s+branch|revenue\s+by\s+branch|top\s+branch|average\s+order|avg\s+order|branch\s+by\s+branch|by\s+branch|expenses\s+by\s+branch|profit\s+by\s+branch)\b|\b(what|how)\s+about\s+(yesterday|today|this\s+week|last\s+week|this\s+month|last\s+month|this\s+year|past\s+\d+\s+days?)\b|\band\s+(yesterday|last\s+week|last\s+month|this\s+week|this\s+month)\b|\b(what\s+happened|why\s+(did|was|is|are)|what\s+does\s+that\s+mean|tell\s+me\s+more|explain\s+that|what\s+went\s+wrong|why\s+zero|why\s+0)\b/i
+const STOCK_LEVEL_W   = /\b(in\s+stock|stock\s+level|do\s+we\s+have|how\s+much\s+\w|how\s+many\s+\w+\s+of|quantity\s+of|stock\s+of)\b/i
+const DISH_QUERY_W    = /\b(revenue|sales|made|earned)\s+(from|of)\s+[a-z]|how\s+many\s+[a-z][\w\s]+\s+(did\s+we\s+sell|sold)|how\s+much\s+(did\s+we\s+make\s+from|from)\s+[a-z]/i
+const GREETING_W      = /^(hi+|hello+|hey+|good\s*(morning|afternoon|evening|day|night)|howdy|greetings|morning|evening|afternoon|how\s+are\s+you|how'?s\s+it|what'?s\s+up|sup|yo|salut|bonjour|hola|jambo|muraho|niaje|habari|mwaramutse|amakuru)\b/i
+const RECORD_TX_W     = new RegExp([
+  // Clear recording commands
+  '\\b(record\\s+this|log\\s+this|save\\s+this\\s+(transaction|expense|payment)|add\\s+this\\s+entry|create\\s+(an?\\s+)?entry|book\\s+this|register\\s+this\\s+payment|enter\\s+this\\s+expense|post\\s+this\\s+entry|journalize|add\\s+to\\s+(ledger|books)|process\\s+payroll|close\\s+the\\s+books|reconcile\\s+account|bank\\s+reconciliation|accrue\\s+this|defer\\s+this|capitalize\\s+this|amortize\\s+this|write\\s+off\\s+the|reverse\\s+accrual|note\\s+this\\s+transaction|track\\s+this\\s+(purchase|payment|expense)|capture\\s+this\\s+expense|post\\s+to\\s+ledger)\\b',
+  // Explicit record triggers
+  '\\b(record|log|add|post|enter)\\s+(?:a\\s+)?(?:transaction|entry|expense|income|payment|sale|purchase|journal|payroll|salary|refund|invoice|deposit|loan|asset|depreciation)\\b',
+  // Income sentence phrases
+  '\\b(received\\s+payment|got\\s+paid|client\\s+(paid|cleared|settled)|customer\\s+(paid|settled|cleared)|invoice\\s+was\\s+paid|received\\s+money|money\\s+came\\s+in|received\\s+deposit|got\\s+revenue|earned\\s+income|collected\\s+cash|payment\\s+received|booked\\s+revenue|sales\\s+came\\s+in|cash\\s+received\\s+today|money\\s+received\\s+today|client\\s+finally\\s+paid|customer\\s+cleared|supplier\\s+refunded\\s+us|refund\\s+received|settlement\\s+received|financing\\s+received|funding\\s+secured|investment\\s+received|dividend\\s+received|remittance\\s+received|claim\\s+received|insurance\\s+payout|we\\s+received\\s+cash)\\b',
+  // Expense sentence phrases
+  '\\b(settled\\s+the\\s+bill|cleared\\s+the\\s+invoice|paid\\s+(supplier|vendor|employees|staff|salary|wages|rent|invoice|contractor|freelancer|tax|vat|insurance|bill|interest|loan|penalty|fee)|paid\\s+via\\s+(mtn|airtel|momo|bank|card)|processed\\s+payroll|salary\\s+paid|wages\\s+paid|payroll\\s+processed|commission\\s+paid|bonus\\s+paid|reimbursed\\s+employee|made\\s+(a\\s+)?payment|sent\\s+payment|transferred\\s+funds|moved\\s+money|bank\\s+charged\\s+fee|bank\\s+deducted|withdrew\\s+cash|deposited\\s+cash|momo\\s+payment|mobile\\s+money\\s+payment|card\\s+was\\s+charged|supplier\\s+has\\s+been\\s+paid|employee\\s+salaries\\s+went\\s+out|we\\s+paid\\s+for|we\\s+(spent|bought|purchased)|subscription\\s+renewed|insurance\\s+premium\\s+paid|maintenance\\s+contract\\s+renewed|advance\\s+payment\\s+made|prepayment\\s+made|security\\s+deposit\\s+paid|converted\\s+currency|forex\\s+(gain|loss)|owner\\s+(invested|withdrew)|capital\\s+injected|dividend\\s+paid|drawings\\s+recorded|customer\\s+refunded|refund\\s+issued|credit\\s+note\\s+issued|discount\\s+(applied|given)|purchase\\s+returned|damaged\\s+goods)\\b',
+  // With amounts: action words + number
+  '\\b(paid|spent|bought|purchased|received|earned|sold|withdrew|deposited)\\s+[\\d,]+',
+  '\\b[\\d,]+\\s*(k\\b)?\\s+(for|on)\\s+\\w',
+  '\\b(fuel|diesel|rent|salary|wages|payroll|electricity|water\\s+bill|airtime|internet\\s+bill|phone\\s+bill|data\\s+bundle|repair|maintenance|supplies|insurance|vat|paye|bonus|overtime|cleaning|transport|delivery|capex|depreciation|loan\\s+repayment|installment|mortgage|dividend|drawings|petty\\s+cash|shipping|freight|customs|logistics|marketing|advertising|legal\\s+fee|audit\\s+fee|consultancy|training|workshop|seminar|school\\s+fees|membership|donation|interest\\s+expense|bank\\s+fee|hosting|saas|cloud|hardware|telecom|procurement|packaging|warehousing|sponsorship|permit\\s+fee|government\\s+fee|oil\\s+change|advance\\s+payment|prepayment|reimbursement|settlement)\\s+[\\d,]+',
+  '\\b(expense|payment|bill|invoice|fee|charge|cost)\\s+of\\s+[\\d,]+',
+  // Accounting terms (always record intent)
+  '\\b(journal\\s+entry|ledger\\s+entry|bookkeeping|accrual|adjustment\\s+entry|reversal\\s+entry|adjusting\\s+entry|journalize|create\\s+adjusting\\s+entry|close\\s+(revenue|expense)\\s+account|record\\s+retained\\s+earnings)\\b',
+  // Natural conversational
+  '\\b(please\\s+save\\s+this\\s+expense|add\\s+this\\s+to\\s+(accounting|books)|I\\s+need\\s+this\\s+recorded|log\\s+the\\s+(utility|fuel|salary|rent|payroll|water|electricity|internet)\\s+payment|record\\s+today.?s\\s+sales|register\\s+the\\s+incoming\\s+transfer|the\\s+bank\\s+deducted)\\b',
+].join('|'), 'i')
+
+function isRestaurantDataQuery(q: string) {
+  const isQuery = /\b(how much|how many|what did|what are|how little|which|show me|list|total|summary|report)\b/i.test(q)
+  const isRecordIntent = !isQuery && RECORD_TX_W.test(q)
+  return GREETING_W.test(q.trim()) || isRecordIntent || SOLO_RESTAURANT.test(q) || PAYMENT_W.test(q) || STOCK_LEVEL_W.test(q) || DISH_QUERY_W.test(q) || (TIME_WORD.test(q) && METRIC_WORD.test(q))
+}
 
 type Message = {
 	id: string
@@ -94,7 +130,7 @@ function createWelcomeMessage(): Message[] {
 	return [{
 		id: 'welcome-message',
 		role: 'assistant',
-		content: "Hi! I'm Jesse, your accounting AI assistant. I can help you with:\n\n• **Upload images** 📷 - Send receipts, invoices, or bills and I'll automatically extract and record transactions!\n  - Just click the image icon and upload\n  - I'll read the document and create proper journal entries\n  - Works with photos, scans, or screenshots\n\n• **Record transactions** - Single or multiple transactions with different dates and accounts:\n  - Single: \"Record 50,000 fuel expense on Jan 15\"\n  - Batch: \"Jan 10: received 200,000 from client, Jan 12: paid 80,000 rent, Jan 15: 45,000 diesel\"\n  - Natural: \"Yesterday I paid 40,000 for parking and 25,000 for lunch\"\n  - Sequential: \"Record driver payment 60,000 on Jan 5, diesel 45,000 on Jan 6, repair 120,000 on Jan 7\"\n\n• **Product sales** - If you add products to Inventory, I can automatically calculate revenue:\n  - \"Sold 5 bags of cement today\"\n  - \"Customer bought 20kg of diesel\"\n  - I'll look up the price from your inventory and record the sale!\n\n• **Create adjusting entries** - Depreciation, accruals, deferrals, and corrections\n\n• **Understand your finances** - Ask about your cash balance, revenue, expenses, profit, or account balances\n\n• **Explain accounting concepts** - Questions about debits, credits, accounts payable, receivables, financial statements, etc.\n\n**Important:**\n- I can handle multiple transactions at once with different dates and accounts!\n- Just separate them with commas, \"and\", or list them\n- I automatically detect the right accounts based on the transaction type\n- Upload images of receipts and invoices for automatic processing!\n- Add products in the Inventory tab to enable automatic sales tracking\n- I only answer accounting-related questions\n- I cannot delete transactions (use the Delete button in the Journal section)\n\nWhat can I help you with today?",
+		content: "Hi, how can I help you today?",
 		timestamp: new Date()
 	}]
 }
@@ -106,14 +142,19 @@ export default function AIChat() {
 	const [input, setInput] = useState('')
 	const [selectedImages, setSelectedImages] = useState<File[]>([])
 	const [loading, setLoading] = useState(false)
+	const [loadingPhase, setLoadingPhase] = useState<string>('')
 	const [loadingHistory, setLoadingHistory] = useState(true)
 	const [error, setError] = useState<string | null>(null)
+	const [typingMessageId, setTypingMessageId] = useState<string | null>(null)
+	const [typingText, setTypingText] = useState<string>('')
+	const typingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 	const [selectedDate, setSelectedDate] = useState<string>('all')
 	const [conversationMode, setConversationMode] = useState<'history' | 'new'>('history')
 	const [showDatePicker, setShowDatePicker] = useState(false)
 	const [pendingFinancialRecord, setPendingFinancialRecord] = useState<PendingFinancialRecord | null>(null)
 	const messagesEndRef = useRef<HTMLDivElement>(null)
 	const fileInputRef = useRef<HTMLInputElement>(null)
+	const excelInputRef = useRef<HTMLInputElement>(null)
 	const conversationModeRef = useRef<'history' | 'new'>('history')
 
 	useEffect(() => {
@@ -151,6 +192,40 @@ export default function AIChat() {
 	useEffect(() => {
 		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
 	}, [messages, loading])
+
+	// Cleanup typing animation on unmount
+	useEffect(() => {
+		return () => { if (typingTimerRef.current) clearInterval(typingTimerRef.current) }
+	}, [])
+
+	// Scroll as typing text grows
+	useEffect(() => {
+		if (typingMessageId) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+	}, [typingText, typingMessageId])
+
+	function startTypingAnimation(messageId: string, fullText: string) {
+		if (typingTimerRef.current) clearInterval(typingTimerRef.current)
+		setTypingMessageId(messageId)
+		setTypingText('')
+
+		// Split into words so markdown syntax is never broken mid-token
+		const words = fullText.split(/(\s+)/)  // keeps whitespace as separate tokens
+		let wordIndex = 0
+		// Speed: ~40ms per word feels natural; long messages get a bit faster
+		const delayMs = fullText.length > 600 ? 20 : fullText.length > 200 ? 30 : 40
+
+		typingTimerRef.current = setInterval(() => {
+			wordIndex++
+			if (wordIndex >= words.length) {
+				setTypingText(fullText)
+				setTypingMessageId(null)
+				if (typingTimerRef.current) clearInterval(typingTimerRef.current)
+				typingTimerRef.current = null
+			} else {
+				setTypingText(words.slice(0, wordIndex).join(''))
+			}
+		}, delayMs)
+	}
 
 	// Load chat history from database on mount
 	useEffect(() => {
@@ -276,6 +351,71 @@ export default function AIChat() {
 		setSelectedImages(prev => prev.filter((_, i) => i !== index))
 	}
 
+	async function handleExcelUpload(e: React.ChangeEvent<HTMLInputElement>) {
+		const file = e.target.files?.[0]
+		if (!file) return
+		if (e.target) e.target.value = ''
+
+		const userContent = `Importing Excel file: ${file.name}`
+		const uId = await saveMessage('user', userContent)
+		const uMsg: Message = { id: uId, role: 'user', content: userContent, timestamp: new Date() }
+		setAllMessages(prev => [...prev, uMsg])
+		setMessages(prev => [...prev, uMsg])
+		setLoading(true)
+		setLoadingPhase('reading...')
+
+		let phaseTimer1: ReturnType<typeof setTimeout> | null = null
+		let phaseTimer2: ReturnType<typeof setTimeout> | null = null
+		let phaseTimer3: ReturnType<typeof setTimeout> | null = null
+
+		try {
+			const buffer = await file.arrayBuffer()
+			const wb = XLSX.read(buffer)
+			const ws = wb.Sheets[wb.SheetNames[0]]
+			const rows = XLSX.utils.sheet_to_json(ws, { defval: '' }) as Record<string, unknown>[]
+
+			if (rows.length === 0) {
+				const msg = 'The Excel file appears to be empty or has no data rows.'
+				const id = await saveMessage('assistant', msg)
+				const m: Message = { id, role: 'assistant', content: msg, timestamp: new Date() }
+				setAllMessages(prev => [...prev, m])
+				setMessages(prev => [...prev, m])
+				return
+			}
+
+			setLoadingPhase('thinking...')
+			phaseTimer1 = setTimeout(() => setLoadingPhase('untangling the spaghetti....'), 2500)
+			phaseTimer2 = setTimeout(() => setLoadingPhase('recording...'), 5500)
+			phaseTimer3 = setTimeout(() => setLoadingPhase('magnifying....'), 10000)
+
+			const res = await fetch('/api/restaurant/ask-jesse', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				credentials: 'include',
+				body: JSON.stringify({ importRows: rows, fileName: file.name }),
+			})
+			const data = await res.json().catch(() => ({}))
+			const content = data.answer ?? "Sorry, couldn't process the file."
+			const aId = await saveMessage('assistant', content)
+			const aMsg: Message = { id: aId, role: 'assistant', content, timestamp: new Date() }
+			setAllMessages(prev => [...prev, aMsg])
+			setMessages(prev => [...prev, aMsg])
+			startTypingAnimation(aId, content)
+		} catch {
+			const msg = `Failed to read "${file.name}". Make sure it's a valid .xlsx or .csv file.`
+			const id = await saveMessage('assistant', msg)
+			const m: Message = { id, role: 'assistant', content: msg, timestamp: new Date() }
+			setAllMessages(prev => [...prev, m])
+			setMessages(prev => [...prev, m])
+		} finally {
+			if (phaseTimer1) clearTimeout(phaseTimer1)
+			if (phaseTimer2) clearTimeout(phaseTimer2)
+			if (phaseTimer3) clearTimeout(phaseTimer3)
+			setLoadingPhase('')
+			setLoading(false)
+		}
+	}
+
 	async function uploadImages(files: File[]): Promise<string[]> {
 		const uploadedPaths: string[] = []
 		
@@ -312,6 +452,7 @@ export default function AIChat() {
 		setPendingFinancialRecord(null)
 		localStorage.removeItem('aiChatDraft') // Clear draft after sending
 		setLoading(true)
+		setLoadingPhase('magnifying...')
 		setError(null)
 
 		// Upload images first
@@ -341,15 +482,61 @@ export default function AIChat() {
 				msg.id === tempUserId ? { ...msg, id: savedUserId } : msg
 			))
 
-			// Send to AI
+			// All text messages go to Jesse — he handles data queries, conversational
+			// replies, identity questions, and everything else gracefully.
+			// Only pure image-with-no-text goes to the vision API.
+			if (userContent) {
+				// Start advanced loading phases for heavy data queries
+				const isHeavyQuery = isRestaurantDataQuery(userContent)
+				let t1: ReturnType<typeof setTimeout> | null = null
+				let t2: ReturnType<typeof setTimeout> | null = null
+				if (isHeavyQuery) {
+					t1 = setTimeout(() => setLoadingPhase('thinking...'), 1500)
+					t2 = setTimeout(() => setLoadingPhase('untangling the spaghetti....'), 4000)
+				}
+				try {
+					const rRes = await fetch('/api/restaurant/ask-jesse', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						credentials: 'include',
+						body: JSON.stringify({ question: userContent }),
+					})
+					if (!rRes.ok) {
+						const errBody = await rRes.json().catch(() => ({}))
+						const errMsg = errBody?.error || ''
+						if (errMsg.toLowerCase().includes('unauthorized') || rRes.status === 401) {
+							throw new Error("You're not logged in. Please refresh the page and sign in again.")
+						}
+						if (errMsg.toLowerCase().includes('no restaurant')) {
+							throw new Error("No restaurant found for your account. Make sure your setup is complete.")
+						}
+						throw new Error(`Something went wrong on our end (${rRes.status}). Try again in a moment.`)
+					}
+					const rData = await rRes.json().catch(() => ({}))
+					const rContent = rData.answer ?? "I'm not sure about that one. Try asking about revenue, expenses, or inventory."
+					const rId = await saveMessage('assistant', rContent)
+					const rMsg: Message = { id: rId, role: 'assistant', content: rContent, timestamp: new Date() }
+					setAllMessages(prev => [...prev, rMsg])
+					setMessages(prev => [...prev, rMsg])
+					startTypingAnimation(rId, rContent)
+				} finally {
+					if (t1) clearTimeout(t1)
+					if (t2) clearTimeout(t2)
+					setLoadingPhase('')
+					setLoading(false)
+				}
+				return
+			}
+
+			// No text — image-only message goes to the vision API
 			const res = await fetch('/api/ai/chat', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				credentials: 'include',
 				body: JSON.stringify({
-					message: userContent || 'Please analyze this image',
+					message: 'Please analyze this image',
 					images: uploadedImagePaths,
-					conversationHistory: messages.slice(-50) // Last 50 messages for context (increased memory)
+					conversationHistory: messages.slice(-50),
 				})
 			})
 
@@ -357,24 +544,25 @@ export default function AIChat() {
 				const errBody = await res.json().catch(() => ({}))
 				const errMsg = errBody?.error || errBody?.message || ''
 				if (errMsg.toLowerCase().includes('gemini') || errMsg.toLowerCase().includes('api key')) {
-					throw new Error('⚙️ Jesse AI is not fully configured right now. Please try again later.')
+					throw new Error('Image analysis is not configured right now. Contact your admin.')
 				}
-				throw new Error("I'm sorry, I encountered an issue. Please try again.")
+				if (res.status === 401) {
+					throw new Error("You're not logged in. Please refresh and sign in again.")
+				}
+				throw new Error(`Image analysis failed (${res.status}). Try again in a moment.`)
 			}
 
 			const data = await res.json()
-
-			// Check if there's an error in the response
 			if (data.error) {
-				throw new Error("I'm sorry, I encountered an issue. Please try again.")
+				throw new Error("Couldn't analyse that image. Try a clearer photo or a different format.")
 			}
 
 			// Save AI response to database
-			let aiContent = data.response || "I couldn't generate a response. Could you please rephrase your question?"
-			
-			// Clean up any HTML or technical content that might have slipped through
+			let aiContent = data.response || "I couldn't read that image. Could you try a different one?"
+
+			// Clean up any HTML that might have slipped through
 			if (aiContent.includes('<html') || aiContent.includes('<!DOCTYPE')) {
-				aiContent = "I'm sorry, I can't help with that right now. Please try asking in a different way or contact support if the issue persists."
+				aiContent = "That image couldn't be processed. Please try again with a different file."
 			}
 			
 			const aiMessageId = await saveMessage('assistant', aiContent)
@@ -388,6 +576,7 @@ export default function AIChat() {
 
 			setAllMessages((prev) => [...prev, aiMessage])
 			setMessages((prev) => [...prev, aiMessage])
+			startTypingAnimation(aiMessageId, aiContent)
 			setError(null)
 
 			// If transactions were created, add a success message
@@ -542,11 +731,14 @@ export default function AIChat() {
 				}
 			}
 		} catch (e: any) {
-			// Show user-friendly error message
-			const errorMessage = e?.message?.includes('fetch') || e?.message?.includes('network')
-				? "I'm having trouble connecting. Please check your internet connection and try again."
-				: e?.message || "I'm sorry, something went wrong. Please try again."
-			
+			const raw = e?.message || ''
+			const errorMessage =
+				raw.includes('fetch') || raw.includes('network') || raw.includes('Failed to fetch')
+					? "Can't reach the server right now. Check your internet connection and try again."
+					: raw.length > 0 && raw.length < 200
+						? raw
+						: "Something went wrong on our end. Give it another try."
+
 			setError(errorMessage)
 			
 			// Add error message to chat instead of just showing in error banner
@@ -558,6 +750,7 @@ export default function AIChat() {
 			}
 			setMessages((prev) => [...prev.filter(msg => msg.id !== tempUserId), errorMsg])
 		} finally {
+			setLoadingPhase('')
 			setLoading(false)
 		}
 	}
@@ -775,7 +968,14 @@ export default function AIChat() {
 												</div>
 											)}
 											
-										{renderMessageContent(msg.content)}
+										{renderMessageContent(
+											msg.role === 'assistant' && msg.id === typingMessageId
+												? typingText
+												: msg.content
+										)}
+										{msg.role === 'assistant' && msg.id === typingMessageId && (
+											<span className="inline-block w-[2px] h-[14px] bg-gray-500 ml-0.5 align-middle animate-pulse rounded-sm" />
+										)}
 										{msg.role === 'assistant' && isSharedQuotaMessage(msg.content) && (
 											<div className="mt-3 rounded-lg border border-amber-200 bg-white/80 px-3 py-2 text-xs text-amber-700">
 												Shared service issue: Jesse AI is using the app's shared service capacity, not a per-user daily limit.
@@ -808,7 +1008,10 @@ export default function AIChat() {
 								<div className="flex h-8 w-8 shrink-0 items-center justify-center text-orange-500">
 									<Sparkles className="h-4 w-4" />
 								</div>
-								<div className="rounded-lg bg-gray-100 px-4 py-2">
+								<div className="rounded-lg bg-gray-100 px-4 py-2.5 flex items-center gap-2">
+									{loadingPhase ? (
+										<span className="text-sm text-gray-500 italic animate-pulse">{loadingPhase}</span>
+									) : null}
 									<div className="flex gap-1">
 										<div className="h-2 w-2 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '0ms' }}></div>
 										<div className="h-2 w-2 animate-bounce rounded-full bg-gray-400" style={{ animationDelay: '150ms' }}></div>
@@ -901,6 +1104,14 @@ export default function AIChat() {
 						onChange={handleImageSelect}
 						className="hidden"
 					/>
+					{/* Excel Import Button */}
+					<input
+						ref={excelInputRef}
+						type="file"
+						accept=".xlsx,.xls,.csv"
+						onChange={handleExcelUpload}
+						className="hidden"
+					/>
 					<button
 						onClick={() => fileInputRef.current?.click()}
 						disabled={loading || selectedImages.length >= 5}
@@ -909,6 +1120,14 @@ export default function AIChat() {
 					>
 						<span className="text-lg font-bold">+</span>
 						<ImageIcon className="h-4 w-4" />
+					</button>
+					<button
+						onClick={() => excelInputRef.current?.click()}
+						disabled={loading}
+						className="flex h-fit items-center gap-2 rounded-md border border-green-300 bg-white px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-50 disabled:cursor-not-allowed disabled:opacity-50"
+						title="Import Excel / CSV file"
+					>
+						<Sheet className="h-4 w-4" />
 					</button>
 					
 					<textarea
@@ -929,52 +1148,10 @@ export default function AIChat() {
 					</button>
 				</div>
 				<p className="mt-2 text-xs text-gray-500">
-				Press Enter to send, Shift+Enter for new line • Ctrl+V to paste images • Max 5 images
+				Press Enter to send, Shift+Enter for new line • Ctrl+V to paste images • Max 5 images • Green button imports Excel/CSV
 			</p>
 		</div>
 
-			{/* Quick Actions */}
-			<div className="rounded-lg border border-orange-200 bg-orange-50 p-3">
-				<h4 className="mb-2 text-xs font-bold text-orange-900 uppercase tracking-wide">Quick Actions:</h4>
-				<div className="flex flex-wrap gap-2">
-					<button
-						onClick={() => sendMessage("Let's talk about my analytics. What do you see?")}
-						className="rounded-md bg-gradient-to-r from-orange-500 to-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:from-orange-600 hover:to-red-700 shadow-sm"
-					>
-						Analyse My Business
-					</button>
-					<button
-						onClick={() => sendMessage("I need marketing ideas to bring more customers in. Can you help me figure out what's going on and suggest a campaign?")}
-						className="rounded-md bg-gradient-to-r from-orange-500 to-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:from-orange-600 hover:to-red-700 shadow-sm"
-					>
-						🔥 Marketing Ideas
-					</button>
-					<button
-						onClick={() => setInput('What adjusting entries would you like me to record?')}
-						className="rounded-md bg-white border border-orange-200 px-3 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100"
-					>
-						Create Adjustment
-					</button>
-					<button
-						onClick={() => setInput('Explain my current financial position')}
-						className="rounded-md bg-white border border-orange-200 px-3 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100"
-					>
-						Explain Finances
-					</button>
-					<button
-						onClick={() => setInput('What transactions happened this week?')}
-						className="rounded-md bg-white border border-orange-200 px-3 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100"
-					>
-						This Week's Activity
-					</button>
-					<button
-						onClick={() => setInput('What is my current cash balance?')}
-						className="rounded-md bg-white border border-orange-200 px-3 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100"
-					>
-						Cash Balance
-					</button>
-				</div>
-			</div>
 			</div>
 			</div>
 		</div>

@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { BranchBadge } from '@/contexts/RestaurantBranchContext'
+import { BranchBadge, useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
 
 type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory'
 type Period = 'today' | 'week' | 'month' | 'quarter' | 'year'
@@ -878,7 +878,18 @@ function TheoreticalInventoryTable({ data, onCountSaved }: { data: any; onCountS
   )
 }
 
-//  MAIN COMPONENT 
+//  BRANCH REPORT CACHE  (survives tab switches within the same page session)
+
+type ReportSnapshot = {
+  period: Period; rangeMode: 'preset' | 'custom'
+  draftFrom: string; draftTo: string
+  txData: any[]; periodTxData: any[]
+  dishProfitData: any; invMovementData: any; theoreticalInvData: any
+  loadedPeriod: string
+}
+const _branchReportCache = new Map<string, ReportSnapshot>()
+
+//  MAIN COMPONENT
 
 export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => void }) {
   const [activeTab, setActiveTab] = useState<ReportTab>('journal')
@@ -897,9 +908,17 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
   const [theoreticalInvData, setTheoreticalInvData] = useState<any>(null)
   const [loadedPeriod, setLoadedPeriod] = useState<string>('')
   const [exporting, setExporting] = useState(false)
-  const isFirstMount = useRef(true)
+  const branchCtx = useRestaurantBranch()
+  const branchId = branchCtx?.branchId ?? ''
+  const activeBranchRef = useRef(branchId)
 
-  const fetchReportRange = useCallback(async (start: string, end: string, label: string, isPeriodFetch = true) => {
+  const isFirstMount = useRef(true)
+  const autoSelectedPeriod = useRef<Period | null>(null)
+
+  const fetchReportRange = useCallback(async (
+    start: string, end: string, label: string, isPeriodFetch = true,
+    snapPeriod?: Period, snapRangeMode?: 'preset' | 'custom', snapFrom?: string, snapTo?: string,
+  ) => {
     setLoading(true); setTxData(null); setDishProfitData(null); setInvMovementData(null); setTheoreticalInvData(null)
     try {
       const [txRes, dpRes, imRes, tiRes] = await Promise.all([
@@ -908,66 +927,101 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
         fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
       ])
+      let txRows: any[] = []
       if (txRes.ok) {
         const d = await txRes.json()
-        const rawRows = Array.isArray(d)?d:(d.transactions??d.data??[])
-        const normalized = normalizeTransactions(rawRows)
-        setTxData(normalized)
-        if (isPeriodFetch) setPeriodTxData(normalized)
+        txRows = normalizeTransactions(Array.isArray(d)?d:(d.transactions??d.data??[]))
+        setTxData(txRows)
+        if (isPeriodFetch) setPeriodTxData(txRows)
         setLoadedPeriod(label)
       }
-      if (dpRes.ok) setDishProfitData(await dpRes.json())
-      if (imRes.ok) setInvMovementData(await imRes.json())
-      if (tiRes.ok) setTheoreticalInvData(await tiRes.json())
+      let dpData: any = null, imData: any = null, tiData: any = null
+      if (dpRes.ok) { dpData = await dpRes.json(); setDishProfitData(dpData) }
+      if (imRes.ok) { imData = await imRes.json(); setInvMovementData(imData) }
+      if (tiRes.ok) { tiData = await tiRes.json(); setTheoreticalInvData(tiData) }
+      if (activeBranchRef.current) {
+        _branchReportCache.set(activeBranchRef.current, {
+          period: snapPeriod ?? 'today', rangeMode: snapRangeMode ?? 'preset',
+          draftFrom: snapFrom ?? start, draftTo: snapTo ?? end,
+          txData: txRows, periodTxData: txRows,
+          dishProfitData: dpData, invMovementData: imData, theoreticalInvData: tiData,
+          loadedPeriod: label,
+        })
+      }
     } catch { setTxData([]) }
     finally { setLoading(false) }
   }, [])
 
   const fetchReport = useCallback(async (p: Period) => {
     const { start, end, label } = getDateRange(p)
-    await fetchReportRange(start, end, label)
+    try { localStorage.setItem('magnify-reports-period', p) } catch { /* */ }
+    await fetchReportRange(start, end, label, true, p, 'preset', start, end)
   }, [fetchReportRange])
 
-  // On mount: find the most recent period that actually has data so the page never opens empty
+  // On mount: use localStorage-cached period for instant load; background-load heavy reports after transactions
   useEffect(() => {
-    async function autoSelectPeriod() {
-      for (const p of ['today','week','month','quarter','year'] as Period[]) {
-        const { start, end } = getDateRange(p)
+    async function loadInitial() {
+      setLoading(true)
+      const saved = (typeof localStorage !== 'undefined'
+        ? localStorage.getItem('magnify-reports-period')
+        : null) as Period | null
+      const ordered: Period[] = saved
+        ? [saved, ...(['today', 'week', 'month', 'quarter', 'year'] as Period[]).filter(p => p !== saved)]
+        : ['today', 'week', 'month', 'quarter', 'year']
+
+      for (let i = 0; i < ordered.length; i++) {
+        const p = ordered[i]
+        const { start, end, label } = getDateRange(p)
         try {
-          const freshRes = await fetch(`/api/transactions?startDate=${start}&endDate=${end}`, FRESH_FETCH_OPTIONS)
-          if (freshRes.ok) {
-            const d = await freshRes.json()
-            const rows = normalizeTransactions(Array.isArray(d) ? d : (d.transactions ?? d.data ?? []))
+          const res = await fetch(`/api/transactions?startDate=${start}&endDate=${end}`, FRESH_FETCH_OPTIONS)
+          if (!res.ok) continue
+          const d = await res.json()
+          const rows = normalizeTransactions(Array.isArray(d) ? d : (d.transactions ?? d.data ?? []))
+          const isLast = i === ordered.length - 1
+          if (rows.length > 0 || isLast) {
+            autoSelectedPeriod.current = p
+            setPeriod(p)
+            setRangeMode('preset')
+            setTxData(rows)
+            setPeriodTxData(rows)
+            setLoadedPeriod(label)
+            setLoading(false)
             if (rows.length > 0) {
-              const [dpRes, imRes, tiRes] = await Promise.all([
-                fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
-                fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
-                fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
-              ])
-              setPeriod(p)
-              setRangeMode('preset')
-              setTxData(rows)
-              setPeriodTxData(rows)
-              setLoadedPeriod(getDateRange(p).label)
-              if (dpRes.ok) setDishProfitData(await dpRes.json())
-              if (imRes.ok) setInvMovementData(await imRes.json())
-              if (tiRes.ok) setTheoreticalInvData(await tiRes.json())
-              return
+              try { localStorage.setItem('magnify-reports-period', p) } catch { /* */ }
             }
+            // Background-load heavy reports without blocking the UI
+            Promise.all([
+              fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+              fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+              fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+            ]).then(async ([dpRes, imRes, tiRes]) => {
+              let dpData: any = null, imData: any = null, tiData: any = null
+              if (dpRes.ok) { dpData = await dpRes.json(); setDishProfitData(dpData) }
+              if (imRes.ok) { imData = await imRes.json(); setInvMovementData(imData) }
+              if (tiRes.ok) { tiData = await tiRes.json(); setTheoreticalInvData(tiData) }
+              if (activeBranchRef.current) {
+                _branchReportCache.set(activeBranchRef.current, {
+                  period: p, rangeMode: 'preset',
+                  draftFrom: start, draftTo: end,
+                  txData: rows, periodTxData: rows,
+                  dishProfitData: dpData, invMovementData: imData, theoreticalInvData: tiData,
+                  loadedPeriod: label,
+                })
+              }
+            }).catch(() => { /* non-critical — tabs will show empty state */ })
+            return
           }
         } catch { /* continue to next period */ }
       }
-      // Nothing found in any period — just show month empty state
-      setPeriod('month')
-      setRangeMode('preset')
-      fetchReport('month')
+      setLoading(false)
     }
-    autoSelectPeriod()
+    loadInitial()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-fetch when period pill is clicked manually (skip initial mount — autoSelectPeriod handles that)
+  // Re-fetch when period pill is clicked manually (skip initial mount and autoSelectPeriod-triggered changes)
   useEffect(() => {
     if (isFirstMount.current) { isFirstMount.current = false; return }
+    if (period === autoSelectedPeriod.current) { autoSelectedPeriod.current = null; return }
     if (rangeMode === 'custom') {
       fetchReportRange(draftFrom, draftTo, `${draftFrom} - ${draftTo}`)
       return
@@ -987,6 +1041,79 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
     window.addEventListener('refreshTransactions', handler)
     return () => window.removeEventListener('refreshTransactions', handler)
   }, [draftFrom, draftTo, period, rangeMode, fetchReport, fetchReportRange])
+
+  // On branch switch: restore cache instantly, then silently refresh in background
+  useEffect(() => {
+    if (activeBranchRef.current === branchId) return // mount or same branch — skip
+    activeBranchRef.current = branchId
+
+    const cached = branchId ? _branchReportCache.get(branchId) : null
+    if (cached) {
+      autoSelectedPeriod.current = cached.period
+      setPeriod(cached.period)
+      setRangeMode(cached.rangeMode)
+      setDraftFrom(cached.draftFrom)
+      setDraftTo(cached.draftTo)
+      setTxData(cached.txData)
+      setPeriodTxData(cached.periodTxData)
+      setDishProfitData(cached.dishProfitData)
+      setInvMovementData(cached.invMovementData)
+      setTheoreticalInvData(cached.theoreticalInvData)
+      setLoadedPeriod(cached.loadedPeriod)
+      // Silently re-fetch to keep data fresh
+      const { start, end } = cached.rangeMode === 'custom'
+        ? { start: cached.draftFrom, end: cached.draftTo }
+        : getDateRange(cached.period)
+      Promise.all([
+        fetch(`/api/transactions?startDate=${start}&endDate=${end}`, FRESH_FETCH_OPTIONS),
+        fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+        fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+        fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+      ]).then(async ([txRes, dpRes, imRes, tiRes]) => {
+        let txRows = cached.txData
+        if (txRes.ok) {
+          const d = await txRes.json()
+          txRows = normalizeTransactions(Array.isArray(d) ? d : (d.transactions ?? d.data ?? []))
+          setTxData(txRows); setPeriodTxData(txRows)
+        }
+        let dpData = cached.dishProfitData, imData = cached.invMovementData, tiData = cached.theoreticalInvData
+        if (dpRes.ok) { dpData = await dpRes.json(); setDishProfitData(dpData) }
+        if (imRes.ok) { imData = await imRes.json(); setInvMovementData(imData) }
+        if (tiRes.ok) { tiData = await tiRes.json(); setTheoreticalInvData(tiData) }
+        _branchReportCache.set(branchId, { ...cached, txData: txRows, periodTxData: txRows, dishProfitData: dpData, invMovementData: imData, theoreticalInvData: tiData })
+      }).catch(() => {})
+    } else {
+      // No cache yet for this branch — fresh load with loading indicator
+      setLoading(true)
+      setTxData(null); setDishProfitData(null); setInvMovementData(null); setTheoreticalInvData(null)
+      const { start, end, label } = getDateRange(period)
+      fetch(`/api/transactions?startDate=${start}&endDate=${end}`, FRESH_FETCH_OPTIONS)
+        .then(async (res) => {
+          if (!res.ok) return
+          const d = await res.json()
+          const rows = normalizeTransactions(Array.isArray(d) ? d : (d.transactions ?? d.data ?? []))
+          setTxData(rows); setPeriodTxData(rows); setLoadedPeriod(label)
+          Promise.all([
+            fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+            fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+            fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+          ]).then(async ([dpRes, imRes, tiRes]) => {
+            let dpData: any = null, imData: any = null, tiData: any = null
+            if (dpRes.ok) { dpData = await dpRes.json(); setDishProfitData(dpData) }
+            if (imRes.ok) { imData = await imRes.json(); setInvMovementData(imData) }
+            if (tiRes.ok) { tiData = await tiRes.json(); setTheoreticalInvData(tiData) }
+            _branchReportCache.set(branchId, {
+              period, rangeMode: 'preset', draftFrom: start, draftTo: end,
+              txData: rows, periodTxData: rows,
+              dishProfitData: dpData, invMovementData: imData, theoreticalInvData: tiData,
+              loadedPeriod: label,
+            })
+          }).catch(() => {})
+        })
+        .catch(() => { setTxData([]) })
+        .finally(() => setLoading(false))
+    }
+  }, [branchId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const exportAllPDF = useCallback(async () => {
     setExporting(true)

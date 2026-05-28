@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { ensureRestaurantForOwner, getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { getRestaurantFifoAvailability } from '@/lib/fifoRollout'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
+import { cached } from '@/lib/apiCache'
 
 const settingsRestaurantSelect = {
   id: true,
@@ -85,7 +86,7 @@ export async function GET() {
   const effectiveBillHeader = activeBranch?.billHeader ?? restaurant.billHeader ?? ''
   const billHeaderInherited = activeBranch !== null && (activeBranch.billHeader === null || activeBranch.billHeader === '')
 
-  return NextResponse.json({
+  return cached({
     restaurant: {
       ...restaurant,
       billHeader: effectiveBillHeader,

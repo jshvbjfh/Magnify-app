@@ -112,10 +112,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   const [submitError,      setSubmitError]      = useState<string | null>(null)
   const [confirmSuccess,   setConfirmSuccess]   = useState<string | null>(null)
   const [takenBy,          setTakenBy]          = useState('')
-  const [payingTableKey,    setPayingTableKey]    = useState<string | null>(null)
+  const [payingOrderId,     setPayingOrderId]     = useState<string | null>(null)
   const [payMethod,         setPayMethod]         = useState('Cash')
   const [payingSaving,      setPayingSaving]      = useState(false)
-  const [cancelingTableKey, setCancelingTableKey] = useState<string | null>(null)
+  const [cancelingOrderId,  setCancelingOrderId]  = useState<string | null>(null)
   const [servingSaving,     setServingSaving]     = useState(false)
 
   const orderSubmitLockRef = useRef(false)
@@ -340,8 +340,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
     }
   }
 
-  async function collectPayment(tableKey: string) {
-    const order = pendingOrders.find(o => (o.table_id ?? 'takeaway') === tableKey)
+  async function collectPayment(orderId: string) {
+    const order = pendingOrders.find(o => o.id === orderId)
     if (!order || paymentLockRef.current) return
     paymentLockRef.current = true
     setPayingSaving(true)
@@ -362,7 +362,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
       }).catch(err => {
         void logError('sync', 'Post-payment push failed', { error: (err as Error).message })
       })
-      setPayingTableKey(null)
+      setPayingOrderId(null)
       setPayMethod('Cash')
     } catch {}
     finally {
@@ -384,9 +384,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   })
 
   const cartItems      = localCart[selectedTableKey] ?? []
-  const currentOrder   = pendingOrders.find(o => (o.table_id ?? 'takeaway') === selectedTableKey) ?? null
+  const currentOrders  = pendingOrders
+    .filter(o => (o.table_id ?? 'takeaway') === selectedTableKey)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  const currentOrder   = currentOrders[0] ?? null
   const confirmedItems = currentOrder ? (orderItemsMap[currentOrder.id] ?? []) : []
   const isBuilding     = cartItems.length > 0
+  const isMultiOrder   = !isBuilding && currentOrders.length > 1
   const rightItems     = isBuilding
     ? cartItems
     : confirmedItems.map(i => ({ dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price, qty: i.qty }))
@@ -396,13 +400,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
 
   // ── Pay modal ──
 
-  function PayModal({ tableKey, onClose }: { tableKey: string; onClose: () => void }) {
-    const order   = pendingOrders.find(o => (o.table_id ?? 'takeaway') === tableKey)
+  function PayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
+    const order   = pendingOrders.find(o => o.id === orderId)
     const items   = order ? (orderItemsMap[order.id] ?? []) : []
     const sub     = items.reduce((s, i) => s + i.dish_price * i.qty, 0)
     const vat     = Math.round(sub * VAT_RATE)
     const tot     = Math.round(sub * (1 + VAT_RATE))
-    const name    = tableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === tableKey)?.name ?? 'Table')
+    const name    = order?.table_name ?? (order?.table_id ? (tables.find(t => t.id === order.table_id)?.name ?? 'Table') : 'Takeaway')
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
@@ -444,7 +448,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2.5 rounded-xl hover:bg-gray-50">
               Cancel
             </button>
-            <button onClick={() => collectPayment(tableKey)} disabled={payingSaving}
+            <button onClick={() => collectPayment(orderId)} disabled={payingSaving}
               className="flex-1 bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl">
               {payingSaving ? 'Processing…' : `Confirm ${payMethod}`}
             </button>
@@ -737,19 +741,78 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
         {/* Mode label strip */}
         <div className={`flex-shrink-0 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-widest ${
           isBuilding             ? 'bg-orange-50 text-orange-600' :
+          isMultiOrder           ? 'bg-amber-50  text-amber-700'  :
           confirmedItems.length  ? 'bg-amber-50  text-amber-700'  :
                                    'bg-gray-50   text-gray-400'
         }`}>
           {isBuilding
             ? 'Building order — not sent yet'
-            : confirmedItems.length
-              ? `Order · ${currentOrder?.order_number ?? ''}`
-              : 'Tap a dish to add items'}
+            : isMultiOrder
+              ? `${currentOrders.length} active orders`
+              : confirmedItems.length
+                ? `Order · ${currentOrder?.order_number ?? ''}`
+                : 'Tap a dish to add items'}
         </div>
 
         {/* Items list */}
         <div className="flex-1 overflow-y-auto px-4 py-3">
-          {rightItems.length === 0 ? (
+          {isMultiOrder ? (
+            <div className="space-y-3">
+              {currentOrders.map(ord => {
+                const oi  = orderItemsMap[ord.id] ?? []
+                const sub = oi.reduce((s, i) => s + i.dish_price * i.qty, 0)
+                const vat = Math.round(sub * VAT_RATE)
+                const tot = Math.round(sub * (1 + VAT_RATE))
+                return (
+                  <div key={ord.id} className="border border-gray-200 rounded-xl overflow-hidden">
+                    <div className="bg-gray-50 px-3 py-2 flex justify-between items-center border-b border-gray-100">
+                      <span className="text-xs font-bold text-gray-700">{ord.order_number}</span>
+                      <span className="text-xs text-gray-500 truncate ml-2">{ord.created_by_name}</span>
+                    </div>
+                    <div className="px-3 py-2 space-y-1.5">
+                      {oi.map(item => (
+                        <div key={item.id} className="flex items-start justify-between">
+                          <span className="text-sm text-gray-800 font-medium flex-1 min-w-0 leading-snug">
+                            {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                          </span>
+                          <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
+                            {fmtRWF(item.dish_price * item.qty)} RWF
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="border-t border-gray-100 px-3 py-2 space-y-1.5">
+                      <div className="flex justify-between text-xs text-gray-500">
+                        <span>Subtotal</span><span>{fmtRWF(sub)} RWF</span>
+                      </div>
+                      <div className="flex justify-between text-xs text-orange-600 font-medium">
+                        <span>VAT 18%</span><span>+{fmtRWF(vat)} RWF</span>
+                      </div>
+                      <div className="flex justify-between text-sm font-bold text-gray-900 border-t border-gray-100 pt-1.5">
+                        <span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span>
+                      </div>
+                      <div className="flex gap-1.5 pt-0.5">
+                        {!ord.served_at && (
+                          <button onClick={() => markOrderServed(ord.id)} disabled={servingSaving}
+                            className="flex-1 flex items-center justify-center gap-1 border border-green-300 hover:bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-xl transition-colors disabled:opacity-60">
+                            <CheckCircle2 className="h-3.5 w-3.5" /> Served
+                          </button>
+                        )}
+                        <button onClick={() => setPayingOrderId(ord.id)}
+                          className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
+                          <CreditCard className="h-3.5 w-3.5" /> Pay
+                        </button>
+                      </div>
+                      <button onClick={() => setCancelingOrderId(ord.id)}
+                        className="w-full flex items-center justify-center gap-1 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
+                        <ShieldAlert className="h-3 w-3" /> Cancel
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : rightItems.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full py-12 text-gray-400">
               <ShoppingBag className="h-8 w-8 mb-3 text-gray-300" />
               <p className="text-sm">No items yet</p>
@@ -790,7 +853,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
         </div>
 
         {/* Totals + action buttons */}
-        {rightItems.length > 0 && (
+        {!isMultiOrder && rightItems.length > 0 && (
           <div className="flex-shrink-0 border-t border-gray-200 px-4 py-4 space-y-2">
 
             {/* ── Success banner ── */}
@@ -852,7 +915,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                     <CheckCircle2 className="h-4 w-4" /> {servingSaving ? 'Marking…' : 'Mark Served'}
                   </button>
                 )}
-                <button onClick={() => setPayingTableKey(selectedTableKey)}
+                <button onClick={() => currentOrder && setPayingOrderId(currentOrder.id)}
                   className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-2xl text-base transition-colors shadow-sm flex items-center justify-center gap-2">
                   <CreditCard className="h-4 w-4" /> Collect Payment
                 </button>
@@ -862,7 +925,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                 </button>
                 {currentOrder && (
                   <button
-                    onClick={() => setCancelingTableKey(selectedTableKey)}
+                    onClick={() => setCancelingOrderId(currentOrder.id)}
                     className="w-full flex items-center justify-center gap-1.5 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
                     <ShieldAlert className="h-3.5 w-3.5" /> Cancel order
                   </button>
@@ -873,38 +936,37 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
         )}
       </div>
 
-      {payingTableKey && (
+      {payingOrderId && (
         <PayModal
-          tableKey={payingTableKey}
-          onClose={() => { setPayingTableKey(null); setPayMethod('Cash') }}
+          orderId={payingOrderId}
+          onClose={() => { setPayingOrderId(null); setPayMethod('Cash') }}
         />
       )}
 
-      {cancelingTableKey && (
+      {cancelingOrderId && (
         <CancelModal
-          tableKey={cancelingTableKey}
-          onClose={() => setCancelingTableKey(null)}
+          orderId={cancelingOrderId}
+          onClose={() => setCancelingOrderId(null)}
         />
       )}
     </div>
   )
 
   // ── Cancel Modal ── (defined inside component to access closure state)
-  function CancelModal({ tableKey, onClose }: { tableKey: string; onClose: () => void }) {
+  function CancelModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
     const [pin,    setPin]    = useState('')
     const [reason, setReason] = useState('')
     const [saving, setSaving] = useState(false)
     const [error,  setError]  = useState<string | null>(null)
 
-    const tableName = tableKey === 'takeaway'
-      ? 'Takeaway'
-      : (tables.find(t => t.id === tableKey)?.name ?? 'Table')
+    const order     = pendingOrders.find(o => o.id === orderId)
+    const tableKey  = order ? (order.table_id ?? 'takeaway') : 'takeaway'
+    const tableName = order?.table_name ?? 'Order'
 
     async function submit() {
       if (pin.length !== 5) { setError('PIN must be exactly 5 digits'); return }
       if (!reason.trim())   { setError('Please enter a reason');        return }
 
-      const order = pendingOrders.find(o => (o.table_id ?? 'takeaway') === tableKey)
       if (!order) { setError('Order not found'); return }
 
       setSaving(true)

@@ -10,6 +10,7 @@ import {
   getRestaurantContextForUser,
 } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
+import { cached } from '@/lib/apiCache'
 
 const branchTabSelect = {
   id: true,
@@ -95,10 +96,10 @@ export async function GET() {
   const result = await getAuthorizedBranchContext()
   if ('error' in result) return result.error
 
-  return withActiveBranchCookie(NextResponse.json({
+  return withActiveBranchCookie(cached({
     activeBranchId: result.activeBranchId,
     branches: result.branches,
-  }), result.restaurantId, result.activeBranchId)
+  }, 15, 60), result.restaurantId, result.activeBranchId)
 }
 
 export async function PATCH(req: Request) {

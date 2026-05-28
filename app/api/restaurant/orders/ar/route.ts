@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { cached } from '@/lib/apiCache'
 
 // GET outstanding A/R: PAID credit orders not yet collected
 export async function GET() {
@@ -35,7 +36,7 @@ export async function GET() {
       orderBy: { paidAt: 'asc' },
     })
 
-    return NextResponse.json(orders)
+    return cached(orders)
   } catch (error: any) {
     console.error('Failed to load A/R orders:', error)
     return NextResponse.json({ error: error?.message || 'Failed to load A/R orders' }, { status: 500 })

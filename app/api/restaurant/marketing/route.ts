@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { clearGeminiQuotaFailure, getGeminiAttemptPlan, getGeminiApiKeys, getGeminiKeyAvailability, getGeminiRetryConfig, getGeminiUnavailableMessage, isQuotaError, isRetryableGeminiServiceError, markGeminiQuotaFailure } from '@/lib/openai'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { cached } from '@/lib/apiCache'
 
 export const dynamic = 'force-dynamic'
 
@@ -131,7 +132,7 @@ export async function GET(req: NextRequest) {
   const prevRev30 = prev30sales.reduce((s, x) => s + x.totalSaleAmount, 0)
   const revTrendPct = prevRev30 > 0 ? ((rev30 - prevRev30) / prevRev30) * 100 : null
 
-  return NextResponse.json({
+  return cached({
     weeklyTrend,
     dayTrend,
     hourTrend,
@@ -143,7 +144,7 @@ export async function GET(req: NextRequest) {
     revTrendPct: revTrendPct !== null ? Number(revTrendPct.toFixed(1)) : null,
     campaigns,
     salesCount30d: recentSales.length,
-  })
+  }, 300)
 }
 
 export async function POST(req: NextRequest) {
