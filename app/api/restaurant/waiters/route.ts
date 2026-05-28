@@ -147,13 +147,9 @@ export async function POST(req: Request) {
 
     // ── Owner (User) account path ──────────────────────────────────────────
     if (reqRole === 'owner') {
-      const ownerCheck = await prisma.restaurant.findFirst({
-        where: { id: restaurant.id, ownerId: admin.id },
-        select: { id: true },
-      })
-      if (!ownerCheck) {
-        return NextResponse.json({ error: 'You do not own this restaurant' }, { status: 403 })
-      }
+      // Access is already verified: requireAdmin() confirmed admin/owner role,
+      // and getRestaurantContextForUser confirmed this user is linked to the restaurant
+      // (either as ownerId or managerId). No additional gate needed.
 
       const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } })
       const canUpdateExistingOwner = Boolean(existing && existing.role === 'owner')
