@@ -46,7 +46,10 @@ async function resolveRestaurantAccess(
 
   if (userRole === 'owner' || userRole === 'admin') {
     restaurants = await prisma.restaurant.findMany({
-      where: { ownerId: userId, deletedAt: null },
+      where: {
+        OR: [{ ownerId: userId }, { managerId: userId }],
+        deletedAt: null,
+      },
       select: { id: true, name: true, ownerId: true },
       orderBy: { createdAt: 'asc' },
     })
@@ -92,6 +95,7 @@ async function resolveRestaurantAccess(
 }
 
 export async function GET(req: Request) {
+  try {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -375,4 +379,12 @@ export async function GET(req: Request) {
     dailyHistory,
     topDishes,
   })
+  } catch (e: any) {
+    const msg = e?.message || 'Unknown error'
+    const isTimeout = msg.includes('connection pool') || msg.includes('timed out') || msg.includes('Server has closed')
+    return NextResponse.json(
+      { error: isTimeout ? 'Database is warming up, please try again in a moment.' : msg },
+      { status: 503 }
+    )
+  }
 }
