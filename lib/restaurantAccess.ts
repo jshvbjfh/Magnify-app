@@ -354,3 +354,18 @@ export async function getRestaurantContextForUser(
     billingUserId: restaurant.ownerId,
   }
 }
+
+/**
+ * Reads restaurantId and branchId directly from the NextAuth session JWT.
+ * Zero extra DB queries — values are embedded at login and updated on branch switch.
+ * Use this in API routes instead of getRestaurantContextForUser when you only need
+ * the IDs to scope a query (transactions, inventory, orders, etc.).
+ */
+export function getRestaurantContextFromSession(sessionUser: Record<string, unknown> | null | undefined) {
+  return {
+    restaurantId: (sessionUser?.restaurantId as string | null) ?? null,
+    branchId: (sessionUser?.branchId as string | null) ?? null,
+    userId: (sessionUser?.id as string | null) ?? null,
+    role: (sessionUser?.role as string | null) ?? null,
+  }
+}

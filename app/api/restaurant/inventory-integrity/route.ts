@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 
 import { authOptions } from '@/lib/auth'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { getRestaurantInventoryIntegrity } from '@/lib/inventoryIntegrity'
 import { prisma } from '@/lib/prisma'
 import { cached } from '@/lib/apiCache'
@@ -17,7 +17,7 @@ export async function GET() {
 		return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 	}
 
-	const context = await getRestaurantContextForUser(session.user.id)
+	const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 	if (!context?.restaurantId || !context.branchId) {
 		return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 	}

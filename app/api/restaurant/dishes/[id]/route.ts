@@ -1,9 +1,9 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { normalizeDishVariantPayload } from '@/lib/dishVariants'
-import { ensureMainBranchForRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { ensureMainBranchForRestaurant, getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 const dishInclude = {
@@ -33,7 +33,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = await getRestaurantContextForUser(session.user.id)
+  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   if (!context?.restaurantId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const branchId = await requireBranchId(context.restaurantId, context.branchId, session.user.id)
@@ -46,7 +46,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const dish = await prisma.$transaction(async (tx) => {
     const updated = await tx.dish.updateMany({
-      where: { id, restaurantId: context.restaurantId, branchId },
+      where: { id, restaurantId: context.restaurantId ?? undefined, branchId: branchId ?? undefined },
       data: {
         ...(data.name !== undefined && { name: data.name }),
         ...(data.sellingPrice !== undefined && { sellingPrice: Number(data.sellingPrice) }),
@@ -73,7 +73,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     }
 
     const updatedDish = await tx.dish.findFirst({
-      where: { id, restaurantId: context.restaurantId, branchId },
+      where: { id, restaurantId: context.restaurantId ?? undefined, branchId: branchId ?? undefined },
       include: dishInclude,
     })
 
@@ -103,7 +103,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = await getRestaurantContextForUser(session.user.id)
+  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   if (!context?.restaurantId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const branchId = await requireBranchId(context.restaurantId, context.branchId, session.user.id)

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
-  ArrowLeft, Trash2, X, Receipt, ShieldAlert,
+  ArrowLeft, Trash2, X, Receipt, ShieldAlert, WifiOff, AlertCircle, Cloud,
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
@@ -9,6 +9,7 @@ import {
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline } from '../services/sync'
+import { useOnline } from '../hooks/useOnline'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -105,6 +106,7 @@ interface Props {
 }
 
 export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId = null, onPendingCountChange, syncVersion }: Props) {
+  const { isOnline } = useOnline()
   // ── Shared state ──
   const [dishes,        setDishes]        = useState<Dish[]>([])
   const [tables,        setTables]        = useState<RestaurantTable[]>([])
@@ -324,6 +326,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         canceled_at:        null,
         cancel_reason:      null,
         synced:             0,
+        sync_error:         null,
         created_at:         now,
         updated_at:         now,
       }
@@ -440,7 +443,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     ? cartItems
     : confirmedItems.map(i => ({ dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price, qty: i.qty }))
   const { subtotal, vatAmount, totalAmount } = calcTotals(rightItems)
-  const tableNumber        = selectedTableKey === 'takeaway' ? 'T/A' : `#${tables.findIndex(t => t.id === selectedTableKey) + 1}`
+  const tableNumber        = selectedTableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
   const currentOrderServed = Boolean(currentOrder?.served_at)
   const activeTableKeys    = new Set(pendingOrders.map(o => o.table_id ?? 'takeaway'))
 
@@ -563,11 +566,26 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
                         }`}>
                           {ds}
                         </span>
-                        {!order.synced && (
-                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                            Pending sync
-                          </span>
-                        )}
+                        {!order.synced && (() => {
+                          if (order.sync_error) return (
+                            <span title={order.sync_error} className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                              <AlertCircle className="h-3 w-3" />
+                              Sync error
+                            </span>
+                          )
+                          if (!isOnline) return (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                              <WifiOff className="h-3 w-3" />
+                              Saved offline
+                            </span>
+                          )
+                          return (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                              <Cloud className="h-3 w-3" />
+                              Syncing...
+                            </span>
+                          )
+                        })()}
                       </div>
                       <p className="text-xs text-gray-500 mt-1">{orderMeta}</p>
                     </div>

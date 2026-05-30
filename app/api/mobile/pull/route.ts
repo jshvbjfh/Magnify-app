@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
-import { resolveActiveStaffAccess } from '@/lib/mobileStaffAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,17 +34,13 @@ async function verifyToken(req: Request) {
 export async function GET(req: Request) {
   try {
     const claims = await verifyToken(req)
-    // Resolve the current staff->restaurant->branch binding from the database.
-    // JWT restaurant/branch claims can become stale after account repair or branch reassignment.
-    const staffAccess = await resolveActiveStaffAccess(claims.sub)
 
-    if (!staffAccess) {
+    const restaurantId = claims.restaurantId
+    const userBranchId = claims.branchId ?? null
+
+    if (!restaurantId) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
-
-    const restaurantId = staffAccess.restaurantId
-
-    const userBranchId = staffAccess.branchId ?? null
 
     if (!userBranchId) {
       return jsonNoStore(

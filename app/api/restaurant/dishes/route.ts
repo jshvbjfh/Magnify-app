@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { ensureMainBranchForRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { ensureMainBranchForRestaurant, getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { normalizeDishVariantPayload } from '@/lib/dishVariants'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 import { cached } from '@/lib/apiCache'
@@ -21,7 +21,7 @@ export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = await getRestaurantContextForUser(session.user.id)
+  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
   const { searchParams } = new URL(req.url)
@@ -53,7 +53,7 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = await getRestaurantContextForUser(session.user.id)
+  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   if (!context?.restaurantId) {
     return NextResponse.json({ error: 'No restaurant found for this account' }, { status: 400 })
   }
@@ -80,7 +80,7 @@ export async function POST(req: Request) {
   const dish = await prisma.$transaction(async (tx) => {
     const createdDish = await tx.dish.create({
       data: {
-        restaurantId: context.restaurantId,
+        restaurantId: context.restaurantId!,
         branchId: resolvedBranchId,
         name,
         sellingPrice: Number(sellingPrice),

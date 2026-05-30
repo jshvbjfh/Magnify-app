@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { buildRestaurantOrderTimeline, getRestaurantOrderDisplayStatus } from '@/lib/restaurantOrders'
 
 function parseDateParam(value: string | null) {
@@ -32,7 +32,7 @@ export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = await getRestaurantContextForUser(session.user.id)
+  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   if (!context?.restaurantId || !context.branchId) {
     return NextResponse.json(
       { error: 'No restaurant branch found for this account. Ask your administrator to check your account configuration.' },

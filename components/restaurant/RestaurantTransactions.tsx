@@ -169,23 +169,32 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   })
   const snapshotStorageScope = snapshotScopeId ? `restaurant-transactions:${snapshotScopeId}` : null
 
+  // Ref so persistSnapshot stays stable — always writes to the current scope without recreating
+  const snapshotStorageScopeRef = useRef<string | null>(null)
+  snapshotStorageScopeRef.current = snapshotStorageScope
+
   const persistSnapshot = useCallback((nextTransactions: Transaction[]) => {
-    if (!snapshotStorageScope) return
-    const snapshot = mergeRestaurantDeviceSnapshot<RestaurantTransactionsSnapshot>(snapshotStorageScope, {
+    const scope = snapshotStorageScopeRef.current
+    if (!scope) return
+    const snapshot = mergeRestaurantDeviceSnapshot<RestaurantTransactionsSnapshot>(scope, {
       transactions: nextTransactions,
     })
     if (!snapshot) return
     setSnapshotUpdatedAt(snapshot.updatedAt)
     setShowingCachedSnapshot(false)
-  }, [snapshotStorageScope])
+  }, [])
+
+  // Ref so fetchTransactions can check whether data already exists without taking
+  // transactions.length as a dependency (which would cause a re-fetch on every load)
+  const hasTransactionsRef = useRef(false)
 
   const fetchTransactions = useCallback(async () => {
-    setLoading(transactions.length === 0)
+    if (!hasTransactionsRef.current) setLoading(true)
     setLoadError(null)
 
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      if (transactions.length === 0) {
-        setLoadError('You are offline. Reconnect to load transactions from the server.')
+      if (!hasTransactionsRef.current) {
+        setLoadError('You are offline.')
       }
       setLoading(false)
       return
@@ -196,14 +205,15 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
       if (!res.ok) throw new Error('Failed to load transactions')
       const data = await res.json()
       const nextTransactions = normalizeTransactions(data.transactions || [])
+      hasTransactionsRef.current = nextTransactions.length > 0
       setTransactions(nextTransactions)
       persistSnapshot(nextTransactions)
     } catch {
-      setLoadError('Could not load transactions. Check connection or database status.')
+      setLoadError('Could not load transactions.')
     } finally {
       setLoading(false)
     }
-  }, [persistSnapshot, transactions.length])
+  }, [persistSnapshot])
 
   useEffect(() => {
     if (!snapshotStorageScope) return
@@ -441,7 +451,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
         {/* Main content */}
         <div className="flex-1 min-w-0 space-y-4">
 
-          {loadError && (
+          {loadError && hasTransactionsRef.current && (
             <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {loadError}
             </div>
@@ -512,11 +522,11 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                 <RefreshCw className="h-6 w-6 text-gray-400 animate-spin mr-2" />
                 <span className="text-gray-400 text-sm">Loading transactions&hellip;</span>
               </div>
-            ) : loadError ? (
+            ) : loadError && !hasTransactionsRef.current ? (
               <div className="text-center py-16">
                 <Calendar className="h-10 w-10 text-red-200 mx-auto mb-3" />
-                <p className="text-red-600 font-medium">Transactions unavailable</p>
-                <p className="text-red-400 text-sm mt-1">The list could not be loaded from the server.</p>
+                <p className="text-red-600 font-medium">Could not load transactions.</p>
+                <p className="text-red-400 text-sm mt-1">Check your connection and try again.</p>
               </div>
             ) : rows.length === 0 && !newTxRow ? (
               <div className="text-center py-16">

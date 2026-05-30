@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 
 function normalizePaymentMethod(paymentMethod?: string): string {
   const raw = String(paymentMethod || 'Cash').trim().toLowerCase()
@@ -67,8 +67,8 @@ export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = await getRestaurantContextForUser(session.user.id)
-  const billingUserId = context?.billingUserId ?? session.user.id
+  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+  const billingUserId = context?.userId ?? session.user.id
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
 

@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { resolveCancellationApprover } from '@/lib/cancelApproval'
 import { ACTIVE_RESTAURANT_ORDER_STATUSES, calculateRestaurantOrderTotals, enqueueOrderSync, generateRestaurantOrderNumber, isRestaurantOrderNumberConflict, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
 import { findRestaurantAction, isRestaurantActionConflict, normalizeRestaurantActionKey, recordRestaurantAction } from '@/lib/restaurantAction'
@@ -17,7 +17,7 @@ export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json([])
 
-  const context = await getRestaurantContextForUser(session.user.id)
+  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   if (!context?.restaurantId || !context.branchId) return NextResponse.json([])
 
   const searchParams = new URL(req.url).searchParams
@@ -68,7 +68,7 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = await getRestaurantContextForUser(session.user.id)
+  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const restaurantId = context.restaurantId
@@ -194,7 +194,7 @@ export async function DELETE(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = await getRestaurantContextForUser(session.user.id)
+  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
   if (!restaurantId || !branchId || !context) return NextResponse.json({ error: 'No restaurant branch' }, { status: 400 })

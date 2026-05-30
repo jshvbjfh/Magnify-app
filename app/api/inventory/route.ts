@@ -1,10 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server'
+﻿import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import fs from 'fs'
 import path from 'path'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 const isProduction = process.env.NODE_ENV === 'production'
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
-		const context = await getRestaurantContextForUser(session.user.id)
+		const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 		const restaurantId = context?.restaurantId ?? null
 		const branchId = context?.branchId ?? null
 
@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
 		}
 
 		const body = await req.json()
-		const context = await getRestaurantContextForUser(session.user.id)
+		const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 		const restaurantId = context?.restaurantId ?? null
 		const branchId = context?.branchId ?? null
 		const { name, description, unit, unitCost, unitPrice, quantity, category, reorderLevel, skipOpeningPurchase } = body
@@ -223,7 +223,7 @@ export async function PUT(req: NextRequest) {
 		}
 
 		const body = await req.json()
-		const context = await getRestaurantContextForUser(session.user.id)
+		const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 		const restaurantId = context?.restaurantId ?? null
 		const branchId = context?.branchId ?? null
 		const { id, name, description, unit, unitCost, unitPrice, quantity, category, reorderLevel } = body
@@ -362,7 +362,7 @@ export async function DELETE(req: NextRequest) {
 		}
 
 		const { searchParams } = new URL(req.url)
-		const context = await getRestaurantContextForUser(session.user.id)
+		const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 		const restaurantId = context?.restaurantId ?? null
 		const branchId = context?.branchId ?? null
 		const id = searchParams.get('id')

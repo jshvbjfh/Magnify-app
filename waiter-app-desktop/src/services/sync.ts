@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs'
 import {
   replaceDishes, replaceTables, setConfig, getConfig,
-  getDishes, getTables, getUnsyncedOrders, markOrdersSynced,
+  getDishes, getTables, getUnsyncedOrders, markOrdersSynced, updateOrderSyncError,
   replaceCancellationApprovers, getCancellationApprovers,
   reconcileOrderStatuses, upsertIncomingOrders,
   type Dish, type RestaurantTable, type CancellationApprover, type RemoteOrderStatus, type IncomingOrder,
@@ -324,14 +324,18 @@ export async function pushSync(): Promise<number> {
   }
   const syncedOrders = orders.filter(o => syncedOrderIds.includes(o.id))
   await markOrdersSynced(syncedOrders)
-  if (Array.isArray(failedOrderIds) && failedOrderIds.length > 0) {
+
+  if (Array.isArray(failedOrders) && failedOrders.length > 0) {
+    await Promise.all(
+      failedOrders.map(f => updateOrderSyncError(f.orderId, f.error ?? 'Server rejected this order'))
+    )
     await logWarn('sync', 'Push sync completed with failed orders', {
       pendingOrders: orders.length,
       pendingItems: items.length,
       syncedOrders: syncedOrderIds.length,
-      failedOrders: failedOrderIds.length,
+      failedOrders: failedOrderIds?.length ?? 0,
       failedOrderIds,
-      failures: failedOrders ?? [],
+      failures: failedOrders,
     })
   }
   await logInfo('sync', 'Push sync completed', {
@@ -346,18 +350,30 @@ export async function pushSync(): Promise<number> {
 
 export async function syncAll(branchId?: string): Promise<{ pushed: number; pulled: boolean; warning?: string; error?: string; authFailed?: boolean }> {
   let pushed = 0
+  let pushError: string | undefined
 
+  // Push and pull are independent — a push timeout must not block the pull.
+  // QR menu orders live on the server and only reach the waiter via pull.
   try {
     pushed = await pushSync()
-    const pullResult = await pullSync(branchId)
-    return { pushed, pulled: true, warning: pullResult.warning }
   } catch (err) {
-    const error = (err as Error).message
+    pushError = (err as Error).message
+    // Auth failure means the token is invalid — pull would also fail, stop early.
+    if (pushError === SESSION_INVALID_MESSAGE) {
+      return { pushed: 0, pulled: false, error: pushError, authFailed: true }
+    }
+  }
+
+  try {
+    const pullResult = await pullSync(branchId)
+    return { pushed, pulled: true, warning: pullResult.warning, error: pushError }
+  } catch (err) {
+    const pullError = (err as Error).message
     return {
       pushed,
       pulled: false,
-      error,
-      authFailed: error === SESSION_INVALID_MESSAGE,
+      error: pullError,
+      authFailed: pullError === SESSION_INVALID_MESSAGE,
     }
   }
 }

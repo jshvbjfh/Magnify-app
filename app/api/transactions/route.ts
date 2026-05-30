@@ -4,7 +4,7 @@ import { databaseUnavailableJson, isPrismaDatabaseUnavailableError, logDatabaseU
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { recordJournalEntry, recordVatJournalEntry } from '@/lib/accounting'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 
 class UnauthorizedError extends Error {
   constructor() {
@@ -33,12 +33,8 @@ async function requireContext() {
   const session = await getServerSession(authOptions)
   const userId = session?.user?.id
   if (!userId) throw new UnauthorizedError()
-  const context = await getRestaurantContextForUser(userId)
-  return {
-    userId,
-    restaurantId: context?.restaurantId ?? null,
-    branchId: context?.branchId ?? null,
-  }
+  const { restaurantId, branchId } = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+  return { userId, restaurantId, branchId }
 }
 
 export async function GET(req: Request) {

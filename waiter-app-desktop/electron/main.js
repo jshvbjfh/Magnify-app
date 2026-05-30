@@ -131,6 +131,12 @@ CREATE TABLE IF NOT EXISTS cancellation_approvers (
 ALTER TABLE dishes ADD COLUMN menu_type TEXT;
 `,
   },
+  {
+    version: 3,
+    sql: `
+ALTER TABLE orders ADD COLUMN sync_error TEXT;
+`,
+  },
 ]
 
 function runMigrations(database) {

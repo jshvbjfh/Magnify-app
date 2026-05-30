@@ -1,16 +1,16 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { ensureCoreCategories, ensureAccount, resolveSettlementAccount, normalizePaymentMethod } from '@/lib/accounting'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const context = await getRestaurantContextForUser(session.user.id)
+    const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
     if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })

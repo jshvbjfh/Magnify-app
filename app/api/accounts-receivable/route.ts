@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
 import { recordJournalEntry } from '@/lib/accounting'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 
 export async function GET() {
   try {
@@ -23,15 +23,14 @@ export async function POST(req: Request) {
     const { clientName, description, amount, date, serviceType } = await req.json()
     if (!clientName || !amount) return NextResponse.json({ error: 'clientName and amount required' }, { status: 400 })
 
-    const ctx = await getRestaurantContextForUser(session.user.id)
-    const restaurant = ctx?.restaurant ?? null
-    if (!restaurant) return NextResponse.json({ error: 'No restaurant linked' }, { status: 409 })
+    const ctx = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+    if (!ctx.restaurantId) return NextResponse.json({ error: 'No restaurant linked' }, { status: 409 })
 
     const txDate = date ? new Date(date) : new Date()
     const fullDescription = `${serviceType || 'Service'}: ${description || clientName} - ${clientName}`
 
     await recordJournalEntry(prisma, {
-      restaurantId: restaurant.id,
+      restaurantId: ctx.restaurantId,
       date: txDate,
       description: fullDescription,
       amount: parseFloat(amount),

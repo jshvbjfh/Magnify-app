@@ -318,6 +318,7 @@ export interface Order {
   canceled_at: string | null
   cancel_reason: string | null
   synced: number
+  sync_error: string | null
   created_at: string
   updated_at: string
 }
@@ -421,10 +422,15 @@ export async function markOrdersSynced(orders: Array<{ id: string; updated_at: s
   const db = getDB()
   for (const order of orders) {
     await db.run(
-      'UPDATE orders SET synced = 1 WHERE id = ? AND updated_at = ?',
+      'UPDATE orders SET synced = 1, sync_error = NULL WHERE id = ? AND updated_at = ?',
       [order.id, order.updated_at],
     )
   }
+}
+
+export async function updateOrderSyncError(orderId: string, error: string | null): Promise<void> {
+  const db = getDB()
+  await db.run('UPDATE orders SET sync_error = ? WHERE id = ?', [error, orderId])
 }
 
 export interface RemoteOrderStatus {

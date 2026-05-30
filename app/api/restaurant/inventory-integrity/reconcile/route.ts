@@ -1,11 +1,11 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 
 import { authOptions } from '@/lib/auth'
 import { getRestaurantFifoAvailability } from '@/lib/fifoRollout'
 import { applyRestaurantInventoryReconciliation, previewRestaurantInventoryReconciliation } from '@/lib/inventoryReconciliation'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 
 function getEffectiveAt(value: unknown) {
 	if (!value) return undefined
@@ -29,7 +29,7 @@ async function requireRestaurantAdminContext() {
 		return { error: NextResponse.json({ error: 'Admin only' }, { status: 403 }) }
 	}
 
-	const context = await getRestaurantContextForUser(session.user.id)
+	const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 	if (!context?.restaurantId || !context.branchId) {
 		return { error: NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 }) }
 	}
@@ -50,9 +50,9 @@ export async function GET(req: Request) {
 	const ingredientIds = searchParams.getAll('ingredientId')
 
 	const preview = await previewRestaurantInventoryReconciliation(prisma, {
-		billingUserId: result.context.billingUserId,
-		restaurantId: result.context.restaurantId,
-		branchId: result.context.branchId,
+		billingUserId: result.context.userId ?? '',
+		restaurantId: result.context.restaurantId!,
+		branchId: result.context.branchId!,
 		effectiveAt,
 		ingredientIds: ingredientIds.length > 0 ? ingredientIds : undefined,
 	})
@@ -71,9 +71,9 @@ export async function POST(req: Request) {
 
 	if (mode !== 'apply') {
 		const preview = await previewRestaurantInventoryReconciliation(prisma, {
-			billingUserId: result.context.billingUserId,
-			restaurantId: result.context.restaurantId,
-			branchId: result.context.branchId,
+			billingUserId: result.context.userId ?? '',
+			restaurantId: result.context.restaurantId!,
+			branchId: result.context.branchId!,
 			effectiveAt,
 			ingredientIds,
 		})
@@ -89,14 +89,14 @@ export async function POST(req: Request) {
 		return NextResponse.json({ error: 'A valid effectiveAt timestamp is required when applying reconciliation.' }, { status: 400 })
 	}
 
-	if (!getRestaurantFifoAvailability(result.context.restaurant)) {
+	if (!getRestaurantFifoAvailability({ id: result.context.restaurantId! })) {
 		return NextResponse.json({ error: 'FIFO cutover apply is only available for pilot-enabled branches. Add this branch to FIFO_PILOT_RESTAURANTS first.' }, { status: 409 })
 	}
 
 	const applied = await prisma.$transaction((tx) => applyRestaurantInventoryReconciliation(tx, {
-		billingUserId: result.context.billingUserId,
-		restaurantId: result.context.restaurantId,
-		branchId: result.context.branchId,
+		billingUserId: result.context.userId ?? '',
+		restaurantId: result.context.restaurantId!,
+		branchId: result.context.branchId!,
 		effectiveAt,
 		ingredientIds,
 	}), { timeout: 60000 })

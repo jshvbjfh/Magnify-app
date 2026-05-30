@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { recordJournalEntry } from '@/lib/accounting'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 
 export async function GET(_req: NextRequest) {
 	try {
@@ -26,15 +26,14 @@ export async function POST(req: NextRequest) {
 		if (!amount) missingFields.push('amount')
 		if (missingFields.length > 0) return NextResponse.json({ error: `Missing required fields: ${missingFields.join(', ')}` }, { status: 400 })
 
-		const ctx = await getRestaurantContextForUser(session.user.id)
-		const restaurant = ctx?.restaurant ?? null
-		if (!restaurant) return NextResponse.json({ error: 'No restaurant linked to this account' }, { status: 409 })
+		const ctx = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+		if (!ctx.restaurantId) return NextResponse.json({ error: 'No restaurant linked to this account' }, { status: 409 })
 
 		const txDate = date ? new Date(date) : new Date()
 		const fullDescription = `${description || 'Goods/services received'} - ${vendorName}`
 
 		await recordJournalEntry(prisma, {
-			restaurantId: restaurant.id,
+			restaurantId: ctx.restaurantId,
 			date: txDate,
 			description: fullDescription,
 			amount: parseFloat(amount),

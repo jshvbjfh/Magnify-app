@@ -3,7 +3,6 @@ import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
 import { enqueueOrderSync } from '@/lib/restaurantOrders'
 import { finalizeRestaurantOrderPayment } from '@/lib/restaurantOrderPayment'
-import { resolveActiveStaffAccess } from '@/lib/mobileStaffAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -96,15 +95,14 @@ interface MobileOrderItem {
 export async function POST(req: Request) {
   try {
     const claims = await verifyToken(req)
-    const staffAccess = await resolveActiveStaffAccess(claims.sub)
     const mobileSourceDeviceId = `mobile:${claims.sub}`
 
-    if (!staffAccess?.restaurantId || !staffAccess.branchId) {
+    const restaurantId = claims.restaurantId
+    const branchId = claims.branchId
+
+    if (!restaurantId || !branchId) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
-
-    const restaurantId = staffAccess.restaurantId
-    const branchId = staffAccess.branchId
 
     const { orders, orderItems } = (await req.json()) as {
       orders: MobileOrder[]
@@ -157,6 +155,15 @@ export async function POST(req: Request) {
             where: { id: order.id, restaurantId },
             select: { status: true },
           })
+
+          // Fast path: order already fully processed — skip all heavy work
+          if (order.status === 'PAID' && existingOrder?.status === 'PAID') {
+            const hasDishSales = await tx.dishSale.count({ where: { orderId: order.id } }) > 0
+            if (hasDishSales) {
+              needsPostTxEnqueue = false
+              return
+            }
+          }
 
           const existingMissingDishSales =
             order.status === 'PAID' && existingOrder?.status === 'PAID'
@@ -246,7 +253,7 @@ export async function POST(req: Request) {
           }
 
           needsPostTxEnqueue = true
-        }, { timeout: 30000 })
+        }, { timeout: 8000 })
 
         if (needsPostTxEnqueue) {
           try {

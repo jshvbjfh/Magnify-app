@@ -1,9 +1,9 @@
-export const dynamic = 'force-dynamic'
+﻿export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 
 export async function GET(req: NextRequest) {
 	try {
@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
 			return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 		}
 
-		const context = await getRestaurantContextForUser(session.user.id)
+		const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 		if (!context?.restaurantId || !context.branchId) {
 			return NextResponse.json({ items: [] })
 		}
