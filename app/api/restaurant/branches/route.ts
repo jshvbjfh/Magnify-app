@@ -6,8 +6,6 @@ import { prisma } from '@/lib/prisma'
 import {
   ACTIVE_BRANCH_COOKIE_NAME,
   createBranch,
-  ensureMainBranchForRestaurant,
-  getRestaurantContextForUser,
 } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 import { cached } from '@/lib/apiCache'
@@ -37,37 +35,28 @@ async function getAuthorizedBranchContext() {
     return { error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
   }
 
-  const preferredBranchId = typeof (session.user as { branchId?: string | null }).branchId === 'string'
-    ? (session.user as { branchId?: string | null }).branchId ?? null
-    : null
+  const user = session.user as { id: string; restaurantId?: string | null; branchId?: string | null; role?: string }
+  const restaurantId = typeof user.restaurantId === 'string' ? user.restaurantId : null
 
-  const context = await getRestaurantContextForUser(session.user.id, { preferredBranchId })
-  const restaurantId = context?.restaurantId ?? null
   if (!restaurantId) {
     return {
       session,
-      context,
-      restaurantId: null,
+      restaurantId: null as null,
       branches: [] as Array<{ id: string; name: string; code: string; isMain: boolean; isActive: boolean }>,
       activeBranchId: null as string | null,
     }
   }
 
-  await ensureMainBranchForRestaurant(restaurantId)
-
+  // One DB query — list branches. Auth context comes from JWT (zero extra queries).
+  const sessionBranchId = typeof user.branchId === 'string' ? user.branchId : null
   const branches = await listActiveBranches(restaurantId)
 
-  const activeBranchId = branches.some((branch) => branch.id === context?.branchId)
-    ? context?.branchId ?? null
+  const activeBranchId = branches.some(b => b.id === sessionBranchId)
+    ? sessionBranchId
     : branches[0]?.id ?? null
-
-  if (activeBranchId && activeBranchId !== context?.branchId) {
-    // branchId no longer on User model — branch selection is handled via session/context
-  }
 
   return {
     session,
-    context,
     restaurantId,
     branches,
     activeBranchId,
@@ -154,6 +143,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'No restaurant found' }, { status: 400 })
   }
 
+  const restaurantId = result.restaurantId
+
   const role = String((result.session.user as { role?: string }).role ?? '')
   if (role !== 'admin') {
     return NextResponse.json({ error: 'Only the restaurant admin can create branches.' }, { status: 403 })
@@ -170,13 +161,13 @@ export async function POST(req: Request) {
   try {
     const branch = await prisma.$transaction(async (tx) => {
       const createdBranch = await createBranch({
-        restaurantId: result.restaurantId,
+        restaurantId,
         name,
         code,
       }, tx)
 
       await enqueueSyncChange(tx, {
-        restaurantId: result.restaurantId,
+        restaurantId,
         entityType: 'branch',
         entityId: createdBranch.id,
         operation: 'upsert',
@@ -186,14 +177,14 @@ export async function POST(req: Request) {
       return createdBranch
     })
 
-    const branches = await listActiveBranches(result.restaurantId)
+    const branches = await listActiveBranches(restaurantId)
 
     return withActiveBranchCookie(NextResponse.json({
       ok: true,
       activeBranchId: result.activeBranchId,
       branch,
       branches,
-    }, { status: 201 }), result.restaurantId, result.activeBranchId)
+    }, { status: 201 }), restaurantId, result.activeBranchId)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create branch'
     const status = message.includes('already exists') ? 409 : message.includes('required') ? 400 : 500

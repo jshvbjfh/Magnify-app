@@ -299,6 +299,18 @@ useEffect(() => {
     }
   }
 
+  // Keep Neon warm — ping every 4 minutes while tab is visible so cold starts
+  // don't hit users during active sessions. Stops when tab is hidden.
+  useEffect(() => {
+    const ping = () => {
+      if (!document.hidden) {
+        fetch('/api/health', { credentials: 'include' }).catch(() => undefined)
+      }
+    }
+    const id = setInterval(ping, 4 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [])
+
   // Load tracking mode fresh from DB (session may be stale after settings change)
   useEffect(() => {
     let cancelled = false
