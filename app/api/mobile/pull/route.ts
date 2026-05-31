@@ -138,12 +138,15 @@ export async function GET(req: Request) {
         take: 200,
       }),
 
-      // Full active orders restaurant-wide (including QR/guest orders from any branch)
-      // so the waiter app receives orders regardless of which branch placed them.
+      // Active orders + recent PAID/CANCELED (last 3 days) so the owner's device
+      // has revenue history on a fresh install without relying on push-side data.
       prisma.restaurantOrder.findMany({
         where: {
           restaurantId,
-          status: { in: ['PENDING', 'OPEN'] },
+          OR: [
+            { status: { in: ['PENDING', 'OPEN'] } },
+            { status: { in: ['PAID', 'CANCELED'] }, updatedAt: { gte: recentOrderSince } },
+          ],
         },
         select: {
           id: true,
@@ -179,7 +182,7 @@ export async function GET(req: Request) {
           },
         },
         orderBy: { createdAt: 'asc' },
-        take: 100,
+        take: 300,
       }),
     ])
 
