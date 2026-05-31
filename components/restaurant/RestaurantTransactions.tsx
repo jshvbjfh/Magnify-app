@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react'
 import { Plus, ArrowDownLeft, ArrowUpRight, RefreshCw, Search, X, Calendar, TrendingUp, TrendingDown, Layers, Check } from 'lucide-react'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
+import { fetchWithWakeup } from '@/lib/fetchWithWakeup'
 
 // --- Types ---
 interface Transaction {
@@ -150,6 +151,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   const restaurantBranch = useRestaurantBranch()
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
+  const [connecting, setConnecting] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string>(todayStr())
   const [search, setSearch] = useState('')
@@ -201,7 +203,12 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     }
 
     try {
-      const res = await fetch('/api/transactions', { credentials: 'include' })
+      const res = await fetchWithWakeup(
+        '/api/transactions',
+        { credentials: 'include' },
+        () => setConnecting(true),
+      )
+      setConnecting(false)
       if (!res.ok) throw new Error('Failed to load transactions')
       const data = await res.json()
       const nextTransactions = normalizeTransactions(data.transactions || [])
@@ -209,6 +216,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
       setTransactions(nextTransactions)
       persistSnapshot(nextTransactions)
     } catch {
+      setConnecting(false)
       setLoadError('Could not load transactions.')
     } finally {
       setLoading(false)
@@ -451,6 +459,12 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
         {/* Main content */}
         <div className="flex-1 min-w-0 space-y-4">
 
+          {connecting && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 flex items-center gap-2">
+              <RefreshCw className="h-4 w-4 animate-spin flex-shrink-0" />
+              Connecting to server...
+            </div>
+          )}
           {loadError && hasTransactionsRef.current && (
             <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               {loadError}

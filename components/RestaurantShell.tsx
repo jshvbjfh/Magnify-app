@@ -1,9 +1,10 @@
 ﻿'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Image from 'next/image'
 import { LayoutDashboard, UtensilsCrossed, Layout, ClipboardList, ChefHat, Package, BarChart3, Users, LogOut, Sparkles, Bell, X, ArrowLeftRight, BrainCircuit, Settings, Radio, Menu, RefreshCw, Plus, Edit2 } from 'lucide-react'
 import { signOut, useSession, signIn } from 'next-auth/react'
+import { fetchWithWakeup } from '@/lib/fetchWithWakeup'
 import AIChat from '@/components/AIChat'
 import RestaurantDashboard from '@/components/restaurant/RestaurantDashboard'
 import RestaurantMenu from '@/components/restaurant/RestaurantMenu'
@@ -98,6 +99,7 @@ export default function RestaurantShell() {
   const [branches, setBranches] = useState<BranchTab[]>([])
   const [activeBranchId, setActiveBranchId] = useState<string | null>(null)
   const [branchesLoaded, setBranchesLoaded] = useState(false)
+  const [branchConnecting, setBranchConnecting] = useState(false)
   const [branchSwitchingId, setBranchSwitchingId] = useState<string | null>(null)
   const [branchError, setBranchError] = useState<string | null>(null)
   const [branchNotice, setBranchNotice] = useState<string | null>(null)
@@ -138,14 +140,17 @@ useEffect(() => {
 
     let cancelled = false
     setBranchesLoaded(false)
+    setBranchConnecting(false)
 
     const loadBranches = async () => {
       try {
-        const res = await fetch('/api/restaurant/branches', { credentials: 'include', cache: 'no-store' })
+        const res = await fetchWithWakeup(
+          '/api/restaurant/branches',
+          { credentials: 'include', cache: 'no-store' },
+          () => { if (!cancelled) setBranchConnecting(true) },
+        )
         const data = await res.json().catch(() => null)
-        if (!res.ok) {
-          throw new Error(data?.error || 'Failed to load branches')
-        }
+        if (!res.ok) throw new Error(data?.error || 'Failed to load branches')
 
         if (cancelled) return
 
@@ -154,10 +159,12 @@ useEffect(() => {
         setBranches(Array.isArray(data?.branches) ? data.branches : [])
         setActiveBranchId(nextActiveBranchId)
         setBranchError(null)
+        setBranchConnecting(false)
       } catch (error) {
         if (cancelled) return
         setBranches([])
-        setBranchError(error instanceof Error ? error.message : 'Branches are unavailable right now.')
+        setBranchConnecting(false)
+        setBranchError('Could not connect. Check your internet connection.')
       } finally {
         if (!cancelled) setBranchesLoaded(true)
       }
@@ -660,6 +667,12 @@ useEffect(() => {
                     </div>
                   )}
                 </div>
+                {branchConnecting && (
+                  <p className="mt-2 text-xs text-amber-600 flex items-center gap-1.5">
+                    <RefreshCw className="h-3 w-3 animate-spin" />
+                    Connecting to server...
+                  </p>
+                )}
                 {branchError ? (
                   <p className="mt-2 text-xs text-red-600">{branchError}</p>
                 ) : branchNotice ? (
