@@ -226,14 +226,35 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   useEffect(() => {
     if (!snapshotStorageScope) return
     const snapshot = loadRestaurantDeviceSnapshot<RestaurantTransactionsSnapshot>(snapshotStorageScope)
-    if (!snapshot) return
+    if (!snapshot) {
+      // No cache for this branch — clear stale data so the previous branch doesn't show
+      setTransactions([])
+      hasTransactionsRef.current = false
+      return
+    }
+    hasTransactionsRef.current = true
     setTransactions(Array.isArray(snapshot.transactions) ? normalizeTransactions(snapshot.transactions) : [])
     setSnapshotUpdatedAt(snapshot.updatedAt ?? null)
     setShowingCachedSnapshot(true)
     setLoading(false)
   }, [snapshotStorageScope])
 
+  // Initial fetch on mount
   useEffect(() => { fetchTransactions() }, [fetchTransactions])
+
+  // Re-fetch when branch changes — snapshot effect shows cached data instantly,
+  // this fires a background server fetch to get fresh data for the new branch
+  const prevSnapshotScopeRef = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (prevSnapshotScopeRef.current === undefined) {
+      prevSnapshotScopeRef.current = snapshotStorageScope
+      return // mount fetch is handled above
+    }
+    if (prevSnapshotScopeRef.current !== snapshotStorageScope) {
+      prevSnapshotScopeRef.current = snapshotStorageScope
+      void fetchTransactions()
+    }
+  }, [snapshotStorageScope, fetchTransactions])
 
   useEffect(() => {
     const handler = () => fetchTransactions()
