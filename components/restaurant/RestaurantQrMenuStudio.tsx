@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Smartphone, Trash2, Upload } from 'lucide-react'
+import { AlertCircle, Smartphone, Trash2, Upload, RefreshCw } from 'lucide-react'
 
 import QrMenuPageContent, { type QrMenuDish } from '@/components/QrMenuPageContent'
 import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
@@ -178,6 +178,33 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
     }
   }
 
+  if (loading) {
+    return (
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+        <div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm space-y-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-2 max-w-xl">
+              <div className="h-3 w-24 rounded-full bg-gray-100 animate-pulse" />
+              <div className="h-6 w-40 rounded-lg bg-gray-100 animate-pulse" />
+              <div className="h-3 w-full rounded-full bg-gray-100 animate-pulse" />
+              <div className="h-3 w-3/4 rounded-full bg-gray-100 animate-pulse" />
+            </div>
+            <div className="h-16 w-32 rounded-2xl bg-gray-100 animate-pulse" />
+          </div>
+          <div className="h-24 rounded-2xl bg-gray-100 animate-pulse" />
+          <div className="h-16 rounded-2xl bg-gray-100 animate-pulse" />
+          <div className="flex items-center justify-center gap-2 pt-2 text-sm text-gray-400">
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            Loading settings...
+          </div>
+        </div>
+        <div className="rounded-3xl border border-gray-200 bg-white overflow-hidden shadow-sm">
+          <div className="h-full min-h-[400px] bg-gray-100 animate-pulse" />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
       <div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
@@ -218,8 +245,8 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
                 disabled={loading || uploading || saving}
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-orange-500/25 transition hover:from-orange-600 hover:to-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <Upload className="h-4 w-4" />
-                {uploading ? 'Uploading image...' : qrMenuHeroImageUrl ? 'Replace image' : 'Upload image'}
+                {uploading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                {uploading ? 'Uploading...' : saving ? 'Saving...' : qrMenuHeroImageUrl ? 'Replace image' : 'Upload image'}
               </button>
               <button
                 type="button"
