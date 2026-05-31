@@ -258,15 +258,6 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
             <p className="text-[11px] text-gray-400">Upload to Imgur or any public host, then paste the direct image link here. Must start with https://</p>
           </div>
 
-          {qrMenuHeroImageUrl && !qrMenuHeroImageUrl.startsWith('https://') && (
-            <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
-              <div>
-                <p className="font-semibold">Image only visible locally</p>
-                <p className="mt-0.5 text-xs">This image was uploaded on your local machine and won&apos;t appear on the live Vercel QR page. Upload a new image from the live manager portal, or paste a public HTTPS image URL above.</p>
-              </div>
-            </div>
-          )}
 
           {error ? (
             <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
