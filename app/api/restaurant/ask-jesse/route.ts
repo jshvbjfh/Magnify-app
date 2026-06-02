@@ -153,11 +153,11 @@ function classifyExpenseAccount(text: string): string {
   // Rent & Premises
   if (/\brent\b|office rent|premises|lease|storage fee|warehousing|packaging cost/.test(t)) return 'Rent & Premises'
   // Salaries & HR
-  if (/salary|salaries|wage|wages|payroll|staff pay|employee pay|worker|labor|labour|bonus|overtime|commission payout|per diem|contractor pay|freelancer|allowance|reimburs|salary advance|payroll deduction|compensation|paye|internship stipend|coaching|mentoring fee/.test(t)) return 'Salaries & Wages'
+  if (/salary|salaries|wage|wages|payroll|staff\s*pay|employee\s*pay|\bemployee\b|\bstaff\b|\bworker\b|labor|labour|bonus|overtime|commission payout|per diem|contractor pay|freelancer|allowance|reimburs|salary advance|payroll deduction|compensation|paye|internship stipend|coaching|mentoring fee/.test(t)) return 'Salaries & Wages'
   // Utilities
   if (/electric|electricity|water bill|utilities|utility|power bill/.test(t)) return 'Utilities'
-  // Communication & Tech
-  if (/telecom|phone bill|airtime|data bundle|internet|mobile data|communication|hosting fee|domain|cloud subscription|saas|api charges|server expense|it support|cybersecurity|software maintenance|tech upgrade|hardware|printer|network equipment|backup service|storage subscription|software renewal/.test(t)) return 'Technology & Telecom'
+  // Communication & Tech — includes POS systems and named software
+  if (/telecom|phone bill|airtime|data bundle|internet|mobile data|communication|hosting fee|domain|cloud subscription|saas|api charges|server expense|it support|cybersecurity|software maintenance|tech upgrade|hardware|printer|network equipment|backup service|storage subscription|software renewal|\bpos\b|point of sale|magnify|subscription\s+fee|system\s+fee|platform\s+fee|app\s+fee/.test(t)) return 'Technology & Telecom'
   // Repairs & Maintenance
   if (/repair|maintenance|fix|technician|servicing|replacement part|oil change|tire|janitorial|cleaning expense|security expense/.test(t)) return 'Repairs & Maintenance'
   // Insurance
@@ -197,6 +197,8 @@ function classifyExpenseAccount(text: string): string {
 
 function classifyIncomeAccount(text: string): string {
   const t = text.toLowerCase()
+  // Dish / food sales — "sold a dish", "sold burger", "sold a meal"
+  if (/\b(sold\s+a?\s*)?(dish|meal|food|drink|burger|pizza|chicken|rice|beef|fish|juice|cocktail|coffee|tea|beer|wine|soda|menu\s+item)\b/.test(t)) return 'Sales Revenue'
   if (/service income|consulting income|consultancy|professional fee|advisory/.test(t)) return 'Service Revenue'
   if (/interest income|interest earned/.test(t)) return 'Interest Income'
   if (/rental income|rent income/.test(t)) return 'Rental Income'
@@ -226,7 +228,7 @@ interface TxItem {
   description: string
 }
 
-const TX_STOP = /\b(record|log|add|post|enter|a|transaction|entry|i|paid|received|spent|bought|purchased|earned|for|from|by|via|using|with|on|the|to|of|and|in|at|today|yesterday|cash|momo|bank|card|cheque)\b/gi
+const TX_STOP = /\b(record|log|add|post|enter|a|an|transaction|entry|i|we|our|paid|received|spent|bought|purchased|earned|sold|for|from|by|via|using|with|on|the|to|of|and|in|at|today|yesterday|this|month|past|date|cash|momo|bank|card|cheque|rwf|frw)\b/gi
 
 function parseSingleTransaction(seg: string): TxItem | null {
   const amount = extractAmount(seg)
@@ -238,15 +240,19 @@ function parseSingleTransaction(seg: string): TxItem | null {
   const direction: 'in' | 'out' = isIncome ? 'in' : 'out'
   const accountName = direction === 'in' ? classifyIncomeAccount(seg) : classifyExpenseAccount(seg)
 
-  const description = seg
+  // Extract dish/item name from "the dish is X" or "dish: X" patterns
+  const dishMatch = seg.match(/(?:the\s+)?dish\s+is\s+([^,.]+)/i) || seg.match(/dish[:\s]+([^,.]+)/i)
+  const namedItem = dishMatch?.[1]?.trim() ?? null
+
+  const description = namedItem || (seg
     .replace(TX_STOP, ' ')
     .replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}/gi, '')
     .replace(/\bon\s+(?:the\s+)?\d{1,2}(?:st|nd|rd|th)?\b/gi, '')
-    .replace(/[\d,]+\s*(k|thousand)?\b/gi, '')
+    .replace(/[\d,]+\s*(k|thousand|rwf|frw)?\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^[,.\-\s]+|[,.\-\s]+$/g, '')
-    || (direction === 'in' ? 'Income' : 'General Expense')
+    || (direction === 'in' ? 'Income' : 'General Expense'))
 
   return { direction, amount, date, accountName, paymentMethod, description }
 }
@@ -348,6 +354,8 @@ function parseIntents(q: string): Intent[] {
     /\b(settled\s+the\s+bill|cleared\s+the\s+invoice|paid\s+(supplier|vendor|employees|staff|salary|wages|rent|invoice|contractor|freelancer|tax|vat|insurance|utility|bill|interest|loan|penalty|fee)|paid\s+via\s+(mtn|airtel|momo|bank|card)|processed\s+payroll|salary\s+paid|wages\s+paid|staff\s+payment|payroll\s+processed|commission\s+paid|bonus\s+paid|allowance\s+paid|reimbursed\s+(employee|expense)|made\s+(a\s+)?payment|sent\s+payment|made\s+(a\s+)?transfer|transferred\s+funds|moved\s+money|bank\s+charged\s+fee|bank\s+deducted|withdrew\s+cash|deposited\s+cash|momo\s+payment|mobile\s+money\s+payment|card\s+was\s+charged|pos\s+payment|supplier\s+has\s+been\s+paid|employee\s+salaries\s+went\s+out|we\s+paid\s+for|we\s+(spent|bought|purchased)|covered\s+expenses|asset\s+acquired|equipment\s+(purchased|bought|installed)|record\s+depreciation|depreciate\s+asset|disposed\s+asset|sold\s+asset|asset\s+write.?off|subscription\s+renewed|monthly\s+payment\s+made|annual\s+fee\s+paid|insurance\s+premium\s+paid|maintenance\s+contract\s+renewed|standing\s+order\s+executed|advance\s+payment\s+made|prepayment\s+made|security\s+deposit\s+paid|escrow\s+payment|retention\s+payment|converted\s+currency|forex\s+(gain|loss)\s+recorded|international\s+payment\s+sent|remittance\s+sent|owner\s+(invested|withdrew)|shareholder\s+contribution|capital\s+injected|dividend\s+paid|drawings\s+recorded|profit\s+reinvested|equity\s+contribution|customer\s+refunded|refund\s+issued|credit\s+note\s+issued|discount\s+(applied|given)|purchase\s+returned|sales\s+return|damaged\s+goods\s+returned)\b/i.test(q) ||
     // ── Natural conversational phrases ──
     /\b(please\s+save\s+this\s+expense|add\s+this\s+to\s+(accounting|books)|I\s+need\s+this\s+recorded|log\s+the\s+(utility|fuel|salary|rent|payroll|water|electricity|internet)\s+payment|record\s+today.?s\s+sales|track\s+this\s+payment|register\s+the\s+incoming\s+transfer|the\s+bank\s+deducted\s+charges|fix\s+the\s+duplicate\s+transaction|remove\s+the\s+wrong\s+entry|adjust\s+the\s+(final\s+)?balance|update\s+the\s+(invoice|record|financials))\b/i.test(q) ||
+    // ── Natural payee-before-amount: "we paid our employee 250,000", "we sold a dish for 250,000" ──
+    (hasAmount && /\b(we\s+)?(paid|sold|spent|received|earned|bought|gave)\s+(?:our\s+|a\s+|the\s+|an\s+|for\s+)?\w/i.test(q)) ||
     // ── With amounts: action words + number ──
     (hasAmount && (
       /\b(paid|spent|bought|purchased|received|earned|sold|withdrew|deposited)\s+[\d,]+/i.test(q) ||
