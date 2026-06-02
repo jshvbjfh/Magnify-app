@@ -722,12 +722,15 @@ export async function POST(req: Request) {
       }
     }
 
-    lines.push(`**Excel Import — ${fileName}** · ${importRows.length} row${importRows.length !== 1 ? 's' : ''} found`)
+    const recordedBranchName = resolvedBranchId
+      ? (branches.find(b => b.id === resolvedBranchId)?.name ?? null)
+      : null
+    lines.push(`**Excel Import — ${fileName}** · ${importRows.length} row${importRows.length !== 1 ? 's' : ''}${recordedBranchName ? ` · ${recordedBranchName}` : ''}`)
     lines.push(...resultLines.slice(0, 50))
     if (resultLines.length > 50) lines.push(`  ...and ${resultLines.length - 50} more entries`)
     lines.push(`  ─`)
     if (successCount > 0) {
-      lines.push(`  ::CheckCircle:: **${successCount} transaction${successCount !== 1 ? 's' : ''} recorded** and visible in the Journal.`)
+      lines.push(`  ::CheckCircle:: **${successCount} transaction${successCount !== 1 ? 's' : ''} recorded**${recordedBranchName ? ` to **${recordedBranchName}**` : ''} and visible in the Journal.`)
     }
     if (skipCount > 0) {
       lines.push(`  ::AlertTriangle:: ${skipCount} row${skipCount !== 1 ? 's' : ''} skipped (missing or invalid amount).`)
