@@ -321,7 +321,7 @@ function parseIntents(q: string): Intent[] {
   if (/\bwaste\b|\bwasted\b|\bspoilage?\b|\bspoilt?\b/i.test(q)) s.add('waste')
   if (/\bfood\s*cost\b|\bcogs\b|\bcost\s*of\s*goods\b/i.test(q)) s.add('food_cost')
   if (/\btop\s*dish(es)?\b|\bbest.?sell\b|\bpopular\b|\bmost\s*ordered\b|\bbest\s*dish\b|\bbest\s*drink\b|\bour\s+best\b/i.test(q)) s.add('top_dishes')
-  if (/\blow\s*stock\b|\brun(ning)?\s*out\b|\breorder\b|\bshortage\b|\bfinish(ing|ed)?\b/i.test(q)) s.add('low_stock')
+  if (/\blow\s*stock\b|\brun(ning)?\s*out\b|\breorder\b|\bshortage\b|\bfinish(ing|ed)?\b|\brestock\b|\bstock\s*up\b|\bwhat\s+should\s+i\s+restock\b|\bwhat.*restock\b|\bneed\s+to\s+buy\b|\bneed\s+restocking\b/i.test(q)) s.add('low_stock')
   if (/\bmomo\b|\bmobile\s*money\b|\bbank\b|\bcheque\b|\bcheck\b|\bcard\b|\bcash\b|\bcredit\b|\bpayment\s*method\b|\bpaid\s*by\b|\bbreakdown\b/i.test(q)) s.add('payment')
   if (/\bin\s+stock\b|\bstock\s+level\b|\bstock\s+of\b|\bquantity\s+of\b|\bdo\s+we\s+have\b|\bhow\s+much\s+.{2,40}\s+(do\s+we|is\s+left|remaining|available)\b|\bhow\s+many\s+\w+\s+of\b/i.test(q)) s.add('stock_level')
   // Specific dish revenue/sales — "how much from burgers", "how many chicken wings did we sell"
@@ -1378,13 +1378,27 @@ export async function POST(req: Request) {
       where: { restaurantId },
       select: { name: true, quantity: true, reorderLevel: true, unit: true },
     })
-    const low = items.filter(i => i.quantity <= (i.reorderLevel ?? 0))
+    const low = items
+      .filter(i => i.quantity <= (i.reorderLevel ?? 0))
+      .map(i => ({ ...i, deficit: (i.reorderLevel ?? 0) - i.quantity }))
+      .sort((a, b) => b.deficit - a.deficit) // most critical first
+
+    const isRestockQuery = /restock|what\s+should|need\s+to\s+buy/i.test(question)
+
     if (low.length === 0) {
       lines.push(`**Low Stock** — ::CheckCircle:: All items are above reorder levels!`)
+    } else if (isRestockQuery) {
+      lines.push(`**Restock Priority** — ${low.length} item${low.length !== 1 ? 's' : ''} below reorder level`)
+      lines.push(`  Most urgent first:`)
+      low.slice(0, 10).forEach((i, idx) => {
+        const urgency = idx === 0 ? '::Flame::' : idx <= 2 ? '::AlertTriangle::' : '  '
+        lines.push(`  ${urgency} **${i.name}** — ${Number(i.quantity.toFixed(2))} ${i.unit} left (${i.deficit > 0 ? `${Number(i.deficit.toFixed(2))} ${i.unit} short` : 'at limit'})`)
+      })
+      if (low.length > 10) lines.push(`  ...and ${low.length - 10} more`)
     } else {
       lines.push(`**Low Stock Alert** — ${low.length} item${low.length !== 1 ? 's' : ''} need restocking`)
       low.slice(0, 10).forEach(i =>
-        lines.push(`  ::AlertTriangle:: ${i.name}: ${i.quantity} ${i.unit} (reorder at ≤${i.reorderLevel})`)
+        lines.push(`  ::AlertTriangle:: ${i.name}: ${Number(i.quantity.toFixed(2))} ${i.unit} (reorder at ≤${i.reorderLevel})`)
       )
       if (low.length > 10) lines.push(`  ...and ${low.length - 10} more`)
     }
