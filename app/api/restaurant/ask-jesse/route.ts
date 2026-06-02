@@ -489,6 +489,40 @@ export async function POST(req: Request) {
   if (Array.isArray(body?.importRows) && body.importRows.length > 0) {
     const importRows = body.importRows as Record<string, unknown>[]
     const fileName: string = body.fileName ?? 'file'
+    const explicitBranchId: string | null = body.branchId ?? null
+    const explicitBranchName: string | null = body.branchName ?? null
+
+    // Multi-branch check — ask which branch before recording
+    const branches = await prisma.branch.findMany({
+      where: { restaurantId, isActive: true },
+      select: { id: true, name: true, isMain: true },
+      orderBy: { isMain: 'desc' },
+    })
+    if (branches.length > 1 && !explicitBranchId && !explicitBranchName) {
+      return NextResponse.json({
+        answer: [
+          `::BarChart2:: I see **${branches.length} branches** in this restaurant.`,
+          ``,
+          `Which branch should I record the **${importRows.length} rows** from **${fileName}** to?`,
+        ].join('\n'),
+        period: 'N/A',
+        intents: ['import_branch_select'],
+        followUps: branches.map(b => `Record to ${b.name}`),
+        needsBranch: true,
+        source: 'restaurant-db',
+      })
+    }
+
+    // Resolve branch ID from name if provided
+    let resolvedBranchId: string | null = explicitBranchId
+    if (!resolvedBranchId && explicitBranchName) {
+      const match = branches.find(b => b.name.toLowerCase().includes(explicitBranchName.toLowerCase()) || explicitBranchName.toLowerCase().includes(b.name.toLowerCase()))
+      resolvedBranchId = match?.id ?? (branches.find(b => b.isMain)?.id ?? branches[0]?.id ?? null)
+    }
+    if (!resolvedBranchId) {
+      resolvedBranchId = branches.find(b => b.isMain)?.id ?? branches[0]?.id ?? null
+    }
+
     const allKeys = Object.keys(importRows[0] ?? {})
 
     // Flexible column finder — exact match first, then partial/contains match
@@ -669,6 +703,7 @@ export async function POST(req: Request) {
       try {
         await recordJournalEntry(prisma, {
           restaurantId,
+          branchId: resolvedBranchId ?? undefined,
           date,
           description: description || accountName,
           amount,

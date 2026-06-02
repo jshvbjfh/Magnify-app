@@ -154,6 +154,7 @@ export default function AIChat() {
 	const [conversationMode, setConversationMode] = useState<'history' | 'new'>('history')
 	const [showDatePicker, setShowDatePicker] = useState(false)
 	const [pendingFinancialRecord, setPendingFinancialRecord] = useState<PendingFinancialRecord | null>(null)
+	const pendingExcelImport = useRef<{ rows: Record<string, unknown>[]; fileName: string } | null>(null)
 	const messagesEndRef = useRef<HTMLDivElement>(null)
 	const fileInputRef = useRef<HTMLInputElement>(null)
 	const excelInputRef = useRef<HTMLInputElement>(null)
@@ -401,8 +402,12 @@ export default function AIChat() {
 			})
 			const data = await res.json().catch(() => ({}))
 			const content = data.answer ?? "Sorry, couldn't process the file."
+			const followUps: string[] = Array.isArray(data.followUps) ? data.followUps : []
+			if (data.needsBranch) {
+				pendingExcelImport.current = { rows, fileName: file.name }
+			}
 			const aId = await saveMessage('assistant', content)
-			const aMsg: Message = { id: aId, role: 'assistant', content, timestamp: new Date() }
+			const aMsg: Message = { id: aId, role: 'assistant', content, timestamp: new Date(), followUps }
 			setAllMessages(prev => [...prev, aMsg])
 			setMessages(prev => [...prev, aMsg])
 			startTypingAnimation(aId, content)
@@ -491,6 +496,35 @@ export default function AIChat() {
 			// replies, identity questions, and everything else gracefully.
 			// Only pure image-with-no-text goes to the vision API.
 			if (userContent) {
+				// If there's a pending Excel import waiting for branch selection, re-submit with the branch
+				if (pendingExcelImport.current && /record to /i.test(userContent)) {
+					const branchName = userContent.replace(/^record to\s*/i, '').replace(/^["']|["']$/g, '').trim()
+					const { rows, fileName } = pendingExcelImport.current
+					pendingExcelImport.current = null
+					setLoadingPhase('recording...')
+					try {
+						const rRes = await fetch('/api/restaurant/ask-jesse', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							credentials: 'include',
+							body: JSON.stringify({ importRows: rows, fileName, branchName }),
+						})
+						const rData = await rRes.json().catch(() => ({}))
+						const rContent = rData.answer ?? "Couldn't process the import."
+						const followUps: string[] = Array.isArray(rData.followUps) ? rData.followUps : []
+						lastJesseQA.current = { question: userContent, answer: rContent }
+						const rId = await saveMessage('assistant', rContent)
+						const rMsg: Message = { id: rId, role: 'assistant', content: rContent, timestamp: new Date(), followUps }
+						setAllMessages(prev => [...prev, rMsg])
+						setMessages(prev => [...prev, rMsg])
+						startTypingAnimation(rId, rContent)
+					} finally {
+						setLoadingPhase('')
+						setLoading(false)
+					}
+					return
+				}
+
 				// Start advanced loading phases for heavy data queries
 				const isHeavyQuery = isRestaurantDataQuery(userContent)
 				let t1: ReturnType<typeof setTimeout> | null = null
