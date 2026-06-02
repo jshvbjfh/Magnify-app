@@ -1391,17 +1391,17 @@ export async function POST(req: Request) {
 
   // ── Record Transaction ────────────────────────────────────────────────────────
   if (intents.includes('record_transaction')) {
+    lines.push(`::Lightbulb:: I'm focused on **reporting** — I can answer questions about your revenue, expenses, profit, stock, and orders.`)
+    lines.push(``)
+    lines.push(`To record a transaction, use the **Transactions** page or the **Journal** section.`)
+    lines.push(``)
+    lines.push(`Can I help you with a report instead?`)
+    if (false) {
     const segments = parseTransactionSegments(question)
     const txItems = segments.map(parseSingleTransaction).filter((x): x is TxItem => x !== null)
 
     if (txItems.length === 0) {
-      lines.push(`**Transaction Recording** — ::AlertTriangle:: I need the amount to record this.`)
-      lines.push(`  Include the amount and I'll handle the rest. Examples:`)
-      lines.push(`  • "paid 50,000 for fuel today by MoMo"`)
-      lines.push(`  • "received 200,000 from client via bank"`)
-      lines.push(`  • "salary 300,000 paid today"`)
-      lines.push(`  • "rent 80,000 by bank, diesel 45,000 cash"`)
-      lines.push(`  • "Jan 10: client paid 500,000, Jan 12: rent 200,000"`)
+      lines.push(`not used`)
     } else {
       let successCount = 0
       const recorded: string[] = []
@@ -1431,7 +1431,7 @@ export async function POST(req: Request) {
         lines.push(`  ─`)
         lines.push(`  ::CheckCircle:: **${successCount} transaction${successCount !== 1 ? 's' : ''} recorded.** View in the Journal section.`)
       }
-    }
+    } // end if(false)
   }
 
   // ── Greeting ─────────────────────────────────────────────────────────────────
@@ -1439,15 +1439,17 @@ export async function POST(req: Request) {
     const hour = new Date().toLocaleString('en-US', { timeZone: TZ, hour: 'numeric', hour12: false })
     const h = parseInt(hour, 10)
     const timeGreet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
-    lines.push(`${timeGreet}! ::Zap:: I'm **Jesse**, your restaurant assistant.`)
+    lines.push(`${timeGreet}! ::Zap:: I'm **Jesse** — your restaurant reporting assistant.`)
     lines.push(``)
-    lines.push(`Here's what you can ask me:`)
+    lines.push(`Ask me anything about your numbers:`)
     lines.push(`  • "what's today's revenue?" / "this month's profit"`)
     lines.push(`  • "expenses branch by branch" / "profit by branch this week"`)
     lines.push(`  • "revenue by MoMo today" / "payment breakdown"`)
     lines.push(`  • "what's our best seller?" / "top dishes this month"`)
     lines.push(`  • "how many orders today?" / "pending orders right now"`)
     lines.push(`  • "how much milk do we have?" / "low stock alert"`)
+    lines.push(`  • "how's business today?" / "are we improving?"`)
+    lines.push(`  • "why is revenue low?" / "this week vs last week"`)
   }
 
   // ── Fallback ──────────────────────────────────────────────────────────────────

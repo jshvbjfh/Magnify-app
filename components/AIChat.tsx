@@ -131,9 +131,9 @@ function createWelcomeMessage(): Message[] {
 	return [{
 		id: 'welcome-message',
 		role: 'assistant',
-		content: "Hi! I'm Jesse, your restaurant assistant. What would you like to know?",
+		content: "Hi! I'm Jesse, your restaurant reporting assistant. What would you like to know?",
 		timestamp: new Date(),
-		followUps: ["How's business today?", "Today's revenue?", "Any low stock?", "Record a transaction"],
+		followUps: ["How's business today?", "Today's revenue?", "Any low stock?", "This week vs last week"],
 	}]
 }
 
