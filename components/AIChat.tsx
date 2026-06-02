@@ -257,7 +257,10 @@ export default function AIChat() {
 		}
 	}, [])
 
-	// Filter messages by selected date
+	// Re-filter when date selection or mode changes.
+	// allMessages is intentionally NOT a dependency — new messages are added directly
+	// via setMessages(prev => [...prev, msg]) so the whole list never needs replacing
+	// mid-animation (which was causing all past messages to re-animate on each reply).
 	useEffect(() => {
 		if (conversationMode === 'new') {
 			setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
@@ -272,9 +275,9 @@ export default function AIChat() {
 			})
 			setMessages(filtered)
 		}
-		// Auto-scroll after filtering
 		setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
-	}, [selectedDate, allMessages, conversationMode])
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [selectedDate, conversationMode])
 
 	async function loadChatHistory() {
 		setLoadingHistory(true)
