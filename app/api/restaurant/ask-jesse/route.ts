@@ -528,7 +528,7 @@ export async function POST(req: Request) {
     // Resolve branch ID from name if provided
     let resolvedBranchId: string | null = explicitBranchId
     if (!resolvedBranchId && explicitBranchName) {
-      const branchName = explicitBranchName
+      const branchName = explicitBranchName as string
       const match = branches.find(b => b.name.toLowerCase().includes(branchName.toLowerCase()) || branchName.toLowerCase().includes(b.name.toLowerCase()))
       resolvedBranchId = match?.id ?? (branches.find(b => b.isMain)?.id ?? branches[0]?.id ?? null)
     }
