@@ -1396,42 +1396,6 @@ export async function POST(req: Request) {
     lines.push(`To record a transaction, use the **Transactions** page or the **Journal** section.`)
     lines.push(``)
     lines.push(`Can I help you with a report instead?`)
-    if (false) {
-    const segments = parseTransactionSegments(question)
-    const txItems = segments.map(parseSingleTransaction).filter((x): x is TxItem => x !== null)
-
-    if (txItems.length === 0) {
-      lines.push(`not used`)
-    } else {
-      let successCount = 0
-      const recorded: string[] = []
-      for (const tx of txItems) {
-        try {
-          await recordJournalEntry(prisma, {
-            restaurantId,
-            date: tx.date,
-            description: tx.description || (tx.direction === 'in' ? tx.accountName : tx.accountName),
-            amount: tx.amount,
-            direction: tx.direction,
-            accountName: tx.accountName,
-            categoryType: tx.direction === 'in' ? 'income' : 'expense',
-            paymentMethod: tx.paymentMethod,
-          })
-          const arrow = tx.direction === 'in' ? '::TrendingUp::' : '::TrendingDown::'
-          const dateStr = tx.date.toLocaleDateString('en-RW', { day: 'numeric', month: 'short' })
-          recorded.push(`  ${arrow} **${fmt(tx.amount)}** · ${tx.accountName} · ${tx.paymentMethod} · ${dateStr}${tx.description ? ` · ${tx.description}` : ''}`)
-          successCount++
-        } catch {
-          recorded.push(`  ::XCircle:: Failed: ${tx.description || tx.accountName} (${fmt(tx.amount)})`)
-        }
-      }
-      lines.push(`**Recording ${txItems.length > 1 ? txItems.length + ' Transactions' : 'Transaction'}**`)
-      lines.push(...recorded)
-      if (successCount > 0) {
-        lines.push(`  ─`)
-        lines.push(`  ::CheckCircle:: **${successCount} transaction${successCount !== 1 ? 's' : ''} recorded.** View in the Journal section.`)
-      }
-    } // end if(false)
   }
 
   // ── Greeting ─────────────────────────────────────────────────────────────────
