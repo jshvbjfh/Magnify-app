@@ -258,15 +258,15 @@ export default function AIChat() {
 		}
 	}, [])
 
-	// Re-filter when date selection or mode changes.
-	// allMessages is intentionally NOT a dependency — new messages are added directly
-	// via setMessages(prev => [...prev, msg]) so the whole list never needs replacing
-	// mid-animation (which was causing all past messages to re-animate on each reply).
+	// Sync messages when date filter, mode, or history changes.
+	// Guard: skip while typing animation is active to prevent all past messages
+	// re-animating simultaneously (the original bug this effect caused).
 	useEffect(() => {
 		if (conversationMode === 'new') {
 			setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
 			return
 		}
+		if (typingMessageId) return
 		if (selectedDate === 'all') {
 			setMessages(allMessages)
 		} else {
@@ -277,8 +277,7 @@ export default function AIChat() {
 			setMessages(filtered)
 		}
 		setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
-	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [selectedDate, conversationMode])
+	}, [selectedDate, allMessages, conversationMode, typingMessageId])
 
 	async function loadChatHistory() {
 		setLoadingHistory(true)
