@@ -487,6 +487,10 @@ export async function POST(req: Request) {
 
   // ── Excel / CSV import ────────────────────────────────────────────────────────
   if (Array.isArray(body?.importRows) && body.importRows.length > 0) {
+    return NextResponse.json({
+      answer: `::AlertTriangle:: **Excel import is temporarily paused** while we improve it.\n\n  Check back soon — it will be back shortly.`,
+      period: 'N/A', intents: [], followUps: ["Today's revenue?", "Record a transaction", "Any low stock?"], source: 'restaurant-db',
+    })
     const importRows = body.importRows as Record<string, unknown>[]
     const fileName: string = body.fileName ?? 'file'
     const explicitBranchId: string | null = body.branchId ?? null

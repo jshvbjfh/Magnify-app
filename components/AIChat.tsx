@@ -1180,14 +1180,7 @@ export default function AIChat() {
 						<span className="text-lg font-bold">+</span>
 						<ImageIcon className="h-4 w-4" />
 					</button>
-					<button
-						onClick={() => excelInputRef.current?.click()}
-						disabled={loading}
-						className="flex h-fit items-center gap-2 rounded-md border border-green-300 bg-white px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-50 disabled:cursor-not-allowed disabled:opacity-50"
-						title="Import Excel / CSV file"
-					>
-						<Sheet className="h-4 w-4" />
-					</button>
+					{/* Excel import temporarily paused */}
 					
 					<textarea
 						value={input}
