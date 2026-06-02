@@ -60,8 +60,9 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "magnify-app",
-      "repo": "magnify-pos-releases"
+      "owner": "jshvbjfh",
+      "repo": "magnify-pos-releases",
+      "releaseType": "release"
     },
     "extraResources": [
       "runtime.env"

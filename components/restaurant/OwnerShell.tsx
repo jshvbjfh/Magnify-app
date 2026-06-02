@@ -22,10 +22,14 @@ import {
   TrendingDown,
   TrendingUp,
   Wallet,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from 'lucide-react'
+import AccountsReceivable from './AccountsReceivable'
+import AccountsPayable from './AccountsPayable'
 import { signIn, signOut, useSession } from 'next-auth/react'
 
-type OwnerView = 'home' | 'details' | 'history' | 'reports' | 'inventory' | 'diagnostics'
+type OwnerView = 'home' | 'details' | 'history' | 'reports' | 'inventory' | 'receivable' | 'payable' | 'diagnostics'
 type Period = 'today' | 'week' | 'month'
 type FilterState = {
   mode: 'preset' | 'custom'
@@ -270,6 +274,8 @@ const NAV_ITEMS: { id: OwnerView; label: string; icon: React.ReactNode }[] = [
   { id: 'history',   label: 'History',   icon: <CalendarDays className="h-5 w-5" /> },
   { id: 'reports',   label: 'Reports',   icon: <BarChart3 className="h-5 w-5" /> },
   { id: 'inventory',    label: 'Inventory',    icon: <Package className="h-5 w-5" /> },
+  { id: 'receivable',  label: 'Receivable',   icon: <ArrowDownLeft className="h-5 w-5" /> },
+  { id: 'payable',     label: 'Payable',      icon: <ArrowUpRight className="h-5 w-5" /> },
   { id: 'diagnostics', label: 'Diagnostics', icon: <Activity className="h-5 w-5" /> },
 ]
 
@@ -1268,6 +1274,26 @@ export default function OwnerShell() {
                   </SectionCard>
                 </div>
                   )
+              ) : null}
+
+              {view === 'receivable' ? (
+                <div className="px-4 pt-6 pb-24">
+                  <div className="mb-4">
+                    <h2 className="text-xl font-bold text-gray-900">Accounts Receivable</h2>
+                    <p className="text-sm text-gray-500">Select a client to view everything sold on credit, with the current amount they still owe.</p>
+                  </div>
+                  <AccountsReceivable />
+                </div>
+              ) : null}
+
+              {view === 'payable' ? (
+                <div className="px-4 pt-6 pb-24">
+                  <div className="mb-4">
+                    <h2 className="text-xl font-bold text-gray-900">Accounts Payable</h2>
+                    <p className="text-sm text-gray-500">Select a supplier to view everything purchased on credit, with the current amount still owed.</p>
+                  </div>
+                  <AccountsPayable />
+                </div>
               ) : null}
 
               {view === 'diagnostics' ? (

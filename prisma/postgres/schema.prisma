@@ -57,6 +57,8 @@ model Restaurant {
   accounts       Account[]
   journalEntries JournalEntry[]
   devices        BranchDevice[]
+  creditSales    CreditSale[]
+  supplierDebts  SupplierDebt[]
 
   @@index([ownerId])
   @@index([managerId])
@@ -674,4 +676,46 @@ model AppSchemaState {
   updatedAt      DateTime  @updatedAt
 
   @@map("app_schema_state")
+}
+
+// ─── ACCOUNTS RECEIVABLE / PAYABLE ─────────────────────────────────────────
+
+model CreditSale {
+  id            String     @id @default(cuid())
+  restaurantId  String
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId      String?
+  customerName  String
+  customerPhone String?
+  description   String
+  amount        Float
+  saleDate      DateTime
+  paidAt        DateTime?
+  paymentMethod String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([restaurantId, paidAt])
+  @@index([restaurantId, customerName])
+  @@map("credit_sales")
+}
+
+model SupplierDebt {
+  id            String     @id @default(cuid())
+  restaurantId  String
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  branchId      String?
+  supplierName  String
+  supplierPhone String?
+  description   String
+  amount        Float
+  purchaseDate  DateTime
+  paidAt        DateTime?
+  paymentMethod String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([restaurantId, paidAt])
+  @@index([restaurantId, supplierName])
+  @@map("supplier_debts")
 }

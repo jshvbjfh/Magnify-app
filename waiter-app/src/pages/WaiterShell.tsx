@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { UtensilsCrossed, ArrowLeftRight, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText } from 'lucide-react'
+import { UtensilsCrossed, ArrowLeftRight, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Download } from 'lucide-react'
 import { useOnline } from '../hooks/useOnline'
+import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { isOfflineLikeErrorMessage } from '../services/http'
 import { getConfig, setConfig } from '../services/db'
 import { logInfo } from '../services/logger'
@@ -26,6 +27,7 @@ interface WaiterShellProps {
 
 export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   const { isOnline } = useOnline()
+  const availableUpdate = useUpdateCheck()
   const [activeTab, setActiveTab] = useState<TabId>('menu')
   const [branches, setBranches] = useState<BranchInfo[]>([])
   const [activeBranchId, setActiveBranchId] = useState<string | null>(user?.branchId ?? null)
@@ -155,6 +157,19 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
 
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+
+      {/* ── Update banner ── */}
+      {availableUpdate && (
+        <a
+          href={availableUpdate.downloadUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-2 bg-blue-600 text-white text-xs font-semibold px-4 py-2 flex-shrink-0"
+        >
+          <Download className="h-3.5 w-3.5 flex-shrink-0" />
+          <span>Update v{availableUpdate.version} available — tap to download</span>
+        </a>
+      )}
 
       {/* ── Offline banner ── */}
       {showOfflineBanner && (

@@ -86,4 +86,8 @@ export const API = {
   push: buildApiUrl('/api/mobile/push'),
   /** POST — cancel a confirmed order with supervisor PIN */
   cancelOrder: buildApiUrl('/api/mobile/cancel-order'),
+  /** GET  — check for app updates */
+  version: buildApiUrl('/api/version'),
 }
+
+export const APP_VERSION = '1.0.3'

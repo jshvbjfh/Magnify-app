@@ -39,6 +39,7 @@
     "electron:builder:updater": "npm run electron:build:updater",
     "electron:publish": "node scripts/check-electron-publish-env.mjs && npm run clean:electron && npm run build:electron:updater && electron-builder --publish always",
     "android:bundle": "cd android && gradlew.bat bundleRelease",
+    "android:apk": "npx cap sync android && cd android && gradlew.bat assembleRelease",
     "cap:sync": "npx cap sync android",
     "cap:open": "npx cap open android",
     "cap:run": "npx cap run android",
