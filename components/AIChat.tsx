@@ -49,8 +49,9 @@ type Message = {
 	id: string
 	role: 'user' | 'assistant'
 	content: string
-	images?: string[] // Image URLs/paths
+	images?: string[]
 	timestamp: Date
+	followUps?: string[]
 }
 
 // ─── Icon-aware message renderer ───────────────────────────────────────────
@@ -156,6 +157,7 @@ export default function AIChat() {
 	const fileInputRef = useRef<HTMLInputElement>(null)
 	const excelInputRef = useRef<HTMLInputElement>(null)
 	const conversationModeRef = useRef<'history' | 'new'>('history')
+	const lastJesseQA = useRef<{ question: string; answer: string } | null>(null)
 
 	useEffect(() => {
 		conversationModeRef.current = conversationMode
@@ -499,7 +501,12 @@ export default function AIChat() {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						credentials: 'include',
-						body: JSON.stringify({ question: userContent }),
+						body: JSON.stringify({
+							question: userContent,
+							context: lastJesseQA.current
+								? { prevQuestion: lastJesseQA.current.question, prevAnswer: lastJesseQA.current.answer }
+								: undefined,
+						}),
 					})
 					if (!rRes.ok) {
 						const errBody = await rRes.json().catch(() => ({}))
@@ -514,8 +521,10 @@ export default function AIChat() {
 					}
 					const rData = await rRes.json().catch(() => ({}))
 					const rContent = rData.answer ?? "I'm not sure about that one. Try asking about revenue, expenses, or inventory."
+					const followUps: string[] = Array.isArray(rData.followUps) ? rData.followUps : []
+					lastJesseQA.current = { question: userContent, answer: rContent }
 					const rId = await saveMessage('assistant', rContent)
-					const rMsg: Message = { id: rId, role: 'assistant', content: rContent, timestamp: new Date() }
+					const rMsg: Message = { id: rId, role: 'assistant', content: rContent, timestamp: new Date(), followUps }
 					setAllMessages(prev => [...prev, rMsg])
 					setMessages(prev => [...prev, rMsg])
 					startTypingAnimation(rId, rContent)
@@ -979,6 +988,19 @@ export default function AIChat() {
 										{msg.role === 'assistant' && isSharedQuotaMessage(msg.content) && (
 											<div className="mt-3 rounded-lg border border-amber-200 bg-white/80 px-3 py-2 text-xs text-amber-700">
 												Shared service issue: Jesse AI is using the app's shared service capacity, not a per-user daily limit.
+											</div>
+										)}
+										{msg.role === 'assistant' && msg.id !== typingMessageId && (msg.followUps?.length ?? 0) > 0 && (
+											<div className="mt-3 flex flex-wrap gap-1.5">
+												{msg.followUps!.map((chip) => (
+													<button
+														key={chip}
+														onClick={() => sendMessage(chip)}
+														className="rounded-full border border-orange-200 bg-white px-3 py-1 text-xs font-medium text-orange-700 hover:bg-orange-50 hover:border-orange-300 transition-colors"
+													>
+														{chip}
+													</button>
+												))}
 											</div>
 										)}
 											<p

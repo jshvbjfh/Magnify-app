@@ -261,7 +261,7 @@ type Intent =
   | 'revenue' | 'profit' | 'orders' | 'expenses' | 'waste' | 'food_cost'
   | 'payment' | 'top_dishes' | 'low_stock' | 'stock_level'
   | 'dish_query' | 'branch_comparison' | 'pending_orders' | 'avg_order'
-  | 'greeting' | 'record_transaction'
+  | 'greeting' | 'catchup' | 'trends' | 'why' | 'record_transaction'
 
 function parseIntents(q: string): Intent[] {
   const s = new Set<Intent>()
@@ -318,8 +318,67 @@ function parseIntents(q: string): Intent[] {
     /\b(journal\s+entry|ledger\s+entry|bookkeeping|accrual|adjustment\s+entry|reversal\s+entry|adjusting\s+entry|closing\s+entry|accrue\s+this|defer\s+this|capitalize\s+this\s+cost|amortize\s+this|recognize\s+the\s+revenue|impair\s+the\s+asset|allocate\s+overhead|distribute\s+cost|journalize\s+this|create\s+adjusting\s+entry|close\s+(revenue|expense)\s+account|record\s+retained\s+earnings)\b/i.test(q)
   )) s.add('record_transaction')
 
+  // Catch-up — "how's business?", "how are we doing?", "give me a summary", "anything I should know?"
+  if (/\b(how.?s\s*business|how\s+are\s+we\s+doing|how.?s\s+today|how.?s\s+it\s+going|what.?s\s+the\s+situation|give\s+me\s+a\s+summary|anything\s+(new|i\s+should\s+know)|what.?s\s+up|catch\s+me\s+up|update\s+me|what\s+happened\s+today|daily\s+recap|overview|snapshot)\b/i.test(q)) s.add('catchup')
+  // Trends — "trending?", "are we improving?", "this week vs last", "compare periods"
+  if (/\b(trend(ing)?|improving|getting\s+better|getting\s+worse|this\s+week\s+vs|last\s+week\s+vs|compare\s+(to|with)\s+(last|previous)|versus\s+last|period\s+over\s+period|week\s+on\s+week|month\s+on\s+month|are\s+we\s+(up|down|growing|declining))\b/i.test(q)) s.add('trends')
+  // Why — "why is X low?", "what caused this?", "explain", or bare "why?"
+  if (/\b(why(\s+is|\s+are|\s+did|\s+has|\s+were)?|what\s+caused|what.?s\s+causing|explain(\s+this|\s+the|\s+why)?|what\s+went\s+wrong|what.?s\s+the\s+reason|how\s+come|tell\s+me\s+why)\b/i.test(q)) s.add('why')
+
   if (s.size === 0) s.add('revenue')
   return [...s]
+}
+
+// ── Follow-up chip suggestions per intent ────────────────────────────────────
+function getFollowUps(intents: Intent[], branchCount: number): string[] {
+  const has = (i: Intent) => intents.includes(i)
+  if (has('catchup') || (has('greeting') && intents.length === 1)) {
+    return ["Today's revenue?", 'Any pending orders?', 'Low stock alert?']
+  }
+  if (has('why')) {
+    return ['Compare to last month', 'Which branch caused it?', 'Show me the breakdown']
+  }
+  if (has('trends')) {
+    return ['This month vs last month', 'Which branch is growing?', "What's profit looking like?"]
+  }
+  if (has('branch_comparison')) {
+    return ['Profit by branch', 'Expenses by branch', 'Best performer this month?']
+  }
+  if (has('profit')) {
+    return branchCount > 1
+      ? ['Which branch leads?', "What's driving food cost?", 'Compare to last week']
+      : ["What's the food cost?", 'Revenue this month?', 'Compare to last week']
+  }
+  if (has('revenue')) {
+    return branchCount > 1
+      ? ['Break it down by branch', 'What about expenses?', 'Why is revenue low?']
+      : ['What about expenses?', 'Profit this period?', 'Compare to last week']
+  }
+  if (has('expenses')) {
+    return ["What's the profit?", 'Which branch spends most?', 'Revenue vs expenses']
+  }
+  if (has('orders')) {
+    return ["What's the revenue?", 'Pending orders right now?', 'Average order value?']
+  }
+  if (has('top_dishes')) {
+    return ['Revenue from top dish?', 'Which branch sells it most?', "What's the profit this month?"]
+  }
+  if (has('low_stock')) {
+    return ['Show full stock list', 'What should I restock first?', 'Expenses this week?']
+  }
+  if (has('payment')) {
+    return ['Total revenue this period?', "What's the profit?", 'Orders this week?']
+  }
+  if (has('record_transaction')) {
+    return ["Today's expenses?", "What's today's profit?", 'Revenue this week?']
+  }
+  if (has('waste')) {
+    return ['How does waste affect profit?', 'Expenses this week?', "What's the food cost?"]
+  }
+  if (has('stock_level')) {
+    return ['Any low stock?', 'Record a purchase', 'Inventory expenses this month?']
+  }
+  return ["Today's revenue?", 'Pending orders?', 'Any low stock?']
 }
 
 function parsePaymentFilter(q: string): string | null {
@@ -597,11 +656,13 @@ export async function POST(req: Request) {
       lines.push(`  ::AlertTriangle:: ${skipCount} row${skipCount !== 1 ? 's' : ''} skipped (missing or invalid amount).`)
     }
 
-    return NextResponse.json({ answer: lines.join('\n'), period: 'Import', intents: ['record_transaction'], source: 'restaurant-db' })
+    return NextResponse.json({ answer: lines.join('\n'), period: 'Import', intents: ['record_transaction'], followUps: ["Today's expenses?", "What's today's profit?", 'Revenue this week?'], source: 'restaurant-db' })
   }
 
   const question = ((body?.question ?? '') as string).trim()
   if (!question) return NextResponse.json({ error: 'No question provided' }, { status: 400 })
+  const prevQuestion: string = ((body?.context?.prevQuestion ?? '') as string).trim()
+  const prevAnswer: string = ((body?.context?.prevAnswer ?? '') as string).trim()
 
   // ── Creator / Identity ────────────────────────────────────────────────────────
   if (/\b(who\s+(made|built|created|programmed|developed|trained|wrote|designed)\s+(you|jesse)|who\s+are\s+you\b|what\s+are\s+you\b|your\s+(creator|developer|maker|author|owner)|made\s+by|built\s+by|created\s+by|who\s+is\s+(your|jesse.?s)\s+(creator|developer|maker)|who\s+owns\s+you|where\s+do\s+you\s+come\s+from)\b/i.test(question)) {
@@ -612,7 +673,7 @@ export async function POST(req: Request) {
         `**Magnify** is my creator — specifically **Axel K. Gakuba**.`,
         `I was built to help restaurant managers track revenue, expenses, inventory, and make smarter business decisions in real time.`,
       ].join('\n'),
-      period: 'N/A', intents: ['identity'], source: 'restaurant-db',
+      period: 'N/A', intents: ['identity'], followUps: ["How's business today?", "Today's revenue?", 'Any low stock?'], source: 'restaurant-db',
     })
   }
 
@@ -627,7 +688,7 @@ export async function POST(req: Request) {
     ]
     return NextResponse.json({
       answer: replies[Math.floor(Date.now() / 1000) % replies.length],
-      period: 'N/A', intents: ['conversational'], source: 'restaurant-db',
+      period: 'N/A', intents: ['conversational'], followUps: ["Today's revenue?", 'Any pending orders?', 'Low stock alert?'], source: 'restaurant-db',
     })
   }
 
@@ -646,6 +707,211 @@ export async function POST(req: Request) {
   const branchLabel  = targetBranch ? targetBranch.name : 'All Branches'
   const lines: string[] = []
 
+  // ── CAT 1: CATCH-UP — real business snapshot ─────────────────────────────────
+  if (intents.includes('catchup')) {
+    const todayStr  = kigaliDateStr()
+    const todayStart = kigaliStart(todayStr)
+    const todayEnd   = kigaliEnd(todayStr)
+    const yesterdayStr = kigaliDateStr(shiftDays(todayStart, -1))
+
+    const [todaySales, yesterdaySales, pendingOrders, lowStockItems] = await Promise.all([
+      prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: todayStart, lte: todayEnd } }, select: { totalSaleAmount: true } }),
+      prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: kigaliStart(yesterdayStr), lte: kigaliEnd(yesterdayStr) } }, select: { totalSaleAmount: true } }),
+      prisma.restaurantOrder.findMany({ where: { restaurantId, status: { in: ['PENDING', 'OPEN'] } }, select: { id: true } }),
+      prisma.inventoryItem.findMany({ where: { restaurantId }, select: { name: true, quantity: true, reorderLevel: true } }),
+    ])
+
+    const todayRev     = todaySales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+    const yesterdayRev = yesterdaySales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+    const trend        = yesterdayRev > 0 ? ((todayRev - yesterdayRev) / yesterdayRev) * 100 : null
+    const lowStock     = lowStockItems.filter(i => i.quantity <= (i.reorderLevel ?? 0))
+
+    const hour = new Date().toLocaleString('en-US', { timeZone: TZ, hour: 'numeric', hour12: false })
+    const h = parseInt(hour, 10)
+    const greet = h < 12 ? 'Morning' : h < 17 ? 'Afternoon' : 'Evening'
+
+    lines.push(`::Zap:: **${greet}! Here's the snapshot.**`)
+    lines.push(``)
+    lines.push(`  ::Banknote:: **Revenue today:** ${fmt(todayRev)}${trend !== null ? `  ·  ${trend >= 0 ? '::TrendingUp::' : '::TrendingDown::'} ${trend >= 0 ? '+' : ''}${trend.toFixed(0)}% vs yesterday` : ''}`)
+    lines.push(`  ::Clock:: **Pending orders:** ${pendingOrders.length === 0 ? 'None right now' : `${pendingOrders.length} order${pendingOrders.length !== 1 ? 's' : ''} waiting`}`)
+    if (lowStock.length === 0) {
+      lines.push(`  ::CheckCircle:: **Stock:** All levels OK`)
+    } else {
+      const names = lowStock.slice(0, 3).map(i => i.name).join(', ')
+      lines.push(`  ::AlertTriangle:: **Low stock:** ${names}${lowStock.length > 3 ? ` +${lowStock.length - 3} more` : ''}`)
+    }
+    if (allBranches.length > 1) {
+      lines.push(`  ::BarChart2:: **Branches active:** ${allBranches.length}`)
+    }
+    return NextResponse.json({ answer: lines.join('\n'), period: 'Today', intents, followUps: getFollowUps(intents, allBranches.length), source: 'restaurant-db' })
+  }
+
+  // ── CAT 3: WHY — comparative reasoning using context ─────────────────────────
+  if (intents.includes('why') && !intents.includes('record_transaction')) {
+    // Figure out what "why" refers to — check current question first, then prev question
+    const subject = question + ' ' + prevQuestion
+    const prevIntents = prevQuestion ? parseIntents(prevQuestion) : []
+    const whyAbout: Intent[] = prevIntents.length > 0
+      ? prevIntents.filter(i => !['greeting', 'catchup', 'why', 'trends'].includes(i)) as Intent[]
+      : (parseIntents(subject).filter(i => !['why'].includes(i)) as Intent[])
+    const primaryAbout = whyAbout[0] ?? 'revenue'
+
+    const todayStr   = kigaliDateStr()
+    const todayStart = kigaliStart(todayStr)
+    const todayEnd   = kigaliEnd(todayStr)
+    const range7     = { start: kigaliStart(kigaliDateStr(shiftDays(todayStart, -6))), end: kigaliEnd(todayStr) }
+    const range7prev = { start: kigaliStart(kigaliDateStr(shiftDays(todayStart, -13))), end: kigaliEnd(kigaliDateStr(shiftDays(todayStart, -7))) }
+
+    if (primaryAbout === 'revenue' || primaryAbout === 'profit') {
+      const [thisWeek, lastWeek, topDishes, byBranch] = await Promise.all([
+        prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7.start, lte: range7.end } }, select: { totalSaleAmount: true, calculatedFoodCost: true, paymentMethod: true } }),
+        prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7prev.start, lte: range7prev.end } }, select: { totalSaleAmount: true } }),
+        prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7.start, lte: range7.end } }, select: { totalSaleAmount: true, dish: { select: { name: true } } }, orderBy: { totalSaleAmount: 'desc' }, take: 3 }),
+        allBranches.length > 1
+          ? prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7.start, lte: range7.end } }, select: { totalSaleAmount: true, branchId: true, branch: { select: { name: true } } } })
+          : Promise.resolve([] as { totalSaleAmount: number | null; branchId: string; branch: { name: string } }[]),
+      ])
+
+      const thisRev = thisWeek.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+      const lastRev = lastWeek.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+      const delta   = lastRev > 0 ? ((thisRev - lastRev) / lastRev) * 100 : null
+
+      lines.push(`**Why ${primaryAbout === 'profit' ? 'profit' : 'revenue'} looks the way it does** — past 7 days`)
+      lines.push(``)
+
+      // Week-on-week
+      if (delta !== null) {
+        const icon = delta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+        lines.push(`  ${icon} This week **${fmt(thisRev)}** vs last week **${fmt(lastRev)}** — ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`)
+      } else {
+        lines.push(`  This week: **${fmt(thisRev)}**`)
+      }
+
+      // Payment method breakdown
+      const byMethod: Record<string, number> = {}
+      for (const s of thisWeek) {
+        const m = s.paymentMethod ?? 'Cash'
+        byMethod[m] = (byMethod[m] ?? 0) + (s.totalSaleAmount ?? 0)
+      }
+      const topMethod = Object.entries(byMethod).sort((a, b) => b[1] - a[1])[0]
+      if (topMethod) lines.push(`  ::Banknote:: Most revenue via **${topMethod[0]}** — ${fmt(topMethod[1])}`)
+
+      // Top driver
+      if (topDishes.length > 0) {
+        lines.push(`  ::Flame:: Top seller: **${topDishes[0].dish?.name ?? '—'}** — ${fmt(topDishes[0].totalSaleAmount ?? 0)}`)
+      }
+
+      // Branch breakdown if multi-branch
+      if (byBranch.length > 0) {
+        const bMap: Record<string, { name: string; rev: number }> = {}
+        for (const s of byBranch) {
+          if (!bMap[s.branchId]) bMap[s.branchId] = { name: s.branch.name, rev: 0 }
+          bMap[s.branchId].rev += s.totalSaleAmount ?? 0
+        }
+        const ranked = Object.values(bMap).sort((a, b) => b.rev - a.rev)
+        lines.push(`  ::BarChart2:: **By branch:** ${ranked.map(b => `${b.name} ${fmt(b.rev)}`).join(' · ')}`)
+      }
+
+      // Zero revenue explanation
+      if (thisRev === 0) {
+        lines.push(``)
+        lines.push(`  ::AlertTriangle:: No revenue recorded this week. Possible reasons:`)
+        lines.push(`  • Orders not marked as PAID or COMPLETED`)
+        lines.push(`  • Orders were created under a different time zone date`)
+        lines.push(`  • No orders have been placed yet`)
+      }
+
+    } else if (primaryAbout === 'expenses') {
+      const purchases = await prisma.inventoryPurchase.findMany({
+        where: { restaurantId, purchasedAt: { gte: range7.start, lte: range7.end } },
+        select: { totalCost: true, paymentMethod: true, ingredient: { select: { name: true } } },
+        orderBy: { totalCost: 'desc' },
+      })
+      const total = purchases.reduce((s, p) => s + (p.totalCost ?? 0), 0)
+      lines.push(`**Why expenses look the way they do** — past 7 days`)
+      lines.push(`  Total: **${fmt(total)}** across ${purchases.length} purchase${purchases.length !== 1 ? 's' : ''}`)
+      if (purchases.length > 0) {
+        const top3 = purchases.slice(0, 3)
+        lines.push(`  Top costs:`)
+        top3.forEach(p => lines.push(`  • ${p.ingredient.name}: ${fmt(p.totalCost ?? 0)} (${p.paymentMethod ?? 'Cash'})`))
+      }
+
+    } else if (primaryAbout === 'orders') {
+      const [thisOrders, lastOrders] = await Promise.all([
+        prisma.restaurantOrder.count({ where: { restaurantId, createdAt: { gte: range7.start, lte: range7.end } } }),
+        prisma.restaurantOrder.count({ where: { restaurantId, createdAt: { gte: range7prev.start, lte: range7prev.end } } }),
+      ])
+      const delta = lastOrders > 0 ? ((thisOrders - lastOrders) / lastOrders) * 100 : null
+      lines.push(`**Why order count looks the way it does** — past 7 days`)
+      lines.push(`  This week: **${thisOrders} orders**`)
+      if (delta !== null) {
+        const icon = delta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+        lines.push(`  ${icon} ${delta >= 0 ? '+' : ''}${delta.toFixed(0)}% vs previous 7 days (${lastOrders} orders)`)
+      }
+      if (thisOrders === 0) {
+        lines.push(`  ::AlertTriangle:: No orders this week — check if orders are being created and completed.`)
+      }
+    } else {
+      lines.push(`I need a bit more context. Try:`)
+      lines.push(`  • "why is revenue low this week?"`)
+      lines.push(`  • "why are expenses high?"`)
+      lines.push(`  • "why fewer orders today?"`)
+    }
+
+    return NextResponse.json({ answer: lines.join('\n'), period: 'Past 7 days', intents, followUps: getFollowUps(['why'], allBranches.length), source: 'restaurant-db' })
+  }
+
+  // ── CAT 5: TRENDS — period-over-period ────────────────────────────────────────
+  if (intents.includes('trends') && !intents.includes('record_transaction')) {
+    const todayStr = kigaliDateStr()
+    const todayD   = kigaliStart(todayStr)
+
+    // This week vs last week
+    const thisWeekStart = kigaliStart(kigaliDateStr(shiftDays(todayD, -6)))
+    const lastWeekStart = kigaliStart(kigaliDateStr(shiftDays(todayD, -13)))
+    const lastWeekEnd   = kigaliEnd(kigaliDateStr(shiftDays(todayD, -7)))
+
+    const [thisWeek, lastWeek] = await Promise.all([
+      prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: thisWeekStart, lte: kigaliEnd(todayStr) } }, select: { totalSaleAmount: true, calculatedFoodCost: true } }),
+      prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: lastWeekStart, lte: lastWeekEnd } }, select: { totalSaleAmount: true, calculatedFoodCost: true } }),
+    ])
+
+    const thisRev  = thisWeek.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+    const lastRev  = lastWeek.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+    const thisCogs = thisWeek.reduce((s, x) => s + (x.calculatedFoodCost ?? 0), 0)
+    const lastCogs = lastWeek.reduce((s, x) => s + (x.calculatedFoodCost ?? 0), 0)
+    const revDelta = lastRev > 0 ? ((thisRev - lastRev) / lastRev) * 100 : null
+    const cogsDelta = lastCogs > 0 ? ((thisCogs - lastCogs) / lastCogs) * 100 : null
+
+    lines.push(`**Trend — This week vs last week**`)
+    lines.push(``)
+    if (revDelta !== null) {
+      const icon = revDelta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+      const word = revDelta >= 1 ? 'Up' : revDelta <= -1 ? 'Down' : 'Flat'
+      lines.push(`  ${icon} **Revenue ${word}** ${revDelta >= 0 ? '+' : ''}${revDelta.toFixed(1)}%`)
+      lines.push(`  This week: **${fmt(thisRev)}** · Last week: ${fmt(lastRev)}`)
+    } else {
+      lines.push(`  This week: **${fmt(thisRev)}** · Last week: ${fmt(lastRev)}`)
+    }
+    if (cogsDelta !== null) {
+      lines.push(`  Food cost: ${cogsDelta >= 0 ? '+' : ''}${cogsDelta.toFixed(1)}% vs last week`)
+    }
+
+    const profit = thisRev - thisCogs
+    const prevProfit = lastRev - lastCogs
+    const profitDelta = prevProfit > 0 ? ((profit - prevProfit) / prevProfit) * 100 : null
+    if (profitDelta !== null) {
+      const icon = profitDelta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+      lines.push(`  ${icon} **Profit ${profitDelta >= 0 ? '+' : ''}${profitDelta.toFixed(1)}%** — ${fmt(profit)} this week vs ${fmt(prevProfit)} last`)
+    }
+
+    if (thisRev === 0 && lastRev === 0) {
+      lines.push(`  ::AlertTriangle:: No sales data for either period.`)
+    }
+
+    return NextResponse.json({ answer: lines.join('\n'), period: 'This week vs last', intents, followUps: getFollowUps(['trends'], allBranches.length), source: 'restaurant-db' })
+  }
+
   // ── Follow-up / clarification (no prior context available) ───────────────────
   if (/\b(what\s+happened|why\s+(did|was|is|are)\b|what\s+does\s+that\s+mean|tell\s+me\s+more|explain\s+that|what\s+went\s+wrong|why\s+zero|why\s+0)\b/i.test(question) && intents.length === 1 && intents[0] === 'revenue') {
     lines.push(`::AlertTriangle:: I don't have context from your previous message.`)
@@ -654,7 +920,7 @@ export async function POST(req: Request) {
     lines.push(`  • "why is today's revenue 0?"`)
     lines.push(`  • "what happened to yesterday's sales?"`)
     lines.push(`  • "explain this week's expenses"`)
-    return NextResponse.json({ answer: lines.join('\n'), period: range.label, intents, source: 'restaurant-db' })
+    return NextResponse.json({ answer: lines.join('\n'), period: range.label, intents, followUps: getFollowUps(intents, allBranches.length), source: 'restaurant-db' })
   }
 
   // ── Revenue / Profit / Food Cost / Payment ───────────────────────────────────
@@ -1093,6 +1359,7 @@ export async function POST(req: Request) {
     answer: lines.join('\n'),
     period: range.label,
     intents,
+    followUps: getFollowUps(intents, allBranches.length),
     source: 'restaurant-db',
   })
 }
