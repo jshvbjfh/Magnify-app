@@ -23,6 +23,7 @@ interface Range { start: Date; end: Date; label: string }
 
 function hasExplicitTimePeriod(q: string) {
   return /\b(today|yesterday|this\s*week|last\s*week|this\s*month|last\s*month|this\s*year|past\s+\d+\s*days?|two\s+days|three\s+days|seven\s+days)\b/i.test(q)
+    || parseSpecificDate(q) !== null
 }
 
 function thisMonthRange(): Range {
@@ -31,9 +32,50 @@ function thisMonthRange(): Range {
   return { start: kigaliStart(`${year}-${month}-01`), end: kigaliEnd(today), label: 'This Month' }
 }
 
+const MONTH_MAP: Record<string, number> = {
+  jan:0, january:0, feb:1, february:1, mar:2, march:2,
+  apr:3, april:3, may:4, jun:5, june:5, jul:6, july:6,
+  aug:7, august:7, sep:8, september:8, oct:9, october:9,
+  nov:10, november:10, dec:11, december:11,
+}
+const MONTH_PAT = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)'
+
+function parseSpecificDate(q: string): Range | null {
+  const today = kigaliDateStr()
+  const currentYear = Number(today.split('-')[0])
+  let day: number | null = null
+  let month: number | null = null
+  let year = currentYear
+
+  // "31st may", "31 may", "31st of may"
+  const m1 = q.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH_PAT}(?:\\s+(\\d{4}))?\\b`, 'i'))
+  if (m1) { day = Number(m1[1]); month = MONTH_MAP[m1[2].slice(0,3).toLowerCase()]; if (m1[3]) year = Number(m1[3]) }
+
+  // "may 31st", "may 31", "june 5"
+  const m2 = !m1 && q.match(new RegExp(`\\b${MONTH_PAT}\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+(\\d{4}))?\\b`, 'i'))
+  if (m2) { month = MONTH_MAP[m2[1].slice(0,3).toLowerCase()]; day = Number(m2[2]); if (m2[3]) year = Number(m2[3]) }
+
+  if (day === null || month === null || day < 1 || day > 31) return null
+
+  // If month is in the future for this year, use last year
+  const specDate = new Date(year, month, day)
+  const todayObj = new Date(today + 'T12:00:00')
+  if (specDate > todayObj) year = currentYear - 1
+
+  const mm = String(month + 1).padStart(2, '0')
+  const dd = String(day).padStart(2, '0')
+  const dateStr = `${year}-${mm}-${dd}`
+  const monthName = new Date(year, month, day).toLocaleDateString('en-US', { month: 'short' })
+  return { start: kigaliStart(dateStr), end: kigaliEnd(dateStr), label: `${monthName} ${day}` }
+}
+
 function parseRange(q: string): Range {
   const today = kigaliDateStr()
   const todayD = kigaliStart(today)
+
+  // Specific date: "31st may", "may 31", "june 5th 2025", etc.
+  const specific = parseSpecificDate(q)
+  if (specific) return specific
 
   if (/\byesterday\b/i.test(q)) {
     const y = kigaliDateStr(shiftDays(todayD, -1))
