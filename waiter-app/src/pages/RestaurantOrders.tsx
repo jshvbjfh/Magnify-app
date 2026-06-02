@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
-  Search, ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
-  ArrowLeft, Trash2, X, Receipt, ShieldAlert,
+  ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
+  ArrowLeft, Trash2, X, Receipt, ShieldAlert, WifiOff, AlertCircle, Cloud,
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
@@ -9,6 +9,7 @@ import {
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline } from '../services/sync'
+import { useOnline } from '../hooks/useOnline'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -80,23 +81,40 @@ function getDisplayStatus(order: Order) {
   return 'PENDING'
 }
 
+// ─── Module-level stale-while-revalidate caches ──────────────────────────────
+// Survive tab switches; cleared only on app restart.
+
+type PosSnapshot = {
+  dishes: Dish[]
+  tables: RestaurantTable[]
+  pendingOrders: Order[]
+  orderItemsMap: Record<string, OrderItem[]>
+  restaurantId: string | null
+  branchId: string | null
+}
+let posCache: PosSnapshot | null = null
+let historyCache: Order[] | null = null
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 interface Props {
   mode?: 'pos' | 'history'
   waiterName: string
+  activeBranchId?: string | null
   onPendingCountChange?: (count: number) => void
   syncVersion?: number
 }
 
-export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCountChange, syncVersion }: Props) {
+export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId = null, onPendingCountChange, syncVersion }: Props) {
+  const { isOnline } = useOnline()
   // ── Shared state ──
   const [dishes,        setDishes]        = useState<Dish[]>([])
   const [tables,        setTables]        = useState<RestaurantTable[]>([])
   const [pendingOrders, setPendingOrders] = useState<Order[]>([])
   const [orderItemsMap, setOrderItemsMap] = useState<Record<string, OrderItem[]>>({})
   const [allOrders,     setAllOrders]     = useState<Order[]>([])
-  const [loading,       setLoading]       = useState(true)
+  const [loading,       setLoading]       = useState(mode === 'pos' ? !posCache : !historyCache)
+  const [isRefreshing,  setIsRefreshing]  = useState(false)
   const [restaurantId,  setRestaurantId]  = useState<string | null>(null)
   const [branchId,      setBranchId]      = useState<string | null>(null)
 
@@ -107,30 +125,41 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   const [showPanel,        setShowPanel]        = useState<'dishes' | 'order'>('dishes')
   const [addedFlash,       setAddedFlash]       = useState(false)
   const [searchQuery,      setSearchQuery]      = useState('')
-  const [showSearch,       setShowSearch]       = useState(false)
   const [confirmingOrder,  setConfirmingOrder]  = useState(false)
   const [submitError,      setSubmitError]      = useState<string | null>(null)
   const [confirmSuccess,   setConfirmSuccess]   = useState<string | null>(null)
-  const [takenBy,          setTakenBy]          = useState('')
+  const [draftWaiterNames, setDraftWaiterNames] = useState<Record<string, string>>({})
   const [payingOrderId,     setPayingOrderId]     = useState<string | null>(null)
   const [payMethod,         setPayMethod]         = useState('Cash')
   const [payingSaving,      setPayingSaving]      = useState(false)
   const [cancelingOrderId,  setCancelingOrderId]  = useState<string | null>(null)
-  const [servingSaving,     setServingSaving]     = useState(false)
 
   const orderSubmitLockRef = useRef(false)
   const paymentLockRef     = useRef(false)
-  const servingLockRef     = useRef(false)
 
   // ── Data loaders ──
 
   const loadPOS = useCallback(async () => {
+    // Show cached data immediately so the user never stares at a blank screen.
+    if (posCache) {
+      setDishes(posCache.dishes)
+      setTables(posCache.tables)
+      setPendingOrders(posCache.pendingOrders)
+      setOrderItemsMap(posCache.orderItemsMap)
+      setRestaurantId(posCache.restaurantId)
+      setBranchId(posCache.branchId)
+      setLoading(false)
+    }
+    setIsRefreshing(true)
     try {
-      const [d, t, orders, rId, bId] = await Promise.all([
-        getDishes(),
-        getTables(),
-        getOrders({ status: 'PENDING' }),
+      const [rId, activeBranch] = await Promise.all([
         getConfig('restaurantId'),
+        getConfig('activeBranchId'),
+      ])
+      const [d, t, orders, bId] = await Promise.all([
+        getDishes(activeBranch),
+        getTables(),
+        getOrders({ status: 'PENDING', restaurantId: rId }),
         getConfig('branchId'),
       ])
       setDishes(d)
@@ -153,16 +182,37 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
         itemsMap[o.id] = await getOrderItems(o.id)
       }))
       setOrderItemsMap(itemsMap)
+      posCache = { dishes: d, tables: t, pendingOrders: orders, orderItemsMap: itemsMap, restaurantId: rId, branchId: bId }
     } catch { /* DB not ready on first render — will retry */ }
     setLoading(false)
+    setIsRefreshing(false)
   }, [])
 
   const loadHistory = useCallback(async () => {
+    if (historyCache) {
+      setAllOrders(historyCache)
+      setLoading(false)
+    }
+    setIsRefreshing(true)
     try {
-      setAllOrders(await getOrders())
+      const rId = await getConfig('restaurantId')
+      const orders = await getOrders({ restaurantId: rId })
+      setAllOrders(orders)
+      historyCache = orders
     } catch {}
     setLoading(false)
+    setIsRefreshing(false)
   }, [])
+
+  // Clear POS cache when branch changes so the new branch's menu loads fresh.
+  const prevBranchRef = useRef(activeBranchId)
+  useEffect(() => {
+    if (prevBranchRef.current !== activeBranchId) {
+      posCache = null
+      prevBranchRef.current = activeBranchId
+      setLoading(true)
+    }
+  }, [activeBranchId])
 
   useEffect(() => {
     if (mode === 'pos') loadPOS()
@@ -175,8 +225,6 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
     const activeKeys = new Set(pendingOrders.map(o => o.table_id ?? 'takeaway'))
     onPendingCountChange?.(activeKeys.size)
   }, [pendingOrders, mode, onPendingCountChange])
-
-  // takenBy is intentionally left blank — the waiter types the customer/order name
 
   // ── Cart actions ──
 
@@ -278,6 +326,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
         canceled_at:        null,
         cancel_reason:      null,
         synced:             0,
+        sync_error:         null,
         created_at:         now,
         updated_at:         now,
       }
@@ -306,6 +355,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
       // ── Reload BEFORE clearing cart so the panel never flashes empty ──────
       await loadPOS()
       setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+      setDraftWaiterNames(prev => {
+        const next = { ...prev }
+        delete next[selectedTableKey]
+        return next
+      })
       setShowPanel('order')
       setConfirmSuccess(`${orderNumber} confirmed for ${tableName}`)
       setTimeout(() => setConfirmSuccess(null), 4000)
@@ -327,17 +381,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   }
 
   async function markOrderServed(orderId: string) {
-    if (servingLockRef.current) return
-    servingLockRef.current = true
-    setServingSaving(true)
-    try {
-      await updateOrder(orderId, { served_at: new Date().toISOString() })
-      await loadPOS()
-      pushSync().catch(() => {})
-    } finally {
-      servingLockRef.current = false
-      setServingSaving(false)
-    }
+    await updateOrder(orderId, { served_at: new Date().toISOString() })
+    await loadPOS()
+    pushSync().catch(() => {})
   }
 
   async function collectPayment(orderId: string) {
@@ -384,6 +430,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
   })
 
   const cartItems      = localCart[selectedTableKey] ?? []
+  const takenBy        = draftWaiterNames[selectedTableKey] ?? ''
+  const hasTypedWaiterName = Object.prototype.hasOwnProperty.call(draftWaiterNames, selectedTableKey)
   const currentOrders  = pendingOrders
     .filter(o => (o.table_id ?? 'takeaway') === selectedTableKey)
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -395,6 +443,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
     ? cartItems
     : confirmedItems.map(i => ({ dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price, qty: i.qty }))
   const { subtotal, vatAmount, totalAmount } = calcTotals(rightItems)
+  const tableNumber        = selectedTableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
   const currentOrderServed = Boolean(currentOrder?.served_at)
   const activeTableKeys    = new Set(pendingOrders.map(o => o.table_id ?? 'takeaway'))
 
@@ -478,7 +527,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             </p>
           </div>
           <button onClick={loadHistory} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50">
-            <RefreshCw className="h-4 w-4 text-gray-500" />
+            <RefreshCw className={`h-4 w-4 text-gray-500 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
         </div>
 
@@ -495,6 +544,14 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
           <div className="space-y-3">
             {allOrders.map(order => {
               const ds = getDisplayStatus(order)
+              const orderMeta = [
+                order.table_name ?? 'Takeaway',
+                order.created_by_name?.trim() || null,
+                new Date(order.created_at).toLocaleString('en-RW', {
+                  day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+                }),
+              ].filter(Boolean).join(' · ')
+
               return (
                 <div key={order.id} className="bg-white rounded-xl border border-gray-200 p-4 space-y-1.5">
                   <div className="flex items-start justify-between gap-2">
@@ -509,18 +566,28 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                         }`}>
                           {ds}
                         </span>
-                        {!order.synced && (
-                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                            Pending sync
-                          </span>
-                        )}
+                        {!order.synced && (() => {
+                          if (order.sync_error) return (
+                            <span title={order.sync_error} className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                              <AlertCircle className="h-3 w-3" />
+                              Sync error
+                            </span>
+                          )
+                          if (!isOnline) return (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                              <WifiOff className="h-3 w-3" />
+                              Saved offline
+                            </span>
+                          )
+                          return (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                              <Cloud className="h-3 w-3" />
+                              Syncing...
+                            </span>
+                          )
+                        })()}
                       </div>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {order.table_name ?? 'Takeaway'} · {order.created_by_name ?? waiterName} ·{' '}
-                        {new Date(order.created_at).toLocaleString('en-RW', {
-                          day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
-                        })}
-                      </p>
+                      <p className="text-xs text-gray-500 mt-1">{orderMeta}</p>
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className="text-sm font-bold text-gray-900">{fmtRWF(order.total_amount)} RWF</p>
@@ -553,42 +620,40 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
         {/* Header */}
         <div className="bg-white border-b border-gray-200 px-5 flex flex-col flex-shrink-0">
 
-          {/* Row 1: selected table name (or time label for takeaway) + search */}
-          <div className="flex items-center justify-between py-3">
-            <h2 className="text-xl font-bold text-gray-900">
-              {selectedTableKey === 'takeaway'
-                ? getTimeLabel()
-                : (tables.find(t => t.id === selectedTableKey)?.name ?? getTimeLabel())}
-            </h2>
+          {/* Row 1: time label + search */}
+          <div className="flex items-center justify-between py-2">
+            <h2 className="text-xl font-bold text-gray-900">{getTimeLabel()}</h2>
             {activeTableKeys.size > 0 && (
               <span className="text-[13px] font-semibold text-orange-500">
                 {activeTableKeys.size} pending
               </span>
             )}
             <div className="flex items-center gap-2 flex-shrink-0">
-              {showSearch ? (
-                <input
-                  autoFocus type="text" value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  onBlur={() => { if (!searchQuery) setShowSearch(false) }}
-                  placeholder="Search dishes…"
-                  className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-orange-400 w-40"
-                />
-              ) : (
-                <button onClick={() => setShowSearch(true)} className="p-2 rounded-lg hover:bg-gray-100 transition-colors">
-                  <Search className="h-5 w-5 text-gray-600" />
+              {/* Mobile: jump to order panel */}
+              {(cartItems.length > 0 || confirmedItems.length > 0) && (
+                <button
+                  onClick={() => setShowPanel('order')}
+                  className="md:hidden flex items-center gap-1 bg-orange-500 text-white px-2.5 py-1 rounded-full text-xs font-bold">
+                  <ShoppingBag className="h-3.5 w-3.5" />
+                  <span>{cartItems.length > 0 ? cartItems.length : confirmedItems.length}</span>
                 </button>
               )}
+              <input
+                type="text" value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search dishes…"
+                className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-orange-400 w-44"
+              />
               <button onClick={() => { loadPOS(); setShowPanel('dishes') }}
                 className="p-2 rounded-lg hover:bg-gray-100 transition-colors" title="Refresh">
-                <RefreshCw className="h-4 w-4 text-gray-500" />
+                <RefreshCw className={`h-4 w-4 text-gray-500 ${isRefreshing ? 'animate-spin' : ''}`} />
               </button>
             </div>
           </div>
 
-          {/* Row 2: table selector */}
+          {/* Row 2: compact table chips directly under Afternoon */}
           {tables.length > 0 && (
-            <div className="flex flex-wrap items-center gap-3 py-4">
+            <div className="flex flex-wrap items-center gap-2 pb-2">
               {tables.map(table => {
                 const key      = table.id
                 const order    = pendingOrders.find(o => o.table_id === key)
@@ -597,29 +662,29 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                 const isSelected = key === selectedTableKey
                 return (
                   <button key={key}
-                    onClick={() => setSelectedTableKey(key)}
-                    className={`relative flex-shrink-0 flex flex-col items-start px-5 py-3 rounded-2xl text-left transition-all border-2 min-w-[80px] ${
-                      isSelected && isServed  ? 'bg-green-500  text-white border-green-500  shadow-md' :
-                      isSelected && hasOrder  ? 'bg-orange-500 text-white border-orange-500 shadow-md' :
-                      isSelected              ? 'bg-gray-900   text-white border-gray-900   shadow-md' :
+                    onClick={() => { setSelectedTableKey(key); setShowPanel('order') }}
+                    className={`relative flex-shrink-0 flex flex-col items-start px-4 py-2.5 rounded-xl text-left transition-all border ${
+                      isSelected && isServed  ? 'bg-green-500  text-white border-green-500  shadow-sm' :
+                      isSelected && hasOrder  ? 'bg-orange-500 text-white border-orange-500 shadow-sm' :
+                      isSelected              ? 'bg-gray-900   text-white border-gray-900   shadow-sm' :
                       isServed                ? 'bg-green-50   text-green-800  border-green-400  hover:border-green-500'  :
                       hasOrder                ? 'bg-orange-50  text-orange-800 border-orange-300 hover:border-orange-400' :
                                                 'bg-gray-900   text-white border-gray-900 hover:bg-gray-700'
                     }`}>
                     {isServed && (
-                      <span className="absolute -top-2 -right-2 h-5 w-5 rounded-full bg-green-600 border-2 border-white flex items-center justify-center">
-                        <CheckCircle2 className="h-3 w-3 text-white" />
+                      <span className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-green-600 border-2 border-white flex items-center justify-center">
+                        <CheckCircle2 className="h-2.5 w-2.5 text-white" />
                       </span>
                     )}
                     {hasOrder && !isServed && (
-                      <span className="absolute -top-1.5 -right-1.5 h-3.5 w-3.5 rounded-full bg-red-500 border-2 border-white" />
+                      <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white" />
                     )}
-                    <span className="text-[15px] font-bold leading-tight">{table.name}</span>
+                    <span className="text-[18px] font-bold leading-tight">{table.name}</span>
                     {isServed
-                      ? <span className={`text-[11px] font-semibold mt-0.5 ${isSelected ? 'text-green-100' : 'text-green-600'}`}>Served</span>
+                      ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-green-100' : 'text-green-600'}`}>Served</span>
                       : hasOrder
-                        ? <span className={`text-[11px] font-semibold mt-0.5 ${isSelected ? 'text-orange-100' : 'text-orange-500'}`}>Pending…</span>
-                        : <span className="text-[11px] font-medium mt-0.5 text-gray-400">Free</span>
+                        ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-orange-100' : 'text-orange-500'}`}>Pending…</span>
+                        : <span className="text-[14px] font-medium text-gray-400">Free</span>
                     }
                   </button>
                 )
@@ -628,16 +693,16 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
           )}
         </div>
 
-        {/* Category tiles */}
-        <div className="flex-shrink-0 px-4 pt-3 pb-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {/* Category strip */}
+        <div className="flex-shrink-0 px-4 py-2 flex items-center gap-2 overflow-x-auto" style={{scrollbarWidth:'none'}}>
           <button
             onClick={() => setSelectedCategory(null)}
-            className={`rounded-xl px-4 py-3 text-left transition-all ${
+            className={`flex-shrink-0 rounded-lg px-4 py-2 text-left transition-all ${
               selectedCategory === null
-                ? 'bg-gray-800 text-white shadow-md'
-                : 'bg-white text-gray-700 border border-gray-200 hover:border-gray-300 hover:shadow-sm'
+                ? 'bg-gray-800 text-white shadow'
+                : 'bg-white text-gray-700 border border-gray-200 hover:border-gray-300'
             }`}>
-            <span className="block text-sm font-bold truncate">All items</span>
+            <span className="block text-sm font-bold">All items</span>
             <span className="text-xs opacity-70">{dishes.length} items</span>
           </button>
           {categories.map((cat, idx) => {
@@ -646,10 +711,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             const isActive = selectedCategory === cat
             return (
               <button key={cat} onClick={() => setSelectedCategory(isActive ? null : cat)}
-                className={`rounded-xl px-4 py-3 text-left transition-all ${bg} ${fg} ${
-                  isActive ? 'ring-2 ring-gray-900 ring-offset-2' : 'hover:scale-[1.02] hover:shadow-md'
+                className={`flex-shrink-0 rounded-lg px-4 py-2 text-left transition-all ${bg} ${fg} ${
+                  isActive ? 'ring-2 ring-gray-900 ring-offset-1' : 'hover:shadow-md'
                 }`}>
-                <span className="block text-sm font-bold truncate">{cat}</span>
+                <span className="block text-sm font-bold">{cat}</span>
                 <span className="text-xs opacity-90">{count} items</span>
               </button>
             )
@@ -668,7 +733,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
           ) : filteredDishes.length === 0 ? (
             <div className="py-12 text-center text-gray-400 text-sm">No dishes found</div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 gap-3">
               {filteredDishes.map(dish => {
                 const qtyInCart = cartItems.filter(i => i.dishId === dish.id).reduce((s, i) => s + i.qty, 0)
                 const catIdx    = categories.indexOf(dish.category ?? '')
@@ -678,27 +743,20 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                 const initials = dish.name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
                 return (
                   <button key={dish.id} onClick={() => addDishToOrder(dish)}
-                    className="relative rounded-2xl overflow-hidden hover:shadow-lg hover:scale-[1.03] active:scale-[0.97] transition-all text-left flex flex-col h-full">
-                    <div className={`${bgTop} h-[90px] w-full flex items-center justify-center`}>
+                    className="relative rounded-xl overflow-hidden hover:shadow-md hover:scale-[1.02] active:scale-[0.97] transition-all text-left flex flex-col h-full">
+                    <div className={`${bgTop} h-[78px] w-full flex items-center justify-center`}>
                       <span className="text-white font-black text-3xl tracking-tight select-none drop-shadow">{initials}</span>
                     </div>
-                    <div className={`${bgBottom} px-2.5 py-2.5 flex-1 w-full`}>
-                      <p className="text-white text-[13px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
-                      <p className="text-white/70 font-medium text-[11px] mt-1">
+                    <div className={`${bgBottom} px-3 py-2 flex-1 w-full`}>
+                      <p className="text-white text-[16px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
+                      <p className="text-white/70 font-medium text-[14px] mt-0.5">
                         {fmtRWF(Math.round(dish.selling_price * (1 + VAT_RATE)))} RWF incl. VAT
                       </p>
                     </div>
                     {qtyInCart > 0 && (
-                      <>
-                        <button
-                          onClick={e => { e.stopPropagation(); removeLocalCartItem(dish.id) }}
-                          className="absolute top-2 left-2 h-6 w-6 bg-red-500 border-2 border-white text-white rounded-full flex items-center justify-center shadow-sm z-10">
-                          <X className="h-3 w-3" />
-                        </button>
-                        <span className="absolute top-2 right-2 h-6 min-w-[24px] bg-gray-900 border-2 border-white text-white text-xs font-bold rounded-full flex items-center justify-center px-1.5 shadow-sm">
-                          {qtyInCart}
-                        </span>
-                      </>
+                      <span className="absolute top-1.5 right-1.5 h-7 min-w-[28px] bg-gray-900 border-2 border-white text-white text-xs font-bold rounded-full flex items-center justify-center px-1 shadow-sm">
+                        {qtyInCart}
+                      </span>
                     )}
                   </button>
                 )
@@ -706,20 +764,6 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             </div>
           )}
         </div>
-
-        {/* ── Yellow "Check Receipt" button — mobile only, appears when table has items ── */}
-        {(cartItems.length > 0 || confirmedItems.length > 0) && (
-          <div className="md:hidden flex-shrink-0 px-4 py-3 border-t border-gray-200 bg-gray-50">
-            <button
-              onClick={() => setShowPanel('order')}
-              className="w-full bg-yellow-400 hover:bg-yellow-500 active:bg-yellow-500 text-gray-900 font-bold py-4 rounded-2xl text-base transition-colors shadow-sm flex items-center justify-center gap-2">
-              <Receipt className="h-5 w-5" />
-              {cartItems.length > 0
-                ? `Order · ${cartItems.length} item${cartItems.length > 1 ? 's' : ''}`
-                : 'Check Receipt'}
-            </button>
-          </div>
-        )}
       </div>
 
       {/* ── RIGHT PANEL: current order ── */}
@@ -733,9 +777,12 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             className="p-1.5 -ml-1.5 mr-1 rounded-lg hover:bg-gray-100 transition-colors flex-shrink-0">
             <ArrowLeft className="h-5 w-5 text-gray-600" />
           </button>
-          <span className="text-lg font-bold text-gray-900 flex-1 text-center">
-            {selectedTableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')}
-          </span>
+          <span className="text-2xl font-black text-gray-900">{tableNumber}</span>
+          <select value={selectedTableKey} onChange={e => setSelectedTableKey(e.target.value)}
+            className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-white text-gray-600">
+            <option value="takeaway">Takeaway</option>
+            {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
         </div>
 
         {/* Mode label strip */}
@@ -751,7 +798,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
               ? `${currentOrders.length} active orders`
               : confirmedItems.length
                 ? `Order · ${currentOrder?.order_number ?? ''}`
-                : 'Tap a dish to add items'}
+                : 'No items'}
         </div>
 
         {/* Items list */}
@@ -793,8 +840,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                       </div>
                       <div className="flex gap-1.5 pt-0.5">
                         {!ord.served_at && (
-                          <button onClick={() => markOrderServed(ord.id)} disabled={servingSaving}
-                            className="flex-1 flex items-center justify-center gap-1 border border-green-300 hover:bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-xl transition-colors disabled:opacity-60">
+                          <button onClick={() => markOrderServed(ord.id)}
+                            className="flex-1 flex items-center justify-center gap-1 border border-green-300 hover:bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-xl transition-colors">
                             <CheckCircle2 className="h-3.5 w-3.5" /> Served
                           </button>
                         )}
@@ -887,21 +934,45 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
                 <div className="pt-1">
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Taken by</label>
                   <input
+                    key={`taken-by-${selectedTableKey}`}
                     type="text"
+                    name={`taken-by-${selectedTableKey}`}
                     value={takenBy}
-                    onChange={e => { setTakenBy(e.target.value); setSubmitError(null) }}
-                    placeholder="Who's taking this order?"
+                    autoComplete="new-password"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    onChange={e => {
+                      const nextName = e.target.value
+                      setDraftWaiterNames(prev => ({ ...prev, [selectedTableKey]: nextName }))
+                      setSubmitError(null)
+                    }}
+                    onFocus={e => {
+                      if (hasTypedWaiterName || !e.currentTarget.value) return
+                      e.currentTarget.value = ''
+                    }}
                     disabled={confirmingOrder}
                     className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-60"
                   />
+                  <p className="mt-1 text-[11px] text-gray-400">This starts blank for each new order and only the typed waiter name is saved.</p>
                 </div>
 
-                <button onClick={confirmOrder} disabled={confirmingOrder}
+                <button onClick={confirmOrder} disabled={confirmingOrder || !takenBy.trim()}
                   className="w-full bg-orange-500 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm">
                   {confirmingOrder ? 'Confirming…' : 'Confirm Order'}
                 </button>
                 <button
-                  onClick={() => { setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] })); setSubmitError(null) }}
+                  onClick={() => {
+                    setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+                    setDraftWaiterNames(prev => {
+                      const next = { ...prev }
+                      delete next[selectedTableKey]
+                      return next
+                    })
+                    setSubmitError(null)
+                  }}
                   disabled={confirmingOrder}
                   className="w-full text-xs text-gray-400 hover:text-red-500 py-1 transition-colors">
                   Clear cart
@@ -910,9 +981,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName, onPendingCo
             ) : (
               <>
                 {currentOrder && !currentOrderServed && (
-                  <button onClick={() => markOrderServed(currentOrder.id)} disabled={servingSaving}
-                    className="w-full flex items-center justify-center gap-2 bg-white border border-green-300 hover:bg-green-50 text-green-700 font-semibold py-3 rounded-2xl text-sm transition-colors mt-1 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed">
-                    <CheckCircle2 className="h-4 w-4" /> {servingSaving ? 'Marking…' : 'Mark Served'}
+                  <button onClick={() => markOrderServed(currentOrder.id)}
+                    className="w-full flex items-center justify-center gap-2 bg-white border border-green-300 hover:bg-green-50 text-green-700 font-semibold py-3 rounded-2xl text-sm transition-colors mt-1 shadow-sm">
+                    <CheckCircle2 className="h-4 w-4" /> Mark Served
                   </button>
                 )}
                 <button onClick={() => currentOrder && setPayingOrderId(currentOrder.id)}

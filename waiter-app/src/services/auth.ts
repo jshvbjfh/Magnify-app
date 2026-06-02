@@ -103,14 +103,15 @@ export async function getValidatedSession(): Promise<StoredSession | null> {
   }
 }
 
-export async function login(email: string, password: string): Promise<WaiterUser> {
-  const normalizedEmail = email.trim().toLowerCase()
+export async function login(username: string, password: string): Promise<WaiterUser> {
+  if (!API.login) throw new Error('API base URL is not configured. Set VITE_API_BASE_URL in your build.')
+  const normalizedUsername = username.trim().toLowerCase()
   const method = 'POST'
 
   await logInfo('auth', 'Submitting login request', {
     endpoint: API.login,
     method,
-    email: normalizedEmail,
+    username: normalizedUsername,
   })
 
   const response = await sendRequest({
@@ -118,7 +119,7 @@ export async function login(email: string, password: string): Promise<WaiterUser
     method,
     url: API.login,
     headers: { 'Content-Type': 'application/json' },
-    data: { email: normalizedEmail, password },
+    data: { username: normalizedUsername, password },
   })
 
   const rawBody = responseDataToText(response.data)
@@ -143,12 +144,12 @@ export async function login(email: string, password: string): Promise<WaiterUser
         contentType,
         preview: rawBody.slice(0, 240),
       })
-      throw new Error('Server returned HTML instead of JSON. Open startup.log to inspect the response.')
+      throw new Error('Could not connect to the restaurant server. Open startup.log for details.')
     }
 
     const fallbackError = response.status === 401
-      ? 'Invalid email or password'
-      : `Login failed: ${response.status}`
+      ? 'Invalid username or password.'
+      : 'Login failed. Please try again.'
 
     throw new Error(typeof body.error === 'string' ? body.error : fallbackError)
   }
@@ -161,7 +162,7 @@ export async function login(email: string, password: string): Promise<WaiterUser
       contentType,
       preview: rawBody.slice(0, 240),
     })
-    throw new Error('Server returned HTML instead of JSON. Open startup.log to inspect the response.')
+    throw new Error('Could not connect to the restaurant server. Open startup.log for details.')
   }
 
   const { token, user } = body as { token: string; user: WaiterUser }
@@ -189,7 +190,9 @@ export async function login(email: string, password: string): Promise<WaiterUser
 
   // Cache restaurant + branch in config for offline reads
   await setConfig('restaurantId', user.restaurantId)
-  if (user.branchId) await setConfig('branchId', user.branchId)
+  await setConfig('branchId', user.branchId ?? '')
+  await setConfig('activeBranchId', user.branchId ?? '')
+  await setConfig('branches', '')
   await setConfig('waiterName', user.name)
 
   await logInfo('auth', 'Login succeeded', {
@@ -225,5 +228,10 @@ export async function getToken(): Promise<string | null> {
 
 export async function logout(): Promise<void> {
   await clearSession()
+  await setConfig('restaurantId', '')
+  await setConfig('branchId', '')
+  await setConfig('activeBranchId', '')
+  await setConfig('branches', '')
+  await setConfig('waiterName', '')
   await logInfo('auth', 'Session cleared by logout')
 }

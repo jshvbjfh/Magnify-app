@@ -2,7 +2,6 @@ import { redirect } from 'next/navigation'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import RestaurantShell from '@/components/RestaurantShell'
-import OwnerShell from '@/components/restaurant/OwnerShell'
 import WaiterShell from '@/components/restaurant/WaiterShell'
 import KitchenShell from '@/components/restaurant/KitchenShell'
 import RestaurantBootstrapGate from '@/components/restaurant/RestaurantBootstrapGate'
@@ -31,7 +30,7 @@ export default async function RestaurantPage() {
   }
 
   if (role === 'owner') {
-    return <OwnerShell />
+    redirect('/owner-app')
   }
 
   if (role === 'waiter') {

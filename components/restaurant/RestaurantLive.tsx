@@ -2,8 +2,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSession } from 'next-auth/react'
 import { ChefHat, CheckCircle2, Clock, Flame, RefreshCw, Utensils, Receipt } from 'lucide-react'
-import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
-import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
+import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
+import { loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type LiveOrder = {
   id: string; tableName: string; dishName: string; qty: number
@@ -84,11 +84,10 @@ export default function RestaurantLive() {
   const [lastRefresh, setLastRefresh] = useState(new Date())
   const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
-  const snapshotScopeId = buildRestaurantSnapshotScope({
-    restaurantId: restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null,
-    branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
-    fallbackUserId: session?.user?.id ?? null,
-  })
+  const restaurantId = restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null
+  const snapshotScopeId = restaurantId
+    ? `${restaurantId}:live-all`
+    : (session?.user?.id ?? null)
   const snapshotStorageScope = snapshotScopeId ? `restaurant-live:${snapshotScopeId}` : null
 
   const persistSnapshot = useCallback((nextOrders: LiveOrder[], nextSales: Sale[]) => {
@@ -104,7 +103,7 @@ export default function RestaurantLive() {
 
   const loadOrders = useCallback(async () => {
     try {
-      const res = await fetch('/api/restaurant/pending', { credentials: 'include' })
+      const res = await fetch('/api/restaurant/pending?allBranches=1', { credentials: 'include' })
       if (res.ok) {
         const data = await res.json()
         const nextOrders = Array.isArray(data) ? data : []
@@ -117,7 +116,7 @@ export default function RestaurantLive() {
 
   const loadSales = useCallback(async () => {
     try {
-      const res = await fetch('/api/restaurant/dish-sales', { credentials: 'include' })
+      const res = await fetch('/api/restaurant/dish-sales?allBranches=1', { credentials: 'include' })
       if (res.ok) {
         const data = await res.json()
         const nextSales = Array.isArray(data) ? data : []
@@ -173,7 +172,7 @@ export default function RestaurantLive() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-bold text-gray-800">Live View</h2>
-          <BranchBadge />
+          <span className="text-xs font-medium bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-full">All branches</span>
           <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
           <span className="text-xs text-gray-400">
             Last updated {lastRefresh.toLocaleTimeString('en-RW', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}

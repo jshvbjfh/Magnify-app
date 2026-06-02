@@ -43,6 +43,13 @@ android {
             }
         }
     }
+
+    // Make APK artifact names explicit for owner distribution builds.
+    applicationVariants.configureEach { variant ->
+        variant.outputs.configureEach { output ->
+            outputFileName = "owner-app-${variant.name}.apk"
+        }
+    }
 }
 
 repositories {

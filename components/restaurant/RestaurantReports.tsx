@@ -1,6 +1,7 @@
 ﻿'use client'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange } from 'lucide-react'
+import { fmtDesc } from '@/lib/displayId'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { BranchBadge, useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
@@ -420,7 +421,7 @@ function JournalTable({ txs }: { txs: any[] }) {
       </div>
       <DataTable
         head={['Date','Account','Description','Type','Debit (RWF)','Credit (RWF)']}
-        rows={txs.map(t=>[t.date?.slice(0,10)??'', t.account?.name??'', (t.description??'').slice(0,48), t.type?.toUpperCase(), t.type==='debit'?fmt(t.amount):'', t.type==='credit'?fmt(t.amount):''])}
+        rows={txs.map(t=>[t.date?.slice(0,10)??'', t.account?.name??'', fmtDesc(t.description).slice(0,48), t.type?.toUpperCase(), t.type==='debit'?fmt(t.amount):'', t.type==='credit'?fmt(t.amount):''])}
         foot={['','','','TOTALS',fmt(dr),fmt(cr)]}
       />
     </>
@@ -438,7 +439,7 @@ function ReceivableTable({ txs }: { txs: any[] }) {
       </div>
       <DataTable
         head={['Date','Customer / Description','Account','Effect (RWF)']}
-        rows={ar.map(t=>[t.date?.slice(0,10)??'',(t.description??'').slice(0,54),t.account?.name??'',`${getReceivableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getReceivableEffect(t)))}`])}
+        rows={ar.map(t=>[t.date?.slice(0,10)??'',fmtDesc(t.description).slice(0,54),t.account?.name??'',`${getReceivableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getReceivableEffect(t)))}`])}
         foot={ar.length>0?['','','TOTAL RECEIVABLE',fmt(total)]:undefined}
       />
     </>
@@ -456,7 +457,7 @@ function PayableTable({ txs }: { txs: any[] }) {
       </div>
       <DataTable
         head={['Date','Supplier / Description','Account','Category','Effect (RWF)']}
-        rows={ap.map(t=>[t.date?.slice(0,10)??'',(t.description??'').slice(0,42),t.account?.name??'',t.account?.category?.type??'',`${getPayableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getPayableEffect(t)))}`])}
+        rows={ap.map(t=>[t.date?.slice(0,10)??'',fmtDesc(t.description).slice(0,42),t.account?.name??'',t.account?.category?.type??'',`${getPayableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getPayableEffect(t)))}`])}
         foot={ap.length>0?['','','','TOTAL PAYABLE',fmt(total)]:undefined}
       />
     </>
@@ -485,7 +486,7 @@ function CashFlowTable({ txs }: { txs: any[] }) {
           <SectionTitle>Transaction Detail</SectionTitle>
           <DataTable
             head={['Date','Description','Flow','Amount (RWF)']}
-            rows={cash.map(t=>[t.date?.slice(0,10)??'',(t.description??'').slice(0,50),getTransactionFlow(t)==='in'?'Inflow ':'Outflow ',fmt(t.amount)])}
+            rows={cash.map(t=>[t.date?.slice(0,10)??'',fmtDesc(t.description).slice(0,50),getTransactionFlow(t)==='in'?'Inflow ':'Outflow ',fmt(t.amount)])}
           />
         </>
       )}
@@ -538,13 +539,13 @@ function IncomeTable({ txs }: { txs: any[] }) {
       {rev.length>0&&(
         <>
           <SectionTitle>Revenue Detail</SectionTitle>
-          <DataTable head={['Date','Account','Description','Effect (RWF)']} rows={rev.map(t=>[t.date?.slice(0,10)??'',t.account?.name??'',(t.description??'').slice(0,44),`${getIncomeEffect(t)>=0?'+':'-'}${fmt(Math.abs(getIncomeEffect(t)))}`])} foot={['','','TOTAL REVENUE',fmt(tRev)]} />
+          <DataTable head={['Date','Account','Description','Effect (RWF)']} rows={rev.map(t=>[t.date?.slice(0,10)??'',t.account?.name??'',fmtDesc(t.description).slice(0,44),`${getIncomeEffect(t)>=0?'+':'-'}${fmt(Math.abs(getIncomeEffect(t)))}`])} foot={['','','TOTAL REVENUE',fmt(tRev)]} />
         </>
       )}
       {exp.length>0&&(
         <>
           <SectionTitle>Expense Detail</SectionTitle>
-          <DataTable head={['Date','Account','Description','Effect (RWF)']} rows={exp.map(t=>[t.date?.slice(0,10)??'',t.account?.name??'',(t.description??'').slice(0,44),`${getExpenseEffect(t)>=0?'+':'-'}${fmt(Math.abs(getExpenseEffect(t)))}`])} foot={['','','TOTAL EXPENSES',fmt(tExp)]} />
+          <DataTable head={['Date','Account','Description','Effect (RWF)']} rows={exp.map(t=>[t.date?.slice(0,10)??'',t.account?.name??'',fmtDesc(t.description).slice(0,44),`${getExpenseEffect(t)>=0?'+':'-'}${fmt(Math.abs(getExpenseEffect(t)))}`])} foot={['','','TOTAL EXPENSES',fmt(tExp)]} />
         </>
       )}
     </>
@@ -570,7 +571,7 @@ function PaymentHistoryTable({ events }: { events: PaymentMethodEvent[] }) {
               <td className="px-4 py-5 text-sm font-semibold text-gray-900 whitespace-nowrap border-t border-gray-100">{event.clientLabel}</td>
               <td className="px-4 py-5 border-t border-gray-100">
                 <p className="text-sm font-semibold text-gray-900">{event.itemLabel}</p>
-                <p className="mt-1 text-xs text-gray-500">{event.description}</p>
+                <p className="mt-1 text-xs text-gray-500">{fmtDesc(event.description)}</p>
               </td>
               <td className="px-4 py-5 text-right text-sm font-semibold text-gray-900 whitespace-nowrap border-t border-gray-100">{fmt(event.amount)} RWF</td>
             </tr>

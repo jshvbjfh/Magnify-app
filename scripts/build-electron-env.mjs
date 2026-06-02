@@ -31,6 +31,7 @@ const allowedKeys = [
 	'OWNER_SYNC_TARGET_URL',
 	'OWNER_SYNC_EMAIL',
 	'OWNER_SYNC_SHARED_SECRET',
+	'BLOB_READ_WRITE_TOKEN',
 ]
 
 function parseEnvFile(filePath) {

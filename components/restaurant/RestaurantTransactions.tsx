@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import { Plus, ArrowDownLeft, ArrowUpRight, RefreshCw, Search, X, Calendar, TrendingUp, TrendingDown, Layers, Check } from 'lucide-react'
+import { fmtDesc } from '@/lib/displayId'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 import { fetchWithWakeup } from '@/lib/fetchWithWakeup'
@@ -747,8 +748,8 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                           {/* Category / Account */}
                           <td className="px-4 py-3 text-gray-600 whitespace-nowrap text-xs">{t.accountName}</td>
                           {/* Description */}
-                          <td className="px-4 py-3 text-gray-800 font-medium max-w-xs truncate" title={t.description}>
-                            {t.description}
+                          <td className="px-4 py-3 text-gray-800 font-medium max-w-xs truncate" title={fmtDesc(t.description)}>
+                            {fmtDesc(t.description)}
                           </td>
                           {/* Amount */}
                           <td className={`px-4 py-3 font-semibold text-right whitespace-nowrap ${

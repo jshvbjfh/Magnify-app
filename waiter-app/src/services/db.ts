@@ -4,7 +4,7 @@ const sqlite = new SQLiteConnection(CapacitorSQLite)
 let db: SQLiteDBConnection | null = null
 
 const DB_NAME = 'magnify_waiter'
-const DB_VERSION = 1
+const DB_VERSION = 3
 
 interface Migration {
   version: number
@@ -99,6 +99,10 @@ CREATE TABLE IF NOT EXISTS cancellation_approvers (
   {
     version: 2,
     sql: 'ALTER TABLE dishes ADD COLUMN menu_type TEXT;',
+  },
+  {
+    version: 3,
+    sql: 'ALTER TABLE orders ADD COLUMN sync_error TEXT;',
   },
 ]
 
@@ -350,6 +354,7 @@ export interface Order {
   canceled_at: string | null
   cancel_reason: string | null
   synced: number
+  sync_error: string | null
   created_at: string
   updated_at: string
 }
@@ -401,16 +406,21 @@ export async function updateOrder(
   await getDB().run(`UPDATE orders SET ${setClauses} WHERE id = ?`, [...values, orderId])
 }
 
-export async function getOrders(filter?: { status?: string }): Promise<Order[]> {
-  if (filter?.status) {
-    const res = await getDB().query(
-      'SELECT * FROM orders WHERE status = ? ORDER BY created_at DESC',
-      [filter.status]
-    )
-    return (res.values ?? []) as Order[]
-  }
-  const res = await getDB().query('SELECT * FROM orders ORDER BY created_at DESC')
+export async function getOrders(filter?: { status?: string; restaurantId?: string | null }): Promise<Order[]> {
+  const conditions: string[] = []
+  const params: (string | null)[] = []
+  if (filter?.status) { conditions.push('status = ?'); params.push(filter.status) }
+  if (filter?.restaurantId) { conditions.push('restaurant_id = ?'); params.push(filter.restaurantId) }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  const res = await getDB().query(`SELECT * FROM orders ${where} ORDER BY created_at DESC`, params)
   return (res.values ?? []) as Order[]
+}
+
+export async function updateOrderSyncError(orderId: string, error: string): Promise<void> {
+  await getDB().run(
+    'UPDATE orders SET sync_error = ?, updated_at = ? WHERE id = ?',
+    [error, new Date().toISOString(), orderId]
+  )
 }
 
 export async function getOrderItems(orderId: string): Promise<OrderItem[]> {

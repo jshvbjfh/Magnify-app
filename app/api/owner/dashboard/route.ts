@@ -171,6 +171,8 @@ export async function GET(req: Request) {
   ])
 
   // ── Financial summary from journal entries ────────────────────────────────
+  // Income entries: DR Cash (asset), CR Revenue (income)  → read the credit line
+  // Expense entries: DR Expense (expense), CR Cash (asset) → read the debit line
   let totalRevenue = 0
   let totalExpenses = 0
 
@@ -190,17 +192,18 @@ export async function GET(req: Request) {
   }> = []
 
   for (const entry of journalEntries) {
-    const drLine = entry.lines.find((l) => l.debit > 0)
-    const crLine = entry.lines.find((l) => l.credit > 0)
-    const amount = drLine?.debit ?? crLine?.credit ?? 0
-    const mainAccount = drLine?.account ?? crLine?.account ?? null
-    const categoryType = mainAccount?.category?.type ?? 'expense'
+    const incomeLine = entry.lines.find((l) => l.credit > 0 && l.account?.category?.type === 'income')
+    const expenseLine = entry.lines.find((l) => l.debit > 0 && l.account?.category?.type === 'expense')
 
-    if (categoryType === 'income') {
-      totalRevenue += amount
-    } else if (categoryType === 'expense') {
-      totalExpenses += amount
+    if (incomeLine) {
+      totalRevenue += incomeLine.credit
+    } else if (expenseLine) {
+      totalExpenses += expenseLine.debit
     }
+
+    const mainLine = incomeLine ?? expenseLine ?? entry.lines[0]
+    const amount = incomeLine ? incomeLine.credit : (expenseLine?.debit ?? 0)
+    const categoryType = incomeLine ? 'income' : (expenseLine ? 'expense' : 'other')
 
     transactionRows.push({
       id: entry.id,
@@ -210,8 +213,8 @@ export async function GET(req: Request) {
       type: categoryType === 'income' ? 'credit' : 'debit',
       direction: categoryType === 'income' ? 'in' : 'out',
       paymentMethod: '',
-      accountName: mainAccount?.name ?? '',
-      categoryName: mainAccount?.category?.name ?? '',
+      accountName: mainLine?.account?.name ?? '',
+      categoryName: mainLine?.account?.category?.name ?? '',
       categoryType,
       sourceKind: null,
       isManual: false,
@@ -271,34 +274,38 @@ export async function GET(req: Request) {
   }
 
   // ── Daily history ──────────────────────────────────────────────────────────
+  // Use journal entries for both revenue and expenses so manual income entries
+  // appear in the chart alongside dish sales.
   const dailySalesByDate = new Map<string, { revenue: number; cogs: number }>()
   for (const sale of dishSales) {
     const key = toDateKey(sale.saleDate)
     const current = dailySalesByDate.get(key) ?? { revenue: 0, cogs: 0 }
-    current.revenue += sale.totalSaleAmount
     current.cogs += sale.calculatedFoodCost
     dailySalesByDate.set(key, current)
   }
+  const dailyRevenueByDate = new Map<string, number>()
   const dailyExpensesByDate = new Map<string, number>()
   for (const entry of journalEntries) {
-    const drLine = entry.lines.find((l) => l.debit > 0)
-    const amount = drLine?.debit ?? 0
-    const categoryType = drLine?.account?.category?.type
-    if (categoryType === 'expense') {
-      const key = toDateKey(entry.entryDate)
-      dailyExpensesByDate.set(key, (dailyExpensesByDate.get(key) ?? 0) + amount)
+    const incomeLine = entry.lines.find((l) => l.credit > 0 && l.account?.category?.type === 'income')
+    const expenseLine = entry.lines.find((l) => l.debit > 0 && l.account?.category?.type === 'expense')
+    const key = toDateKey(entry.entryDate)
+    if (incomeLine) {
+      dailyRevenueByDate.set(key, (dailyRevenueByDate.get(key) ?? 0) + incomeLine.credit)
+    }
+    if (expenseLine) {
+      dailyExpensesByDate.set(key, (dailyExpensesByDate.get(key) ?? 0) + expenseLine.debit)
     }
   }
 
   const dailyHistory = listDateKeys(range.from, range.to).map((dateKey) => {
-    const sales = dailySalesByDate.get(dateKey) ?? { revenue: 0, cogs: 0 }
+    const revenue = dailyRevenueByDate.get(dateKey) ?? 0
     const expenses = dailyExpensesByDate.get(dateKey) ?? 0
     return {
       date: dateKey,
       label: formatDayLabel(dateKey),
-      revenue: sales.revenue,
+      revenue,
       expenses,
-      profit: sales.revenue - expenses,
+      profit: revenue - expenses,
     }
   })
 

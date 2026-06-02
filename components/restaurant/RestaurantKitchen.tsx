@@ -97,17 +97,15 @@ export default function RestaurantKitchen({ onAskJesse }: { onAskJesse?: () => v
   async function loadWaste() {
     setLoading(wasteLogs.length === 0 && ingredients.length === 0 && pendingWaste.length === 0)
     try {
-      const [w, i, pendingPayload] = await Promise.all([
+      const [w, i] = await Promise.all([
         fetch('/api/restaurant/waste', { credentials: 'include' })
           .then(r => r.ok ? r.json() : []).catch(() => []),
         fetch('/api/restaurant/ingredients', { credentials: 'include' })
           .then(r => r.ok ? r.json() : []).catch(() => []),
-        fetch('/api/restaurant/waste-pending', { credentials: 'include' })
-          .then(r => r.json()).catch(() => ({ items: [] })),
       ])
       const nextWasteLogs = Array.isArray(w) ? w : []
       const nextIngredients = Array.isArray(i) ? i : []
-      const nextPendingWaste = Array.isArray(pendingPayload?.items) ? pendingPayload.items : []
+      const nextPendingWaste: PendingWasteItem[] = []
       setWasteLogs(nextWasteLogs)
       setIngredients(nextIngredients)
       setPendingWaste(nextPendingWaste)

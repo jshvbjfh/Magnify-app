@@ -22,11 +22,12 @@ export async function GET(req: Request) {
 
   const searchParams = new URL(req.url).searchParams
   const includeServed = ['1', 'true', 'yes'].includes((searchParams.get('includeServed') ?? '').toLowerCase())
+  const allBranches = searchParams.get('allBranches') === '1'
 
   const orders = await prisma.restaurantOrder.findMany({
     where: {
       restaurantId: context.restaurantId,
-      branchId: context.branchId,
+      ...(allBranches ? {} : { branchId: context.branchId }),
       status: { in: [...ACTIVE_RESTAURANT_ORDER_STATUSES] },
       ...(includeServed ? {} : { servedAt: null }),
     },

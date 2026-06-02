@@ -82,6 +82,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
   const to = searchParams.get('to')
+  const allBranches = searchParams.get('allBranches') === '1'
 
   // F2-1: Removed redundant `userId: billingUserId` filter.
   // restaurantId + branchId is the correct scope. The userId filter could
@@ -89,7 +90,7 @@ export async function GET(req: Request) {
   const sales = await prisma.dishSale.findMany({
     where: {
       restaurantId,
-      branchId,
+      ...(allBranches ? {} : { branchId }),
       ...(from && to && { saleDate: { gte: new Date(from), lte: new Date(to) } }),
     },
     include: { dish: true },
@@ -107,7 +108,7 @@ export async function GET(req: Request) {
         where: {
           id: { in: orderIds },
           restaurantId,
-          branchId,
+          ...(allBranches ? {} : { branchId }),
         },
         select: {
           id: true,

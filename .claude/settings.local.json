@@ -1,12 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find \"/c/Users/HP/AppData/Local/Programs\" -name \"*.exe\" -path \"*magnify*\" 2>/dev/null | head -5; find \"/c/Users/HP/Desktop\" -name \"*magnify*\" 2>/dev/null | head -5; find \"/c/Users/HP/AppData/Local\" -maxdepth 2 -name \"app.asar\" -path \"*magnify*\" 2>/dev/null | head -5)",
-      "Read(//c/Users/HP/AppData/Local/Programs/**)",
-      "Read(//c/Users/HP/Desktop/**)",
-      "Read(//c/Users/HP/AppData/Local/**)",
-      "Bash(node -e ' *)",
-      "Bash(python3 -c ' *)"
+      "Bash(*)",
+      "PowerShell(*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)"
     ]
   }
 }

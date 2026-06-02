@@ -1,6 +1,7 @@
 ﻿'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { fmtDesc } from '@/lib/displayId'
 import {
   Activity,
   AlertTriangle,
@@ -1019,7 +1020,7 @@ export default function OwnerShell() {
                                       </span>
                                       <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">{txn.paymentMethod}</span>
                                     </div>
-                                    <p className="mt-3 text-base font-semibold text-slate-900">{txn.description}</p>
+                                    <p className="mt-3 text-base font-semibold text-slate-900">{fmtDesc(txn.description)}</p>
                                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                                       <span>{new Date(txn.date).toLocaleString('en-RW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                                       <span className="rounded-full bg-white px-2 py-0.5">{txn.accountName}</span>

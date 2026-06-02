@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs'
 import {
   replaceDishes, replaceTables, setConfig, getConfig,
-  getDishes, getTables, getUnsyncedOrders, markOrdersSynced,
+  getDishes, getTables, getUnsyncedOrders, markOrdersSynced, updateOrderSyncError,
   replaceCancellationApprovers, getCancellationApprovers,
   reconcileOrderStatuses, upsertIncomingOrders,
   type Dish, type RestaurantTable, type CancellationApprover, type RemoteOrderStatus, type IncomingOrder,
@@ -18,15 +18,28 @@ import { logError, logInfo, logWarn } from './logger'
 
 // ─── Pull (Neon → SQLite) ────────────────────────────────────────────────────
 
+export interface BranchInfo {
+  id: string
+  name: string
+  code: string
+  isMain: boolean
+}
+
 export interface PullPayload {
   dishes: Dish[]
   tables: RestaurantTable[]
   restaurant: { id: string; name: string }
+  branches?: BranchInfo[]
   cancellationApprovers?: CancellationApprover[]
 }
 
 export interface PullResult {
   warning?: string
+}
+
+function normalizeConfigId(value: string | null | undefined): string | undefined {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  return normalized || undefined
 }
 
 async function requireValidToken(): Promise<string> {
@@ -38,14 +51,21 @@ async function requireValidToken(): Promise<string> {
   return token
 }
 
-export async function pullSync(): Promise<PullResult> {
+export async function pullSync(branchId?: string): Promise<PullResult> {
+  if (!API.pull) throw new Error('API base URL is not configured. Set VITE_API_BASE_URL in your build.')
   const token = await requireValidToken()
   const method = 'GET'
+
+  const requestedBranchId = normalizeConfigId(branchId)
+  const assignedBranchId = normalizeConfigId(await getConfig('branchId'))
+  const activeBranchId = normalizeConfigId(await getConfig('activeBranchId'))
+  const effectiveBranchId = requestedBranchId ?? activeBranchId ?? assignedBranchId
+  const pullUrl = effectiveBranchId ? `${API.pull}?branchId=${encodeURIComponent(effectiveBranchId)}` : API.pull
 
   const response = await sendRequest({
     scope: 'sync',
     method,
-    url: API.pull,
+    url: pullUrl,
     headers: { Authorization: `Bearer ${token}` },
   })
 
@@ -53,7 +73,7 @@ export async function pullSync(): Promise<PullResult> {
     const httpError = new Error(`HTTP ${response.status}`)
 
     await logWarn('sync', 'Pull sync unauthorized', {
-      endpoint: API.pull,
+      endpoint: pullUrl,
       method,
       status: response.status,
       error: httpError.message,
@@ -66,9 +86,10 @@ export async function pullSync(): Promise<PullResult> {
     const httpError = new Error(`HTTP ${response.status}`)
 
     await logError('sync', 'Pull sync failed', {
-      endpoint: API.pull,
+      endpoint: pullUrl,
       method,
       status: response.status,
+      branchId: effectiveBranchId ?? null,
       error: httpError.message,
     })
 
@@ -77,7 +98,7 @@ export async function pullSync(): Promise<PullResult> {
 
     if (!parsedFromJson && rawBody) {
       await logError('sync', 'Pull response was not JSON', {
-        endpoint: API.pull,
+        endpoint: pullUrl,
         method,
         status: response.status,
         contentType: getResponseHeader(response.headers, 'content-type'),
@@ -97,7 +118,7 @@ export async function pullSync(): Promise<PullResult> {
 
   if (!parsedFromJson) {
     await logError('sync', 'Pull response was not JSON', {
-      endpoint: API.pull,
+      endpoint: pullUrl,
       method,
       status: response.status,
       contentType: getResponseHeader(response.headers, 'content-type'),
@@ -148,6 +169,11 @@ export async function pullSync(): Promise<PullResult> {
   await setConfig('lastPullAttemptAt', now)
   if (didRefreshLocalSnapshot) {
     await setConfig('lastPulledAt', now)
+  }
+
+  // Store branch list so the UI can render branch chips without another network call.
+  if (Array.isArray(payload.branches) && payload.branches.length > 0) {
+    await setConfig('branches', JSON.stringify(payload.branches))
   }
 
   // Store cancellation approvers for offline PIN validation
@@ -280,14 +306,18 @@ export async function pushSync(): Promise<number> {
   }
   const syncedOrders = orders.filter(o => syncedOrderIds.includes(o.id))
   await markOrdersSynced(syncedOrders)
-  if (Array.isArray(failedOrderIds) && failedOrderIds.length > 0) {
+
+  if (Array.isArray(failedOrders) && failedOrders.length > 0) {
+    await Promise.all(
+      failedOrders.map(f => updateOrderSyncError(f.orderId, f.error ?? 'Server rejected this order'))
+    )
     await logWarn('sync', 'Push sync completed with failed orders', {
       pendingOrders: orders.length,
       pendingItems: items.length,
       syncedOrders: syncedOrderIds.length,
-      failedOrders: failedOrderIds.length,
+      failedOrders: failedOrderIds?.length ?? 0,
       failedOrderIds,
-      failures: failedOrders ?? [],
+      failures: failedOrders,
     })
   }
   await logInfo('sync', 'Push sync completed', {
@@ -300,20 +330,30 @@ export async function pushSync(): Promise<number> {
 
 // ─── Full sync cycle ─────────────────────────────────────────────────────────
 
-export async function syncAll(): Promise<{ pushed: number; pulled: boolean; warning?: string; error?: string; authFailed?: boolean }> {
+export async function syncAll(branchId?: string): Promise<{ pushed: number; pulled: boolean; warning?: string; error?: string; authFailed?: boolean }> {
   let pushed = 0
+  let pushError: string | undefined
 
+  // Push and pull are independent — a push timeout must not block the pull.
   try {
     pushed = await pushSync()
-    const pullResult = await pullSync()
-    return { pushed, pulled: true, warning: pullResult.warning }
   } catch (err) {
-    const error = (err as Error).message
+    pushError = (err as Error).message
+    if (pushError === SESSION_INVALID_MESSAGE) {
+      return { pushed: 0, pulled: false, error: pushError, authFailed: true }
+    }
+  }
+
+  try {
+    const pullResult = await pullSync(branchId)
+    return { pushed, pulled: true, warning: pullResult.warning, error: pushError }
+  } catch (err) {
+    const pullError = (err as Error).message
     return {
       pushed,
       pulled: false,
-      error,
-      authFailed: error === SESSION_INVALID_MESSAGE,
+      error: pullError,
+      authFailed: pullError === SESSION_INVALID_MESSAGE,
     }
   }
 }

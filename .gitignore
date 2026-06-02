@@ -26,3 +26,5 @@ dev.db-journal
 runtime.env
 public/uploads/chat/
 tsconfig.tsbuildinfo
+
+.env*
