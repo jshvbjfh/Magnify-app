@@ -1391,8 +1391,9 @@ export async function POST(req: Request) {
       lines.push(`**Restock Priority** — ${low.length} item${low.length !== 1 ? 's' : ''} below reorder level`)
       lines.push(`  Most urgent first:`)
       low.slice(0, 10).forEach((i, idx) => {
-        const urgency = idx === 0 ? '::Flame::' : idx <= 2 ? '::AlertTriangle::' : '  '
-        lines.push(`  ${urgency} **${i.name}** — ${Number(i.quantity.toFixed(2))} ${i.unit} left (${i.deficit > 0 ? `${Number(i.deficit.toFixed(2))} ${i.unit} short` : 'at limit'})`)
+        const urgency = idx === 0 ? '::AlertTriangle:: ::AlertTriangle::' : '::AlertTriangle::'
+        const label = idx === 0 ? ' — **URGENT**' : ''
+        lines.push(`  ${urgency} **${i.name}**${label} — ${Number(i.quantity.toFixed(2))} ${i.unit} left (${i.deficit > 0 ? `${Number(i.deficit.toFixed(2))} ${i.unit} short` : 'at limit'})`)
       })
       if (low.length > 10) lines.push(`  ...and ${low.length - 10} more`)
     } else {
