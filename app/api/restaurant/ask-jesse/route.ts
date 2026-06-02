@@ -644,6 +644,11 @@ export async function POST(req: Request) {
       'retail price','wholesale price',
     ]
 
+    // Detect inventory purchase format once before looping
+    const isInventoryFile =
+      allKeys.some(k => /\b(cost|price)\b/i.test(k)) &&
+      allKeys.some(k => /\b(qty|quantity|units?|pieces?|pcs)\b/i.test(k))
+
     const lines: string[] = []
     let successCount = 0
     let skipCount = 0
@@ -689,8 +694,6 @@ export async function POST(req: Request) {
       else direction = /\b(received|earned|income|revenue|sales|sold|customer\s+paid|got\s+paid|money\s+in|cash\s+in|inflow)\b/i.test(description) ? 'in' : 'out'
 
       const prompt = `${description} ${typeRaw}`
-      // Files with Unit Cost + Quantity Bought are clearly inventory purchases
-      const isInventoryFile = allKeys.some(k => /unit.?cost/i.test(k)) && allKeys.some(k => /quantity.?(bought|received)/i.test(k))
       const accountName = direction === 'in'
         ? classifyIncomeAccount(prompt)
         : (isInventoryFile ? 'Inventory Purchases' : classifyExpenseAccount(prompt))
