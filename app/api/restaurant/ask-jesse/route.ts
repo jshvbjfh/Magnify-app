@@ -649,8 +649,11 @@ export async function POST(req: Request) {
     let skipCount = 0
     const resultLines: string[] = []
 
+    // Parse all rows first (CPU-only, fast) then batch DB inserts
+    type ParsedRow = { amount: number; description: string; date: Date; direction: 'in' | 'out'; accountName: string; paymentMethod: string }
+    const parsedRows: ParsedRow[] = []
+
     for (const row of importRows) {
-      // Amount — direct column OR computed (Cost × Qty, Price × Qty)
       let amount = 0
       const amountRaw = col(row, ...AMOUNT_COLS)
       if (amountRaw) {
@@ -667,10 +670,7 @@ export async function POST(req: Request) {
       }
       if (!amount || isNaN(amount) || amount <= 0) { skipCount++; continue }
 
-      // Description — keyword prompt for account classification
       const description = col(row, ...DESCRIPTION_COLS)
-
-      // Date
       let date = new Date()
       const dateRaw = col(row, ...DATE_COLS)
       if (dateRaw) {
@@ -682,44 +682,57 @@ export async function POST(req: Request) {
         }
       }
 
-      // Direction — from type column or description keywords
       const typeRaw = col(row, ...TYPE_COLS).toLowerCase()
       let direction: 'in' | 'out'
       if (/income|revenue|\bin\b|credit|received|sales|earning|inflow|cash\s*in/.test(typeRaw)) direction = 'in'
       else if (/expense|\bout\b|debit|paid|cost|payment|outflow|cash\s*out/.test(typeRaw)) direction = 'out'
       else direction = /\b(received|earned|income|revenue|sales|sold|customer\s+paid|got\s+paid|money\s+in|cash\s+in|inflow)\b/i.test(description) ? 'in' : 'out'
 
-      // Account classification using description as keyword prompt
       const prompt = `${description} ${typeRaw}`
-      const accountName = direction === 'in' ? classifyIncomeAccount(prompt) : classifyExpenseAccount(prompt)
+      // Files with Unit Cost + Quantity Bought are clearly inventory purchases
+      const isInventoryFile = allKeys.some(k => /unit.?cost/i.test(k)) && allKeys.some(k => /quantity.?(bought|received)/i.test(k))
+      const accountName = direction === 'in'
+        ? classifyIncomeAccount(prompt)
+        : (isInventoryFile ? 'Inventory Purchases' : classifyExpenseAccount(prompt))
 
-      // Payment method
       const pmRaw = col(row, ...PAYMENT_COLS)
       let paymentMethod = 'Cash'
       if (/momo|mobile\s*money|mtn|airtel\s*money/i.test(pmRaw)) paymentMethod = 'MoMo'
       else if (/bank|transfer|cheque|check|wire|rtgs|eft|swift|direct\s*debit|standing\s*order/i.test(pmRaw)) paymentMethod = 'Bank'
       else if (/card|visa|mastercard|pos|debit\s*card|credit\s*card/i.test(pmRaw)) paymentMethod = 'Card'
 
-      try {
-        await recordJournalEntry(prisma, {
+      parsedRows.push({ amount, description, date, direction, accountName, paymentMethod })
+    }
+
+    // Batch DB inserts — 15 concurrent at a time to avoid overwhelming the connection pool
+    const BATCH = 15
+    for (let i = 0; i < parsedRows.length; i += BATCH) {
+      const chunk = parsedRows.slice(i, i + BATCH)
+      const results = await Promise.allSettled(chunk.map(r =>
+        recordJournalEntry(prisma, {
           restaurantId,
           branchId: resolvedBranchId ?? undefined,
-          date,
-          description: description || accountName,
-          amount,
-          direction,
-          accountName,
-          categoryType: direction === 'in' ? 'income' : 'expense',
-          paymentMethod,
+          date: r.date,
+          description: r.description || r.accountName,
+          amount: r.amount,
+          direction: r.direction,
+          accountName: r.accountName,
+          categoryType: r.direction === 'in' ? 'income' : 'expense',
+          paymentMethod: r.paymentMethod,
         })
-        const arrow = direction === 'in' ? '::TrendingUp::' : '::TrendingDown::'
-        const dateLabel = date.toLocaleDateString('en-RW', { day: 'numeric', month: 'short', year: '2-digit' })
-        resultLines.push(`  ${arrow} **${fmt(amount)}** · ${accountName} · ${paymentMethod} · ${dateLabel}${description ? ` · ${description.slice(0, 45)}` : ''}`)
-        successCount++
-      } catch {
-        resultLines.push(`  ::XCircle:: Skipped: ${description || 'row'} — ${fmt(amount)}`)
-        skipCount++
-      }
+      ))
+      results.forEach((result, idx) => {
+        const r = chunk[idx]
+        if (result.status === 'fulfilled') {
+          const arrow = r.direction === 'in' ? '::TrendingUp::' : '::TrendingDown::'
+          const dateLabel = r.date.toLocaleDateString('en-RW', { day: 'numeric', month: 'short', year: '2-digit' })
+          resultLines.push(`  ${arrow} **${fmt(r.amount)}** · ${r.accountName} · ${r.paymentMethod} · ${dateLabel}${r.description ? ` · ${r.description.slice(0, 45)}` : ''}`)
+          successCount++
+        } else {
+          resultLines.push(`  ::XCircle:: Skipped: ${r.description || r.accountName} — ${fmt(r.amount)}`)
+          skipCount++
+        }
+      })
     }
 
     const recordedBranchName = resolvedBranchId
