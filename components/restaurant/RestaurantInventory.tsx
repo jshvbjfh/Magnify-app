@@ -687,6 +687,9 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     ...items.map(item => item.name.trim()).filter(Boolean),
     ...purchases.map(purchase => purchase.ingredient.name.trim()).filter(Boolean),
   ])).sort((left, right) => left.localeCompare(right))
+  const knownSupplierNames = Array.from(new Set(
+    purchases.map(p => (p.supplier ?? '').trim()).filter(Boolean)
+  )).sort((a, b) => a.localeCompare(b))
   const purchaseUnitOptions = pForm.purchaseUnit && !INVENTORY_UNITS.some(option => option.value === pForm.purchaseUnit)
     ? [{ value: pForm.purchaseUnit, label: pForm.purchaseUnit }, ...INVENTORY_UNITS]
     : INVENTORY_UNITS
@@ -717,7 +720,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
             </td>
             <td className="px-3 py-2 align-top">
               <div className="space-y-1.5">
-                <input value={pForm.supplier} onChange={e=>setPForm(f=>({...f,supplier:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                <input value={pForm.supplier} onChange={e=>setPForm(f=>({...f,supplier:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown} list="inventory-known-suppliers"
                   className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
                   placeholder="Supplier (optional)"/>
                 <select value={pForm.paymentMethod} onChange={e=>setPForm(f=>({...f,paymentMethod:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
@@ -887,6 +890,13 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           ))}
         </datalist>
       )}
+      {knownSupplierNames.length > 0 && (
+        <datalist id="inventory-known-suppliers">
+          {knownSupplierNames.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+      )}
 
       {purchaseError && (
         <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
@@ -958,7 +968,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                     </td>
                     <td className="px-3 py-2 align-top">
                       <div className="space-y-1.5">
-                        <input value={pForm.supplier} onChange={e=>setPForm(f=>({...f,supplier:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                        <input value={pForm.supplier} onChange={e=>setPForm(f=>({...f,supplier:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown} list="inventory-known-suppliers"
                           className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"
                           placeholder="Supplier (optional)"/>
                         <select value={pForm.paymentMethod} onChange={e=>setPForm(f=>({...f,paymentMethod:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
