@@ -32,6 +32,8 @@ let desktopUpdateDeferredTimer = null
 let desktopUpdatePollInterval = null
 let desktopUpdateCheckInFlight = false
 let desktopUpdateDownloaded = false
+let offlineRetryCallback = null
+let isOfflineFallback = false
 
 function appendStartupLog(message) {
 	try {
@@ -509,6 +511,8 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	if (r.ok && !r.skipped) actions.push('Added branches.deletedAt')
 	r = dbExecute(`ALTER TABLE "branches" ADD COLUMN "billHeader" TEXT;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added branches.billHeader')
+	r = dbExecute(`ALTER TABLE "branches" ADD COLUMN "type" TEXT NOT NULL DEFAULT 'kitchen';`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added branches.type')
 
 	// dishes
 	r = dbExecute(`ALTER TABLE "dishes" ADD COLUMN "description" TEXT;`, SKIP_TABLE)
@@ -625,6 +629,14 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	// last-resort fallbacks
 	dbExecute(`UPDATE "inventory_items" SET "restaurantId" = (SELECT "id" FROM "restaurants" LIMIT 1) WHERE "restaurantId" IS NULL;`, SKIP_SOFT)
 	dbExecute(`UPDATE "inventory_items" SET "branchId" = (SELECT "id" FROM "branches" LIMIT 1) WHERE "branchId" IS NULL;`, SKIP_SOFT)
+
+	// staff
+	r = dbExecute(`ALTER TABLE "staff" ADD COLUMN "hourlyRate" REAL;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added staff.hourlyRate')
+
+	// employee_shifts
+	r = dbExecute(`ALTER TABLE "employee_shifts" ADD COLUMN "calculatedWage" REAL;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added employee_shifts.calculatedWage')
 
 	// branch_devices
 	r = dbExecute(`ALTER TABLE "branch_devices" ADD COLUMN "restaurantId" TEXT;`, SKIP_TABLE)
@@ -1077,6 +1089,35 @@ function findAvailablePort(startPort) {
 	})
 }
 
+function parseDbHostPort(databaseUrl) {
+	try {
+		const url = new URL(databaseUrl)
+		return { host: url.hostname, port: parseInt(url.port || '5432', 10) }
+	} catch {
+		return null
+	}
+}
+
+function probeTcpConnectivity(host, port, timeoutMs) {
+	return new Promise((resolve) => {
+		const socket = new net.Socket()
+		let settled = false
+
+		function done(result) {
+			if (settled) return
+			settled = true
+			socket.destroy()
+			resolve(result)
+		}
+
+		socket.setTimeout(timeoutMs)
+		socket.once('connect', () => done(true))
+		socket.once('timeout', () => done(false))
+		socket.once('error', () => done(false))
+		socket.connect(port, host)
+	})
+}
+
 // Resolve icon path — works both in dev and packaged
 function getIconPath() {
 	const candidates = [
@@ -1171,7 +1212,8 @@ function createWindow(localIP, serverPort) {
 		icon: getIconPath(),
 		webPreferences: {
 			nodeIntegration: false,
-			contextIsolation: true
+			contextIsolation: true,
+			preload: path.join(__dirname, 'preload.js'),
 		},
 		title: 'Magnify — Restaurant',
 		autoHideMenuBar: true
@@ -1288,6 +1330,286 @@ function createMaintenanceWindow(message) {
 	})
 }
 
+function createOfflineWindow() {
+	if (loadingWindow) {
+		loadingWindow.close()
+		loadingWindow = null
+	}
+
+	mainWindow = new BrowserWindow({
+		width: 820,
+		height: 560,
+		show: false,
+		icon: getIconPath(),
+		webPreferences: {
+			nodeIntegration: true,
+			contextIsolation: false,
+		},
+		title: 'Magnify — No Internet',
+		autoHideMenuBar: true,
+	})
+
+	mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`
+		<html>
+		<body style="margin:0;background:#111827;color:#f9fafb;font-family:Segoe UI,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px;box-sizing:border-box;">
+			<div style="max-width:540px;width:100%;text-align:center;">
+				<div style="width:60px;height:60px;background:#1f2937;border:1px solid #374151;border-radius:16px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:20px;">
+					<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+						<line x1="2" y1="2" x2="22" y2="22"></line>
+						<path d="M8.5 16.5a5 5 0 0 1 7 0"></path>
+						<path d="M2 8.82a15 15 0 0 1 4.17-2.65"></path>
+						<path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"></path>
+						<path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"></path>
+						<path d="M5 12.5A10 10 0 0 1 7.5 11"></path>
+						<circle cx="12" cy="20" r="1" fill="#6b7280"></circle>
+					</svg>
+				</div>
+				<div style="font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#6b7280;margin-bottom:10px;">No Internet Connection</div>
+				<h1 style="font-size:24px;font-weight:700;margin:0 0 12px;line-height:1.3;">Manager portal is offline</h1>
+				<p style="font-size:14px;color:#9ca3af;line-height:1.7;margin:0 0 24px;">
+					The manager portal needs an internet connection to reach the cloud database.
+					Check your connection and tap Try Again.
+				</p>
+				<div style="background:#1f2937;border:1px solid #374151;border-radius:14px;padding:20px 22px;margin-bottom:28px;text-align:left;">
+					<div style="font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#f97316;margin-bottom:8px;">Waiters can keep working</div>
+					<p style="font-size:13px;color:#d1d5db;line-height:1.65;margin:0;">
+						The Waiter App works fully offline — tables and orders continue as normal.
+						Once the manager comes back online, live view and reports will update automatically.
+					</p>
+				</div>
+				<button
+					id="retryBtn"
+					onclick="this.disabled=true;this.textContent='Checking...';this.style.opacity='0.6';require('electron').ipcRenderer.send('offline-retry')"
+					style="padding:11px 32px;background:#f97316;color:#fff;border:none;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;letter-spacing:0.02em;">
+					Try Again
+				</button>
+			</div>
+		</body>
+		</html>
+	`))
+
+	mainWindow.once('ready-to-show', () => {
+		mainWindow.show()
+	})
+
+	mainWindow.on('closed', () => {
+		mainWindow = null
+	})
+}
+
+ipcMain.on('offline-retry', () => {
+	if (offlineRetryCallback) offlineRetryCallback()
+})
+
+// ─── Thermal printer support ──────────────────────────────────────────────────
+
+const PRINTER_SETTINGS_PATH = () => path.join(app.getPath('userData'), 'printer-settings.json')
+
+const DEFAULT_PRINTER_SETTINGS = {
+	enabled: false,
+	type: 'system',
+	printerName: '',
+	networkHost: '',
+	networkPort: 9100,
+}
+
+function loadPrinterSettings() {
+	try {
+		const raw = fs.readFileSync(PRINTER_SETTINGS_PATH(), 'utf8')
+		return { ...DEFAULT_PRINTER_SETTINGS, ...JSON.parse(raw) }
+	} catch {
+		return { ...DEFAULT_PRINTER_SETTINGS }
+	}
+}
+
+function savePrinterSettings(settings) {
+	fs.writeFileSync(PRINTER_SETTINGS_PATH(), JSON.stringify(settings, null, 2), 'utf8')
+}
+
+function escHtml(str) {
+	return String(str || '')
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+}
+
+function buildKitchenTicketHtml(data) {
+	const rows = data.items.map(item => `
+		<div class="item">
+			<span class="qty">${item.qty}x</span>
+			<span class="name">${escHtml(item.dishName)}</span>
+		</div>
+		${item.notes ? `<div class="note">&gt; ${escHtml(item.notes)}</div>` : ''}
+	`).join('')
+
+	return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Courier New',monospace; font-size:14px; width:280px; margin:0 auto; padding:8px; }
+  .center { text-align:center; }
+  .title { font-size:20px; font-weight:bold; margin-bottom:4px; }
+  .divider { border-top:1px dashed #000; margin:6px 0; }
+  .meta { font-size:12px; margin:2px 0; }
+  .item { display:flex; gap:8px; margin:4px 0; font-weight:bold; }
+  .qty { min-width:26px; }
+  .note { margin-left:32px; font-style:italic; font-size:12px; margin-bottom:4px; }
+  @media print { @page { margin:0; size:80mm auto; } }
+</style></head>
+<body>
+  <div class="center">
+    <div class="title">${escHtml(data.branchType === 'bar' ? 'BAR' : 'KITCHEN')}</div>
+    <div>Order #${escHtml(data.orderNumber)}</div>
+  </div>
+  <div class="divider"></div>
+  <div class="meta">Table : ${escHtml(data.tableName)}</div>
+  <div class="meta">Time  : ${escHtml(data.time)}</div>
+  <div class="divider"></div>
+  ${rows}
+  <div class="divider"></div>
+  <div class="meta">Waiter: ${escHtml(data.waiterName)}</div>
+</body></html>`
+}
+
+function buildKitchenTicketEscPos(data) {
+	const parts = []
+	const t = s => Buffer.from(s, 'utf8')
+	const b = bytes => Buffer.from(bytes)
+	const ESC = 0x1B, GS = 0x1D
+
+	parts.push(b([ESC, 0x40]))           // Initialize
+	parts.push(b([ESC, 0x61, 0x01]))     // Center
+	parts.push(b([ESC, 0x45, 0x01]))     // Bold ON
+	parts.push(b([ESC, 0x21, 0x11]))     // Double height
+	parts.push(t(data.branchType === 'bar' ? 'BAR\n' : 'KITCHEN\n'))
+	parts.push(b([ESC, 0x21, 0x00]))     // Normal size
+	parts.push(t(`Order #${data.orderNumber}\n`))
+	parts.push(b([ESC, 0x45, 0x00]))     // Bold OFF
+	parts.push(b([ESC, 0x61, 0x00]))     // Left align
+	parts.push(t('--------------------------------\n'))
+	parts.push(t(`Table : ${data.tableName}\n`))
+	parts.push(t(`Time  : ${data.time}\n`))
+	parts.push(t('--------------------------------\n'))
+
+	for (const item of data.items) {
+		parts.push(b([ESC, 0x45, 0x01]))   // Bold ON
+		parts.push(t(`${item.qty}x  ${item.dishName}\n`))
+		parts.push(b([ESC, 0x45, 0x00]))   // Bold OFF
+		if (item.notes) parts.push(t(`    > ${item.notes}\n`))
+	}
+
+	parts.push(t('--------------------------------\n'))
+	parts.push(t(`Waiter: ${data.waiterName}\n`))
+	parts.push(t('\n\n\n'))
+	parts.push(b([GS, 0x56, 0x00]))      // Full cut
+
+	return Buffer.concat(parts)
+}
+
+function printViaSystemPrinter(printerName, htmlContent) {
+	return new Promise((resolve, reject) => {
+		const win = new BrowserWindow({
+			show: false,
+			webPreferences: { nodeIntegration: false, contextIsolation: true },
+		})
+		win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(htmlContent))
+		win.webContents.once('did-finish-load', () => {
+			win.webContents.print(
+				{ silent: true, deviceName: printerName, printBackground: true },
+				(success, err) => {
+					win.destroy()
+					if (success) resolve(true)
+					else reject(new Error(err || 'print failed'))
+				}
+			)
+		})
+	})
+}
+
+function printViaNetwork(host, port, buffer) {
+	return new Promise((resolve, reject) => {
+		const socket = new net.Socket()
+		const timer = setTimeout(() => {
+			socket.destroy()
+			reject(new Error('Network printer timed out'))
+		}, 5000)
+		socket.connect(Number(port), host, () => {
+			socket.write(buffer, () => {
+				clearTimeout(timer)
+				socket.end()
+				resolve(true)
+			})
+		})
+		socket.on('error', err => {
+			clearTimeout(timer)
+			reject(err)
+		})
+	})
+}
+
+ipcMain.handle('printer:list-system', async () => {
+	try {
+		const printers = await mainWindow.webContents.getPrintersAsync()
+		return printers.map(p => ({ name: p.name, isDefault: p.isDefault }))
+	} catch {
+		return []
+	}
+})
+
+ipcMain.handle('printer:get-settings', () => loadPrinterSettings())
+
+ipcMain.handle('printer:save-settings', (_, settings) => {
+	savePrinterSettings(settings)
+	return true
+})
+
+ipcMain.handle('printer:print-kitchen', async (_, data) => {
+	const settings = loadPrinterSettings()
+	if (!settings.enabled) return { ok: false, reason: 'Printer not enabled' }
+	try {
+		if (settings.type === 'network') {
+			await printViaNetwork(settings.networkHost, settings.networkPort, buildKitchenTicketEscPos(data))
+		} else {
+			await printViaSystemPrinter(settings.printerName, buildKitchenTicketHtml(data))
+		}
+		return { ok: true }
+	} catch (e) {
+		return { ok: false, reason: e.message }
+	}
+})
+
+ipcMain.handle('printer:print-bill', async (_, html) => {
+	const settings = loadPrinterSettings()
+	if (!settings.enabled) return { ok: false, reason: 'Printer not enabled' }
+	if (settings.type === 'network') return { ok: false, reason: 'Bill printing requires a system printer' }
+	try {
+		await printViaSystemPrinter(settings.printerName, html)
+		return { ok: true }
+	} catch (e) {
+		return { ok: false, reason: e.message }
+	}
+})
+
+ipcMain.handle('printer:test', async () => {
+	const settings = loadPrinterSettings()
+	const testData = {
+		branchType: 'kitchen', orderNumber: 'TEST', tableName: 'Table 1',
+		time: new Date().toLocaleTimeString(), waiterName: 'System Test',
+		items: [{ qty: 2, dishName: 'Smash Burger', notes: 'medium rare' }, { qty: 1, dishName: 'Fries', notes: '' }],
+	}
+	try {
+		if (settings.type === 'network') {
+			await printViaNetwork(settings.networkHost, settings.networkPort, buildKitchenTicketEscPos(testData))
+		} else {
+			await printViaSystemPrinter(settings.printerName, buildKitchenTicketHtml(testData))
+		}
+		return { ok: true }
+	} catch (e) {
+		return { ok: false, reason: e.message }
+	}
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 getAutoUpdater()?.on('checking-for-update', () => {
 	appendStartupLog('Electron updater: checking for update')
 })
@@ -1313,6 +1635,25 @@ function dismissBanner() {
 		var b = document.getElementById('magnify-update-banner');
 		if (b) b.remove();
 	`).catch(() => {})
+}
+
+function showOfflineFallbackBanner() {
+	if (!mainWindow) return
+	const js = `
+		(function() {
+			if (document.getElementById('magnify-offline-banner')) return;
+			var bar = document.createElement('div');
+			bar.id = 'magnify-offline-banner';
+			bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#fffbeb;border-bottom:2px solid #f59e0b;padding:9px 20px;display:flex;align-items:center;justify-content:space-between;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:13px;color:#92400e;';
+			bar.innerHTML = '<div style="display:flex;align-items:center;gap:9px;">'
+				+ '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+				+ '<span><strong>Working offline</strong> — Using local data. Changes won\\'t sync to the cloud until you reconnect and restart.</span>'
+				+ '</div>'
+				+ '<button onclick="document.getElementById(\\'magnify-offline-banner\\').remove()" style="margin-left:16px;padding:3px 12px;border:1px solid #d97706;border-radius:5px;background:#fef3c7;color:#92400e;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">Dismiss</button>';
+			document.body.prepend(bar);
+		})();
+	`
+	mainWindow.webContents.executeJavaScript(js).catch(() => {})
 }
 
 const bannerStyles = 'position:fixed;bottom:24px;right:24px;z-index:99999;background:#fff;border:1px solid #e5e7eb;border-left:4px solid #f97316;border-radius:8px;box-shadow:0 4px 24px rgba(0,0,0,0.12);padding:16px 20px;max-width:370px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:14px;color:#111827;line-height:1.5;'
@@ -1495,8 +1836,47 @@ app.whenReady().then(async () => {
 	const configuredDatabaseUrl = String(process.env.DATABASE_URL || '')
 	const hasCloudDatabaseUrl = configuredDatabaseUrl.startsWith('postgresql://') || configuredDatabaseUrl.startsWith('postgres://')
 	const electronDataMode = normalizeElectronDataMode(process.env.ELECTRON_DATA_MODE || 'cloud')
-	const shouldUseLocalDatabase = !hasCloudDatabaseUrl || (app.isPackaged && electronDataMode !== 'cloud')
 	appendStartupLog(`Electron data mode=${electronDataMode}`)
+
+	// Probe cloud database reachability before starting the server.
+	// The cloud build uses a PostgreSQL Prisma client that cannot fall back to SQLite,
+	// so if the database is unreachable we show the offline window immediately and skip
+	// the Next.js server entirely.  The retry handler re-probes and relaunches cleanly.
+	if (app.isPackaged && hasCloudDatabaseUrl && electronDataMode === 'cloud') {
+		const neonHostPort = parseDbHostPort(configuredDatabaseUrl)
+		if (neonHostPort) {
+			appendStartupLog(`Probing cloud database at ${neonHostPort.host}:${neonHostPort.port} (timeout 4s)`)
+			const reachable = await probeTcpConnectivity(neonHostPort.host, neonHostPort.port, 4000)
+			if (reachable) {
+				appendStartupLog('Cloud database reachable — using cloud mode')
+			} else {
+				isOfflineFallback = true
+				appendStartupLog('Cloud database unreachable — showing offline window without starting server')
+				offlineRetryCallback = async () => {
+					appendStartupLog('Offline retry: re-probing cloud database connectivity')
+					let retryReachable = false
+					try {
+						retryReachable = await probeTcpConnectivity(neonHostPort.host, neonHostPort.port, 4000)
+					} catch { /* ignore probe errors */ }
+					appendStartupLog(`Offline retry: probe result=${retryReachable}`)
+					if (!retryReachable) {
+						appendStartupLog('Offline retry: still unreachable')
+						createOfflineWindow()
+						return
+					}
+					appendStartupLog('Offline retry: database reachable — relaunching app')
+					app.relaunch()
+					app.exit(0)
+				}
+				createOfflineWindow()
+				return
+			}
+		} else {
+			appendStartupLog('Could not parse cloud database host — proceeding with cloud mode')
+		}
+	}
+
+	const shouldUseLocalDatabase = !hasCloudDatabaseUrl || (app.isPackaged && electronDataMode !== 'cloud')
 	appendStartupLog(`Database mode=${shouldUseLocalDatabase ? 'local-sqlite' : 'cloud-postgres'}`)
 
 	// Detect local IP and set NEXTAUTH_URL dynamically so session cookies work on LAN
@@ -1540,6 +1920,10 @@ app.whenReady().then(async () => {
 
 	function isRecoverableBootstrapSchemaError(message) {
 		return /(does not exist in the current database|no such column|no such table|\bP2021\b|\bP2022\b)/i.test(String(message || ''))
+	}
+
+	function isNetworkConnectivityError(message) {
+		return /(Can't reach database server|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|ECONNRESET|connection refused|connection timed out|getaddrinfo)/i.test(String(message || ''))
 	}
 
 	// Run local database migrations for packaged desktop installs.
@@ -2056,6 +2440,31 @@ app.whenReady().then(async () => {
 						createMaintenanceWindow(`${message}\n\nAutomatic schema repair failed:\n${repairDetails}`)
 						return
 					}
+				}
+
+				if (isNetworkConnectivityError(message)) {
+					appendStartupLog('Bootstrap failed due to network connectivity; showing offline screen')
+					offlineRetryCallback = async () => {
+						if (mainWindow) { mainWindow.close(); mainWindow = null }
+						createLoadingWindow()
+						try {
+							const retryResult = await runInternalBootstrap(serverPort, internalBootstrapSecret, branchDeviceId)
+							appendStartupLog(`Offline retry bootstrap completed: ${JSON.stringify(retryResult)}`)
+							if (loadingWindow) { loadingWindow.close(); loadingWindow = null }
+							createWindow(localIP, serverPort)
+						} catch (retryErr) {
+							const retryMsg = retryErr?.message || String(retryErr)
+							appendStartupLog(`Offline retry bootstrap failed: ${retryMsg}`)
+							if (loadingWindow) { loadingWindow.close(); loadingWindow = null }
+							if (isNetworkConnectivityError(retryMsg)) {
+								createOfflineWindow()
+							} else {
+								createMaintenanceWindow(retryMsg)
+							}
+						}
+					}
+					createOfflineWindow()
+					return
 				}
 
 				createMaintenanceWindow(message)

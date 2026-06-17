@@ -90,7 +90,8 @@ function parseInline(text: string, lineKey: string): React.ReactNode[] {
 				</span>
 			)
 		} else if (m[2]) {
-			parts.push(<strong key={`${lineKey}-b${partIdx++}`}>{m[2]}</strong>)
+			const innerKey = `${lineKey}-b${partIdx++}`
+			parts.push(<strong key={innerKey}>{parseInline(m[2], innerKey)}</strong>)
 		}
 		lastIdx = m.index + m[0].length
 	}
@@ -113,6 +114,11 @@ function renderMessageContent(content: string) {
 		</div>
 	)
 }
+
+// Memoized wrapper — old messages never re-render when typingText changes
+const StableMessageContent = React.memo(function StableMessageContent({ content }: { content: string }) {
+	return renderMessageContent(content)
+})
 
 type PendingFinancialRecord = {
 	items: Array<{ name: string; unitPrice: number; quantity: number; unit?: string }>
@@ -147,8 +153,8 @@ export default function AIChat() {
 	const [loadingPhase, setLoadingPhase] = useState<string>('')
 	const [loadingHistory, setLoadingHistory] = useState(true)
 	const [error, setError] = useState<string | null>(null)
-	const [typingMessageId, setTypingMessageId] = useState<string | null>(null)
-	const [typingText, setTypingText] = useState<string>('')
+	const [liveBubble, setLiveBubble] = useState<{ id: string; text: string; message: Message } | null>(null)
+	const liveBubbleRef = useRef<{ id: string; text: string; message: Message } | null>(null)
 	const typingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 	const [selectedDate, setSelectedDate] = useState<string>('all')
 	const [conversationMode, setConversationMode] = useState<'history' | 'new'>('history')
@@ -202,31 +208,49 @@ export default function AIChat() {
 		return () => { if (typingTimerRef.current) clearInterval(typingTimerRef.current) }
 	}, [])
 
-	// Scroll as typing text grows
+	// Scroll as live bubble grows
 	useEffect(() => {
-		if (typingMessageId) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-	}, [typingText, typingMessageId])
+		if (liveBubble) messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+	}, [liveBubble])
 
-	function startTypingAnimation(messageId: string, fullText: string) {
-		if (typingTimerRef.current) clearInterval(typingTimerRef.current)
-		setTypingMessageId(messageId)
-		setTypingText('')
+	// Persist chat history to localStorage on every change (device-only, no cloud)
+	useEffect(() => {
+		if (allMessages.length === 0) return
+		try {
+			localStorage.setItem('jesse_chat_history_v1', JSON.stringify(allMessages))
+		} catch {
+			// localStorage full or unavailable — silently skip
+		}
+	}, [allMessages])
 
-		// Split into words so markdown syntax is never broken mid-token
-		const words = fullText.split(/(\s+)/)  // keeps whitespace as separate tokens
+	function startTypingAnimation(message: Message) {
+		if (typingTimerRef.current) {
+			clearInterval(typingTimerRef.current)
+			// Just clear the bubble — message is already in the messages list
+			liveBubbleRef.current = null
+			setLiveBubble(null)
+		}
+
+		const fullText = message.content
+		const words = fullText.split(/(\s+)/)
 		let wordIndex = 0
-		// Speed: ~40ms per word feels natural; long messages get a bit faster
 		const delayMs = fullText.length > 600 ? 20 : fullText.length > 200 ? 30 : 40
+
+		liveBubbleRef.current = { id: message.id, text: '', message }
+		setLiveBubble({ id: message.id, text: '', message })
 
 		typingTimerRef.current = setInterval(() => {
 			wordIndex++
 			if (wordIndex >= words.length) {
-				setTypingText(fullText)
-				setTypingMessageId(null)
 				if (typingTimerRef.current) clearInterval(typingTimerRef.current)
 				typingTimerRef.current = null
+				liveBubbleRef.current = null
+				setLiveBubble(null)
+				// message is already in messages — just clear the bubble
 			} else {
-				setTypingText(words.slice(0, wordIndex).join(''))
+				const newText = words.slice(0, wordIndex).join('')
+				liveBubbleRef.current = { id: message.id, text: newText, message }
+				setLiveBubble({ id: message.id, text: newText, message })
 			}
 		}, delayMs)
 	}
@@ -260,14 +284,13 @@ export default function AIChat() {
 	}, [])
 
 	// Sync messages when date filter, mode, or history changes.
-	// Guard: skip while typing animation is active to prevent all past messages
-	// re-animating simultaneously (the original bug this effect caused).
+	// Use ref guard so this never fires while the typing bubble is active.
 	useEffect(() => {
 		if (conversationMode === 'new') {
 			setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
 			return
 		}
-		if (typingMessageId) return
+		if (liveBubbleRef.current) return
 		if (selectedDate === 'all') {
 			setMessages(allMessages)
 		} else {
@@ -278,62 +301,35 @@ export default function AIChat() {
 			setMessages(filtered)
 		}
 		setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
-	}, [selectedDate, allMessages, conversationMode, typingMessageId])
+	}, [selectedDate, allMessages, conversationMode])
+
+	const CHAT_STORAGE_KEY = 'jesse_chat_history_v1'
 
 	async function loadChatHistory() {
 		setLoadingHistory(true)
 		try {
-			const res = await fetch('/api/ai/messages?limit=10000', {
-				credentials: 'include'
-			})
-			
-			if (res.ok) {
-				const data = await res.json()
-				console.log('Loaded chat history:', data) // Debug log
-				if (data.messages && data.messages.length > 0) {
-					const loadedMessages = data.messages.map((msg: any) => ({
-						...msg,
-						timestamp: new Date(msg.timestamp)
-					}))
-					console.log('Setting messages:', loadedMessages) // Debug log
-					setAllMessages(loadedMessages)
-					if (conversationModeRef.current === 'history') {
-						setMessages(loadedMessages)
-					}
-				} else {
-					const welcomeMsg = createWelcomeMessage()
-					setAllMessages(welcomeMsg)
-					if (conversationModeRef.current === 'history') {
-						setMessages(welcomeMsg)
-					}
+			const raw = localStorage.getItem(CHAT_STORAGE_KEY)
+			if (raw) {
+				const parsed = JSON.parse(raw)
+				if (Array.isArray(parsed) && parsed.length > 0) {
+					const loaded = parsed.map((msg: any) => ({ ...msg, timestamp: new Date(msg.timestamp) }))
+					setAllMessages(loaded)
+					if (conversationModeRef.current === 'history') setMessages(loaded)
+					return
 				}
-			} else {
-				console.error('Failed to load chat history:', await res.text())
 			}
-		} catch (e: any) {
-			console.error('Failed to load chat history:', e)
+		} catch {
+			// Corrupted storage — fall through to welcome message
 		} finally {
 			setLoadingHistory(false)
 		}
+		const welcome = createWelcomeMessage()
+		setAllMessages(welcome)
+		if (conversationModeRef.current === 'history') setMessages(welcome)
 	}
 
-	async function saveMessage(role: 'user' | 'assistant', content: string, images?: string[]): Promise<string> {
-		try {
-			const res = await fetch('/api/ai/messages', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				credentials: 'include',
-				body: JSON.stringify({ role, content, images })
-			})
-
-			if (res.ok) {
-				const data = await res.json()
-				return data.message.id
-			}
-		} catch (e) {
-			console.error('Failed to save message:', e)
-		}
-		return Date.now().toString()
+	async function saveMessage(role: 'user' | 'assistant', content: string, _images?: string[]): Promise<string> {
+		return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 	}
 
 	// FUNCTION DISABLED - Chat history deletion is permanently disabled
@@ -410,7 +406,7 @@ export default function AIChat() {
 			const aMsg: Message = { id: aId, role: 'assistant', content, timestamp: new Date(), followUps }
 			setAllMessages(prev => [...prev, aMsg])
 			setMessages(prev => [...prev, aMsg])
-			startTypingAnimation(aId, content)
+			startTypingAnimation(aMsg)
 		} catch {
 			const msg = `Failed to read "${file.name}". Make sure it's a valid .xlsx or .csv file.`
 			const id = await saveMessage('assistant', msg)
@@ -517,7 +513,7 @@ export default function AIChat() {
 						const rMsg: Message = { id: rId, role: 'assistant', content: rContent, timestamp: new Date(), followUps }
 						setAllMessages(prev => [...prev, rMsg])
 						setMessages(prev => [...prev, rMsg])
-						startTypingAnimation(rId, rContent)
+						startTypingAnimation(rMsg)
 					} finally {
 						setLoadingPhase('')
 						setLoading(false)
@@ -564,7 +560,7 @@ export default function AIChat() {
 					const rMsg: Message = { id: rId, role: 'assistant', content: rContent, timestamp: new Date(), followUps }
 					setAllMessages(prev => [...prev, rMsg])
 					setMessages(prev => [...prev, rMsg])
-					startTypingAnimation(rId, rContent)
+					startTypingAnimation(rMsg)
 				} finally {
 					if (t1) clearTimeout(t1)
 					if (t2) clearTimeout(t2)
@@ -622,7 +618,7 @@ export default function AIChat() {
 
 			setAllMessages((prev) => [...prev, aiMessage])
 			setMessages((prev) => [...prev, aiMessage])
-			startTypingAnimation(aiMessageId, aiContent)
+			startTypingAnimation(aiMessage)
 			setError(null)
 
 			// If transactions were created, add a success message
@@ -812,7 +808,7 @@ export default function AIChat() {
 		setMessages(createWelcomeMessage())
 	}
 
-	const latestAssistantMessage = [...messages].reverse().find((msg) => msg.role === 'assistant')
+	const latestAssistantMessage = liveBubble ? liveBubble.message : [...messages].reverse().find((msg) => msg.role === 'assistant')
 	const showSharedQuotaBanner = Boolean(latestAssistantMessage && isSharedQuotaMessage(latestAssistantMessage.content))
 
 	function handleKeyPress(e: React.KeyboardEvent) {
@@ -946,7 +942,7 @@ export default function AIChat() {
 					<div className="space-y-4 p-4">
 						{messages.map((msg, index) => {
 							// Check if this message is from a different day than the previous message
-							const showDateSeparator = index === 0 || 
+							const showDateSeparator = index === 0 ||
 								new Date(messages[index - 1].timestamp).toDateString() !== new Date(msg.timestamp).toDateString()
 							
 							// Format date as "Day, Month Date, Year" (e.g., "Thursday, February 13, 2026")
@@ -1014,12 +1010,11 @@ export default function AIChat() {
 												</div>
 											)}
 											
-										{renderMessageContent(
-											msg.role === 'assistant' && msg.id === typingMessageId
-												? typingText
-												: msg.content
-										)}
-										{msg.role === 'assistant' && msg.id === typingMessageId && (
+										{msg.role === 'assistant' && liveBubble?.id === msg.id
+											? renderMessageContent(liveBubble!.text)
+											: <StableMessageContent content={msg.content} />
+										}
+										{msg.role === 'assistant' && liveBubble?.id === msg.id && (
 											<span className="inline-block w-[2px] h-[14px] bg-gray-500 ml-0.5 align-middle animate-pulse rounded-sm" />
 										)}
 										{msg.role === 'assistant' && isSharedQuotaMessage(msg.content) && (
@@ -1027,7 +1022,7 @@ export default function AIChat() {
 												Shared service issue: Jesse AI is using the app's shared service capacity, not a per-user daily limit.
 											</div>
 										)}
-										{msg.role === 'assistant' && msg.id !== typingMessageId && (msg.followUps?.length ?? 0) > 0 && (
+										{msg.role === 'assistant' && liveBubble?.id !== msg.id && (msg.followUps?.length ?? 0) > 0 && (
 											<div className="mt-3 flex flex-wrap gap-1.5">
 												{msg.followUps!.map((chip) => (
 													<button

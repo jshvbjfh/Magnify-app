@@ -386,47 +386,53 @@ function getFollowUps(intents: Intent[], branchCount: number): string[] {
     return ["Today's revenue?", 'Any pending orders?', 'Low stock alert?']
   }
   if (has('why')) {
-    return ['Compare to last month', 'Which branch caused it?', 'Show me the breakdown']
+    return ['Compare this week vs last week', 'Revenue by branch', 'Show top selling dishes']
   }
   if (has('trends')) {
-    return ['This month vs last month', 'Which branch is growing?', "What's profit looking like?"]
+    return ['This month vs last month', 'Which branch is growing?', "What's profit this week?"]
   }
   if (has('branch_comparison')) {
-    return ['Profit by branch', 'Expenses by branch', 'Best performer this month?']
+    return ['Profit by branch', 'Expenses by branch', 'Top dishes this month?']
   }
   if (has('profit')) {
     return branchCount > 1
-      ? ['Which branch leads?', "What's driving food cost?", 'Compare to last week']
-      : ["What's the food cost?", 'Revenue this month?', 'Compare to last week']
+      ? ['Which branch has best margin?', "What's the food cost this period?", 'Compare to last week']
+      : ["What's the food cost?", 'Top dishes this month?', 'Compare to last week']
   }
   if (has('revenue')) {
     return branchCount > 1
-      ? ['Break it down by branch', 'What about expenses?', 'Why is revenue low?']
-      : ['What about expenses?', 'Profit this period?', 'Compare to last week']
+      ? ['Revenue by branch', 'What are the top dishes?', 'Why did revenue change?']
+      : ['What about expenses?', 'Top dishes this period?', 'Why did revenue change?']
   }
   if (has('expenses')) {
-    return ["What's the profit?", 'Which branch spends most?', 'Revenue vs expenses']
+    return ["What's the profit?", 'Revenue vs expenses', 'Compare to last week']
   }
   if (has('orders')) {
-    return ["What's the revenue?", 'Pending orders right now?', 'Average order value?']
+    return ["What's the revenue?", 'Average order value?', 'Pending orders right now?']
   }
   if (has('top_dishes')) {
-    return ['Revenue from top dish?', 'Which branch sells it most?', "What's the profit this month?"]
+    return ['Revenue from top dish this month?', 'Which branch sells it most?', "What's the profit this month?"]
   }
   if (has('low_stock')) {
-    return ['Show full stock list', 'What should I restock first?', 'Expenses this week?']
+    return ['What should I restock first?', 'Expenses this week?', 'How much did we spend on inventory?']
   }
   if (has('payment')) {
-    return ['Total revenue this period?', "What's the profit?", 'Orders this week?']
+    return ['Total revenue this period?', "What's the profit?", 'Revenue by branch']
   }
   if (has('record_transaction')) {
     return ["Today's expenses?", "What's today's profit?", 'Revenue this week?']
   }
   if (has('waste')) {
-    return ['How does waste affect profit?', 'Expenses this week?', "What's the food cost?"]
+    return ['How does waste compare to last week?', "What's the food cost?", 'Top wasted items?']
   }
   if (has('stock_level')) {
-    return ['Any low stock?', 'Record a purchase', 'Inventory expenses this month?']
+    return ['Any low stock items?', 'What should I restock first?', 'Inventory expenses this month?']
+  }
+  if (has('avg_order')) {
+    return ["What's the revenue?", 'Top dishes this period?', 'Pending orders now?']
+  }
+  if (has('pending_orders')) {
+    return ["What's today's revenue?", 'Average order value?', 'Top dishes today?']
   }
   return ["Today's revenue?", 'Pending orders?', 'Any low stock?']
 }
@@ -480,6 +486,74 @@ function parseDishName(q: string): string | null {
     }
   }
   return null
+}
+
+// ── Comparison period helper ─────────────────────────────────────────────────
+function getPreviousRange(range: Range): Range | null {
+  const todayStr = kigaliDateStr()
+  const todayD   = kigaliStart(todayStr)
+  if (range.label === 'Today') {
+    const y = kigaliDateStr(shiftDays(todayD, -1))
+    return { start: kigaliStart(y), end: kigaliEnd(y), label: 'Yesterday' }
+  }
+  if (range.label === 'Yesterday') {
+    const d = kigaliDateStr(shiftDays(todayD, -2))
+    return { start: kigaliStart(d), end: kigaliEnd(d), label: 'Day before' }
+  }
+  if (range.label === 'This Week' || range.label === 'Past 7 Days') {
+    return {
+      start: kigaliStart(kigaliDateStr(shiftDays(todayD, -13))),
+      end:   kigaliEnd(kigaliDateStr(shiftDays(todayD, -7))),
+      label: 'Previous 7 days',
+    }
+  }
+  if (range.label === 'Last Week') {
+    return {
+      start: kigaliStart(kigaliDateStr(shiftDays(todayD, -20))),
+      end:   kigaliEnd(kigaliDateStr(shiftDays(todayD, -14))),
+      label: 'Week before',
+    }
+  }
+  if (range.label === 'This Month') {
+    const [year, month] = todayStr.split('-').map(Number)
+    const pm = month === 1 ? 12 : month - 1
+    const py = month === 1 ? year - 1 : year
+    const lastDay = new Date(year, month - 1, 0).getDate()
+    return {
+      start: kigaliStart(`${py}-${String(pm).padStart(2,'0')}-01`),
+      end:   kigaliEnd(`${py}-${String(pm).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`),
+      label: 'Last Month',
+    }
+  }
+  if (range.label === 'Last Month') {
+    const [year, month] = todayStr.split('-').map(Number)
+    const pm1 = month === 1 ? 12 : month - 1
+    const py1 = month === 1 ? year - 1 : year
+    const pm2 = pm1 === 1 ? 12 : pm1 - 1
+    const py2 = pm1 === 1 ? py1 - 1 : py1
+    const lastDay = new Date(py1, pm1 - 1, 0).getDate()
+    return {
+      start: kigaliStart(`${py2}-${String(pm2).padStart(2,'0')}-01`),
+      end:   kigaliEnd(`${py1}-${String(pm1).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`),
+      label: 'Month before',
+    }
+  }
+  if (range.label === 'This Year') {
+    const [year] = todayStr.split('-')
+    const prevYear = Number(year) - 1
+    return { start: kigaliStart(`${prevYear}-01-01`), end: kigaliEnd(`${prevYear}-12-31`), label: 'Last Year' }
+  }
+  return null
+}
+
+function dSign(current: number, previous: number): string {
+  if (previous <= 0) return ''
+  const d = ((current - previous) / previous) * 100
+  return `${d >= 0 ? '+' : ''}${d.toFixed(1)}%`
+}
+function dIcon(current: number, previous: number): '::TrendingUp::' | '::TrendingDown::' | '' {
+  if (previous <= 0) return ''
+  return current >= previous ? '::TrendingUp::' : '::TrendingDown::'
 }
 
 export async function POST(req: Request) {
@@ -816,48 +890,147 @@ export async function POST(req: Request) {
   const branchLabel  = targetBranch ? targetBranch.name : 'All Branches'
   const lines: string[] = []
 
-  // ── CAT 1: CATCH-UP — real business snapshot ─────────────────────────────────
+  // ── CAT 1: CATCH-UP — executive business snapshot ────────────────────────────
   if (intents.includes('catchup')) {
-    const todayStr  = kigaliDateStr()
+    const todayStr   = kigaliDateStr()
     const todayStart = kigaliStart(todayStr)
     const todayEnd   = kigaliEnd(todayStr)
-    const yesterdayStr = kigaliDateStr(shiftDays(todayStart, -1))
+    const yStr       = kigaliDateStr(shiftDays(todayStart, -1))
 
-    const [todaySales, yesterdaySales, pendingOrders, lowStockItems] = await Promise.all([
-      prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: todayStart, lte: todayEnd } }, select: { totalSaleAmount: true } }),
-      prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: kigaliStart(yesterdayStr), lte: kigaliEnd(yesterdayStr) } }, select: { totalSaleAmount: true } }),
-      prisma.restaurantOrder.findMany({ where: { restaurantId, status: { in: ['PENDING', 'OPEN'] } }, select: { id: true } }),
-      prisma.inventoryItem.findMany({ where: { restaurantId }, select: { name: true, quantity: true, reorderLevel: true } }),
+    const [todaySales, ySales, pendingOrders, allStock, todayOrders] = await Promise.all([
+      prisma.dishSale.findMany({
+        where: { restaurantId, saleDate: { gte: todayStart, lte: todayEnd } },
+        select: { totalSaleAmount: true, calculatedFoodCost: true, paymentMethod: true, branchId: true, branch: { select: { name: true } }, dish: { select: { name: true } } },
+      }),
+      prisma.dishSale.findMany({
+        where: { restaurantId, saleDate: { gte: kigaliStart(yStr), lte: kigaliEnd(yStr) } },
+        select: { totalSaleAmount: true },
+      }),
+      prisma.restaurantOrder.findMany({
+        where: { restaurantId, status: { in: ['PENDING', 'OPEN'] } },
+        select: { totalAmount: true, branch: { select: { name: true } } },
+      }),
+      prisma.inventoryItem.findMany({ where: { restaurantId }, select: { name: true, quantity: true, reorderLevel: true, unit: true } }),
+      prisma.restaurantOrder.findMany({
+        where: { restaurantId, createdAt: { gte: todayStart, lte: todayEnd }, status: { in: ['COMPLETED', 'PAID'] } },
+        select: { totalAmount: true },
+      }),
     ])
 
-    const todayRev     = todaySales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
-    const yesterdayRev = yesterdaySales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
-    const trend        = yesterdayRev > 0 ? ((todayRev - yesterdayRev) / yesterdayRev) * 100 : null
-    const lowStock     = lowStockItems.filter(i => i.quantity <= (i.reorderLevel ?? 0))
+    const todayRev  = todaySales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+    const todayCogs = todaySales.reduce((s, x) => s + (x.calculatedFoodCost ?? 0), 0)
+    const todayProfit = todayRev - todayCogs
+    const yRev      = ySales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+    const revTrend  = yRev > 0 ? ((todayRev - yRev) / yRev) * 100 : null
+    const lowStock  = allStock.filter(i => i.quantity <= (i.reorderLevel ?? 0))
+    const pendingVal = pendingOrders.reduce((s, o) => s + (o.totalAmount ?? 0), 0)
+    const avgOrder  = todayOrders.length > 0 ? todayOrders.reduce((s, o) => s + (o.totalAmount ?? 0), 0) / todayOrders.length : 0
+
+    // Top dish today
+    const dishMap: Record<string, { name: string; rev: number; qty: number }> = {}
+    for (const s of todaySales) {
+      const k = s.dish.name
+      if (!dishMap[k]) dishMap[k] = { name: k, rev: 0, qty: 0 }
+      dishMap[k].rev += s.totalSaleAmount ?? 0
+    }
+    const topDish = Object.values(dishMap).sort((a, b) => b.rev - a.rev)[0]
+
+    // Top branch today
+    const branchMap: Record<string, { name: string; rev: number }> = {}
+    for (const s of todaySales) {
+      if (!branchMap[s.branchId]) branchMap[s.branchId] = { name: s.branch.name, rev: 0 }
+      branchMap[s.branchId].rev += s.totalSaleAmount ?? 0
+    }
+    const branchRanked = Object.values(branchMap).sort((a, b) => b.rev - a.rev)
+    const topBranch = branchRanked[0]
+
+    // Payment method dominant
+    const pmMap: Record<string, number> = {}
+    for (const s of todaySales) { const m = s.paymentMethod ?? 'Cash'; pmMap[m] = (pmMap[m] ?? 0) + (s.totalSaleAmount ?? 0) }
+    const topPm = Object.entries(pmMap).sort((a, b) => b[1] - a[1])[0]
 
     const hour = new Date().toLocaleString('en-US', { timeZone: TZ, hour: 'numeric', hour12: false })
-    const h = parseInt(hour, 10)
+    const h    = parseInt(hour, 10)
     const greet = h < 12 ? 'Morning' : h < 17 ? 'Afternoon' : 'Evening'
 
-    lines.push(`::Zap:: **${greet}! Here's the snapshot.**`)
+    lines.push(`::Zap:: **${greet}! Business Snapshot — Today**`)
     lines.push(``)
-    lines.push(`  ::Banknote:: **Revenue today:** ${fmt(todayRev)}${trend !== null ? `  ·  ${trend >= 0 ? '::TrendingUp::' : '::TrendingDown::'} ${trend >= 0 ? '+' : ''}${trend.toFixed(0)}% vs yesterday` : ''}`)
-    lines.push(`  ::Clock:: **Pending orders:** ${pendingOrders.length === 0 ? 'None right now' : `${pendingOrders.length} order${pendingOrders.length !== 1 ? 's' : ''} waiting`}`)
-    if (lowStock.length === 0) {
-      lines.push(`  ::CheckCircle:: **Stock:** All levels OK`)
+
+    // ── Revenue ──
+    lines.push(`**::Banknote:: Revenue**`)
+    lines.push(`  Total: **${fmt(todayRev)}**`)
+    if (revTrend !== null) {
+      const icon = revTrend >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+      lines.push(`  ${icon} ${revTrend >= 0 ? '+' : ''}${revTrend.toFixed(1)}% vs yesterday (${fmt(yRev)})`)
+    }
+    if (todayOrders.length > 0) lines.push(`  ${todayOrders.length} completed order${todayOrders.length !== 1 ? 's' : ''} · Avg: **${fmt(avgOrder)}**`)
+    if (topPm) lines.push(`  Most payments via **${topPm[0]}** (${pct(topPm[1], todayRev)})`)
+    lines.push(``)
+
+    // ── Profit ──
+    if (todayRev > 0) {
+      lines.push(`**::Target:: Profit**`)
+      lines.push(`  **${fmt(todayProfit)}** (${pct(todayProfit, todayRev)} margin)`)
+      lines.push(`  Food cost: ${fmt(todayCogs)} · ${pct(todayCogs, todayRev)} of revenue`)
+      lines.push(``)
+    }
+
+    // ── Operations ──
+    lines.push(`**::Clock:: Operations**`)
+    if (pendingOrders.length === 0) {
+      lines.push(`  No pending orders right now`)
     } else {
-      const names = lowStock.slice(0, 3).map(i => i.name).join(', ')
-      lines.push(`  ::AlertTriangle:: **Low stock:** ${names}${lowStock.length > 3 ? ` +${lowStock.length - 3} more` : ''}`)
+      lines.push(`  **${pendingOrders.length} pending order${pendingOrders.length !== 1 ? 's'  : ''}** · ${fmt(pendingVal)} in queue`)
+      if (allBranches.length > 1) {
+        const pMap: Record<string, number> = {}
+        for (const o of pendingOrders) { const b = o.branch?.name ?? 'Unknown'; pMap[b] = (pMap[b] ?? 0) + 1 }
+        const pTop = Object.entries(pMap).sort((a, b) => b[1] - a[1]).slice(0, 2)
+        pTop.forEach(([b, c]) => lines.push(`  ${b}: ${c} order${c !== 1 ? 's' : ''}`))
+      }
     }
-    if (allBranches.length > 1) {
-      lines.push(`  ::BarChart2:: **Branches active:** ${allBranches.length}`)
+    if (allBranches.length > 1) lines.push(`  ${allBranches.length} branches active`)
+    lines.push(``)
+
+    // ── Stock ──
+    if (lowStock.length === 0) {
+      lines.push(`**::CheckCircle:: Stock** — All levels OK`)
+    } else {
+      lines.push(`**::AlertTriangle:: Stock Alerts — ${lowStock.length} item${lowStock.length !== 1 ? 's' : ''} low**`)
+      lowStock.slice(0, 4).forEach(i => lines.push(`  • **${i.name}**: ${Number(i.quantity.toFixed(2))} ${(i as any).unit ?? ''} (reorder at ≤${i.reorderLevel})`))
+      if (lowStock.length > 4) lines.push(`  ...and ${lowStock.length - 4} more`)
     }
+    lines.push(``)
+
+    // ── Best performers ──
+    if (topDish || (topBranch && allBranches.length > 1)) {
+      lines.push(`**::Flame:: Best Performers Today**`)
+      if (topDish) lines.push(`  ::ChefHat:: Top dish: **${topDish.name}** — ${fmt(topDish.rev)}`)
+      if (topBranch && allBranches.length > 1) {
+        const share = pct(topBranch.rev, todayRev)
+        lines.push(`  ::Star:: Top branch: **${topBranch.name}** — ${fmt(topBranch.rev)} (${share} of revenue)`)
+      }
+      lines.push(``)
+    }
+
+    // ── Jesse's Take ──
+    lines.push(`**::Lightbulb:: Jesse's Take**`)
+    if (todayRev === 0) {
+      lines.push(`  No revenue recorded yet today. Make sure orders are marked PAID or COMPLETED.`)
+    } else if (revTrend !== null && revTrend >= 15) {
+      lines.push(`  Strong day — up ${revTrend.toFixed(0)}% vs yesterday.${pendingOrders.length > 0 ? ` ${pendingOrders.length} pending order${pendingOrders.length !== 1 ? 's' : ''} still in the queue.` : ' Keep it going.'}`)
+    } else if (revTrend !== null && revTrend <= -15) {
+      lines.push(`  Revenue is down ${Math.abs(revTrend).toFixed(0)}% vs yesterday.${lowStock.length > 0 ? ` ${lowStock.length} low-stock item${lowStock.length !== 1 ? 's' : ''} may be limiting sales.` : ' Check that orders are being completed.'}`)
+    } else if (revTrend !== null) {
+      lines.push(`  Tracking close to yesterday (${revTrend >= 0 ? '+' : ''}${revTrend.toFixed(1)}%).${todayOrders.length > 0 ? ` Average order is ${fmt(avgOrder)}.` : ''}`)
+    } else {
+      lines.push(`  ${todayOrders.length > 0 ? `${todayOrders.length} order${todayOrders.length !== 1 ? 's' : ''} completed today.` : 'No comparable data from yesterday.'}`)
+    }
+
     return NextResponse.json({ answer: lines.join('\n'), period: 'Today', intents, followUps: getFollowUps(intents, allBranches.length), source: 'restaurant-db' })
   }
 
-  // ── CAT 3: WHY — comparative reasoning using context ─────────────────────────
+  // ── CAT 3: WHY — root-cause analysis ─────────────────────────────────────────
   if (intents.includes('why') && !intents.includes('record_transaction')) {
-    // Figure out what "why" refers to — check current question first, then prev question
     const subject = question + ' ' + prevQuestion
     const prevIntents = prevQuestion ? parseIntents(prevQuestion) : []
     const whyAbout: Intent[] = prevIntents.length > 0
@@ -867,98 +1040,172 @@ export async function POST(req: Request) {
 
     const todayStr   = kigaliDateStr()
     const todayStart = kigaliStart(todayStr)
-    const todayEnd   = kigaliEnd(todayStr)
     const range7     = { start: kigaliStart(kigaliDateStr(shiftDays(todayStart, -6))), end: kigaliEnd(todayStr) }
     const range7prev = { start: kigaliStart(kigaliDateStr(shiftDays(todayStart, -13))), end: kigaliEnd(kigaliDateStr(shiftDays(todayStart, -7))) }
 
     if (primaryAbout === 'revenue' || primaryAbout === 'profit') {
-      const [thisWeek, lastWeek, topDishes, byBranch] = await Promise.all([
-        prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7.start, lte: range7.end } }, select: { totalSaleAmount: true, calculatedFoodCost: true, paymentMethod: true } }),
+      const [thisWeekSales, lastWeekSales, thisWeekOrders, lastWeekOrders, topDishesThis, topDishesLast, byBranchThis, byBranchLast] = await Promise.all([
+        prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7.start, lte: range7.end } }, select: { totalSaleAmount: true, calculatedFoodCost: true, paymentMethod: true, dishId: true, dish: { select: { name: true } } } }),
         prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7prev.start, lte: range7prev.end } }, select: { totalSaleAmount: true } }),
-        prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7.start, lte: range7.end } }, select: { totalSaleAmount: true, dish: { select: { name: true } } }, orderBy: { totalSaleAmount: 'desc' }, take: 3 }),
-        allBranches.length > 1
-          ? prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7.start, lte: range7.end } }, select: { totalSaleAmount: true, branchId: true, branch: { select: { name: true } } } })
-          : Promise.resolve([] as { totalSaleAmount: number | null; branchId: string; branch: { name: string } }[]),
+        prisma.restaurantOrder.count({ where: { restaurantId, createdAt: { gte: range7.start, lte: range7.end } } }),
+        prisma.restaurantOrder.count({ where: { restaurantId, createdAt: { gte: range7prev.start, lte: range7prev.end } } }),
+        prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7.start, lte: range7.end } }, select: { totalSaleAmount: true, dishId: true, dish: { select: { name: true } } } }),
+        prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7prev.start, lte: range7prev.end } }, select: { totalSaleAmount: true, dishId: true } }),
+        allBranches.length > 1 ? prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7.start, lte: range7.end } }, select: { totalSaleAmount: true, branchId: true, branch: { select: { name: true } } } }) : Promise.resolve([] as { totalSaleAmount: number | null; branchId: string; branch: { name: string } }[]),
+        allBranches.length > 1 ? prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range7prev.start, lte: range7prev.end } }, select: { totalSaleAmount: true, branchId: true } }) : Promise.resolve([] as { totalSaleAmount: number | null; branchId: string }[]),
       ])
 
-      const thisRev = thisWeek.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
-      const lastRev = lastWeek.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
-      const delta   = lastRev > 0 ? ((thisRev - lastRev) / lastRev) * 100 : null
+      const thisRev  = thisWeekSales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+      const lastRev  = lastWeekSales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+      const thisCogs = thisWeekSales.reduce((s, x) => s + (x.calculatedFoodCost ?? 0), 0)
+      const revDelta = lastRev > 0 ? ((thisRev - lastRev) / lastRev) * 100 : null
+      const ordDelta = lastWeekOrders > 0 ? ((thisWeekOrders - lastWeekOrders) / lastWeekOrders) * 100 : null
 
-      lines.push(`**Why ${primaryAbout === 'profit' ? 'profit' : 'revenue'} looks the way it does** — past 7 days`)
+      // Dish-level delta
+      const dishThis: Record<string, { name: string; rev: number }> = {}
+      const dishLast: Record<string, number> = {}
+      for (const s of topDishesThis) { if (!dishThis[s.dishId]) dishThis[s.dishId] = { name: s.dish.name, rev: 0 }; dishThis[s.dishId].rev += s.totalSaleAmount ?? 0 }
+      for (const s of topDishesLast) { dishLast[s.dishId] = (dishLast[s.dishId] ?? 0) + (s.totalSaleAmount ?? 0) }
+      const dishDrivers = Object.entries(dishThis)
+        .map(([id, d]) => ({ name: d.name, thisRev: d.rev, lastRev: dishLast[id] ?? 0, delta: d.rev - (dishLast[id] ?? 0) }))
+        .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+        .slice(0, 3)
+
+      // Branch delta
+      const bThis: Record<string, { name: string; rev: number }> = {}
+      const bLast: Record<string, number> = {}
+      for (const s of byBranchThis) { if (!bThis[s.branchId]) bThis[s.branchId] = { name: s.branch.name, rev: 0 }; bThis[s.branchId].rev += s.totalSaleAmount ?? 0 }
+      for (const s of byBranchLast) { bLast[s.branchId] = (bLast[s.branchId] ?? 0) + (s.totalSaleAmount ?? 0) }
+      const branchDrivers = Object.entries(bThis)
+        .map(([id, b]) => ({ name: b.name, thisRev: b.rev, lastRev: bLast[id] ?? 0, delta: b.rev - (bLast[id] ?? 0) }))
+        .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+
+      const subject2 = primaryAbout === 'profit' ? 'profit' : 'revenue'
+      const overallIcon = revDelta !== null ? (revDelta >= 0 ? '::TrendingUp::' : '::TrendingDown::') : ''
+
+      lines.push(`**Why ${subject2} looks the way it does** — past 7 days`)
       lines.push(``)
-
-      // Week-on-week
-      if (delta !== null) {
-        const icon = delta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
-        lines.push(`  ${icon} This week **${fmt(thisRev)}** vs last week **${fmt(lastRev)}** — ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`)
+      lines.push(`**Overall**`)
+      if (revDelta !== null) {
+        lines.push(`  ${overallIcon} ${subject2.charAt(0).toUpperCase() + subject2.slice(1)} ${revDelta >= 0 ? 'up' : 'down'} **${dSign(thisRev, lastRev)}**`)
+        lines.push(`  This week: **${fmt(thisRev)}** · Last week: ${fmt(lastRev)} · Difference: ${thisRev >= lastRev ? '+' : ''}${fmt(thisRev - lastRev)}`)
       } else {
         lines.push(`  This week: **${fmt(thisRev)}**`)
       }
+      lines.push(``)
 
-      // Payment method breakdown
-      const byMethod: Record<string, number> = {}
-      for (const s of thisWeek) {
-        const m = s.paymentMethod ?? 'Cash'
-        byMethod[m] = (byMethod[m] ?? 0) + (s.totalSaleAmount ?? 0)
-      }
-      const topMethod = Object.entries(byMethod).sort((a, b) => b[1] - a[1])[0]
-      if (topMethod) lines.push(`  ::Banknote:: Most revenue via **${topMethod[0]}** — ${fmt(topMethod[1])}`)
+      // Ranked drivers
+      lines.push(`**Main Drivers**`)
+      const drivers: string[] = []
 
-      // Top driver
-      if (topDishes.length > 0) {
-        lines.push(`  ::Flame:: Top seller: **${topDishes[0].dish?.name ?? '—'}** — ${fmt(topDishes[0].totalSaleAmount ?? 0)}`)
+      // Order volume
+      if (ordDelta !== null) {
+        const icon = ordDelta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+        drivers.push(`  ${icon} Orders went from **${lastWeekOrders}** to **${thisWeekOrders}** (${dSign(thisWeekOrders, lastWeekOrders)})`)
       }
 
-      // Branch breakdown if multi-branch
-      if (byBranch.length > 0) {
-        const bMap: Record<string, { name: string; rev: number }> = {}
-        for (const s of byBranch) {
-          if (!bMap[s.branchId]) bMap[s.branchId] = { name: s.branch.name, rev: 0 }
-          bMap[s.branchId].rev += s.totalSaleAmount ?? 0
-        }
-        const ranked = Object.values(bMap).sort((a, b) => b.rev - a.rev)
-        lines.push(`  ::BarChart2:: **By branch:** ${ranked.map(b => `${b.name} ${fmt(b.rev)}`).join(' · ')}`)
+      // Dish shifts
+      for (const d of dishDrivers) {
+        if (Math.abs(d.delta) < 100) continue
+        const icon = d.delta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+        drivers.push(`  ${icon} **${d.name}**: ${d.delta >= 0 ? '+' : ''}${fmt(d.delta)} vs last week`)
       }
 
-      // Zero revenue explanation
+      // Branch shifts
+      for (const b of branchDrivers) {
+        if (Math.abs(b.delta) < 100 || allBranches.length < 2) continue
+        const icon = b.delta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+        drivers.push(`  ${icon} **${b.name}** branch: ${b.delta >= 0 ? '+' : ''}${fmt(b.delta)} vs last week`)
+      }
+
+      if (drivers.length === 0 && thisRev === 0) {
+        drivers.push(`  ::AlertTriangle:: No revenue this week — orders may not be marked PAID or COMPLETED`)
+      } else if (drivers.length === 0) {
+        drivers.push(`  Performance is consistent — no single major driver identified`)
+      }
+      lines.push(...drivers)
+      lines.push(``)
+
+      // Biggest factor
+      lines.push(`**::Lightbulb:: Biggest Factor**`)
       if (thisRev === 0) {
-        lines.push(``)
-        lines.push(`  ::AlertTriangle:: No revenue recorded this week. Possible reasons:`)
-        lines.push(`  • Orders not marked as PAID or COMPLETED`)
-        lines.push(`  • Orders were created under a different time zone date`)
-        lines.push(`  • No orders have been placed yet`)
+        lines.push(`  No revenue recorded. Ensure orders are marked PAID or COMPLETED to appear here.`)
+      } else if (ordDelta !== null && Math.abs(ordDelta) > 10) {
+        const word = ordDelta >= 0 ? 'increase' : 'decrease'
+        lines.push(`  The ${word} in order volume (${ordDelta >= 0 ? '+' : ''}${ordDelta.toFixed(0)}%) accounts for most of the ${subject2} shift.`)
+      } else if (dishDrivers[0] && Math.abs(dishDrivers[0].delta) > 0) {
+        const d = dishDrivers[0]
+        lines.push(`  **${d.name}** had the biggest impact — ${d.delta >= 0 ? 'up' : 'down'} ${fmt(Math.abs(d.delta))} vs last week.`)
+      } else {
+        lines.push(`  Performance is broadly consistent across all categories.`)
+      }
+
+      if (primaryAbout === 'profit' && thisCogs > 0) {
+        lines.push(`  Food cost this period: **${fmt(thisCogs)}** (${pct(thisCogs, thisRev)} of revenue)`)
       }
 
     } else if (primaryAbout === 'expenses') {
-      const purchases = await prisma.inventoryPurchase.findMany({
-        where: { restaurantId, purchasedAt: { gte: range7.start, lte: range7.end } },
-        select: { totalCost: true, paymentMethod: true, ingredient: { select: { name: true } } },
-        orderBy: { totalCost: 'desc' },
-      })
-      const total = purchases.reduce((s, p) => s + (p.totalCost ?? 0), 0)
+      const [thisExp, lastExp] = await Promise.all([
+        prisma.inventoryPurchase.findMany({ where: { restaurantId, purchasedAt: { gte: range7.start, lte: range7.end } }, select: { totalCost: true, paymentMethod: true, ingredient: { select: { name: true } } }, orderBy: { totalCost: 'desc' } }),
+        prisma.inventoryPurchase.aggregate({ where: { restaurantId, purchasedAt: { gte: range7prev.start, lte: range7prev.end } }, _sum: { totalCost: true } }),
+      ])
+      const thisTotal = thisExp.reduce((s, p) => s + (p.totalCost ?? 0), 0)
+      const lastTotal = lastExp._sum.totalCost ?? 0
       lines.push(`**Why expenses look the way they do** — past 7 days`)
-      lines.push(`  Total: **${fmt(total)}** across ${purchases.length} purchase${purchases.length !== 1 ? 's' : ''}`)
-      if (purchases.length > 0) {
-        const top3 = purchases.slice(0, 3)
-        lines.push(`  Top costs:`)
-        top3.forEach(p => lines.push(`  • ${p.ingredient.name}: ${fmt(p.totalCost ?? 0)} (${p.paymentMethod ?? 'Cash'})`))
+      lines.push(``)
+      lines.push(`**Overall**`)
+      lines.push(`  Total: **${fmt(thisTotal)}** across ${thisExp.length} purchase${thisExp.length !== 1 ? 's' : ''}`)
+      if (lastTotal > 0) {
+        const icon = thisTotal >= lastTotal ? '::TrendingUp::' : '::TrendingDown::'
+        lines.push(`  ${icon} ${dSign(thisTotal, lastTotal)} vs previous 7 days (${fmt(lastTotal)})`)
+      }
+      if (thisExp.length > 0) {
+        lines.push(``)
+        lines.push(`**Top Cost Drivers**`)
+        thisExp.slice(0, 4).forEach((p, i) => {
+          const medal = i === 0 ? '::AlertTriangle::' : '  •'
+          lines.push(`  ${medal} **${p.ingredient.name}**: ${fmt(p.totalCost ?? 0)} (${p.paymentMethod ?? 'Cash'})`)
+        })
+      }
+      lines.push(``)
+      lines.push(`**::Lightbulb:: Biggest Factor**`)
+      if (thisExp.length > 0) {
+        const top = thisExp[0]
+        lines.push(`  **${top.ingredient.name}** was the highest single expense at ${fmt(top.totalCost ?? 0)}.`)
+      } else {
+        lines.push(`  No purchases recorded this week.`)
       }
 
     } else if (primaryAbout === 'orders') {
-      const [thisOrders, lastOrders] = await Promise.all([
+      const [thisOrders, lastOrders, thisCompleted, thisPending] = await Promise.all([
         prisma.restaurantOrder.count({ where: { restaurantId, createdAt: { gte: range7.start, lte: range7.end } } }),
         prisma.restaurantOrder.count({ where: { restaurantId, createdAt: { gte: range7prev.start, lte: range7prev.end } } }),
+        prisma.restaurantOrder.count({ where: { restaurantId, createdAt: { gte: range7.start, lte: range7.end }, status: { in: ['COMPLETED', 'PAID'] } } }),
+        prisma.restaurantOrder.count({ where: { restaurantId, createdAt: { gte: range7.start, lte: range7.end }, status: { in: ['PENDING', 'OPEN'] } } }),
       ])
-      const delta = lastOrders > 0 ? ((thisOrders - lastOrders) / lastOrders) * 100 : null
+      const completionRate = thisOrders > 0 ? (thisCompleted / thisOrders) * 100 : 0
       lines.push(`**Why order count looks the way it does** — past 7 days`)
-      lines.push(`  This week: **${thisOrders} orders**`)
-      if (delta !== null) {
-        const icon = delta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
-        lines.push(`  ${icon} ${delta >= 0 ? '+' : ''}${delta.toFixed(0)}% vs previous 7 days (${lastOrders} orders)`)
+      lines.push(``)
+      lines.push(`**Overall**`)
+      lines.push(`  This week: **${thisOrders} orders** · Last week: ${lastOrders}`)
+      if (lastOrders > 0) {
+        const icon = thisOrders >= lastOrders ? '::TrendingUp::' : '::TrendingDown::'
+        lines.push(`  ${icon} ${dSign(thisOrders, lastOrders)} change in order volume`)
       }
+      lines.push(``)
+      lines.push(`**Breakdown**`)
+      lines.push(`  Completed: **${thisCompleted}** · Pending/open: ${thisPending}`)
+      lines.push(`  Completion rate: **${completionRate.toFixed(1)}%**`)
+      lines.push(``)
+      lines.push(`**::Lightbulb:: Biggest Factor**`)
       if (thisOrders === 0) {
-        lines.push(`  ::AlertTriangle:: No orders this week — check if orders are being created and completed.`)
+        lines.push(`  No orders placed this week. Check if the waiter app is active and orders are being entered.`)
+      } else if (completionRate < 50) {
+        lines.push(`  Low completion rate (${completionRate.toFixed(0)}%) — many orders are not being marked PAID or COMPLETED.`)
+      } else if (lastOrders > 0 && thisOrders < lastOrders) {
+        lines.push(`  Order volume dropped by ${lastOrders - thisOrders} compared to last week. Check if any branch was less active.`)
+      } else {
+        lines.push(`  Order volume is ${thisOrders >= lastOrders ? 'up or stable' : 'lower'} vs last week. Completion rate is ${completionRate.toFixed(0)}%.`)
       }
     } else {
       lines.push(`I need a bit more context. Try:`)
@@ -972,50 +1219,144 @@ export async function POST(req: Request) {
 
   // ── CAT 5: TRENDS — period-over-period ────────────────────────────────────────
   if (intents.includes('trends') && !intents.includes('record_transaction')) {
-    const todayStr = kigaliDateStr()
-    const todayD   = kigaliStart(todayStr)
-
-    // This week vs last week
+    const todayStr      = kigaliDateStr()
+    const todayD        = kigaliStart(todayStr)
     const thisWeekStart = kigaliStart(kigaliDateStr(shiftDays(todayD, -6)))
     const lastWeekStart = kigaliStart(kigaliDateStr(shiftDays(todayD, -13)))
     const lastWeekEnd   = kigaliEnd(kigaliDateStr(shiftDays(todayD, -7)))
+    const scopeLabel    = targetBranch ? targetBranch.name : 'All Branches'
 
-    const [thisWeek, lastWeek] = await Promise.all([
-      prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: thisWeekStart, lte: kigaliEnd(todayStr) } }, select: { totalSaleAmount: true, calculatedFoodCost: true } }),
-      prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: lastWeekStart, lte: lastWeekEnd } }, select: { totalSaleAmount: true, calculatedFoodCost: true } }),
+    const [thisWeekSales, lastWeekSales, thisCompletedOrders, lastCompletedOrders, byBranchThis, byBranchLast, byDishThis, byDishLast] = await Promise.all([
+      prisma.dishSale.findMany({ where: { restaurantId, ...branchFilter, saleDate: { gte: thisWeekStart, lte: kigaliEnd(todayStr) } }, select: { totalSaleAmount: true, calculatedFoodCost: true } }),
+      prisma.dishSale.findMany({ where: { restaurantId, ...branchFilter, saleDate: { gte: lastWeekStart, lte: lastWeekEnd } }, select: { totalSaleAmount: true, calculatedFoodCost: true } }),
+      prisma.restaurantOrder.findMany({ where: { restaurantId, ...branchFilter, createdAt: { gte: thisWeekStart, lte: kigaliEnd(todayStr) }, status: { in: ['COMPLETED', 'PAID'] } }, select: { totalAmount: true } }),
+      prisma.restaurantOrder.findMany({ where: { restaurantId, ...branchFilter, createdAt: { gte: lastWeekStart, lte: lastWeekEnd }, status: { in: ['COMPLETED', 'PAID'] } }, select: { totalAmount: true } }),
+      allBranches.length > 1 && !branchFilter.branchId
+        ? prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: thisWeekStart, lte: kigaliEnd(todayStr) } }, select: { totalSaleAmount: true, branchId: true, branch: { select: { name: true } } } })
+        : Promise.resolve([] as { totalSaleAmount: number | null; branchId: string; branch: { name: string } }[]),
+      allBranches.length > 1 && !branchFilter.branchId
+        ? prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: lastWeekStart, lte: lastWeekEnd } }, select: { totalSaleAmount: true, branchId: true } })
+        : Promise.resolve([] as { totalSaleAmount: number | null; branchId: string }[]),
+      prisma.dishSale.findMany({ where: { restaurantId, ...branchFilter, saleDate: { gte: thisWeekStart, lte: kigaliEnd(todayStr) } }, select: { totalSaleAmount: true, dishId: true, dish: { select: { name: true } } } }),
+      prisma.dishSale.findMany({ where: { restaurantId, ...branchFilter, saleDate: { gte: lastWeekStart, lte: lastWeekEnd } }, select: { totalSaleAmount: true, dishId: true } }),
     ])
 
-    const thisRev  = thisWeek.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
-    const lastRev  = lastWeek.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
-    const thisCogs = thisWeek.reduce((s, x) => s + (x.calculatedFoodCost ?? 0), 0)
-    const lastCogs = lastWeek.reduce((s, x) => s + (x.calculatedFoodCost ?? 0), 0)
-    const revDelta = lastRev > 0 ? ((thisRev - lastRev) / lastRev) * 100 : null
-    const cogsDelta = lastCogs > 0 ? ((thisCogs - lastCogs) / lastCogs) * 100 : null
+    const thisRev    = thisWeekSales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+    const lastRev    = lastWeekSales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+    const thisCogs   = thisWeekSales.reduce((s, x) => s + (x.calculatedFoodCost ?? 0), 0)
+    const lastCogs   = lastWeekSales.reduce((s, x) => s + (x.calculatedFoodCost ?? 0), 0)
+    const thisProfit = thisRev - thisCogs
+    const lastProfit = lastRev - lastCogs
 
-    lines.push(`**Trend — This week vs last week**`)
+    // Volume vs size analysis
+    const thisAvgOrder = thisCompletedOrders.length > 0 ? thisCompletedOrders.reduce((s, o) => s + (o.totalAmount ?? 0), 0) / thisCompletedOrders.length : 0
+    const lastAvgOrder = lastCompletedOrders.length > 0 ? lastCompletedOrders.reduce((s, o) => s + (o.totalAmount ?? 0), 0) / lastCompletedOrders.length : 0
+    const volumeChange = lastCompletedOrders.length > 0 ? ((thisCompletedOrders.length - lastCompletedOrders.length) / lastCompletedOrders.length) * 100 : null
+    const sizeChange   = lastAvgOrder > 0 ? ((thisAvgOrder - lastAvgOrder) / lastAvgOrder) * 100 : null
+
+    // Branch delta
+    const bThis: Record<string, { name: string; rev: number }> = {}
+    const bLast: Record<string, number> = {}
+    for (const s of byBranchThis) { if (!bThis[s.branchId]) bThis[s.branchId] = { name: s.branch.name, rev: 0 }; bThis[s.branchId].rev += s.totalSaleAmount ?? 0 }
+    for (const s of byBranchLast) { bLast[s.branchId] = (bLast[s.branchId] ?? 0) + (s.totalSaleAmount ?? 0) }
+    const branchDeltas = Object.entries(bThis)
+      .map(([id, b]) => ({ name: b.name, thisRev: b.rev, lastRev: bLast[id] ?? 0, delta: b.rev - (bLast[id] ?? 0) }))
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+
+    // Dish delta
+    const dThis: Record<string, { name: string; rev: number }> = {}
+    const dLast: Record<string, number> = {}
+    for (const s of byDishThis) { if (!dThis[s.dishId]) dThis[s.dishId] = { name: s.dish.name, rev: 0 }; dThis[s.dishId].rev += s.totalSaleAmount ?? 0 }
+    for (const s of byDishLast) { dLast[s.dishId] = (dLast[s.dishId] ?? 0) + (s.totalSaleAmount ?? 0) }
+    const dishDeltas = Object.entries(dThis)
+      .map(([id, d]) => ({ name: d.name, thisRev: d.rev, lastRev: dLast[id] ?? 0, delta: d.rev - (dLast[id] ?? 0) }))
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+      .slice(0, 4)
+
+    lines.push(`**Trend — This Week vs Last Week · ${scopeLabel}**`)
     lines.push(``)
-    if (revDelta !== null) {
-      const icon = revDelta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
-      const word = revDelta >= 1 ? 'Up' : revDelta <= -1 ? 'Down' : 'Flat'
-      lines.push(`  ${icon} **Revenue ${word}** ${revDelta >= 0 ? '+' : ''}${revDelta.toFixed(1)}%`)
-      lines.push(`  This week: **${fmt(thisRev)}** · Last week: ${fmt(lastRev)}`)
-    } else {
-      lines.push(`  This week: **${fmt(thisRev)}** · Last week: ${fmt(lastRev)}`)
+
+    // Revenue
+    const revIcon = dIcon(thisRev, lastRev)
+    const revWord = lastRev > 0 ? (thisRev >= lastRev * 1.01 ? 'Up' : thisRev <= lastRev * 0.99 ? 'Down' : 'Flat') : '—'
+    lines.push(`**::Banknote:: Revenue ${revWord}**`)
+    lines.push(`  This week: **${fmt(thisRev)}** · Last week: ${fmt(lastRev)}`)
+    if (lastRev > 0) lines.push(`  ${revIcon} ${dSign(thisRev, lastRev)} · Difference: ${thisRev >= lastRev ? '+' : ''}${fmt(thisRev - lastRev)}`)
+    lines.push(``)
+
+    // Orders — volume vs size
+    lines.push(`**::Users:: Orders — More Customers or Larger Orders?**`)
+    lines.push(`  Completed: **${thisCompletedOrders.length}** this week · ${lastCompletedOrders.length} last week`)
+    if (volumeChange !== null) {
+      const vIcon = dIcon(thisCompletedOrders.length, lastCompletedOrders.length)
+      lines.push(`  ${vIcon} Order volume: ${dSign(thisCompletedOrders.length, lastCompletedOrders.length)} (${thisCompletedOrders.length > lastCompletedOrders.length ? 'more' : 'fewer'} customers)`)
     }
-    if (cogsDelta !== null) {
-      lines.push(`  Food cost: ${cogsDelta >= 0 ? '+' : ''}${cogsDelta.toFixed(1)}% vs last week`)
+    if (sizeChange !== null) {
+      const sIcon = dIcon(thisAvgOrder, lastAvgOrder)
+      lines.push(`  ${sIcon} Avg order size: ${fmt(thisAvgOrder)} vs ${fmt(lastAvgOrder)} — ${dSign(thisAvgOrder, lastAvgOrder)} (${thisAvgOrder > lastAvgOrder ? 'spending more per order' : 'spending less per order'})`)
+    }
+    // Determine primary driver
+    if (volumeChange !== null && sizeChange !== null && (volumeChange !== 0 || sizeChange !== 0)) {
+      const volumeDriven = Math.abs(volumeChange) >= Math.abs(sizeChange)
+      lines.push(`  ::ArrowRight:: **Primary driver: ${volumeDriven ? `order volume (${dSign(thisCompletedOrders.length, lastCompletedOrders.length)})` : `order size (${dSign(thisAvgOrder, lastAvgOrder)})`}**`)
+    }
+    lines.push(``)
+
+    // Food cost
+    lines.push(`**::ChefHat:: Food Cost**`)
+    lines.push(`  This week: **${fmt(thisCogs)}** (${pct(thisCogs, thisRev)}) · Last week: ${fmt(lastCogs)} (${pct(lastCogs, lastRev)})`)
+    if (lastCogs > 0) {
+      const cogsIcon = dIcon(thisCogs, lastCogs)
+      lines.push(`  ${cogsIcon} ${dSign(thisCogs, lastCogs)} — ${thisCogs > lastCogs ? 'rising faster than revenue is a margin risk' : 'improving relative to revenue'}`)
+    }
+    lines.push(``)
+
+    // Profit
+    const profIcon = dIcon(thisProfit, lastProfit)
+    lines.push(`**::Target:: Profit**`)
+    lines.push(`  This week: **${fmt(thisProfit)}** (${pct(thisProfit, thisRev)} margin) · Last week: ${fmt(lastProfit)} (${pct(lastProfit, lastRev)})`)
+    if (lastProfit > 0) lines.push(`  ${profIcon} ${dSign(thisProfit, lastProfit)} vs last week`)
+    lines.push(``)
+
+    // Which branch caused it?
+    if (branchDeltas.length > 1) {
+      lines.push(`**::BarChart2:: Which Branch Caused It?**`)
+      branchDeltas.slice(0, 4).forEach(b => {
+        const icon = b.delta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+        lines.push(`  ${icon} **${b.name}**: ${b.delta >= 0 ? '+' : ''}${fmt(b.delta)} (this week ${fmt(b.thisRev)} vs last ${fmt(b.lastRev)})`)
+      })
+      lines.push(``)
     }
 
-    const profit = thisRev - thisCogs
-    const prevProfit = lastRev - lastCogs
-    const profitDelta = prevProfit > 0 ? ((profit - prevProfit) / prevProfit) * 100 : null
-    if (profitDelta !== null) {
-      const icon = profitDelta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
-      lines.push(`  ${icon} **Profit ${profitDelta >= 0 ? '+' : ''}${profitDelta.toFixed(1)}%** — ${fmt(profit)} this week vs ${fmt(prevProfit)} last`)
+    // Which dishes caused it?
+    if (dishDeltas.length > 0) {
+      lines.push(`**::ChefHat:: Which Dishes Caused It?**`)
+      dishDeltas.forEach(d => {
+        const icon = d.delta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+        lines.push(`  ${icon} **${d.name}**: ${d.delta >= 0 ? '+' : ''}${fmt(d.delta)} (this week ${fmt(d.thisRev)} vs last ${fmt(d.lastRev)})`)
+      })
+      lines.push(``)
     }
 
+    // Jesse's Take
+    lines.push(`**::Lightbulb:: Jesse's Take**`)
     if (thisRev === 0 && lastRev === 0) {
-      lines.push(`  ::AlertTriangle:: No sales data for either period.`)
+      lines.push(`  No sales data for either period.`)
+    } else if (thisRev > lastRev && thisCogs / thisRev > lastCogs / (lastRev || 1) + 0.05) {
+      lines.push(`  Revenue grew but food costs rose faster — margins are squeezed. Worth reviewing purchasing.`)
+    } else if (thisRev >= lastRev) {
+      const driver = volumeChange !== null && sizeChange !== null
+        ? (Math.abs(volumeChange) >= Math.abs(sizeChange) ? `driven by ${thisCompletedOrders.length > lastCompletedOrders.length ? 'more orders' : 'fewer orders'}` : `driven by ${thisAvgOrder > lastAvgOrder ? 'higher spend per order' : 'lower spend per order'}`)
+        : ''
+      lines.push(`  Business is ${thisRev > lastRev * 1.1 ? 'growing well' : 'holding steady'}${driver ? ` — ${driver}` : ''}.`)
+    } else {
+      const topLoser = dishDeltas[0]?.delta < 0 ? dishDeltas[0] : null
+      const topBranchLoser = branchDeltas[0]?.delta < 0 ? branchDeltas[0] : null
+      let take = `Revenue is down vs last week.`
+      if (topBranchLoser) take += ` **${topBranchLoser.name}** contributed the most to the drop (${fmt(topBranchLoser.delta)}).`
+      else if (topLoser) take += ` **${topLoser.name}** had the biggest drop (${fmt(topLoser.delta)}).`
+      if (volumeChange !== null && volumeChange < -10) take += ` Order volume fell ${Math.abs(volumeChange).toFixed(0)}%.`
+      lines.push(`  ${take}`)
     }
 
     return NextResponse.json({ answer: lines.join('\n'), period: 'This week vs last', intents, followUps: getFollowUps(['trends'], allBranches.length), source: 'restaurant-db' })
@@ -1034,47 +1375,152 @@ export async function POST(req: Request) {
 
   // ── Revenue / Profit / Food Cost / Payment ───────────────────────────────────
   if (intents.some(i => ['revenue', 'profit', 'payment', 'food_cost'].includes(i)) && !intents.includes('branch_comparison') && !intents.includes('record_transaction')) {
-    const sales = await prisma.dishSale.findMany({
-      where: { restaurantId, ...branchFilter, saleDate: { gte: range.start, lte: range.end } },
-      select: { totalSaleAmount: true, calculatedFoodCost: true, paymentMethod: true },
-    })
+    const prevRange = getPreviousRange(range)
+
+    const [sales, prevSales, topDishes, branchSales] = await Promise.all([
+      prisma.dishSale.findMany({
+        where: { restaurantId, ...branchFilter, saleDate: { gte: range.start, lte: range.end } },
+        select: { totalSaleAmount: true, calculatedFoodCost: true, paymentMethod: true, dishId: true, dish: { select: { name: true } }, branchId: true, branch: { select: { name: true } } },
+      }),
+      prevRange ? prisma.dishSale.aggregate({
+        where: { restaurantId, ...branchFilter, saleDate: { gte: prevRange.start, lte: prevRange.end } },
+        _sum: { totalSaleAmount: true, calculatedFoodCost: true },
+      }) : Promise.resolve(null),
+      prisma.dishSale.groupBy({
+        by: ['dishId'],
+        where: { restaurantId, ...branchFilter, saleDate: { gte: range.start, lte: range.end } },
+        _sum: { totalSaleAmount: true, quantitySold: true },
+        orderBy: { _sum: { totalSaleAmount: 'desc' } },
+        take: 5,
+      }),
+      allBranches.length > 1 && !branchFilter.branchId
+        ? prisma.dishSale.findMany({ where: { restaurantId, saleDate: { gte: range.start, lte: range.end } }, select: { totalSaleAmount: true, branchId: true, branch: { select: { name: true } } } })
+        : Promise.resolve([] as { totalSaleAmount: number | null; branchId: string; branch: { name: string } }[]),
+    ])
+
     const totalRev  = sales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
     const totalCogs = sales.reduce((s, x) => s + (x.calculatedFoodCost ?? 0), 0)
+    const prevRev   = prevSales?._sum.totalSaleAmount ?? 0
+    const prevCogs  = prevSales?._sum.calculatedFoodCost ?? 0
+
+    // Payment method breakdown
+    const pmBreakdown: Record<string, { amount: number; count: number }> = {}
+    for (const s of sales) {
+      const m = s.paymentMethod ?? 'Cash'
+      if (!pmBreakdown[m]) pmBreakdown[m] = { amount: 0, count: 0 }
+      pmBreakdown[m].amount += s.totalSaleAmount ?? 0
+      pmBreakdown[m].count++
+    }
+    const pmRanked = Object.entries(pmBreakdown).sort((a, b) => b[1].amount - a[1].amount)
+
+    // Dish names for topDishes
+    const dishNameMap: Record<string, string> = {}
+    for (const s of sales) dishNameMap[s.dishId] = s.dish.name
+
+    // Branch breakdown
+    const bMap: Record<string, { name: string; rev: number }> = {}
+    for (const s of branchSales) {
+      if (!bMap[s.branchId]) bMap[s.branchId] = { name: s.branch.name, rev: 0 }
+      bMap[s.branchId].rev += s.totalSaleAmount ?? 0
+    }
+    const bRanked = Object.values(bMap).sort((a, b) => b.rev - a.rev)
 
     if (intents.includes('payment')) {
       if (pmFilter) {
         const filtered = sales.filter(s => s.paymentMethod === pmFilter)
         const amount   = filtered.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
         lines.push(`**${pmFilter} Revenue** — ${range.label} · ${branchLabel}`)
-        lines.push(`  Amount: **${fmt(amount)}** (${pct(amount, totalRev)} of total)`)
-        lines.push(`  Orders: ${filtered.length}`)
-      } else {
-        const byMethod: Record<string, { amount: number; count: number }> = {}
-        for (const s of sales) {
-          const m = s.paymentMethod ?? 'Cash'
-          if (!byMethod[m]) byMethod[m] = { amount: 0, count: 0 }
-          byMethod[m].amount += s.totalSaleAmount ?? 0
-          byMethod[m].count++
+        lines.push(`  Amount: **${fmt(amount)}** (${pct(amount, totalRev)} of total revenue)`)
+        lines.push(`  Transactions: ${filtered.length}`)
+        if (prevRange && prevRev > 0) {
+          lines.push(`  ${range.label}: ${fmt(amount)} · Compare with full payment breakdown for ${prevRange.label}`)
         }
-        lines.push(`**Revenue by Payment Method** — ${range.label} · ${branchLabel}`)
-        Object.entries(byMethod)
-          .sort((a, b) => b[1].amount - a[1].amount)
-          .forEach(([method, d]) => {
-            lines.push(`  ${method}: **${fmt(d.amount)}** (${pct(d.amount, totalRev)}) · ${d.count} orders`)
-          })
-        lines.push(`  ─`)
+      } else {
+        lines.push(`**Payment Method Breakdown** — ${range.label} · ${branchLabel}`)
         lines.push(`  Total: **${fmt(totalRev)}**`)
+        lines.push(``)
+        pmRanked.forEach(([method, d], i) => {
+          const medal = i === 0 ? '::Star::' : i === 1 ? '::Award::' : '  '
+          lines.push(`  ${medal} **${method}**: ${fmt(d.amount)} (${pct(d.amount, totalRev)}) · ${d.count} transactions`)
+        })
+        if (pmRanked.length > 0) {
+          lines.push(``)
+          lines.push(`**::Lightbulb:: Insight**`)
+          lines.push(`  **${pmRanked[0][0]}** is the dominant payment method at ${pct(pmRanked[0][1].amount, totalRev)} of revenue.`)
+        }
       }
     }
 
     if (intents.includes('revenue') && !intents.includes('payment')) {
       lines.push(`**Revenue** — ${range.label} · ${branchLabel}`)
       lines.push(`  Total: **${fmt(totalRev)}**`)
+
       if (totalRev === 0) {
         lines.push(`  ::AlertTriangle:: No completed orders found for this period.`)
-        lines.push(`  Revenue is recorded when orders are marked PAID or COMPLETED.`)
+        lines.push(`  Revenue records when orders are marked PAID or COMPLETED.`)
       } else {
-        lines.push(`  Dish Sales: ${sales.length}`)
+        lines.push(`  Transactions: ${sales.length}${sales.length > 0 ? ` · Avg per sale: ${fmt(totalRev / sales.length)}` : ''}`)
+
+        // Comparison
+        if (prevRange && prevRev > 0) {
+          const icon = dIcon(totalRev, prevRev)
+          lines.push(``)
+          lines.push(`**vs ${prevRange.label}**`)
+          lines.push(`  ${icon} ${dSign(totalRev, prevRev)} · ${prevRange.label}: ${fmt(prevRev)} · Difference: ${totalRev >= prevRev ? '+' : ''}${fmt(totalRev - prevRev)}`)
+        }
+
+        // Payment breakdown
+        if (pmRanked.length > 1) {
+          lines.push(``)
+          lines.push(`**Payment Breakdown**`)
+          pmRanked.forEach(([m, d]) => lines.push(`  ${m}: **${fmt(d.amount)}** (${pct(d.amount, totalRev)})`))
+        }
+
+        // Branch breakdown
+        if (bRanked.length > 1) {
+          lines.push(``)
+          lines.push(`**By Branch**`)
+          bRanked.forEach((b, i) => {
+            const medal = i === 0 ? '::Star::' : i === 1 ? '::Award::' : '  '
+            lines.push(`  ${medal} **${b.name}**: ${fmt(b.rev)} (${pct(b.rev, totalRev)})`)
+          })
+        }
+
+        // Top dishes
+        if (topDishes.length > 0) {
+          lines.push(``)
+          lines.push(`**Top Sellers**`)
+          topDishes.slice(0, 3).forEach((d, i) => {
+            const name = dishNameMap[d.dishId] ?? d.dishId
+            const rev  = d._sum.totalSaleAmount ?? 0
+            const medal = i === 0 ? '::Flame::' : i === 1 ? '::Award::' : '  '
+            lines.push(`  ${medal} ${i + 1}. **${name}**: ${fmt(rev)} (${pct(rev, totalRev)})`)
+          })
+        }
+
+        // Insights
+        const insights: string[] = []
+        if (bRanked.length > 1 && bRanked[0]) {
+          const share = (bRanked[0].rev / totalRev) * 100
+          if (share > 60) insights.push(`**${bRanked[0].name}** generated ${share.toFixed(0)}% of total revenue — highly concentrated.`)
+        }
+        if (topDishes[0]) {
+          const topRev = topDishes[0]._sum.totalSaleAmount ?? 0
+          const topShare = totalRev > 0 ? (topRev / totalRev) * 100 : 0
+          if (topShare > 30) insights.push(`**${dishNameMap[topDishes[0].dishId] ?? '—'}** accounts for ${topShare.toFixed(0)}% of all revenue — your biggest driver.`)
+        }
+        if (pmRanked[0] && (pmRanked[0][1].amount / totalRev) > 0.7) {
+          insights.push(`${pct(pmRanked[0][1].amount, totalRev)} of payments come through **${pmRanked[0][0]}**.`)
+        }
+        if (prevRange && prevRev > 0) {
+          const delta = ((totalRev - prevRev) / prevRev) * 100
+          if (Math.abs(delta) > 20) insights.push(`Revenue ${delta > 0 ? 'grew' : 'dropped'} ${Math.abs(delta).toFixed(0)}% vs ${prevRange.label} — a significant shift.`)
+        }
+        if (insights.length > 0) {
+          lines.push(``)
+          lines.push(`**::Lightbulb:: Key Insights**`)
+          insights.forEach(ins => lines.push(`  • ${ins}`))
+        }
       }
     }
 
@@ -1082,91 +1528,314 @@ export async function POST(req: Request) {
       lines.push(`**Food Cost** — ${range.label} · ${branchLabel}`)
       lines.push(`  COGS: **${fmt(totalCogs)}**`)
       lines.push(`  Food Cost %: **${pct(totalCogs, totalRev)}**`)
+      if (prevCogs > 0) {
+        const icon = dIcon(totalCogs, prevCogs)
+        lines.push(`  ${icon} ${dSign(totalCogs, prevCogs)} vs ${prevRange?.label} (${fmt(prevCogs)}, ${pct(prevCogs, prevRev)})`)
+      }
+      lines.push(``)
+      lines.push(`**::Lightbulb:: Insight**`)
+      const fc = totalRev > 0 ? (totalCogs / totalRev) * 100 : 0
+      if (fc < 25) lines.push(`  Food cost at ${fc.toFixed(1)}% — well controlled. Industry benchmark is 28–35%.`)
+      else if (fc < 35) lines.push(`  Food cost at ${fc.toFixed(1)}% — within normal range. Benchmark is 28–35%.`)
+      else lines.push(`  Food cost at ${fc.toFixed(1)}% — above typical range of 28–35%. Review high-cost ingredients.`)
     }
 
     if (intents.includes('profit')) {
-      const wasteLogs = await prisma.wasteLog.findMany({
-        where: { restaurantId, ...branchFilter, date: { gte: range.start, lte: range.end } },
-        select: { calculatedCost: true },
-      })
-      const wasteCost = wasteLogs.reduce((s, x) => s + (x.calculatedCost ?? 0), 0)
-      const profit    = totalRev - totalCogs - wasteCost
+      const [wasteLogs, prevWaste] = await Promise.all([
+        prisma.wasteLog.findMany({ where: { restaurantId, ...branchFilter, date: { gte: range.start, lte: range.end } }, select: { calculatedCost: true } }),
+        prevRange ? prisma.wasteLog.aggregate({ where: { restaurantId, ...branchFilter, date: { gte: prevRange.start, lte: prevRange.end } }, _sum: { calculatedCost: true } }) : Promise.resolve(null),
+      ])
+      const wasteCost  = wasteLogs.reduce((s, x) => s + (x.calculatedCost ?? 0), 0)
+      const profit     = totalRev - totalCogs - wasteCost
+      const prevProfit = prevRev - prevCogs - (prevWaste?._sum.calculatedCost ?? 0)
+
       lines.push(`**Profit & Loss** — ${range.label} · ${branchLabel}`)
-      lines.push(`  Revenue:   **${fmt(totalRev)}**`)
-      lines.push(`  Food Cost: ${fmt(totalCogs)} (${pct(totalCogs, totalRev)})`)
-      lines.push(`  Waste:     ${fmt(wasteCost)} (${pct(wasteCost, totalRev)})`)
+      lines.push(``)
+      lines.push(`  ::Banknote:: Revenue:   **${fmt(totalRev)}**`)
+      lines.push(`  ::ChefHat:: Food Cost:  ${fmt(totalCogs)} (${pct(totalCogs, totalRev)})`)
+      if (wasteCost > 0) lines.push(`  ::AlertTriangle:: Waste: ${fmt(wasteCost)} (${pct(wasteCost, totalRev)})`)
       lines.push(`  ─`)
-      lines.push(`  **${profit >= 0 ? '::TrendingUp:: Profit' : '::TrendingDown:: Loss'}: ${fmt(Math.abs(profit))} (${pct(Math.abs(profit), totalRev)})**`)
+      const profIcon = profit >= 0 ? '::TrendingUp::' : '::TrendingDown::'
+      lines.push(`  ${profIcon} **${profit >= 0 ? 'Profit' : 'Loss'}: ${fmt(Math.abs(profit))} (${pct(Math.abs(profit), totalRev)} margin)**`)
+
+      if (prevRange && prevRev > 0) {
+        lines.push(``)
+        lines.push(`**vs ${prevRange.label}**`)
+        const icon = dIcon(profit, prevProfit)
+        lines.push(`  ${icon} Profit: ${dSign(profit, prevProfit)} · ${prevRange.label}: ${fmt(prevProfit)}`)
+        lines.push(`  Revenue: ${dSign(totalRev, prevRev)} · Food cost: ${dSign(totalCogs, prevCogs)}`)
+      }
+
+      lines.push(``)
+      lines.push(`**::Lightbulb:: Jesse's Take**`)
+      const margin = totalRev > 0 ? (profit / totalRev) * 100 : 0
+      if (totalRev === 0) {
+        lines.push(`  No revenue recorded. Profit cannot be calculated without sales.`)
+      } else if (margin >= 20) {
+        lines.push(`  Healthy margins at ${margin.toFixed(1)}%. Food cost is well controlled${wasteCost > 0 ? `, though waste (${fmt(wasteCost)}) is eating into profit` : ''}.`)
+      } else if (margin >= 10) {
+        lines.push(`  Margins are moderate at ${margin.toFixed(1)}%. ${totalCogs / totalRev > 0.35 ? 'Food costs are above average — review purchasing.' : 'Look for opportunities to increase order volume.'}`)
+      } else if (margin >= 0) {
+        lines.push(`  Margins are thin at ${margin.toFixed(1)}%. Food cost (${pct(totalCogs, totalRev)}) is the main factor${wasteCost > 0 ? `, plus ${fmt(wasteCost)} in waste` : ''}.`)
+      } else {
+        lines.push(`  Operating at a loss. Revenue (${fmt(totalRev)}) is not covering food cost (${fmt(totalCogs)})${wasteCost > 0 ? ` plus waste (${fmt(wasteCost)})` : ''}. Review pricing or costs.`)
+      }
     }
   }
 
   // ── Orders ───────────────────────────────────────────────────────────────────
   if (intents.includes('orders') && !intents.includes('pending_orders')) {
-    const orders = await prisma.restaurantOrder.findMany({
-      where: { restaurantId, ...branchFilter, createdAt: { gte: range.start, lte: range.end } },
-      select: { status: true, totalAmount: true },
-    })
-    const completed = orders.filter(o => ['COMPLETED', 'PAID'].includes(o.status ?? '')).length
-    const pending   = orders.filter(o => ['PENDING', 'OPEN'].includes(o.status ?? '')).length
-    const totalAmt  = orders.reduce((s, o) => s + (o.totalAmount ?? 0), 0)
+    const prevRange = getPreviousRange(range)
+    const [orders, prevCount] = await Promise.all([
+      prisma.restaurantOrder.findMany({
+        where: { restaurantId, ...branchFilter, createdAt: { gte: range.start, lte: range.end } },
+        select: { status: true, totalAmount: true, branch: { select: { name: true } }, branchId: true },
+      }),
+      prevRange ? prisma.restaurantOrder.count({ where: { restaurantId, ...branchFilter, createdAt: { gte: prevRange.start, lte: prevRange.end } } }) : Promise.resolve(0),
+    ])
+
+    const completed    = orders.filter(o => ['COMPLETED', 'PAID'].includes(o.status ?? ''))
+    const pending      = orders.filter(o => ['PENDING', 'OPEN'].includes(o.status ?? ''))
+    const totalAmt     = orders.reduce((s, o) => s + (o.totalAmount ?? 0), 0)
+    const completedAmt = completed.reduce((s, o) => s + (o.totalAmount ?? 0), 0)
+    const avgOrder     = completed.length > 0 ? completedAmt / completed.length : 0
+    const completionPct = orders.length > 0 ? (completed.length / orders.length) * 100 : 0
+
     lines.push(`**Orders** — ${range.label} · ${branchLabel}`)
     lines.push(`  Total: **${orders.length}**`)
-    lines.push(`  Completed: ${completed}  ·  Pending: ${pending}`)
-    lines.push(`  Order Value: ${fmt(totalAmt)}`)
+    lines.push(``)
+    lines.push(`**Breakdown**`)
+    lines.push(`  ::CheckCircle:: Completed: **${completed.length}** (${completionPct.toFixed(0)}% completion rate)`)
+    lines.push(`  ::Clock:: Pending / open: ${pending.length}`)
+    lines.push(`  Order value: ${fmt(totalAmt)} · Avg completed order: **${fmt(avgOrder)}**`)
+
+    if (prevRange && prevCount > 0) {
+      lines.push(``)
+      lines.push(`**vs ${prevRange.label}**`)
+      const icon = dIcon(orders.length, prevCount)
+      lines.push(`  ${icon} ${dSign(orders.length, prevCount)} · ${prevRange.label}: ${prevCount} orders · This period: ${orders.length}`)
+    }
+
+    // Branch breakdown
+    if (allBranches.length > 1) {
+      const bMap: Record<string, number> = {}
+      for (const o of orders) { const b = o.branch?.name ?? 'Unknown'; bMap[b] = (bMap[b] ?? 0) + 1 }
+      const bRanked = Object.entries(bMap).sort((a, b) => b[1] - a[1])
+      if (bRanked.length > 1) {
+        lines.push(``)
+        lines.push(`**By Branch**`)
+        bRanked.forEach(([b, c], i) => {
+          const medal = i === 0 ? '::Star::' : '  '
+          lines.push(`  ${medal} **${b}**: ${c} orders (${pct(c, orders.length)})`)
+        })
+      }
+    }
+
+    lines.push(``)
+    lines.push(`**::Lightbulb:: Jesse's Take**`)
+    if (orders.length === 0) {
+      lines.push(`  No orders recorded for this period. Check if the waiter app is being used.`)
+    } else if (completionPct < 50) {
+      lines.push(`  Completion rate is low at ${completionPct.toFixed(0)}% — ${pending.length} order${pending.length !== 1 ? 's' : ''} still pending. Make sure orders are being marked PAID or COMPLETED.`)
+    } else if (prevCount > 0 && orders.length > prevCount) {
+      lines.push(`  Order volume is up ${orders.length - prevCount} orders vs ${prevRange?.label}. Average order value is ${fmt(avgOrder)}.`)
+    } else {
+      lines.push(`  ${completed.length} out of ${orders.length} orders completed (${completionPct.toFixed(0)}%). Average completed order: ${fmt(avgOrder)}.`)
+    }
   }
 
   // ── Pending Orders (right now, no date filter) ────────────────────────────────
   if (intents.includes('pending_orders')) {
     const pending = await prisma.restaurantOrder.findMany({
       where: { restaurantId, ...branchFilter, status: { in: ['PENDING', 'OPEN'] } },
-      select: { status: true, totalAmount: true, table: { select: { name: true } }, branch: { select: { name: true } } },
+      select: { status: true, totalAmount: true, table: { select: { name: true } }, branch: { select: { name: true } }, branchId: true },
     })
     const totalAmt = pending.reduce((s, o) => s + (o.totalAmount ?? 0), 0)
+    const avgAmt   = pending.length > 0 ? totalAmt / pending.length : 0
+
     lines.push(`**Pending Orders Right Now** — ${branchLabel}`)
-    lines.push(`  Count: **${pending.length}**`)
-    lines.push(`  Total Value: ${fmt(totalAmt)}`)
-    if (pending.length > 0) {
-      const byBranch: Record<string, number> = {}
-      for (const o of pending) {
-        const b = o.branch?.name ?? 'Unknown'
-        byBranch[b] = (byBranch[b] ?? 0) + 1
+    if (pending.length === 0) {
+      lines.push(`  ::CheckCircle:: No pending orders — all clear.`)
+    } else {
+      lines.push(`  Count: **${pending.length} order${pending.length !== 1 ? 's' : ''}**`)
+      lines.push(`  Total value in queue: **${fmt(totalAmt)}**`)
+      lines.push(`  Average order: ${fmt(avgAmt)}`)
+
+      if (allBranches.length > 1) {
+        const byBranch: Record<string, { count: number; value: number }> = {}
+        for (const o of pending) {
+          const b = o.branch?.name ?? 'Unknown'
+          if (!byBranch[b]) byBranch[b] = { count: 0, value: 0 }
+          byBranch[b].count++
+          byBranch[b].value += o.totalAmount ?? 0
+        }
+        const bRanked = Object.entries(byBranch).sort((a, b) => b[1].count - a[1].count)
+        if (bRanked.length > 1) {
+          lines.push(``)
+          lines.push(`**By Branch**`)
+          bRanked.forEach(([b, d]) => lines.push(`  ::Clock:: **${b}**: ${d.count} order${d.count !== 1 ? 's' : ''} · ${fmt(d.value)}`))
+        }
       }
-      Object.entries(byBranch).forEach(([b, count]) => lines.push(`  ${b}: ${count} order${count !== 1 ? 's' : ''}`))
+
+      lines.push(``)
+      lines.push(`**::Lightbulb:: Jesse's Take**`)
+      if (pending.length >= 10) {
+        lines.push(`  ${pending.length} orders pending — high queue. Make sure waiters are processing and completing orders promptly.`)
+      } else {
+        lines.push(`  ${pending.length} order${pending.length !== 1 ? 's' : ''} in queue worth ${fmt(totalAmt)}. Complete them to record revenue.`)
+      }
     }
   }
 
   // ── Average Order Value ───────────────────────────────────────────────────────
   if (intents.includes('avg_order')) {
-    const orders = await prisma.restaurantOrder.findMany({
-      where: { restaurantId, ...branchFilter, createdAt: { gte: range.start, lte: range.end } },
-      select: { totalAmount: true },
-    })
-    const totalAmt = orders.reduce((s, o) => s + (o.totalAmount ?? 0), 0)
-    const avg      = orders.length > 0 ? totalAmt / orders.length : 0
+    const prevRange = getPreviousRange(range)
+    const [orders, prevOrders] = await Promise.all([
+      prisma.restaurantOrder.findMany({
+        where: { restaurantId, ...branchFilter, createdAt: { gte: range.start, lte: range.end }, status: { in: ['COMPLETED', 'PAID'] } },
+        select: { totalAmount: true, branchId: true, branch: { select: { name: true } } },
+      }),
+      prevRange ? prisma.restaurantOrder.findMany({
+        where: { restaurantId, ...branchFilter, createdAt: { gte: prevRange.start, lte: prevRange.end }, status: { in: ['COMPLETED', 'PAID'] } },
+        select: { totalAmount: true },
+      }) : Promise.resolve([]),
+    ])
+
+    const totalAmt  = orders.reduce((s, o) => s + (o.totalAmount ?? 0), 0)
+    const avg       = orders.length > 0 ? totalAmt / orders.length : 0
+    const prevAmt   = prevOrders.reduce((s, o) => s + (o.totalAmount ?? 0), 0)
+    const prevAvg   = prevOrders.length > 0 ? prevAmt / prevOrders.length : 0
+
     lines.push(`**Average Order Value** — ${range.label} · ${branchLabel}`)
     lines.push(`  Average: **${fmt(avg)}**`)
-    lines.push(`  Based on ${orders.length} order${orders.length !== 1 ? 's' : ''} · Total: ${fmt(totalAmt)}`)
+    lines.push(`  Based on ${orders.length} completed order${orders.length !== 1 ? 's' : ''} · Total: ${fmt(totalAmt)}`)
+
+    if (prevRange && prevAvg > 0) {
+      const icon = dIcon(avg, prevAvg)
+      lines.push(``)
+      lines.push(`**vs ${prevRange.label}**`)
+      lines.push(`  ${icon} ${dSign(avg, prevAvg)} · ${prevRange.label}: ${fmt(prevAvg)} (${prevOrders.length} orders)`)
+    }
+
+    // By branch if multi-branch
+    if (allBranches.length > 1) {
+      const bMap: Record<string, { name: string; total: number; count: number }> = {}
+      for (const o of orders) {
+        if (!bMap[o.branchId]) bMap[o.branchId] = { name: o.branch?.name ?? 'Unknown', total: 0, count: 0 }
+        bMap[o.branchId].total += o.totalAmount ?? 0
+        bMap[o.branchId].count++
+      }
+      const bRanked = Object.values(bMap).map(b => ({ ...b, avg: b.count > 0 ? b.total / b.count : 0 })).sort((a, b) => b.avg - a.avg)
+      if (bRanked.length > 1) {
+        lines.push(``)
+        lines.push(`**By Branch**`)
+        bRanked.forEach((b, i) => {
+          const medal = i === 0 ? '::Star::' : '  '
+          lines.push(`  ${medal} **${b.name}**: ${fmt(b.avg)} avg (${b.count} orders)`)
+        })
+      }
+    }
+
+    lines.push(``)
+    lines.push(`**::Lightbulb:: Jesse's Take**`)
+    if (orders.length === 0) {
+      lines.push(`  No completed orders for this period.`)
+    } else if (prevAvg > 0) {
+      const delta = ((avg - prevAvg) / prevAvg) * 100
+      if (delta > 10) lines.push(`  Average order value is up ${delta.toFixed(1)}% vs ${prevRange?.label}. Customers are spending more per visit.`)
+      else if (delta < -10) lines.push(`  Average order value dropped ${Math.abs(delta).toFixed(1)}% vs ${prevRange?.label}. Check if menu prices changed or order composition shifted.`)
+      else lines.push(`  Average order value is stable at ${fmt(avg)} — consistent with ${prevRange?.label}.`)
+    } else {
+      lines.push(`  Average completed order is ${fmt(avg)} across ${orders.length} order${orders.length !== 1 ? 's' : ''}.`)
+    }
   }
 
   // ── Expenses ─────────────────────────────────────────────────────────────────
   if (intents.includes('expenses') && !intents.includes('branch_comparison') && !intents.includes('record_transaction')) {
-    const purchases = await prisma.inventoryPurchase.findMany({
-      where: { restaurantId, ...branchFilter, purchasedAt: { gte: range.start, lte: range.end } },
-      select: { totalCost: true, paymentMethod: true },
-    })
-    const total = purchases.reduce((s, p) => s + (p.totalCost ?? 0), 0)
+    const prevRange = getPreviousRange(range)
+    const [purchases, prevTotal] = await Promise.all([
+      prisma.inventoryPurchase.findMany({
+        where: { restaurantId, ...branchFilter, purchasedAt: { gte: range.start, lte: range.end } },
+        select: { totalCost: true, paymentMethod: true, ingredient: { select: { name: true } }, branchId: true, branch: { select: { name: true } } },
+        orderBy: { totalCost: 'desc' },
+      }),
+      prevRange ? prisma.inventoryPurchase.aggregate({ where: { restaurantId, ...branchFilter, purchasedAt: { gte: prevRange.start, lte: prevRange.end } }, _sum: { totalCost: true } }) : Promise.resolve(null),
+    ])
+
+    const total    = purchases.reduce((s, p) => s + (p.totalCost ?? 0), 0)
+    const prevAmt  = prevTotal?._sum.totalCost ?? 0
+
+    // Build ingredient name map
+    const ingMap: Record<string, string> = {}
+    for (const p of purchases) ingMap[p.ingredient.name] = p.ingredient.name
+
+    // Payment breakdown
+    const pmBreak: Record<string, number> = {}
+    for (const p of purchases) { const m = p.paymentMethod ?? 'Cash'; pmBreak[m] = (pmBreak[m] ?? 0) + (p.totalCost ?? 0) }
+    const pmRanked = Object.entries(pmBreak).sort((a, b) => b[1] - a[1])
+
     lines.push(`**Expenses** — ${range.label} · ${branchLabel}`)
-    lines.push(`  Inventory Purchases: **${fmt(total)}**`)
-    lines.push(`  Transactions: ${purchases.length}`)
+    lines.push(`  Total: **${fmt(total)}**`)
+    lines.push(`  ${purchases.length} purchase transaction${purchases.length !== 1 ? 's' : ''}`)
+
+    if (prevRange && prevAmt > 0) {
+      const icon = dIcon(total, prevAmt)
+      lines.push(`  ${icon} ${dSign(total, prevAmt)} vs ${prevRange.label} (${fmt(prevAmt)})`)
+    }
+
+    // Top cost items
     if (purchases.length > 0) {
-      const byMethod: Record<string, number> = {}
+      lines.push(``)
+      lines.push(`**Top Costs**`)
+      const seen = new Set<string>()
+      let rank = 0
       for (const p of purchases) {
-        const m = p.paymentMethod ?? 'Cash'
-        byMethod[m] = (byMethod[m] ?? 0) + (p.totalCost ?? 0)
+        if (seen.has(p.ingredient.name)) continue
+        seen.add(p.ingredient.name)
+        const medal = rank === 0 ? '::AlertTriangle::' : rank === 1 ? '::Award::' : '  '
+        lines.push(`  ${medal} ${rank + 1}. **${p.ingredient.name}**: ${fmt(p.totalCost ?? 0)} (${pct(p.totalCost ?? 0, total)})`)
+        rank++
+        if (rank >= 5) break
       }
-      Object.entries(byMethod)
-        .sort((a, b) => b[1] - a[1])
-        .forEach(([m, amt]) => lines.push(`  ${m}: ${fmt(amt)}`))
+    }
+
+    // Payment breakdown
+    if (pmRanked.length > 1) {
+      lines.push(``)
+      lines.push(`**Payment Methods**`)
+      pmRanked.forEach(([m, amt]) => lines.push(`  ${m}: **${fmt(amt)}** (${pct(amt, total)})`))
+    }
+
+    // Branch breakdown
+    if (allBranches.length > 1) {
+      const bMap: Record<string, { name: string; total: number }> = {}
+      for (const p of purchases) {
+        if (!bMap[p.branchId]) bMap[p.branchId] = { name: p.branch?.name ?? 'Unknown', total: 0 }
+        bMap[p.branchId].total += p.totalCost ?? 0
+      }
+      const bRanked = Object.values(bMap).sort((a, b) => b.total - a.total)
+      if (bRanked.length > 1) {
+        lines.push(``)
+        lines.push(`**By Branch**`)
+        bRanked.forEach((b, i) => {
+          const medal = i === 0 ? '::Star::' : '  '
+          lines.push(`  ${medal} **${b.name}**: ${fmt(b.total)} (${pct(b.total, total)})`)
+        })
+      }
+    }
+
+    lines.push(``)
+    lines.push(`**::Lightbulb:: Jesse's Take**`)
+    if (total === 0) {
+      lines.push(`  No purchase expenses recorded for this period.`)
+    } else if (prevAmt > 0) {
+      const delta = ((total - prevAmt) / prevAmt) * 100
+      if (delta > 20) lines.push(`  Expenses jumped ${delta.toFixed(0)}% vs ${prevRange?.label}. Review the top cost items to confirm they're necessary.`)
+      else if (delta < -20) lines.push(`  Expenses dropped ${Math.abs(delta).toFixed(0)}% vs ${prevRange?.label} — good cost control, or lower purchasing activity.`)
+      else lines.push(`  Expenses are in line with ${prevRange?.label} (${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%).`)
+    } else {
+      const topItem = purchases[0]
+      if (topItem) lines.push(`  **${topItem.ingredient.name}** was the biggest expense at ${fmt(topItem.totalCost ?? 0)} (${pct(topItem.totalCost ?? 0, total)} of total).`)
     }
   }
 
@@ -1186,21 +1855,58 @@ export async function POST(req: Request) {
   if (intents.includes('top_dishes')) {
     const dishRange = hasExplicitTimePeriod(question) ? range : thisMonthRange()
     const sales = await prisma.dishSale.findMany({
-      where: { restaurantId, saleDate: { gte: dishRange.start, lte: dishRange.end } },
-      include: { dish: { select: { name: true } } },
+      where: { restaurantId, ...branchFilter, saleDate: { gte: dishRange.start, lte: dishRange.end } },
+      select: { totalSaleAmount: true, quantitySold: true, dishId: true, dish: { select: { name: true } }, branchId: true, branch: { select: { name: true } } },
     })
+
     const map: Record<string, { name: string; revenue: number; qty: number }> = {}
     for (const s of sales) {
       if (!map[s.dishId]) map[s.dishId] = { name: s.dish.name, revenue: 0, qty: 0 }
       map[s.dishId].revenue += s.totalSaleAmount ?? 0
       map[s.dishId].qty     += s.quantitySold ?? 0
     }
-    const top = Object.values(map).sort((a, b) => b.revenue - a.revenue).slice(0, 5)
-    lines.push(`**Top Dishes / Best Sellers** — ${dishRange.label}`)
+    const totalRev = sales.reduce((s, x) => s + (x.totalSaleAmount ?? 0), 0)
+    const top      = Object.values(map).sort((a, b) => b.revenue - a.revenue).slice(0, 8)
+
+    lines.push(`**Top Dishes / Best Sellers** — ${dishRange.label} · ${branchLabel}`)
+
     if (top.length === 0) {
-      lines.push('  No sales data for this period.')
+      lines.push(`  No sales data for this period.`)
     } else {
-      top.forEach((d, i) => lines.push(`  ${i + 1}. ${d.name} — **${fmt(d.revenue)}** (${d.qty} sold)`))
+      lines.push(``)
+      lines.push(`**Rankings**`)
+      const medals = ['::Flame::', '::Star::', '::Award::', '  ', '  ', '  ', '  ', '  ']
+      top.forEach((d, i) => {
+        const share = totalRev > 0 ? ` · ${pct(d.revenue, totalRev)} of revenue` : ''
+        lines.push(`  ${medals[i]} **${i + 1}. ${d.name}** — ${fmt(d.revenue)} (${d.qty} sold${share})`)
+      })
+
+      // Insights
+      const topDish = top[0]
+      const insights: string[] = []
+      if (totalRev > 0 && topDish.revenue / totalRev > 0.3) {
+        insights.push(`**${topDish.name}** drives ${pct(topDish.revenue, totalRev)} of all dish revenue — your single biggest earner.`)
+      }
+      if (top.length >= 3) {
+        const top3Rev = top.slice(0, 3).reduce((s, d) => s + d.revenue, 0)
+        if (totalRev > 0 && top3Rev / totalRev > 0.6) {
+          insights.push(`Top 3 dishes account for ${pct(top3Rev, totalRev)} of revenue — consider protecting their stock levels.`)
+        }
+      }
+
+      if (insights.length > 0) {
+        lines.push(``)
+        lines.push(`**::Lightbulb:: Key Insights**`)
+        insights.forEach(ins => lines.push(`  • ${ins}`))
+      }
+
+      lines.push(``)
+      lines.push(`**::Lightbulb:: Jesse's Take**`)
+      if (top.length === 1) {
+        lines.push(`  Only one dish generating revenue this period. Check if other dishes are available and being ordered.`)
+      } else {
+        lines.push(`  **${topDish.name}** leads with ${fmt(topDish.revenue)} (${topDish.qty} sold). Make sure it stays in stock.`)
+      }
     }
   }
 
@@ -1255,19 +1961,24 @@ export async function POST(req: Request) {
         byBranch[id].total += p.totalCost ?? 0
         byBranch[id].count++
       }
-      const ranked = Object.values(byBranch).sort((a, b) => b.total - a.total)
+      const ranked  = Object.values(byBranch).sort((a, b) => b.total - a.total)
+      const grandTotal = ranked.reduce((s, b) => s + b.total, 0)
       lines.push(`**Expenses by Branch** — ${range.label}`)
       if (ranked.length === 0) {
-        lines.push('  No purchase data for this period.')
+        lines.push(`  No purchase data for this period.`)
       } else {
+        lines.push(`  Total across all branches: **${fmt(grandTotal)}**`)
+        lines.push(``)
         ranked.forEach((b, i) => {
           const medal = i === 0 ? '::AlertTriangle::' : i === 1 ? '::Award::' : '  '
-          lines.push(`  ${medal} ${i + 1}. ${b.name}: **${fmt(b.total)}** (${b.count} purchases)`)
+          lines.push(`  ${medal} ${i + 1}. **${b.name}**: ${fmt(b.total)} (${pct(b.total, grandTotal)}) · ${b.count} purchases`)
         })
+        lines.push(``)
+        lines.push(`**::Lightbulb:: Jesse's Take**`)
         const top = ranked[0]
-        lines.push(`  ─`)
-        lines.push(`  **${top.name}** had the highest expenses at **${fmt(top.total)}**.`)
+        lines.push(`  **${top.name}** is spending the most at ${fmt(top.total)} (${pct(top.total, grandTotal)} of total). ${ranked.length > 1 ? `That's ${fmt(top.total - ranked[ranked.length - 1].total)} more than the lowest-spending branch.` : ''}`)
       }
+
     } else if (intents.includes('profit')) {
       const [sales, wasteLogs] = await Promise.all([
         prisma.dishSale.findMany({
@@ -1291,28 +2002,39 @@ export async function POST(req: Request) {
         if (byBranch[id]) byBranch[id].waste += w.calculatedCost ?? 0
       }
       const ranked = Object.values(byBranch)
-        .map(b => ({ ...b, profit: b.revenue - b.cogs - b.waste }))
+        .map(b => ({ ...b, profit: b.revenue - b.cogs - b.waste, margin: b.revenue > 0 ? ((b.revenue - b.cogs - b.waste) / b.revenue) * 100 : 0 }))
         .sort((a, b) => b.profit - a.profit)
+
       lines.push(`**Profit by Branch** — ${range.label}`)
       if (ranked.length === 0) {
-        lines.push('  No sales data for this period.')
+        lines.push(`  No sales data for this period.`)
       } else {
+        lines.push(``)
         ranked.forEach((b, i) => {
           const medal = i === 0 ? '::Star::' : i === 1 ? '::Award::' : '  '
           const sign  = b.profit >= 0 ? '::TrendingUp::' : '::TrendingDown::'
-          lines.push(`  ${medal} ${i + 1}. ${b.name}`)
-          lines.push(`    Revenue: ${fmt(b.revenue)}  ·  Food Cost: ${fmt(b.cogs)}  ·  Waste: ${fmt(b.waste)}`)
-          lines.push(`    ${sign} **${b.profit >= 0 ? 'Profit' : 'Loss'}: ${fmt(Math.abs(b.profit))}**`)
+          lines.push(`  ${medal} **${i + 1}. ${b.name}**`)
+          lines.push(`    Revenue: ${fmt(b.revenue)} · Food Cost: ${fmt(b.cogs)} · Waste: ${fmt(b.waste)}`)
+          lines.push(`    ${sign} **${b.profit >= 0 ? 'Profit' : 'Loss'}: ${fmt(Math.abs(b.profit))}** (${b.margin.toFixed(1)}% margin)`)
         })
+        lines.push(``)
+        lines.push(`**::Lightbulb:: Jesse's Take**`)
         const top = ranked[0]
-        lines.push(`  ─`)
-        lines.push(`  **${top.name}** had the most ${top.profit >= 0 ? 'profit' : 'losses'} at **${fmt(Math.abs(top.profit))}**.`)
+        const bottom = ranked[ranked.length - 1]
+        if (ranked.length > 1 && bottom.profit < 0) {
+          lines.push(`  **${top.name}** leads with ${fmt(top.profit)} profit. **${bottom.name}** is at a loss (${fmt(bottom.profit)}) — review its cost structure.`)
+        } else if (ranked.length > 1) {
+          const marginGap = top.margin - (ranked[ranked.length - 1].margin)
+          lines.push(`  **${top.name}** has the best profit at ${fmt(top.profit)} (${top.margin.toFixed(1)}% margin). Gap to lowest branch is ${marginGap.toFixed(1)} percentage points.`)
+        } else {
+          lines.push(`  **${top.name}**: ${fmt(top.profit)} profit at ${top.margin.toFixed(1)}% margin.`)
+        }
       }
+
     } else {
-      // Default: revenue by branch
       const sales = await prisma.dishSale.findMany({
         where: { restaurantId, saleDate: { gte: range.start, lte: range.end } },
-        select: { totalSaleAmount: true, branchId: true, branch: { select: { name: true } } },
+        select: { totalSaleAmount: true, branchId: true, branch: { select: { name: true } }, quantitySold: true },
       })
       const byBranch: Record<string, { name: string; revenue: number; count: number }> = {}
       for (const s of sales) {
@@ -1321,18 +2043,30 @@ export async function POST(req: Request) {
         byBranch[id].revenue += s.totalSaleAmount ?? 0
         byBranch[id].count++
       }
-      const ranked = Object.values(byBranch).sort((a, b) => b.revenue - a.revenue)
+      const ranked    = Object.values(byBranch).sort((a, b) => b.revenue - a.revenue)
+      const grandTotal = ranked.reduce((s, b) => s + b.revenue, 0)
+
       lines.push(`**Revenue by Branch** — ${range.label}`)
       if (ranked.length === 0) {
-        lines.push('  No sales data for this period.')
+        lines.push(`  No sales data for this period.`)
       } else {
+        lines.push(`  Total: **${fmt(grandTotal)}** across ${ranked.length} branch${ranked.length !== 1 ? 'es' : ''}`)
+        lines.push(``)
         ranked.forEach((b, i) => {
           const medal = i === 0 ? '::Star::' : i === 1 ? '::Award::' : '  '
-          lines.push(`  ${medal} ${i + 1}. ${b.name}: **${fmt(b.revenue)}** (${b.count} sales)`)
+          lines.push(`  ${medal} **${i + 1}. ${b.name}**: ${fmt(b.revenue)} (${pct(b.revenue, grandTotal)}) · ${b.count} sales`)
         })
+        lines.push(``)
+        lines.push(`**::Lightbulb:: Jesse's Take**`)
         const top = ranked[0]
-        lines.push(`  ─`)
-        lines.push(`  **${top.name}** had the most sales at **${fmt(top.revenue)}**.`)
+        const share = grandTotal > 0 ? (top.revenue / grandTotal) * 100 : 0
+        if (share > 60 && ranked.length > 1) {
+          lines.push(`  **${top.name}** generates ${share.toFixed(0)}% of total revenue — heavily concentrated. Consider growing other branches.`)
+        } else if (ranked.length > 1) {
+          lines.push(`  **${top.name}** leads at ${fmt(top.revenue)} (${share.toFixed(0)}%). Revenue is ${share < 50 ? 'fairly balanced' : 'somewhat concentrated'} across branches.`)
+        } else {
+          lines.push(`  **${top.name}**: ${fmt(top.revenue)} in revenue.`)
+        }
       }
     }
   }
@@ -1376,31 +2110,60 @@ export async function POST(req: Request) {
   if (intents.includes('low_stock')) {
     const items = await prisma.inventoryItem.findMany({
       where: { restaurantId },
-      select: { name: true, quantity: true, reorderLevel: true, unit: true },
+      select: { name: true, quantity: true, reorderLevel: true, unit: true, branch: { select: { name: true } } },
     })
-    const low = items
+    const all  = items.length
+    const low  = items
       .filter(i => i.quantity <= (i.reorderLevel ?? 0))
-      .map(i => ({ ...i, deficit: (i.reorderLevel ?? 0) - i.quantity }))
-      .sort((a, b) => b.deficit - a.deficit) // most critical first
+      .map(i => ({ ...i, deficit: (i.reorderLevel ?? 0) - i.quantity, pctLeft: (i.reorderLevel ?? 0) > 0 ? (i.quantity / (i.reorderLevel ?? 1)) * 100 : 100 }))
+      .sort((a, b) => a.pctLeft - b.pctLeft)
 
     const isRestockQuery = /restock|what\s+should|need\s+to\s+buy/i.test(question)
 
     if (low.length === 0) {
-      lines.push(`**Low Stock** — ::CheckCircle:: All items are above reorder levels!`)
-    } else if (isRestockQuery) {
-      lines.push(`**Restock Priority** — ${low.length} item${low.length !== 1 ? 's' : ''} below reorder level`)
-      lines.push(`  Most urgent first:`)
-      low.slice(0, 10).forEach((i, idx) => {
-        const tag = idx === 0 ? 'Critical' : idx <= 2 ? 'High' : 'Low'
-        lines.push(`  ::AlertTriangle:: **${i.name}** [${tag}] — ${Number(i.quantity.toFixed(2))} ${i.unit} left (${i.deficit > 0 ? `${Number(i.deficit.toFixed(2))} ${i.unit} short` : 'at limit'})`)
-      })
-      if (low.length > 10) lines.push(`  ...and ${low.length - 10} more`)
+      lines.push(`**::CheckCircle:: Stock Alert** — All ${all} item${all !== 1 ? 's' : ''} are above reorder levels`)
+      lines.push(`  No restocking needed right now.`)
     } else {
-      lines.push(`**Low Stock Alert** — ${low.length} item${low.length !== 1 ? 's' : ''} need restocking`)
-      low.slice(0, 10).forEach(i =>
-        lines.push(`  ::AlertTriangle:: ${i.name}: ${Number(i.quantity.toFixed(2))} ${i.unit} (reorder at ≤${i.reorderLevel})`)
-      )
-      if (low.length > 10) lines.push(`  ...and ${low.length - 10} more`)
+      const critical = low.filter(i => i.quantity <= 0)
+      const urgent   = low.filter(i => i.quantity > 0 && i.pctLeft < 50)
+      const warning  = low.filter(i => i.pctLeft >= 50)
+
+      if (isRestockQuery) {
+        lines.push(`**Restock Priority** — ${low.length} item${low.length !== 1 ? 's' : ''} need attention`)
+      } else {
+        lines.push(`**::AlertTriangle:: Low Stock Alert** — ${low.length} of ${all} item${all !== 1 ? 's' : ''} below reorder level`)
+      }
+      lines.push(``)
+
+      if (critical.length > 0) {
+        lines.push(`**Out of Stock (${critical.length})**`)
+        critical.slice(0, 5).forEach(i => lines.push(`  ::XCircle:: **${i.name}** — 0 ${i.unit} · ${i.branch.name}`))
+        if (critical.length > 5) lines.push(`  ...and ${critical.length - 5} more`)
+        lines.push(``)
+      }
+
+      if (urgent.length > 0) {
+        lines.push(`**Urgent — Below 50% of reorder level (${urgent.length})**`)
+        urgent.slice(0, 5).forEach(i => lines.push(`  ::AlertTriangle:: **${i.name}** — ${Number(i.quantity.toFixed(2))} ${i.unit} left (need ${Number((i.reorderLevel ?? 0).toFixed(2))}) · ${i.branch.name}`))
+        if (urgent.length > 5) lines.push(`  ...and ${urgent.length - 5} more`)
+        lines.push(``)
+      }
+
+      if (warning.length > 0) {
+        lines.push(`**At Reorder Level (${warning.length})**`)
+        warning.slice(0, 5).forEach(i => lines.push(`  ::Clock:: **${i.name}** — ${Number(i.quantity.toFixed(2))} ${i.unit} · ${i.branch.name}`))
+        if (warning.length > 5) lines.push(`  ...and ${warning.length - 5} more`)
+        lines.push(``)
+      }
+
+      lines.push(`**::Lightbulb:: Jesse's Take**`)
+      if (critical.length > 0) {
+        lines.push(`  ${critical.length} item${critical.length !== 1 ? 's are' : ' is'} completely out of stock. Restock **${critical[0].name}** first.`)
+      } else if (urgent.length > 0) {
+        lines.push(`  **${urgent[0].name}** is the most urgent — only ${Number(urgent[0].quantity.toFixed(2))} ${urgent[0].unit} left. Order soon to avoid stockouts.`)
+      } else {
+        lines.push(`  ${low.length} item${low.length !== 1 ? 's have' : ' has'} hit the reorder threshold. Schedule restocking soon.`)
+      }
     }
   }
 
@@ -1415,33 +2178,43 @@ export async function POST(req: Request) {
 
   // ── Greeting ─────────────────────────────────────────────────────────────────
   if (intents.includes('greeting') && intents.length === 1) {
-    const hour = new Date().toLocaleString('en-US', { timeZone: TZ, hour: 'numeric', hour12: false })
-    const h = parseInt(hour, 10)
-    const timeGreet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
-    lines.push(`${timeGreet}! ::Zap:: I'm **Jesse** — your restaurant reporting assistant.`)
-    lines.push(``)
-    lines.push(`Ask me anything about your numbers:`)
-    lines.push(`  • "what's today's revenue?" / "this month's profit"`)
-    lines.push(`  • "expenses branch by branch" / "profit by branch this week"`)
-    lines.push(`  • "revenue by MoMo today" / "payment breakdown"`)
-    lines.push(`  • "what's our best seller?" / "top dishes this month"`)
-    lines.push(`  • "how many orders today?" / "pending orders right now"`)
-    lines.push(`  • "how much milk do we have?" / "low stock alert"`)
-    lines.push(`  • "how's business today?" / "are we improving?"`)
-    lines.push(`  • "why is revenue low?" / "this week vs last week"`)
+    if (/\b(how\s+are\s+you|how'?s\s+it(\s+going)?|what'?s\s+up|sup)\b/i.test(question)) {
+      const replies = [
+        `I'm great, thanks for asking! Ready to pull your numbers whenever you are. What do you need?`,
+        `Doing well! Ask me anything — revenue, expenses, stock levels, you name it.`,
+        `All good and ready to help! What would you like to check today?`,
+      ]
+      lines.push(replies[Math.floor(Date.now() / 1000) % replies.length])
+    } else {
+      const hour = new Date().toLocaleString('en-US', { timeZone: TZ, hour: 'numeric', hour12: false })
+      const h = parseInt(hour, 10)
+      const timeGreet = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
+      lines.push(`${timeGreet}! ::Zap:: I'm **Jesse** — your restaurant reporting assistant.`)
+      lines.push(``)
+      lines.push(`Ask me anything about your numbers:`)
+      lines.push(`  ::Banknote:: "what's today's revenue?" / "this month's profit"`)
+      lines.push(`  ::BarChart2:: "expenses branch by branch" / "profit by branch this week"`)
+      lines.push(`  ::Target:: "revenue by MoMo today" / "payment breakdown"`)
+      lines.push(`  ::Flame:: "what's our best seller?" / "top dishes this month"`)
+      lines.push(`  ::Clock:: "how many orders today?" / "pending orders right now"`)
+      lines.push(`  ::AlertTriangle:: "how much milk do we have?" / "low stock alert"`)
+      lines.push(`  ::TrendingUp:: "how's business today?" / "are we improving?"`)
+      lines.push(`  ::Lightbulb:: "why is revenue low?" / "this week vs last week"`)
+    }
   }
 
   // ── Fallback ──────────────────────────────────────────────────────────────────
   if (lines.length === 0) {
-    lines.push(`Hmm, I'm not sure about that one. 🤔`)
+    lines.push(`::AlertTriangle:: I'm not sure how to answer that one.`)
     lines.push(``)
-    lines.push(`I'm best at restaurant numbers. Try something like:`)
+    lines.push(`I'm best at restaurant numbers. Try:`)
     lines.push(`  • "what's today's revenue?"`)
-    lines.push(`  • "how many orders this week?"`)
+    lines.push(`  • "profit this week vs last week"`)
+    lines.push(`  • "how many orders this month?"`)
     lines.push(`  • "what's our best seller?"`)
     lines.push(`  • "do we have any low stock?"`)
-    lines.push(`  • "expenses this month"`)
-    lines.push(`  • "paid 50,000 for fuel by MoMo" — to record a transaction`)
+    lines.push(`  • "expenses by branch this month"`)
+    lines.push(`  • "how's business today?" — for a full snapshot`)
   }
 
   return NextResponse.json({

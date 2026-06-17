@@ -4,7 +4,7 @@ const sqlite = new SQLiteConnection(CapacitorSQLite)
 let db: SQLiteDBConnection | null = null
 
 const DB_NAME = 'magnify_waiter'
-const DB_VERSION = 3
+const DB_VERSION = 4
 
 interface Migration {
   version: number
@@ -103,6 +103,18 @@ CREATE TABLE IF NOT EXISTS cancellation_approvers (
   {
     version: 3,
     sql: 'ALTER TABLE orders ADD COLUMN sync_error TEXT;',
+  },
+  {
+    version: 4,
+    sql: 'ALTER TABLE order_items ADD COLUMN notes TEXT;',
+  },
+  {
+    version: 5,
+    sql: `CREATE TABLE IF NOT EXISTS order_code_holders (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  pin_hash TEXT NOT NULL
+);`,
   },
 ]
 
@@ -367,6 +379,7 @@ export interface OrderItem {
   dish_price: number
   qty: number
   status: string
+  notes: string | null
   created_at: string
   updated_at: string
 }
@@ -389,8 +402,8 @@ export async function createOrder(order: Order, items: OrderItem[]): Promise<voi
   )
   for (const item of items) {
     await d.run(
-      'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.created_at, item.updated_at]
+      'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.created_at, item.updated_at]
     )
   }
 }
@@ -488,7 +501,7 @@ export async function reconcileOrderStatuses(remoteOrders: RemoteOrderStatus[]):
 // synced=1 so these are never re-pushed to the server.
 export interface IncomingOrderItem {
   id: string; order_id: string; dish_id: string; dish_name: string
-  dish_price: number; qty: number; status: string; created_at: string; updated_at: string
+  dish_price: number; qty: number; status: string; notes?: string | null; created_at: string; updated_at: string
 }
 export interface IncomingOrder {
   id: string; restaurant_id: string; branch_id: string | null; table_id: string | null
@@ -518,9 +531,9 @@ export async function upsertIncomingOrders(orders: IncomingOrder[]): Promise<voi
     for (const item of order.items) {
       await d.run(
         `INSERT OR IGNORE INTO order_items
-          (id, order_id, dish_id, dish_name, dish_price, qty, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.created_at, item.updated_at]
+          (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.created_at, item.updated_at]
       )
     }
   }
@@ -549,5 +562,25 @@ export async function replaceCancellationApprovers(approvers: CancellationApprov
 
 export async function getCancellationApprovers(): Promise<CancellationApprover[]> {
   const res = await getDB().query('SELECT * FROM cancellation_approvers ORDER BY name')
+  return (res.values ?? []) as CancellationApprover[]
+}
+
+// ---- order_code_holders ----------------------------------------------------
+// 4-digit codes used by waiters when confirming orders. Separate from
+// cancellation_approvers (5-digit supervisor PINs).
+
+export async function replaceOrderCodeHolders(holders: CancellationApprover[]): Promise<void> {
+  const d = getDB()
+  await d.executeSet([
+    { statement: 'DELETE FROM order_code_holders', values: [] },
+    ...holders.map(h => ({
+      statement: 'INSERT INTO order_code_holders (id, name, pin_hash) VALUES (?, ?, ?)',
+      values: [h.id, h.name, h.pin_hash],
+    })),
+  ])
+}
+
+export async function getOrderCodeHolders(): Promise<CancellationApprover[]> {
+  const res = await getDB().query('SELECT * FROM order_code_holders ORDER BY name')
   return (res.values ?? []) as CancellationApprover[]
 }

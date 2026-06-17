@@ -60,7 +60,7 @@ type DashboardData = {
   selectedRestaurantId: string
   restaurants: { id: string; name: string }[]
   selectedBranchId?: string
-  branches?: { id: string; name: string; code: string; isMain: boolean }[]
+  branches?: { id: string; name: string; code: string; type?: string; isMain: boolean }[]
   period: Period | 'custom'
   rangeLabel: string
   from: string
@@ -767,7 +767,7 @@ export default function OwnerShell() {
                       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${isActive ? 'border-orange-500 bg-orange-50 text-orange-700' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
                     >
                       <span>{branch.name}</span>
-                      {branch.isMain ? <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px]">Main</span> : <span className="text-[10px] uppercase text-slate-400">{branch.code}</span>}
+                      {branch.isMain ? <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px]">Main</span> : <span className="text-[10px] capitalize text-slate-400">{branch.type ?? 'kitchen'}</span>}
                       {isSwitching ? <RefreshCw className="h-3 w-3 animate-spin" /> : null}
                     </button>
                   )

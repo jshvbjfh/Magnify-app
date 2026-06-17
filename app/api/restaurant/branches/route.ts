@@ -14,6 +14,7 @@ const branchTabSelect = {
   id: true,
   name: true,
   code: true,
+  type: true,
   isMain: true,
   isActive: true,
 } as const
@@ -42,7 +43,7 @@ async function getAuthorizedBranchContext() {
     return {
       session,
       restaurantId: null as null,
-      branches: [] as Array<{ id: string; name: string; code: string; isMain: boolean; isActive: boolean }>,
+      branches: [] as Array<{ id: string; name: string; code: string; type: string; isMain: boolean; isActive: boolean }>,
       activeBranchId: null as string | null,
     }
   }
@@ -152,7 +153,7 @@ export async function POST(req: Request) {
 
   const body = await req.json().catch(() => ({}))
   const name = String(body?.name ?? '').trim()
-  const code = typeof body?.code === 'string' ? body.code : null
+  const type = body?.type === 'bar' ? 'bar' : 'kitchen'
 
   if (!name) {
     return NextResponse.json({ error: 'Branch name is required' }, { status: 400 })
@@ -163,7 +164,7 @@ export async function POST(req: Request) {
       const createdBranch = await createBranch({
         restaurantId,
         name,
-        code,
+        type,
       }, tx)
 
       await enqueueSyncChange(tx, {

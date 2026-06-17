@@ -2,14 +2,14 @@
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+  const context = await getRestaurantContextForUser(session.user.id)
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const { id } = await params
@@ -30,7 +30,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+  const context = await getRestaurantContextForUser(session.user.id)
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const { inventoryItemId, quantityRequired } = await req.json()
@@ -82,7 +82,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+  const context = await getRestaurantContextForUser(session.user.id)
   if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
 
   const { inventoryItemId } = await req.json()

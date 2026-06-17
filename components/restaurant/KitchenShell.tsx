@@ -1,12 +1,15 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
-import { ChefHat, RefreshCw, Clock, CheckCircle2, LogOut, Flame, Trash2, Plus, X } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { ChefHat, GlassWater, RefreshCw, Clock, CheckCircle2, LogOut, Flame, Trash2, Plus, X, Settings } from 'lucide-react'
 import { signOut, useSession } from 'next-auth/react'
 import RestaurantCloudSync from '@/components/restaurant/RestaurantCloudSync'
+import PrinterSettingsModal from '@/components/restaurant/PrinterSettingsModal'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type PendingOrder = {
   id: string
+  orderId: string
+  orderNumber: string
   tableName: string
   dishName: string
   dishPrice: number
@@ -20,6 +23,7 @@ type PendingOrder = {
 type Ticket = {
   tableKey: string
   tableName: string
+  orderNumber: string
   items: PendingOrder[]
   oldestAddedAt: string
 }
@@ -54,12 +58,14 @@ function AgeTag({ addedAt }: { addedAt: string }) {
 function groupToTickets(items: PendingOrder[]): Ticket[] {
   const map = new Map<string, PendingOrder[]>()
   for (const o of items) {
-    if (!map.has(o.tableName)) map.set(o.tableName, [])
-    map.get(o.tableName)!.push(o)
+    const key = o.orderId
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(o)
   }
-  return Array.from(map.entries()).map(([tableName, ticketItems]) => ({
-    tableKey: tableName,
-    tableName,
+  return Array.from(map.entries()).map(([, ticketItems]) => ({
+    tableKey: ticketItems[0].orderId,
+    tableName: ticketItems[0].tableName,
+    orderNumber: ticketItems[0].orderNumber,
     items: ticketItems,
     oldestAddedAt: ticketItems.reduce(
       (oldest, i) => (i.addedAt < oldest ? i.addedAt : oldest),
@@ -74,6 +80,14 @@ export default function KitchenShell() {
   const [updating, setUpdating] = useState<Set<string>>(new Set())
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [branchType, setBranchType] = useState<'kitchen' | 'bar'>('kitchen')
+
+  // New ticket highlight tracking
+  const prevOrderIdsRef = useRef<Set<string>>(new Set())
+  const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set())
+  // Tracks which orderIds have already been sent to the printer (survives re-renders, resets on mount)
+  const printedOrderIdsRef = useRef<Set<string>>(new Set())
+  const [showPrinterSettings, setShowPrinterSettings] = useState(false)
 
   // Waste modal
   const [showWaste, setShowWaste] = useState(false)
@@ -90,6 +104,13 @@ export default function KitchenShell() {
     fallbackUserId: session?.user?.id ?? null,
   })
   const snapshotStorageScope = snapshotScopeId ? `kitchen-shell:${snapshotScopeId}` : null
+
+  useEffect(() => {
+    fetch('/api/restaurant/branches/current', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.type === 'bar' || d?.type === 'kitchen') setBranchType(d.type) })
+      .catch(() => {})
+  }, [])
 
   const persistSnapshot = useCallback((nextOrders: PendingOrder[], nextWasteIngredients: { id: string; name: string; unit: string }[]) => {
     if (!snapshotStorageScope) return
@@ -152,6 +173,41 @@ export default function KitchenShell() {
       if (!res.ok) { setFetchError(`Server error ${res.status}`); return }
       const data = await res.json()
       const nextOrders = Array.isArray(data) ? data : []
+
+      // Detect newly arrived orders since last poll
+      const freshIds = new Set(
+        nextOrders
+          .filter((o: PendingOrder) => !prevOrderIdsRef.current.has(o.orderId))
+          .map((o: PendingOrder) => o.orderId)
+      )
+      if (freshIds.size > 0) {
+        setNewOrderIds(freshIds)
+        setTimeout(() => setNewOrderIds(new Set()), 6000)
+
+        // Auto-print new tickets when Electron printer is configured
+        if (typeof window !== 'undefined' && window.electronPrinter) {
+          for (const orderId of freshIds) {
+            if (printedOrderIdsRef.current.has(orderId)) continue
+            printedOrderIdsRef.current.add(orderId)
+            const ticketItems = nextOrders.filter((o: PendingOrder) => o.orderId === orderId)
+            if (!ticketItems.length) continue
+            window.electronPrinter.printKitchenTicket({
+              branchType,
+              orderNumber: ticketItems[0].orderNumber,
+              tableName: ticketItems[0].tableName,
+              time: new Date().toLocaleTimeString(),
+              waiterName: ticketItems[0].waiter?.name ?? 'Waiter',
+              items: ticketItems.map((i: PendingOrder) => ({
+                qty: i.qty,
+                dishName: i.dishName,
+                notes: i.notes ?? '',
+              })),
+            }).catch(() => {})
+          }
+        }
+      }
+      prevOrderIdsRef.current = new Set(nextOrders.map((o: PendingOrder) => o.orderId))
+
       setOrders(nextOrders)
       persistSnapshot(nextOrders, wasteIngredients)
       setLastRefresh(new Date())
@@ -159,7 +215,7 @@ export default function KitchenShell() {
     } catch (e: any) {
       setFetchError(e?.message ?? 'Network error')
     }
-  }, [persistSnapshot, wasteIngredients])
+  }, [persistSnapshot, wasteIngredients, branchType])
 
   useEffect(() => {
     if (!snapshotStorageScope) return
@@ -176,7 +232,7 @@ export default function KitchenShell() {
 
   useEffect(() => {
     refresh()
-    const t = setInterval(refresh, 5000)
+    const t = setInterval(refresh, 4000)
     return () => clearInterval(t)
   }, [refresh])
 
@@ -207,10 +263,12 @@ export default function KitchenShell() {
   const cookingTickets = groupToTickets(orders.filter(o => o.status === 'in_kitchen'))
   const readyTickets   = groupToTickets(orders.filter(o => o.status === 'ready'))
 
-  const restaurantName = (session?.user as any)?.restaurantName ?? 'Kitchen'
   const snapshotUpdatedLabel = snapshotUpdatedAt
     ? new Date(snapshotUpdatedAt).toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
     : null
+
+  const TerminalIcon = branchType === 'bar' ? GlassWater : ChefHat
+  const terminalTitle = branchType === 'bar' ? 'Bar Terminal' : 'Kitchen Terminal'
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -226,12 +284,12 @@ export default function KitchenShell() {
       <div className="bg-white border-b border-gray-200 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between flex-wrap gap-2 flex-shrink-0">
         <div className="flex items-center gap-3">
           <div className="bg-gradient-to-br from-orange-500 to-red-600 rounded-xl p-2.5 shadow-sm">
-            <ChefHat className="h-5 w-5 text-white" />
+            <TerminalIcon className="h-5 w-5 text-white" />
           </div>
           <div>
-            <h1 className="font-bold text-gray-900 text-base sm:text-lg leading-tight">Kitchen Display</h1>
+            <h1 className="font-bold text-gray-900 text-base sm:text-lg leading-tight">{terminalTitle}</h1>
             <p className="text-xs text-gray-400">
-              Auto-refreshes every 5 s &middot; last at{' '}
+              Auto-refreshes every 4 s &middot; last at{' '}
               {lastRefresh.toLocaleTimeString('en-RW', { hour: '2-digit', minute: '2-digit' })}
             </p>
           </div>
@@ -243,6 +301,15 @@ export default function KitchenShell() {
           >
             <RefreshCw className="h-4 w-4" /> <span className="hidden sm:inline">Refresh</span>
           </button>
+          {typeof window !== 'undefined' && window.electronPrinter && (
+            <button
+              onClick={() => setShowPrinterSettings(true)}
+              title="Printer settings"
+              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+          )}
           <button
             onClick={() => signOut({ callbackUrl: '/login' })}
             className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-600 bg-gray-100 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors"
@@ -286,6 +353,7 @@ export default function KitchenShell() {
               key={ticket.tableKey}
               ticket={ticket}
               updating={updating}
+              isNew={newOrderIds.has(ticket.tableKey)}
             >
               <button
                 onClick={() => updateStatus(ticket.items.map(i => i.id), 'in_kitchen')}
@@ -311,6 +379,7 @@ export default function KitchenShell() {
               key={ticket.tableKey}
               ticket={ticket}
               updating={updating}
+              isNew={false}
             >
               <button
                 onClick={() => updateStatus(ticket.items.map(i => i.id), 'ready')}
@@ -336,6 +405,7 @@ export default function KitchenShell() {
               key={ticket.tableKey}
               ticket={ticket}
               updating={updating}
+              isNew={false}
             >
               <div className="flex items-center gap-1.5 text-green-600 text-sm font-semibold">
                 <CheckCircle2 className="h-4 w-4" /> Waiting for pickup
@@ -345,6 +415,8 @@ export default function KitchenShell() {
         </Column>
 
       </div>
+
+      {showPrinterSettings && <PrinterSettingsModal onClose={() => setShowPrinterSettings(false)} />}
 
       {/* ── Waste Modal ─────────────────────────────────────────────────────────── */}
       {showWaste && (
@@ -457,26 +529,37 @@ function Column({
 }
 
 function TicketCard({
-  ticket, updating, children,
+  ticket, updating, isNew, children,
 }: {
   ticket: Ticket
   updating: Set<string>
+  isNew: boolean
   children: React.ReactNode
 }) {
   const isLoading = ticket.items.some(i => updating.has(i.id))
   return (
-    <div className={`bg-white rounded-xl border border-gray-200 shadow-sm p-4 space-y-3 transition-opacity ${isLoading ? 'opacity-60' : ''}`}>
+    <div className={`bg-white rounded-xl border shadow-sm p-4 space-y-3 transition-all ${isLoading ? 'opacity-60' : ''} ${isNew ? 'border-orange-400 ring-2 ring-orange-200' : 'border-gray-200'}`}>
       <div className="flex items-center justify-between">
-        <span className="font-bold text-gray-900 text-lg">{ticket.tableName}</span>
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-gray-900 text-lg">{ticket.tableName}</span>
+          <span className="text-xs text-gray-400 font-mono">#{ticket.orderNumber}</span>
+        </div>
         <AgeTag addedAt={ticket.oldestAddedAt} />
       </div>
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         {ticket.items.map(item => (
-          <div key={item.id} className="flex items-center justify-between">
-            <span className="text-base text-gray-800">{item.dishName}</span>
-            <span className="text-base font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
-              ×{item.qty}
-            </span>
+          <div key={item.id} className="space-y-0.5">
+            <div className="flex items-center justify-between">
+              <span className="text-base text-gray-800">{item.dishName}</span>
+              <span className="text-base font-bold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md">
+                ×{item.qty}
+              </span>
+            </div>
+            {item.notes && (
+              <p className="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded font-medium">
+                {item.notes}
+              </p>
+            )}
           </div>
         ))}
       </div>

@@ -152,7 +152,7 @@ export async function POST(req: Request) {
       const restaurantId = await resolveRestaurantId(rawRestaurantId, rawJoinCode, rawUsername)
 
       if (!restaurantId) {
-        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
+        return jsonNoStore({ error: 'Invalid email or password.' }, { status: 401 })
       }
 
       const matchedStaff = await prisma.staff.findFirst({
@@ -166,12 +166,12 @@ export async function POST(req: Request) {
       })
 
       if (!matchedStaff || !matchedStaff.password) {
-        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
+        return jsonNoStore({ error: 'Invalid email or password.' }, { status: 401 })
       }
 
       const valid = await bcrypt.compare(rawPassword, matchedStaff.password)
       if (!valid) {
-        return jsonNoStore({ error: 'Invalid username or password.' }, { status: 401 })
+        return jsonNoStore({ error: 'Invalid email or password.' }, { status: 401 })
       }
 
       const branchId = await resolveStaffBranchId(matchedStaff.id, matchedStaff.restaurantId)
@@ -205,7 +205,7 @@ export async function POST(req: Request) {
     }
 
     return jsonNoStore(
-      { error: 'Please enter your username and password.' },
+      { error: 'Please enter your email and password.' },
       { status: 400 },
     )
   } catch (err) {

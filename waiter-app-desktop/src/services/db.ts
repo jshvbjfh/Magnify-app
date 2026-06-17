@@ -539,3 +539,25 @@ export async function getCancellationApprovers(): Promise<CancellationApprover[]
   const rows = await db.query('SELECT * FROM cancellation_approvers ORDER BY name', [])
   return (rows ?? []) as unknown as CancellationApprover[]
 }
+
+// ---- order_code_holders ----------------------------------------------------
+// Pulled from server on every pullSync. Stores id, name, and bcrypt hash of
+// the 4-digit order code. Separate from cancellation_approvers.
+
+export async function replaceOrderCodeHolders(holders: CancellationApprover[]): Promise<void> {
+  const db = getDB()
+  const statements: StatementSet = [
+    { statement: 'DELETE FROM order_code_holders', values: [] },
+    ...holders.map((h) => ({
+      statement: 'INSERT INTO order_code_holders (id, name, pin_hash) VALUES (?, ?, ?)',
+      values: [h.id, h.name, h.pin_hash],
+    })),
+  ]
+  await db.executeSet(statements)
+}
+
+export async function getOrderCodeHolders(): Promise<CancellationApprover[]> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM order_code_holders ORDER BY name', [])
+  return (rows ?? []) as unknown as CancellationApprover[]
+}

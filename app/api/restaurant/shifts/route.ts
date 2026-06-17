@@ -54,13 +54,20 @@ export async function POST(req: Request) {
   })
   if (!staff) return NextResponse.json({ error: 'Staff not found' }, { status: 404 })
 
+  // Snapshot the wage at log time so later rate changes don't rewrite history.
+  const mins = durationMins ? Number(durationMins) : null
+  const calculatedWage = staff.hourlyRate != null && mins != null
+    ? (mins / 60) * staff.hourlyRate
+    : null
+
   const shift = await prisma.employeeShift.create({
     data: {
       restaurantId: context.restaurantId,
       branchId: context.branchId,
       staffId,
       clockInAt: shiftDate,
-      durationMins: durationMins ? Number(durationMins) : null,
+      durationMins: mins,
+      calculatedWage,
       notes: notes || null,
     },
     include: { staff: { select: { name: true } } },

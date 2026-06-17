@@ -71,6 +71,7 @@ model Branch {
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   name         String
   code         String
+  type         String     @default("kitchen")
   isMain       Boolean    @default(false)
   isActive     Boolean    @default(true)
   address      String?
@@ -114,6 +115,8 @@ model Staff {
   username     String?
   password     String?
   pin          String?
+  cancellationPin String?
+  hourlyRate   Float?
   isActive     Boolean       @default(true)
   phone        String?
   createdAt    DateTime      @default(now())
@@ -152,6 +155,7 @@ model EmployeeShift {
   clockInAt    DateTime
   clockOutAt   DateTime?
   durationMins Int?
+  calculatedWage Float?
   notes        String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -718,4 +722,16 @@ model SupplierDebt {
   @@index([restaurantId, paidAt])
   @@index([restaurantId, supplierName])
   @@map("supplier_debts")
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  userId    String
+  role      String
+  content   String
+  images    String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("chat_messages")
 }

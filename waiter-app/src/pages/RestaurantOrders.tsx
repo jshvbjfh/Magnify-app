@@ -8,12 +8,12 @@ import {
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
-import { pushSync, cancelOrderOnServer, validateCancellationPinOffline } from '../services/sync'
+import { pushSync, cancelOrderOnServer, validateCancellationPinOffline, validateOrderCode, type BranchInfo } from '../services/sync'
 import { useOnline } from '../hooks/useOnline'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: number }
+type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: number; notes?: string }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -91,6 +91,8 @@ type PosSnapshot = {
   orderItemsMap: Record<string, OrderItem[]>
   restaurantId: string | null
   branchId: string | null
+  restaurantName: string
+  branches: BranchInfo[]
 }
 let posCache: PosSnapshot | null = null
 let historyCache: Order[] | null = null
@@ -117,6 +119,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [isRefreshing,  setIsRefreshing]  = useState(false)
   const [restaurantId,  setRestaurantId]  = useState<string | null>(null)
   const [branchId,      setBranchId]      = useState<string | null>(null)
+  const [restaurantName, setRestaurantName] = useState<string>(posCache?.restaurantName ?? '')
+  const [branches,       setBranches]       = useState<BranchInfo[]>(posCache?.branches ?? [])
 
   // ── POS-only state ──
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
@@ -128,7 +132,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [confirmingOrder,  setConfirmingOrder]  = useState(false)
   const [submitError,      setSubmitError]      = useState<string | null>(null)
   const [confirmSuccess,   setConfirmSuccess]   = useState<string | null>(null)
-  const [draftWaiterNames, setDraftWaiterNames] = useState<Record<string, string>>({})
+  const [showCodeModal,    setShowCodeModal]    = useState(false)
   const [payingOrderId,     setPayingOrderId]     = useState<string | null>(null)
   const [payMethod,         setPayMethod]         = useState('Cash')
   const [payingSaving,      setPayingSaving]      = useState(false)
@@ -148,14 +152,21 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       setOrderItemsMap(posCache.orderItemsMap)
       setRestaurantId(posCache.restaurantId)
       setBranchId(posCache.branchId)
+      setRestaurantName(posCache.restaurantName)
+      setBranches(posCache.branches)
       setLoading(false)
     }
     setIsRefreshing(true)
     try {
-      const [rId, activeBranch] = await Promise.all([
+      const [rId, activeBranch, rName, branchesJson] = await Promise.all([
         getConfig('restaurantId'),
         getConfig('activeBranchId'),
+        getConfig('restaurantName'),
+        getConfig('branches'),
       ])
+      const parsedBranches: BranchInfo[] = (() => {
+        try { return branchesJson ? JSON.parse(branchesJson) : [] } catch { return [] }
+      })()
       const [d, t, orders, bId] = await Promise.all([
         getDishes(activeBranch),
         getTables(),
@@ -167,6 +178,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       setPendingOrders(orders)
       setRestaurantId(rId)
       setBranchId(bId)
+      setRestaurantName(rName ?? '')
+      setBranches(parsedBranches)
 
       if (!rId) {
         void logWarn('order', 'POS loaded without restaurant configuration', {
@@ -182,7 +195,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         itemsMap[o.id] = await getOrderItems(o.id)
       }))
       setOrderItemsMap(itemsMap)
-      posCache = { dishes: d, tables: t, pendingOrders: orders, orderItemsMap: itemsMap, restaurantId: rId, branchId: bId }
+      posCache = { dishes: d, tables: t, pendingOrders: orders, orderItemsMap: itemsMap, restaurantId: rId, branchId: bId, restaurantName: rName ?? '', branches: parsedBranches }
     } catch { /* DB not ready on first render — will retry */ }
     setLoading(false)
     setIsRefreshing(false)
@@ -248,9 +261,18 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     })
   }
 
+  function updateCartItemNotes(dishId: string, notes: string) {
+    setLocalCart(prev => {
+      const cart = (prev[selectedTableKey] ?? []).map(i =>
+        i.dishId === dishId ? { ...i, notes: notes || undefined } : i
+      )
+      return { ...prev, [selectedTableKey]: cart }
+    })
+  }
+
   // ── Order lifecycle ──
 
-  async function confirmOrder() {
+  async function confirmOrder(waiterName: string) {
     const cart = localCart[selectedTableKey] ?? []
 
     // ── Guard 1: empty cart ──────────────────────────────────────────────────
@@ -265,14 +287,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       return
     }
 
-    // ── Guard 3: waiter name ─────────────────────────────────────────────────
-    const name = takenBy.trim()
-    if (!name) {
-      setSubmitError('Please enter the waiter name before confirming.')
-      return
-    }
-
-    // ── Guard 4: restaurant config ───────────────────────────────────────────
+    // ── Guard 3: restaurant config ───────────────────────────────────────────
+    const name = waiterName
     if (!restaurantId) {
       void logWarn('order', 'Confirm order blocked: restaurant not configured', {
         selectedTableKey,
@@ -339,11 +355,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         dish_price: item.dishPrice,
         qty:        item.qty,
         status:     'ACTIVE',
+        notes:      item.notes ?? null,
         created_at: now,
         updated_at: now,
       }))
 
       await createOrder(order, items)
+      printKitchenTickets(order, items)
       await logInfo('order', 'Order saved locally', {
         orderId,
         selectedTableKey,
@@ -355,11 +373,6 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       // ── Reload BEFORE clearing cart so the panel never flashes empty ──────
       await loadPOS()
       setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
-      setDraftWaiterNames(prev => {
-        const next = { ...prev }
-        delete next[selectedTableKey]
-        return next
-      })
       setShowPanel('order')
       setConfirmSuccess(`${orderNumber} confirmed for ${tableName}`)
       setTimeout(() => setConfirmSuccess(null), 4000)
@@ -386,22 +399,160 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     pushSync().catch(() => {})
   }
 
+  function escHtml(str: string) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  function printBill(order: Order, items: OrderItem[], rName: string) {
+    const sub = items.reduce((s, i) => s + i.dish_price * i.qty, 0)
+    const vat = Math.round(sub * VAT_RATE)
+    const tot = Math.round(sub * (1 + VAT_RATE))
+    const _d  = new Date(order.paid_at ?? order.updated_at ?? order.created_at)
+    const dt  = `${String(_d.getDate()).padStart(2,'0')}/${String(_d.getMonth()+1).padStart(2,'0')}/${_d.getFullYear()} ${String(_d.getHours()).padStart(2,'0')}:${String(_d.getMinutes()).padStart(2,'0')}`
+    const itemRows = items.map(i =>
+      `<tr><td>${escHtml(i.dish_name)}${i.qty > 1 ? ` ×${i.qty}` : ''}</td>` +
+      `<td class="r">${fmtRWF(i.dish_price * i.qty)} RWF</td></tr>`
+    ).join('')
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:monospace;font-size:13px;padding:8px;width:80mm}
+h1{text-align:center;font-size:15px;font-weight:bold;margin-bottom:6px}
+.c{text-align:center;margin:2px 0}
+hr{border:none;border-top:1px dashed #000;margin:6px 0}
+table{width:100%;border-collapse:collapse}
+td{padding:2px 0;vertical-align:top}
+.r{text-align:right;white-space:nowrap;padding-left:8px}
+.tot td{font-weight:bold;font-size:14px}
+@media print{@page{margin:0;size:80mm auto}}
+</style></head><body>
+<h1>${escHtml(rName || 'RECEIPT')}</h1>
+<p class="c">${escHtml(order.table_name ?? 'Takeaway')}</p>
+<p class="c">${escHtml(order.order_number ?? '')}</p>
+<p class="c">${dt}</p>
+${order.created_by_name ? `<p class="c">Waiter: ${escHtml(order.created_by_name)}</p>` : ''}
+<hr>
+<table>${itemRows}</table>
+<hr>
+<table>
+<tr><td>Subtotal</td><td class="r">${fmtRWF(sub)} RWF</td></tr>
+<tr><td>VAT 18%</td><td class="r">+${fmtRWF(vat)} RWF</td></tr>
+<tr class="tot"><td>TOTAL</td><td class="r">${fmtRWF(tot)} RWF</td></tr>
+</table>
+<hr>
+<p class="c">Paid: ${escHtml(order.payment_method ?? 'Cash')}</p>
+<p class="c" style="margin-top:8px;font-size:11px">Thank you for dining with us!</p>
+</body></html>`
+
+    const iframe = document.createElement('iframe')
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:0;height:0;border:none'
+    document.body.appendChild(iframe)
+    const doc = iframe.contentDocument || iframe.contentWindow?.document
+    if (doc) {
+      doc.open()
+      doc.write(html)
+      doc.close()
+      setTimeout(() => {
+        iframe.contentWindow?.print()
+        setTimeout(() => { try { document.body.removeChild(iframe) } catch {} }, 1000)
+      }, 200)
+    } else {
+      try { document.body.removeChild(iframe) } catch {}
+    }
+  }
+
+  function printSingleKitchenTicket(order: Order, items: OrderItem[], branchLabel: string) {
+    const _d = new Date()
+    const dt = `${String(_d.getDate()).padStart(2,'0')}/${String(_d.getMonth()+1).padStart(2,'0')}/${_d.getFullYear()} ${String(_d.getHours()).padStart(2,'0')}:${String(_d.getMinutes()).padStart(2,'0')}`
+    const itemRows = items.map(i =>
+      `<div class="item"><span class="qty">${i.qty}x</span><span class="name">${escHtml(i.dish_name)}</span></div>` +
+      (i.notes ? `<div class="note">&gt; ${escHtml(i.notes)}</div>` : '')
+    ).join('')
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Courier New',monospace;font-size:14px;width:280px;margin:0 auto;padding:8px}
+.center{text-align:center}
+.title{font-size:22px;font-weight:bold;margin-bottom:4px}
+.sub{font-size:12px;margin-bottom:2px}
+.divider{border-top:1px dashed #000;margin:6px 0}
+.meta{font-size:12px;margin:2px 0}
+.item{display:flex;gap:8px;margin:4px 0;font-weight:bold;font-size:15px}
+.qty{min-width:26px}
+.note{margin-left:32px;font-style:italic;font-size:12px;margin-bottom:4px}
+@media print{@page{margin:0;size:80mm auto}}
+</style></head><body>
+<div class="center">
+<div class="title">${escHtml(branchLabel)}</div>
+<div class="sub">${escHtml(restaurantName)}</div>
+</div>
+<div class="meta">Order ID: ${escHtml(order.order_number ?? '')}</div>
+<div class="divider"></div>
+${itemRows}
+<div class="divider"></div>
+<div class="meta">Table : ${escHtml(order.table_name ?? 'Takeaway')}</div>
+<div class="meta">Date  : ${dt}</div>
+<div class="meta">Waiter: ${escHtml(order.created_by_name ?? '')}</div>
+</body></html>`
+    const iframe = document.createElement('iframe')
+    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:0;height:0;border:none'
+    document.body.appendChild(iframe)
+    const doc = iframe.contentDocument || iframe.contentWindow?.document
+    if (doc) {
+      doc.open()
+      doc.write(html)
+      doc.close()
+      setTimeout(() => {
+        iframe.contentWindow?.print()
+        setTimeout(() => { try { document.body.removeChild(iframe) } catch {} }, 1000)
+      }, 200)
+    } else {
+      try { document.body.removeChild(iframe) } catch {}
+    }
+  }
+
+  function printKitchenTickets(order: Order, items: OrderItem[]) {
+    // Group items by the dish's mother branch, print one ticket per branch.
+    const groups = new Map<string, { label: string; items: OrderItem[] }>()
+    for (const item of items) {
+      const dish    = dishes.find(d => d.id === item.dish_id)
+      const bId     = dish?.branch_id ?? '__unassigned__'
+      if (!groups.has(bId)) {
+        const branch = branches.find(b => b.id === bId)
+        const label  = branch
+          ? (branch.type === 'bar' ? 'BAR' : 'KITCHEN') + ` – ${branch.name}`
+          : 'KITCHEN'
+        groups.set(bId, { label, items: [] })
+      }
+      groups.get(bId)!.items.push(item)
+    }
+    for (const [, group] of groups) {
+      printSingleKitchenTicket(order, group.items, group.label)
+    }
+  }
+
   async function collectPayment(orderId: string) {
     const order = pendingOrders.find(o => o.id === orderId)
     if (!order || paymentLockRef.current) return
     paymentLockRef.current = true
     setPayingSaving(true)
     try {
+      const paidAt = new Date().toISOString()
       await updateOrder(order.id, {
         status:         'PAID',
         payment_method: payMethod,
-        paid_at:        new Date().toISOString(),
+        paid_at:        paidAt,
       })
       await logInfo('order', 'Payment collected — queuing push', {
         orderId: order.id,
         orderNumber: order.order_number,
         paymentMethod: payMethod,
       })
+      printBill(
+        { ...order, payment_method: payMethod, paid_at: paidAt },
+        orderItemsMap[order.id] ?? [],
+        restaurantName,
+      )
       await loadPOS()
       pushSync().then(n => {
         void logInfo('sync', 'Post-payment push completed', { syncedOrders: n })
@@ -430,8 +581,6 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   })
 
   const cartItems      = localCart[selectedTableKey] ?? []
-  const takenBy        = draftWaiterNames[selectedTableKey] ?? ''
-  const hasTypedWaiterName = Object.prototype.hasOwnProperty.call(draftWaiterNames, selectedTableKey)
   const currentOrders  = pendingOrders
     .filter(o => (o.table_id ?? 'takeaway') === selectedTableKey)
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -869,19 +1018,28 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
             <div className="space-y-4">
               {isBuilding
                 ? cartItems.map(item => (
-                    <div key={item.dishId} className="flex items-start justify-between group">
-                      <div className="flex-1 min-w-0 flex items-center gap-1">
-                        <button onClick={() => removeLocalCartItem(item.dishId)}
-                          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
-                          <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                        </button>
-                        <span className="text-sm text-gray-800 font-medium leading-snug">
-                          {item.dishName}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                    <div key={item.dishId} className="group">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0 flex items-center gap-1">
+                          <button onClick={() => removeLocalCartItem(item.dishId)}
+                            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
+                            <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                          </button>
+                          <span className="text-sm text-gray-800 font-medium leading-snug">
+                            {item.dishName}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                          </span>
+                        </div>
+                        <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
+                          {fmtRWF(item.dishPrice * item.qty)} RWF
                         </span>
                       </div>
-                      <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
-                        {fmtRWF(item.dishPrice * item.qty)} RWF
-                      </span>
+                      <input
+                        type="text"
+                        placeholder="Note for kitchen…"
+                        value={item.notes ?? ''}
+                        onChange={e => updateCartItemNotes(item.dishId, e.target.value)}
+                        className="mt-1 w-full text-xs border border-gray-200 rounded-lg px-2 py-1 text-gray-600 placeholder-gray-400 outline-none focus:ring-1 focus:ring-orange-300"
+                      />
                     </div>
                   ))
                 : confirmedItems.map(item => (
@@ -930,47 +1088,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
 
             {isBuilding ? (
               <>
-                {/* ── Waiter name field ── */}
-                <div className="pt-1">
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">Taken by</label>
-                  <input
-                    key={`taken-by-${selectedTableKey}`}
-                    type="text"
-                    name={`taken-by-${selectedTableKey}`}
-                    value={takenBy}
-                    autoComplete="new-password"
-                    autoCorrect="off"
-                    autoCapitalize="off"
-                    spellCheck={false}
-                    data-lpignore="true"
-                    data-1p-ignore="true"
-                    onChange={e => {
-                      const nextName = e.target.value
-                      setDraftWaiterNames(prev => ({ ...prev, [selectedTableKey]: nextName }))
-                      setSubmitError(null)
-                    }}
-                    onFocus={e => {
-                      if (hasTypedWaiterName || !e.currentTarget.value) return
-                      e.currentTarget.value = ''
-                    }}
-                    disabled={confirmingOrder}
-                    className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-60"
-                  />
-                  <p className="mt-1 text-[11px] text-gray-400">This starts blank for each new order and only the typed waiter name is saved.</p>
-                </div>
-
-                <button onClick={confirmOrder} disabled={confirmingOrder || !takenBy.trim()}
+                <button onClick={() => { setSubmitError(null); setShowCodeModal(true) }} disabled={confirmingOrder}
                   className="w-full bg-orange-500 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm">
                   {confirmingOrder ? 'Confirming…' : 'Confirm Order'}
                 </button>
                 <button
                   onClick={() => {
                     setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
-                    setDraftWaiterNames(prev => {
-                      const next = { ...prev }
-                      delete next[selectedTableKey]
-                      return next
-                    })
                     setSubmitError(null)
                   }}
                   disabled={confirmingOrder}
@@ -1020,8 +1144,76 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
           onClose={() => setCancelingOrderId(null)}
         />
       )}
+
+      {showCodeModal && (
+        <OrderCodeModal
+          onClose={() => setShowCodeModal(false)}
+          onConfirmed={(name) => { setShowCodeModal(false); void confirmOrder(name) }}
+        />
+      )}
     </div>
   )
+
+  // ── Order Code Modal ── waiter enters their 4-digit code to confirm an order
+  function OrderCodeModal({ onClose, onConfirmed }: { onClose: () => void; onConfirmed: (waiterName: string) => void }) {
+    const [code,    setCode]    = useState('')
+    const [saving,  setSaving]  = useState(false)
+    const [error,   setError]   = useState<string | null>(null)
+
+    async function submit() {
+      if (code.length !== 4) { setError('Code must be exactly 4 digits'); return }
+      setSaving(true)
+      setError(null)
+      try {
+        const { waiterName } = await validateOrderCode(code)
+        onConfirmed(waiterName)
+      } catch (err) {
+        setError((err as Error).message)
+      } finally {
+        setSaving(false)
+      }
+    }
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-gray-900">Enter Your Order Code</h3>
+            <button onClick={onClose} disabled={saving}>
+              <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
+            </button>
+          </div>
+          <p className="text-sm text-gray-500">Enter your 4-digit code to confirm this order.</p>
+          <input
+            type="password"
+            inputMode="numeric"
+            maxLength={4}
+            value={code}
+            autoFocus
+            onChange={e => { setCode(e.target.value.replace(/\D/g, '').slice(0, 4)); setError(null) }}
+            onKeyDown={e => { if (e.key === 'Enter' && code.length === 4) void submit() }}
+            placeholder="● ● ● ●"
+            className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-orange-400"
+          />
+          {error && (
+            <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
+              {error}
+            </div>
+          )}
+          <div className="flex gap-2 pt-1">
+            <button onClick={onClose} disabled={saving}
+              className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 disabled:opacity-50">
+              Cancel
+            </button>
+            <button onClick={() => void submit()} disabled={saving || code.length !== 4}
+              className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
+              {saving ? 'Checking…' : 'Confirm Order'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   // ── Cancel Modal ── (defined inside component to access closure state)
   function CancelModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {

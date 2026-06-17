@@ -27,15 +27,22 @@ export function normalizePrismaDatabaseUrl(
     return trimmedUrl
   }
 
-  // For pgbouncer connections, respect connection_limit as specified in the URL.
-  // Neon recommends connection_limit=1 because pgbouncer handles multiplexing;
-  // bumping the limit causes Prisma to open more simultaneous connections than
-  // Neon's pooler can satisfy, which triggers pool_timeout on cold starts.
   if (parsedUrl.searchParams.get('pgbouncer')?.toLowerCase() !== 'true') {
     return trimmedUrl
   }
 
-  return trimmedUrl
+  const targetLimit = parsePositiveInteger(
+    options?.pooledConnectionLimit,
+    DEFAULT_POOLED_CONNECTION_LIMIT,
+  )
+  const currentLimit = Number(parsedUrl.searchParams.get('connection_limit') ?? '')
+
+  if (!Number.isFinite(currentLimit) || currentLimit >= targetLimit) {
+    return trimmedUrl
+  }
+
+  parsedUrl.searchParams.set('connection_limit', String(targetLimit))
+  return parsedUrl.toString()
 }
 
 export function buildPrismaClientOptions(

@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
+import bcrypt from 'bcryptjs'
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions)
@@ -21,11 +22,44 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: `Invalid role. Allowed roles: ${ALLOWED_ROLES.join(', ')}` }, { status: 400 })
   }
 
+  let pinHash: string | null | undefined = undefined
+  if (data.pin === null) {
+    pinHash = null
+  } else if (typeof data.pin === 'string' && data.pin.trim()) {
+    if (!/^\d{4}$/.test(data.pin.trim())) {
+      return NextResponse.json({ error: 'Order code must be exactly 4 digits' }, { status: 400 })
+    }
+    pinHash = await bcrypt.hash(data.pin.trim(), 10)
+  }
+
+  let cancellationPinHash: string | null | undefined = undefined
+  if (data.cancellationPin === null) {
+    cancellationPinHash = null
+  } else if (typeof data.cancellationPin === 'string' && data.cancellationPin.trim()) {
+    if (!/^\d{5}$/.test(data.cancellationPin.trim())) {
+      return NextResponse.json({ error: 'Cancellation PIN must be exactly 5 digits' }, { status: 400 })
+    }
+    cancellationPinHash = await bcrypt.hash(data.cancellationPin.trim(), 10)
+  }
+
+  let rate: number | null | undefined = undefined
+  if (data.hourlyRate === null || data.hourlyRate === '') {
+    rate = null
+  } else if (data.hourlyRate !== undefined) {
+    rate = Number(data.hourlyRate)
+    if (Number.isNaN(rate) || rate < 0) {
+      return NextResponse.json({ error: 'Hourly rate must be a positive number' }, { status: 400 })
+    }
+  }
+
   const updateData: Record<string, unknown> = {
     ...(data.name !== undefined && { name: data.name }),
     ...(data.role !== undefined && { role: data.role }),
     ...(data.phone !== undefined && { phone: data.phone }),
     ...(data.isActive !== undefined && { isActive: data.isActive }),
+    ...(pinHash !== undefined && { pin: pinHash }),
+    ...(cancellationPinHash !== undefined && { cancellationPin: cancellationPinHash }),
+    ...(rate !== undefined && { hourlyRate: rate }),
   }
 
   // username: null ensures waiter/kitchen login accounts can't be patched via this endpoint

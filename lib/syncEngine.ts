@@ -378,6 +378,8 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           username: staffUsername ?? undefined,
           password: staffPassword ?? undefined,
           pin: payload.pin ?? payload.cancellationPinHash ?? null,
+          cancellationPin: payload.cancellationPin ?? null,
+          hourlyRate: payload.hourlyRate != null ? Number(payload.hourlyRate) : null,
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
           phone: payload.phone ?? null,
           createdAt: asDate(payload.createdAt) ?? undefined,
@@ -391,6 +393,8 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           username: staffUsername,
           password: staffPassword,
           pin: payload.pin ?? payload.cancellationPinHash ?? null,
+          cancellationPin: payload.cancellationPin ?? null,
+          hourlyRate: payload.hourlyRate != null ? Number(payload.hourlyRate) : null,
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
           phone: payload.phone ?? null,
           createdAt: asDate(payload.createdAt) ?? new Date(),
@@ -684,6 +688,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       const durationMins = payload.durationMins != null
         ? Number(payload.durationMins)
         : payload.hoursWorked != null ? Math.round(Number(payload.hoursWorked) * 60) : null
+      const calculatedWage = payload.calculatedWage != null ? Number(payload.calculatedWage) : null
 
       await db.employeeShift.upsert({
         where: { id: String(payload.id || change.entityId) },
@@ -693,6 +698,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           staffId: shiftStaffId,
           clockInAt,
           durationMins,
+          calculatedWage,
           notes: payload.notes ?? null,
           createdAt: asDate(payload.createdAt) ?? undefined,
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
@@ -704,6 +710,7 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           staffId: shiftStaffId,
           clockInAt,
           durationMins,
+          calculatedWage,
           notes: payload.notes ?? null,
           createdAt: asDate(payload.createdAt) ?? new Date(),
           updatedAt: asDate(payload.updatedAt) ?? new Date(),

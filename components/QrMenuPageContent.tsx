@@ -123,23 +123,13 @@ export default function QrMenuPageContent({
     <div className={`${embedded ? 'bg-[#fbf7f2] pb-6' : 'min-h-screen bg-[#fbf7f2] pb-32'} text-slate-900`}>
       <section className="relative h-[280px] overflow-hidden bg-gradient-to-br from-orange-500 via-red-500 to-red-700 sm:h-[360px]">
         {qrMenuHeroImageUrl ? (
-          qrMenuHeroImageUrl.startsWith('https://') ? (
-            <Image
-              src={qrMenuHeroImageUrl}
-              alt={`${restaurantName} QR menu hero`}
-              fill
-              priority
-              className="object-cover"
-            />
-          ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={qrMenuHeroImageUrl}
-              alt={`${restaurantName} QR menu hero`}
-              className="absolute inset-0 h-full w-full object-cover"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-            />
-          )
+          <Image
+            src={qrMenuHeroImageUrl}
+            alt={`${restaurantName} QR menu hero`}
+            fill
+            priority
+            className="object-cover"
+          />
         ) : (
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.2),transparent_42%),linear-gradient(135deg,#f97316_0%,#ef4444_55%,#991b1b_100%)]" />
         )}

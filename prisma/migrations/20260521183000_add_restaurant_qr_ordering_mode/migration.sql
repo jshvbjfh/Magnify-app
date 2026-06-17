@@ -1,2 +1,2 @@
 ALTER TABLE "restaurants"
-ADD COLUMN IF NOT EXISTS "qrOrderingMode" TEXT NOT NULL DEFAULT 'order';
+ADD COLUMN "qrOrderingMode" TEXT NOT NULL DEFAULT 'order';

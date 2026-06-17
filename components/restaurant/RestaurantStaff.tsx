@@ -4,7 +4,7 @@ import { Plus, Users, Clock, X, CheckCircle2, Sparkles, UserCheck, Copy, Trash2,
 import { loadOwnerSyncConfig, loadServerOwnerSyncConfig } from '@/lib/ownerSyncBrowser'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 
-type Employee = { id:string; name:string; role:string; isActive:boolean; phone:string|null }
+type Employee = { id:string; name:string; role:string; isActive:boolean; phone:string|null; hasPin:boolean; hasCancellationPin:boolean }
 type Shift = { id:string; staff:{name:string}; clockInAt:string; durationMins:number; notes:string|null }
 type Waiter = { id:string; name:string; email:string; createdAt:string }
 type Restaurant = { id:string; name:string; joinCode:string }
@@ -15,6 +15,7 @@ const ROLES = ['Chef','Sous Chef','Waiter','Cashier','Manager','Host','Dishwashe
 
 export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => void }) {
   const restaurantBranch = useRestaurantBranch()
+  const terminalLabel = restaurantBranch?.branchType === 'bar' ? 'Bar' : 'Kitchen'
   const [employees, setEmployees] = useState<Employee[]>([])
   const [shifts, setShifts] = useState<Shift[]>([])
   const [waiters, setWaiters] = useState<Waiter[]>([])
@@ -50,6 +51,14 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
   const [waiterUrlAccessMode, setWaiterUrlAccessMode] = useState<'lan'|'public'>('lan')
   const [showPasswords, setShowPasswords] = useState<Record<string,boolean>>({})
   const [empForm, setEmpForm] = useState({name:'',role:'Waiter',phone:''})
+  const [settingCodeFor, setSettingCodeFor] = useState<Employee|null>(null)
+  const [codeForm, setCodeForm] = useState('')
+  const [codeError, setCodeError] = useState<string|null>(null)
+  const [codeSaving, setCodeSaving] = useState(false)
+  const [settingCancelPinFor, setSettingCancelPinFor] = useState<Employee|null>(null)
+  const [cancelPinForm, setCancelPinForm] = useState('')
+  const [cancelPinError, setCancelPinError] = useState<string|null>(null)
+  const [cancelPinSaving, setCancelPinSaving] = useState(false)
   const [shiftForm, setShiftForm] = useState({staffId:'',date:new Date().toISOString().split('T')[0],durationMins:'480',notes:''})
   const [waiterForm, setWaiterForm] = useState({name:'',email:'',password:''})
 
@@ -152,6 +161,46 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       return
     }
     setShowEmpForm(false); setEmpForm({name:'',role:'Waiter',phone:''}); load()
+  }
+
+  async function saveEmployeeCode(emp: Employee, pin: string | null) {
+    setCodeError(null)
+    setCodeSaving(true)
+    try {
+      const res = await fetch('/api/restaurant/employees/'+emp.id, {
+        method: 'PATCH',
+        headers: {'Content-Type':'application/json'},
+        credentials: 'include',
+        body: JSON.stringify({ pin }),
+      })
+      const payload = await res.json().catch(() => null)
+      if (!res.ok) { setCodeError(payload?.error || 'Failed to save code.'); return }
+      setSettingCodeFor(null)
+      setCodeForm('')
+      load()
+    } finally {
+      setCodeSaving(false)
+    }
+  }
+
+  async function saveEmployeeCancellationPin(emp: Employee, pin: string | null) {
+    setCancelPinError(null)
+    setCancelPinSaving(true)
+    try {
+      const res = await fetch('/api/restaurant/employees/'+emp.id, {
+        method: 'PATCH',
+        headers: {'Content-Type':'application/json'},
+        credentials: 'include',
+        body: JSON.stringify({ cancellationPin: pin }),
+      })
+      const payload = await res.json().catch(() => null)
+      if (!res.ok) { setCancelPinError(payload?.error || 'Failed to save PIN.'); return }
+      setSettingCancelPinFor(null)
+      setCancelPinForm('')
+      load()
+    } finally {
+      setCancelPinSaving(false)
+    }
   }
 
   async function toggleEmployee(emp:Employee) {
@@ -335,7 +384,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
           {tab==='employees'&&<button onClick={()=>setShowEmpForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"><Plus className="h-4 w-4"/> Add Employee</button>}
           {tab==='shifts'&&<button onClick={()=>setShowShiftForm(true)} disabled={employees.length===0} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"><Clock className="h-4 w-4"/> Log Shift</button>}
           {tab==='waiters'&&<button onClick={()=>setShowWaiterForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"><Plus className="h-4 w-4"/> Add Waiter</button>}
-          {tab==='kitchen'&&<button onClick={()=>setShowKitchenForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"><Plus className="h-4 w-4"/> Add Kitchen Account</button>}
+          {tab==='kitchen'&&<button onClick={()=>setShowKitchenForm(true)} className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"><Plus className="h-4 w-4"/> Add {terminalLabel} Account</button>}
           {tab==='owner'&&<button onClick={()=>setShowOwnerForm(true)} className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"><Plus className="h-4 w-4"/> Add Owner Account</button>}
         </div>
       </div>
@@ -366,7 +415,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
           <UserCheck className="h-4 w-4 inline mr-1.5"/>Waiter Accounts
         </button>
         <button onClick={()=>setTab('kitchen')} className={tab==='kitchen'?'px-4 py-2 rounded-lg text-sm font-medium bg-white shadow text-gray-900 text-center':'px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 text-center'}>
-          <ChefHat className="h-4 w-4 inline mr-1.5"/>Kitchen Accounts
+          <ChefHat className="h-4 w-4 inline mr-1.5"/>{terminalLabel} Accounts
         </button>
         <button onClick={()=>setTab('owner')} className={tab==='owner'?'px-4 py-2 rounded-lg text-sm font-medium bg-white shadow text-gray-900 text-center':'px-4 py-2 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-700 text-center'}>
           <Crown className="h-4 w-4 inline mr-1.5"/>Owner Account
@@ -418,6 +467,88 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
                 <button type="submit" disabled={ownerSubmitting} className="flex-1 bg-purple-600 hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60 text-white text-sm font-semibold py-2 rounded-lg transition-colors">{ownerSubmitting?'Creating...':'Create Owner Account'}</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {settingCodeFor&&(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-gray-900">Order Code — {settingCodeFor.name}</h3>
+              <button onClick={()=>{setSettingCodeFor(null);setCodeForm('');setCodeError(null)}}><X className="h-5 w-5 text-gray-400 hover:text-gray-600"/></button>
+            </div>
+            <p className="text-sm text-gray-500">Set a 4-digit code this waiter enters when confirming orders. The kitchen will see their name on tickets.</p>
+            <div>
+              <label className="text-xs font-semibold text-gray-600 mb-1 block">4-Digit Code</label>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={4}
+                value={codeForm}
+                onChange={e=>{setCodeForm(e.target.value.replace(/\D/g,'').slice(0,4));setCodeError(null)}}
+                placeholder="● ● ● ●"
+                className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-orange-400"
+              />
+            </div>
+            {codeError&&<div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">{codeError}</div>}
+            <div className="flex gap-2 pt-1">
+              {settingCodeFor.hasPin&&(
+                <button
+                  onClick={()=>saveEmployeeCode(settingCodeFor, null)}
+                  disabled={codeSaving}
+                  className="flex-1 border border-red-200 text-red-500 text-sm font-medium py-3 rounded-xl hover:bg-red-50 disabled:opacity-50">
+                  Remove Code
+                </button>
+              )}
+              <button
+                onClick={()=>saveEmployeeCode(settingCodeFor, codeForm)}
+                disabled={codeSaving||codeForm.length!==4}
+                className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
+                {codeSaving?'Saving…':'Set Code'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {settingCancelPinFor&&(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-gray-900">Cancellation PIN — {settingCancelPinFor.name}</h3>
+              <button onClick={()=>{setSettingCancelPinFor(null);setCancelPinForm('');setCancelPinError(null)}}><X className="h-5 w-5 text-gray-400 hover:text-gray-600"/></button>
+            </div>
+            <p className="text-sm text-gray-500">Set a 5-digit PIN for this person to approve order cancellations. Only give this to supervisors or managers.</p>
+            <div>
+              <label className="text-xs font-semibold text-gray-600 mb-1 block">5-Digit Cancellation PIN</label>
+              <input
+                type="password"
+                inputMode="numeric"
+                maxLength={5}
+                value={cancelPinForm}
+                onChange={e=>{setCancelPinForm(e.target.value.replace(/\D/g,'').slice(0,5));setCancelPinError(null)}}
+                placeholder="● ● ● ● ●"
+                className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-red-400"
+              />
+            </div>
+            {cancelPinError&&<div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">{cancelPinError}</div>}
+            <div className="flex gap-2 pt-1">
+              {settingCancelPinFor.hasCancellationPin&&(
+                <button
+                  onClick={()=>saveEmployeeCancellationPin(settingCancelPinFor, null)}
+                  disabled={cancelPinSaving}
+                  className="flex-1 border border-red-200 text-red-500 text-sm font-medium py-3 rounded-xl hover:bg-red-50 disabled:opacity-50">
+                  Remove PIN
+                </button>
+              )}
+              <button
+                onClick={()=>saveEmployeeCancellationPin(settingCancelPinFor, cancelPinForm)}
+                disabled={cancelPinSaving||cancelPinForm.length!==5}
+                className="flex-1 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
+                {cancelPinSaving?'Saving…':'Set PIN'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -486,7 +617,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
       {showKitchenForm&&(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4">
-            <div className="flex items-center justify-between"><h3 className="font-bold text-gray-900">Create Kitchen Account</h3><button onClick={()=>setShowKitchenForm(false)}><X className="h-5 w-5 text-gray-400 hover:text-gray-600"/></button></div>
+            <div className="flex items-center justify-between"><h3 className="font-bold text-gray-900">Create {terminalLabel} Account</h3><button onClick={()=>setShowKitchenForm(false)}><X className="h-5 w-5 text-gray-400 hover:text-gray-600"/></button></div>
             <form onSubmit={saveKitchenAccount} className="space-y-3">
               <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Full Name</label><input required className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={kitchenForm.name} onChange={e=>setKitchenForm(f=>({...f,name:e.target.value}))} placeholder="Kitchen Staff"/></div>
               <div><label className="text-xs font-semibold text-gray-600 mb-1 block">Email</label><input required type="email" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400" value={kitchenForm.email} onChange={e=>setKitchenForm(f=>({...f,email:e.target.value}))} placeholder="kitchen@restaurant.com"/></div>
@@ -515,13 +646,31 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200"><tr>{['Name','Role','Phone','Status'].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>)}</tr></thead>
+              <thead className="bg-gray-50 border-b border-gray-200"><tr>{['Name','Role','Phone','Order Code','Cancel PIN','Status'].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-gray-50">
                 {employees.map(emp=>(
                   <tr key={emp.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3 font-medium text-gray-900">{emp.name}</td>
                     <td className="px-4 py-3 text-gray-600">{emp.role}</td>
                     <td className="px-4 py-3 text-gray-500">{emp.phone||'—'}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={()=>{setSettingCodeFor(emp);setCodeForm('');setCodeError(null)}}
+                        className={emp.hasPin
+                          ? 'text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium hover:bg-orange-200 transition-colors'
+                          : 'text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium hover:bg-gray-200 transition-colors'}>
+                        {emp.hasPin?'Code set':'Set code'}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={()=>{setSettingCancelPinFor(emp);setCancelPinForm('');setCancelPinError(null)}}
+                        className={emp.hasCancellationPin
+                          ? 'text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium hover:bg-red-200 transition-colors'
+                          : 'text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium hover:bg-gray-200 transition-colors'}>
+                        {emp.hasCancellationPin?'PIN set':'Set PIN'}
+                      </button>
+                    </td>
                     <td className="px-4 py-3">
                       <button onClick={()=>toggleEmployee(emp)} className={emp.isActive?'text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium':'text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium'}>{emp.isActive?'Active':'Inactive'}</button>
                     </td>
@@ -788,8 +937,8 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
           {kitchenAccounts.length===0 ? (
             <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
               <ChefHat className="h-10 w-10 text-gray-300 mx-auto mb-3"/>
-              <p className="font-medium text-gray-600">No kitchen accounts yet</p>
-              <p className="text-sm text-gray-400 mt-1">Create an account for kitchen staff to view live orders.</p>
+              <p className="font-medium text-gray-600">No {terminalLabel.toLowerCase()} accounts yet</p>
+              <p className="text-sm text-gray-400 mt-1">Create an account for {terminalLabel.toLowerCase()} staff to view live orders.</p>
             </div>
           ) : (
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">

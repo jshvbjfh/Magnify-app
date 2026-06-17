@@ -41,8 +41,6 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
   const [qrMenuHeroImageUrl, setQrMenuHeroImageUrl] = useState<string | null>(null)
   const [selectedMenuType, setSelectedMenuType] = useState<QrMenuTypeSelection>('all')
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
-  const [lastOrder, setLastOrder] = useState<CartItem[] | null>(null)
-  const [showLastOrder, setShowLastOrder] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -161,7 +159,6 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
         return
       }
 
-      setLastOrder([...cart])
       setSubmitted(true)
     } catch {
       setError('Network error. Please try again.')
@@ -220,22 +217,17 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
               </div>
             </div>
           </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => { setCart([]); setSubmitted(false); setCustomerName('') }}
-              className="flex-1 rounded-xl border border-gray-200 bg-white py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-            >
-              Back to Menu
-            </button>
-            <button
-              type="button"
-              onClick={() => { setCart([]); setSubmitted(false); setCustomerName('') }}
-              className="flex-1 rounded-xl bg-orange-500 py-2.5 text-sm font-semibold text-white hover:bg-orange-600"
-            >
-              Order More
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setCart([])
+              setSubmitted(false)
+              setCustomerName('')
+            }}
+            className="w-full rounded-xl bg-orange-500 py-2.5 text-sm font-semibold text-white hover:bg-orange-600"
+          >
+            Order More
+          </button>
         </div>
       </div>
     )
@@ -261,17 +253,6 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
         }}
       />
 
-      {qrOrderingMode === 'order' && lastOrder && totalItems === 0 && !showLastOrder ? (
-        <button
-          type="button"
-          onClick={() => setShowLastOrder(true)}
-          className="fixed bottom-6 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-orange-200 bg-white px-6 py-3 font-semibold text-orange-600 shadow-[0_8px_24px_rgba(0,0,0,0.12)] transition-all hover:bg-orange-50"
-        >
-          <CheckCircle2 className="h-5 w-5 text-green-500" />
-          <span>View Your Order</span>
-        </button>
-      ) : null}
-
       {qrOrderingMode === 'order' && totalItems > 0 && !showCart ? (
         <button
           type="button"
@@ -285,51 +266,6 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
           <span>View Cart</span>
           <span className="rounded-lg bg-white/20 px-2 py-0.5 text-sm">{totalPrice.toLocaleString()} RWF</span>
         </button>
-      ) : null}
-
-      {showLastOrder && lastOrder ? (
-        <div className="fixed inset-0 z-50 flex flex-col justify-end bg-black/50">
-          <div className="max-h-[70vh] overflow-y-auto rounded-t-[30px] bg-white">
-            <div className="flex items-center justify-between border-b border-gray-100 p-4">
-              <div>
-                <h3 className="font-bold text-gray-900">Your Order</h3>
-                <p className="text-xs text-green-600 font-medium">Sent to kitchen</p>
-              </div>
-              <button type="button" onClick={() => setShowLastOrder(false)}>
-                <X className="h-5 w-5 text-gray-400" />
-              </button>
-            </div>
-            <div className="space-y-3 p-4">
-              {lastOrder.map((item) => (
-                <div key={item.key} className="flex items-center justify-between">
-                  <span className="flex-1 text-sm text-gray-800">{item.qty}× {item.dishName}</span>
-                  <span className="text-sm font-semibold text-gray-700">{calculateGrossFromNet(item.qty * item.dishPrice).toLocaleString()} RWF</span>
-                </div>
-              ))}
-              <div className="space-y-1 border-t border-gray-100 pt-3">
-                {(() => {
-                  const sub = lastOrder.reduce((s, i) => s + i.qty * i.dishPrice, 0)
-                  const vat = calculateVatFromNet(sub)
-                  const total = calculateGrossFromNet(sub)
-                  return (
-                    <>
-                      <div className="flex justify-between text-sm text-gray-500"><span>Price before VAT</span><span>{sub.toLocaleString()} RWF</span></div>
-                      <div className="flex justify-between text-sm text-orange-600"><span>VAT (18%)</span><span>{vat.toLocaleString()} RWF</span></div>
-                      <div className="flex justify-between font-bold"><span>Total</span><span className="text-orange-600">{total.toLocaleString()} RWF</span></div>
-                    </>
-                  )
-                })()}
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowLastOrder(false)}
-                className="w-full rounded-xl bg-gray-100 py-2.5 text-sm font-semibold text-gray-700"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
       ) : null}
 
       {qrOrderingMode === 'order' && showCart ? (

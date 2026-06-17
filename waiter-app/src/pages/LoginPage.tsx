@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Loader2, Lock, User, Eye, EyeOff, WifiOff } from 'lucide-react'
+import { Loader2, Lock, Mail, Eye, EyeOff, WifiOff } from 'lucide-react'
 import { login } from '../services/auth'
 import { useOnline } from '../hooks/useOnline'
 
@@ -10,7 +10,7 @@ interface LoginPageProps {
 
 export default function LoginPage({ onLogin, onOpenLogs }: LoginPageProps) {
   const { isOnline } = useOnline()
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [stage, setStage] = useState<{ label: string; progress: number } | null>(null)
@@ -24,7 +24,7 @@ export default function LoginPage({ onLogin, onOpenLogs }: LoginPageProps) {
     setStage({ label: 'Verifying credentials…', progress: 20 })
 
     try {
-      const user = await login(username, password)
+      const user = await login(email, password)
 
       if (user.role !== 'waiter' && user.role !== 'admin' && user.role !== 'kitchen') {
         setError('This app is for waiter accounts only.')
@@ -81,20 +81,20 @@ export default function LoginPage({ onLogin, onOpenLogs }: LoginPageProps) {
             )}
             {/* Fields + submit — hidden when offline */}
             {isOnline && (<>
-            {/* Username */}
+            {/* Email */}
             <div className="space-y-2">
-              <label htmlFor="username" className="block text-sm font-semibold text-gray-700">Username</label>
+              <label htmlFor="email" className="block text-sm font-semibold text-gray-700">Email</label>
               <div className="relative group">
-                <User className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 group-focus-within:text-orange-500 transition-colors" />
+                <Mail className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 group-focus-within:text-orange-500 transition-colors" />
                 <input
-                  id="username"
+                  id="email"
                   className="h-12 w-full border border-gray-300 rounded-xl pl-12 pr-4 text-sm bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all duration-200 placeholder:text-gray-400"
-                  type="text"
-                  placeholder="e.g. john"
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
+                  type="email"
+                  placeholder="your@email.com"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
                   required
-                  autoComplete="username"
+                  autoComplete="email"
                 />
               </div>
             </div>

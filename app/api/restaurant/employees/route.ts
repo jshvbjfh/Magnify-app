@@ -30,11 +30,20 @@ export async function GET() {
       role: true,
       isActive: true,
       phone: true,
+      pin: true,
+      cancellationPin: true,
+      hourlyRate: true,
       createdAt: true,
       updatedAt: true,
     },
   })
-  return cached(staff)
+  return cached(staff.map(s => ({
+    ...s,
+    hasPin: s.pin !== null,
+    hasCancellationPin: s.cancellationPin !== null,
+    pin: undefined,
+    cancellationPin: undefined,
+  })))
 }
 
 export async function POST(req: Request) {
@@ -46,12 +55,20 @@ export async function POST(req: Request) {
 
   const ALLOWED_ROLES = ['Chef', 'Sous Chef', 'Waiter', 'Cashier', 'Manager', 'Host', 'Dishwasher', 'Bartender']
 
-  const { name, role, phone } = await req.json()
+  const { name, role, phone, hourlyRate } = await req.json()
   if (!name || !role) {
     return NextResponse.json({ error: 'name and role are required' }, { status: 400 })
   }
   if (!ALLOWED_ROLES.some(r => r.toLowerCase() === String(role).toLowerCase())) {
     return NextResponse.json({ error: `Invalid role. Allowed roles: ${ALLOWED_ROLES.join(', ')}` }, { status: 400 })
+  }
+
+  let rate: number | null = null
+  if (hourlyRate !== undefined && hourlyRate !== null && hourlyRate !== '') {
+    rate = Number(hourlyRate)
+    if (Number.isNaN(rate) || rate < 0) {
+      return NextResponse.json({ error: 'Hourly rate must be a positive number' }, { status: 400 })
+    }
   }
 
   const staff = await prisma.staff.create({
@@ -60,6 +77,7 @@ export async function POST(req: Request) {
       name,
       role,
       phone: phone || null,
+      hourlyRate: rate,
       branches: {
         create: { branchId: context.branchId },
       },
@@ -70,19 +88,21 @@ export async function POST(req: Request) {
       role: true,
       isActive: true,
       phone: true,
+      hourlyRate: true,
       createdAt: true,
       updatedAt: true,
     },
   })
+  const staffWithFlags = { ...staff, hasPin: false, hasCancellationPin: false }
 
   await enqueueSyncChange(prisma, {
     restaurantId: context.restaurantId,
     branchId: context.branchId,
     entityType: 'staff',
-    entityId: staff.id,
+    entityId: staffWithFlags.id,
     operation: 'upsert',
-    payload: staff,
+    payload: staffWithFlags,
   })
 
-  return NextResponse.json(staff, { status: 201 })
+  return NextResponse.json(staffWithFlags, { status: 201 })
 }

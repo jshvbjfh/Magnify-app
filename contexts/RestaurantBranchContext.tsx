@@ -6,6 +6,7 @@ type RestaurantBranchContextValue = {
   restaurantId: string | null
   branchId: string | null
   branchName: string | null
+  branchType: 'kitchen' | 'bar' | null
 }
 
 const RestaurantBranchContext = createContext<RestaurantBranchContextValue | null>(null)

@@ -136,6 +136,7 @@ export async function createBranch(
     restaurantId: string
     name: string
     code?: string | null
+    type?: string | null
     activateUserId?: string | null
   },
   db: PrismaDb = prisma,
@@ -162,6 +163,7 @@ export async function createBranch(
       restaurantId,
       name,
       code: await uniqueBranchCode(db, restaurantId, params.code || name),
+      type: params.type === 'bar' ? 'bar' : 'kitchen',
       isMain: false,
       isActive: true,
     },

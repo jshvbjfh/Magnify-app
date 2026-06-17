@@ -137,6 +137,16 @@ ALTER TABLE dishes ADD COLUMN menu_type TEXT;
 ALTER TABLE orders ADD COLUMN sync_error TEXT;
 `,
   },
+  {
+    version: 4,
+    sql: `
+CREATE TABLE IF NOT EXISTS order_code_holders (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  pin_hash TEXT NOT NULL
+);
+`,
+  },
 ]
 
 function runMigrations(database) {
@@ -262,6 +272,27 @@ function registerIpcHandlers() {
       req.on('close', () => clearTimeout(timer))
       if (body) req.write(body)
       req.end()
+    })
+  })
+
+  // print:receipt — creates a hidden BrowserWindow, loads HTML, and prints silently
+  ipcMain.handle('print:receipt', (_event, html) => {
+    return new Promise((resolve, reject) => {
+      const printWin = new BrowserWindow({
+        show: false,
+        webPreferences: { nodeIntegration: false, contextIsolation: true },
+      })
+      printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+      printWin.webContents.once('did-finish-load', () => {
+        printWin.webContents.print(
+          { silent: true, printBackground: true },
+          (success, errType) => {
+            printWin.destroy()
+            if (success) resolve({ ok: true })
+            else reject(new Error(errType ?? 'print failed'))
+          }
+        )
+      })
     })
   })
 

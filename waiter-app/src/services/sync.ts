@@ -3,6 +3,7 @@ import {
   replaceDishes, replaceTables, setConfig, getConfig,
   getDishes, getTables, getUnsyncedOrders, markOrdersSynced, updateOrderSyncError,
   replaceCancellationApprovers, getCancellationApprovers,
+  replaceOrderCodeHolders, getOrderCodeHolders,
   reconcileOrderStatuses, upsertIncomingOrders,
   type Dish, type RestaurantTable, type CancellationApprover, type RemoteOrderStatus, type IncomingOrder,
 } from './db'
@@ -23,6 +24,7 @@ export interface BranchInfo {
   name: string
   code: string
   isMain: boolean
+  type: string
 }
 
 export interface PullPayload {
@@ -176,9 +178,15 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
     await setConfig('branches', JSON.stringify(payload.branches))
   }
 
-  // Store cancellation approvers for offline PIN validation
+  // Store cancellation approvers (5-digit supervisor PINs) for offline validation
   if (Array.isArray(payload.cancellationApprovers) && payload.cancellationApprovers.length > 0) {
     await replaceCancellationApprovers(payload.cancellationApprovers)
+  }
+
+  // Store order code holders (4-digit waiter codes) for offline order confirmation
+  const orderCodeHolders = (payload as unknown as { orderCodeHolders?: CancellationApprover[] }).orderCodeHolders
+  if (Array.isArray(orderCodeHolders) && orderCodeHolders.length > 0) {
+    await replaceOrderCodeHolders(orderCodeHolders)
   }
 
   // Reconcile local order statuses with server-authoritative values (last 3 days).
@@ -372,6 +380,18 @@ export async function validateCancellationPinOffline(pin: string): Promise<{ app
     if (match) return { approvedBy: approver.name }
   }
   throw new Error('Invalid supervisor PIN — ask a manager to enter their PIN')
+}
+
+export async function validateOrderCode(code: string): Promise<{ waiterName: string }> {
+  const holders = await getOrderCodeHolders()
+  if (holders.length === 0) {
+    throw new Error('No order codes cached. Connect and sync first.')
+  }
+  for (const holder of holders) {
+    const match = await bcrypt.compare(code, holder.pin_hash)
+    if (match) return { waiterName: holder.name }
+  }
+  throw new Error('Invalid code — check your order code with your manager')
 }
 
 // ─── Cancel order with supervisor PIN (Neon validates PIN) ────────────────────────────────────────

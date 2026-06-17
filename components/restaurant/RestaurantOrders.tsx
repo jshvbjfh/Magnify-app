@@ -664,6 +664,10 @@ ${headerLines}
 <div class="divider"></div>
 <div class="footer">${footerLines}</div>
 </body></html>`
+    if (typeof window !== 'undefined' && window.electronPrinter) {
+      window.electronPrinter.printCustomerBill(html).catch(() => {})
+      return
+    }
     const win = window.open('', '_blank', 'width=350,height=600')
     if (!win) return
     win.document.write(html)
@@ -865,6 +869,7 @@ ${headerLines}
         const payload = await res.json().catch(() => null)
         throw new Error(payload?.error || 'Payment failed.')
       }
+      void printBill(key)
       await Promise.all([loadPending(), loadSales(), loadTables(), loadArOrders()])
       window.dispatchEvent(new CustomEvent('refreshTables'))
       window.dispatchEvent(new CustomEvent('refreshInventory', {

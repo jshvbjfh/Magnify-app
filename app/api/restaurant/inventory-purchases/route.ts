@@ -4,11 +4,10 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { recordJournalEntry } from '@/lib/accounting'
 import { getActiveFifoUnitCost } from '@/lib/fifoCosting'
-import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
+import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 import { toUsageQuantity, toUsageUnitCost, normalizeUnitsPerPurchaseUnit } from '@/lib/inventoryUnits'
 import type { Prisma } from '@prisma/client'
-import { cached } from '@/lib/apiCache'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
 const INVENTORY_TRANSACTION_OPTIONS = { maxWait: 15000, timeout: 60000 } as const
@@ -158,7 +157,7 @@ export async function GET(req: Request) {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+    const context = await getRestaurantContextForUser(session.user.id)
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 
@@ -180,7 +179,7 @@ export async function GET(req: Request) {
       orderBy: [{ createdAt: 'desc' }, { purchasedAt: 'desc' }],
     })
 
-    return cached(purchases)
+    return NextResponse.json(purchases)
   } catch (error: any) {
     console.error('Failed to load inventory purchases:', error)
     return NextResponse.json({ error: error?.message || 'Failed to load inventory purchases' }, { status: 500 })
@@ -193,7 +192,7 @@ export async function POST(req: Request) {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+    const context = await getRestaurantContextForUser(session.user.id)
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 
@@ -313,7 +312,7 @@ export async function PUT(req: Request) {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+    const context = await getRestaurantContextForUser(session.user.id)
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 
@@ -429,7 +428,7 @@ export async function DELETE(req: Request) {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+    const context = await getRestaurantContextForUser(session.user.id)
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 

@@ -101,21 +101,22 @@ export async function GET(req: Request) {
         select: { id: true, name: true },
       }),
 
-      // Staff with a stored PIN can approve order cancellations offline.
-      // PINs themselves are never sent — only the stored bcrypt hash.
+      // Staff with a stored order code (pin) can confirm orders offline.
+      // Staff with a stored cancellationPin can approve order cancellations offline.
+      // Hashes are sent, never plaintext.
       prisma.staff.findMany({
         where: {
           restaurantId,
           branches: { some: { branchId: effectiveBranchId } },
           isActive: true,
-          pin: { not: null },
+          OR: [{ pin: { not: null } }, { cancellationPin: { not: null } }],
         },
-        select: { id: true, name: true, pin: true },
+        select: { id: true, name: true, pin: true, cancellationPin: true },
       }),
 
       prisma.branch.findMany({
         where: { restaurantId, isActive: true },
-        select: { id: true, name: true, code: true, isMain: true },
+        select: { id: true, name: true, code: true, isMain: true, type: true },
         orderBy: { name: 'asc' },
       }),
 
@@ -222,11 +223,20 @@ export async function GET(req: Request) {
       tables: normalisedTables,
       restaurant: restaurant ?? { id: restaurantId, name: 'Restaurant' },
       branches: allBranches,
-      cancellationApprovers: approverEmployees.map(e => ({
-        id: e.id,
-        name: e.name,
-        pin_hash: e.pin as string,
-      })),
+      cancellationApprovers: approverEmployees
+        .filter(e => e.cancellationPin != null)
+        .map(e => ({
+          id: e.id,
+          name: e.name,
+          pin_hash: e.cancellationPin as string,
+        })),
+      orderCodeHolders: approverEmployees
+        .filter(e => e.pin != null)
+        .map(e => ({
+          id: e.id,
+          name: e.name,
+          pin_hash: e.pin as string,
+        })),
       // Recent order status updates for local reconciliation on the waiter device.
       // Waiter app can update matching local rows without re-pushing.
       recentOrders: recentOrders.map(o => ({

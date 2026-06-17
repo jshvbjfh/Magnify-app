@@ -94,8 +94,11 @@ export async function GET(req: Request) {
   const cogs = sales.reduce((s: number, x) => s + (x.calculatedFoodCost ?? 0), 0)
   const foodCostPct = revenue > 0 ? (cogs / revenue) * 100 : 0
 
-  const shifts: { date: Date; calculatedWage: number | null }[] = []
-  const laborCost = 0
+  const shifts = await prisma.employeeShift.findMany({
+    where: { restaurantId, branchId, clockInAt: { gte: from, lte: to } },
+    select: { clockInAt: true, calculatedWage: true },
+  })
+  const laborCost = shifts.reduce((s: number, x) => s + (x.calculatedWage ?? 0), 0)
   const laborPct = revenue > 0 ? (laborCost / revenue) * 100 : 0
 
   // Waste cost
@@ -149,7 +152,7 @@ export async function GET(req: Request) {
   }
 
   for (const shift of shifts) {
-    const key = toDateKey(new Date(shift.date))
+    const key = toDateKey(new Date(shift.clockInAt))
     const current = dayMap.get(key) ?? { revenue: 0, salesCount: 0, cogs: 0, laborCost: 0, wasteCost: 0 }
     current.laborCost += shift.calculatedWage ?? 0
     dayMap.set(key, current)

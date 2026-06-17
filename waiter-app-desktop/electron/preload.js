@@ -39,3 +39,7 @@ try {
 }
 
 contextBridge.exposeInMainWorld('electronConfig', { apiBaseUrl: resolvedApiBaseUrl })
+
+contextBridge.exposeInMainWorld('electronPrint', {
+  receipt: (html) => ipcRenderer.invoke('print:receipt', html),
+})

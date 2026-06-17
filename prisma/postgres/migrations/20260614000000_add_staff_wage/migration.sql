@@ -1,0 +1,2 @@
+ALTER TABLE "staff" ADD COLUMN "hourlyRate" DOUBLE PRECISION;
+ALTER TABLE "employee_shifts" ADD COLUMN "calculatedWage" DOUBLE PRECISION;

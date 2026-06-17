@@ -27,6 +27,7 @@ type BranchTab = {
   id: string
   name: string
   code: string
+  type?: string
   isMain: boolean
 }
 
@@ -105,7 +106,7 @@ export default function RestaurantShell() {
   const [branchNotice, setBranchNotice] = useState<string | null>(null)
   const [branchCreateOpen, setBranchCreateOpen] = useState(false)
   const [branchCreating, setBranchCreating] = useState(false)
-  const [branchForm, setBranchForm] = useState({ name: '', code: '' })
+  const [branchForm, setBranchForm] = useState({ name: '', type: 'kitchen' as 'kitchen' | 'bar' })
   const [branchEditId, setBranchEditId] = useState<string | null>(null)
   const [branchEditForm, setBranchEditForm] = useState({ name: '', code: '' })
   const [branchEditing, setBranchEditing] = useState(false)
@@ -230,7 +231,6 @@ useEffect(() => {
 
   const handleBranchCreate = async () => {
     const name = branchForm.name.trim()
-    const code = branchForm.code.trim()
 
     if (!name || branchCreating) {
       if (!name) setBranchError('Branch name is required')
@@ -248,7 +248,7 @@ useEffect(() => {
         credentials: 'include',
         body: JSON.stringify({
           name,
-          code: code || null,
+          type: branchForm.type,
         }),
       })
       const data = await res.json().catch(() => null)
@@ -265,7 +265,7 @@ useEffect(() => {
       setBranches(nextBranches)
       setActiveBranchId(nextActiveBranchId)
       setBranchCreateOpen(false)
-      setBranchForm({ name: '', code: '' })
+      setBranchForm({ name: '', type: 'kitchen' })
       setBranchNotice(`${createdBranchName} created. Select it when you want to switch.`)
 
       window.dispatchEvent(new Event('refreshWastePending'))
@@ -439,6 +439,7 @@ useEffect(() => {
     restaurantId: typeof (session?.user as any)?.restaurantId === 'string' ? (session?.user as any).restaurantId : null,
     branchId: activeBranchId,
     branchName: activeBranch?.name ?? null,
+    branchType: (activeBranch?.type === 'bar' ? 'bar' : 'kitchen') as 'kitchen' | 'bar',
   }
 
   const sessionRestaurantId = typeof (session?.user as any)?.restaurantId === 'string'
@@ -623,7 +624,7 @@ useEffect(() => {
                             {isSwitching ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : null}
                           </div>
                           <div className="mt-1 flex items-center gap-2 text-[11px] text-gray-500">
-                            <span className="truncate">{branch.code}</span>
+                            <span className="capitalize">{branch.type ?? 'kitchen'}</span>
                             {branch.isMain ? <span className="rounded-full bg-white px-1.5 py-0.5">Main</span> : null}
                           </div>
                         </button>
@@ -731,15 +732,23 @@ useEffect(() => {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Branch code (optional)</label>
-                    <input
-                      value={branchForm.code}
-                      onChange={(event) => setBranchForm((current) => ({ ...current, code: event.target.value.toUpperCase() }))}
-                      placeholder="e.g. BBQ"
-                      className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
-                      disabled={branchCreating}
-                    />
-                    <p className="mt-1 text-xs text-gray-500">If you leave this blank, the app will create a safe unique code for you.</p>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Branch type</label>
+                    <div className="flex gap-4">
+                      {(['kitchen', 'bar'] as const).map((t) => (
+                        <label key={t} className="flex cursor-pointer items-center gap-2">
+                          <input
+                            type="radio"
+                            value={t}
+                            checked={branchForm.type === t}
+                            onChange={() => setBranchForm((f) => ({ ...f, type: t }))}
+                            disabled={branchCreating}
+                            className="accent-orange-500"
+                          />
+                          <span className="text-sm font-medium capitalize text-gray-700">{t}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">Kitchen branches handle food orders. Bar branches handle drinks.</p>
                   </div>
 
                   {branchError ? <p className="text-sm text-red-600">{branchError}</p> : null}

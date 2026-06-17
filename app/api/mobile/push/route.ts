@@ -87,6 +87,7 @@ interface MobileOrderItem {
   dish_price: number
   qty: number
   status: string
+  notes?: string | null
   created_at: string
   updated_at: string
 }
@@ -227,6 +228,7 @@ export async function POST(req: Request) {
                 dishPrice: normalizeNumber(item.dish_price),
                 qty: Math.max(1, normalizeInteger(item.qty, 1)),
                 status: normalizeRequiredText(item.status, 'ACTIVE'),
+                notes: item.notes ?? null,
                 createdAt: normalizedItemCreatedAt,
                 updatedAt: normalizedItemUpdatedAt,
               },
@@ -235,6 +237,7 @@ export async function POST(req: Request) {
                 dishPrice: normalizeNumber(item.dish_price),
                 qty: Math.max(1, normalizeInteger(item.qty, 1)),
                 status: normalizeRequiredText(item.status, 'ACTIVE'),
+                notes: item.notes ?? null,
                 updatedAt: normalizedItemUpdatedAt,
               },
             })

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Smartphone, Trash2, Upload, RefreshCw } from 'lucide-react'
+import { AlertCircle, Smartphone, Trash2, Upload } from 'lucide-react'
 
 import QrMenuPageContent, { type QrMenuDish } from '@/components/QrMenuPageContent'
 import { useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
@@ -32,7 +32,6 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  const [pasteUrl, setPasteUrl] = useState('')
 
   useEffect(() => {
     setQrMenuItems(menuItems)
@@ -173,36 +172,9 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : 'Unable to upload QR menu image.')
     } finally {
-      if (fileInputRef.current) fileInputRef.current.value = ''
+      event.target.value = ''
       setUploading(false)
     }
-  }
-
-  if (loading) {
-    return (
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
-        <div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm space-y-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="space-y-2 max-w-xl">
-              <div className="h-3 w-24 rounded-full bg-gray-100 animate-pulse" />
-              <div className="h-6 w-40 rounded-lg bg-gray-100 animate-pulse" />
-              <div className="h-3 w-full rounded-full bg-gray-100 animate-pulse" />
-              <div className="h-3 w-3/4 rounded-full bg-gray-100 animate-pulse" />
-            </div>
-            <div className="h-16 w-32 rounded-2xl bg-gray-100 animate-pulse" />
-          </div>
-          <div className="h-24 rounded-2xl bg-gray-100 animate-pulse" />
-          <div className="h-16 rounded-2xl bg-gray-100 animate-pulse" />
-          <div className="flex items-center justify-center gap-2 pt-2 text-sm text-gray-400">
-            <RefreshCw className="h-4 w-4 animate-spin" />
-            Loading settings...
-          </div>
-        </div>
-        <div className="rounded-3xl border border-gray-200 bg-white overflow-hidden shadow-sm">
-          <div className="h-full min-h-[400px] bg-gray-100 animate-pulse" />
-        </div>
-      </div>
-    )
   }
 
   return (
@@ -236,17 +208,12 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
               />
               <button
                 type="button"
-                onClick={() => {
-                  if (fileInputRef.current) {
-                    fileInputRef.current.value = ''
-                    fileInputRef.current.click()
-                  }
-                }}
+                onClick={() => fileInputRef.current?.click()}
                 disabled={loading || uploading || saving}
                 className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-orange-500/25 transition hover:from-orange-600 hover:to-red-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {uploading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                {uploading ? 'Uploading...' : saving ? 'Saving...' : qrMenuHeroImageUrl ? 'Replace image' : 'Upload image'}
+                <Upload className="h-4 w-4" />
+                {uploading ? 'Uploading image...' : qrMenuHeroImageUrl ? 'Replace image' : 'Upload image'}
               </button>
               <button
                 type="button"
@@ -262,29 +229,6 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
               Best results: a wide image with strong contrast, sized for mobile first. PNG and JPG work well. Maximum 10MB.
             </p>
           </div>
-
-          <div className="rounded-2xl border border-gray-200 bg-gray-50/60 p-4 space-y-2">
-            <p className="text-xs font-semibold text-gray-700">Or paste a public image URL</p>
-            <div className="flex gap-2">
-              <input
-                type="url"
-                value={pasteUrl}
-                onChange={e => setPasteUrl(e.target.value)}
-                placeholder="https://example.com/your-image.jpg"
-                className="flex-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-orange-300"
-              />
-              <button
-                type="button"
-                disabled={!pasteUrl.trim().startsWith('https://') || saving}
-                onClick={() => { void persistQrMenuHeroImage(pasteUrl.trim()); setPasteUrl('') }}
-                className="rounded-xl border border-orange-200 bg-white px-3 py-2 text-xs font-semibold text-orange-600 hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                Use URL
-              </button>
-            </div>
-            <p className="text-[11px] text-gray-400">Upload to Imgur or any public host, then paste the direct image link here. Must start with https://</p>
-          </div>
-
 
           {error ? (
             <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">

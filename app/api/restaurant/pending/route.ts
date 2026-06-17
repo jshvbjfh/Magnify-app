@@ -24,43 +24,42 @@ export async function GET(req: Request) {
   const includeServed = ['1', 'true', 'yes'].includes((searchParams.get('includeServed') ?? '').toLowerCase())
   const allBranches = searchParams.get('allBranches') === '1'
 
-  const orders = await prisma.restaurantOrder.findMany({
+  // Route each item to its dish's mother branch, not the order's waiter branch.
+  // This means the kitchen terminal sees food items, bar terminal sees drink items,
+  // regardless of which waiter branch placed the order.
+  const items = await prisma.orderItem.findMany({
     where: {
-      restaurantId: context.restaurantId,
-      ...(allBranches ? {} : { branchId: context.branchId }),
-      status: { in: [...ACTIVE_RESTAURANT_ORDER_STATUSES] },
-      ...(includeServed ? {} : { servedAt: null }),
-    },
-    include: {
-      items: {
-        where: { status: 'ACTIVE' },
-        orderBy: { createdAt: 'asc' },
+      status: 'ACTIVE',
+      ...(allBranches ? {} : { dish: { branchId: context.branchId } }),
+      order: {
+        restaurantId: context.restaurantId,
+        status: { in: [...ACTIVE_RESTAURANT_ORDER_STATUSES] },
+        ...(includeServed ? {} : { servedAt: null }),
       },
     },
+    include: { order: true },
     orderBy: { createdAt: 'asc' },
   })
 
-  const flattened = orders.flatMap((order) =>
-    order.items.map((item) => ({
-      id: item.id,
-      orderId: order.id,
-      orderNumber: order.orderNumber,
-      tableId: order.tableId,
-      tableName: order.tableName,
-      dishId: item.dishId,
-      dishName: item.dishName,
-      dishPrice: item.dishPrice,
-      qty: item.qty,
-      status: item.kitchenStatus,
-      waiter: { id: null, name: order.createdByName },
-      addedAt: order.createdAt,
-      readyAt: item.readyAt,
-      orderServedAt: null,
-      paymentMethod: order.paymentMethod,
-      totalAmount: order.totalAmount,
-      notes: null,
-    }))
-  )
+  const flattened = items.map((item) => ({
+    id: item.id,
+    orderId: item.order.id,
+    orderNumber: item.order.orderNumber,
+    tableId: item.order.tableId,
+    tableName: item.order.tableName,
+    dishId: item.dishId,
+    dishName: item.dishName,
+    dishPrice: item.dishPrice,
+    qty: item.qty,
+    status: item.kitchenStatus,
+    waiter: { id: null, name: item.order.createdByName },
+    addedAt: item.order.createdAt,
+    readyAt: item.readyAt,
+    orderServedAt: null,
+    paymentMethod: item.order.paymentMethod,
+    totalAmount: item.order.totalAmount,
+    notes: item.notes ?? null,
+  }))
 
   return NextResponse.json(flattened)
 }

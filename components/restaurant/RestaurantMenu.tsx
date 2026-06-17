@@ -96,6 +96,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   })
 
   async function load() {
+    setLoading(dishes.length === 0 && ingredients.length === 0 && purchases.length === 0)
     try {
       const [d, i, p] = await Promise.all([
         fetch('/api/restaurant/dishes').then(r => r.json()),
