@@ -1237,12 +1237,15 @@ function createWindow(localIP, serverPort) {
 			loadingWindow = null
 		}
 
-		// Compensate for Windows display scaling so layout renders at intended size.
-		// 1.25 factor means we only neutralise 80% of the OS scaling (content stays ~25% larger than 100% baseline)
+		// Compensate for Windows display scaling so the layout renders at its true
+		// design size (same as the web app at 100%). Fully neutralising the OS scale
+		// (factor 1.0) keeps the sidebar and content from overflowing on 125%/150%
+		// displays — the previous 1.25 factor left everything ~25% oversized, which
+		// pushed the sidebar past the viewport height and forced scrolling.
 		try {
 			const scaleFactor = screen.getPrimaryDisplay().scaleFactor
 			if (scaleFactor > 1) {
-				const zoomFactor = parseFloat((1.25 / scaleFactor).toFixed(4))
+				const zoomFactor = parseFloat((1.0 / scaleFactor).toFixed(4))
 				mainWindow.webContents.setZoomFactor(zoomFactor)
 				appendStartupLog(`Display scale=${scaleFactor} → zoom compensated to ${zoomFactor}`)
 			}
