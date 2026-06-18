@@ -9,6 +9,50 @@ app.commandLine.appendSwitch('disable-gpu')
 app.commandLine.appendSwitch('disable-software-rasterizer')
 
 // ---------------------------------------------------------------------------
+// Startup logging — best-effort diagnostics written to userData/startup.log so
+// field issues (window never shows, GPU/render crashes, DB init failures) can be
+// inspected without a debugger. Path: %APPDATA%\magnify-pos\startup.log
+// ---------------------------------------------------------------------------
+const STARTUP_LOG_MAX_BYTES = 512 * 1024
+
+function getStartupLogPath() {
+  try {
+    return path.join(app.getPath('userData'), 'startup.log')
+  } catch {
+    return path.join(require('os').tmpdir(), 'magnify-pos-startup.log')
+  }
+}
+
+function appendStartupLog(message) {
+  try {
+    const logPath = getStartupLogPath()
+    // Keep the log bounded across launches.
+    try {
+      if (fs.statSync(logPath).size > STARTUP_LOG_MAX_BYTES) fs.rmSync(logPath, { force: true })
+    } catch {}
+    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`, 'utf8')
+  } catch {
+    // Best-effort only — never let logging crash the app.
+  }
+}
+
+process.on('uncaughtException', (err) => {
+  appendStartupLog(`uncaughtException: ${err?.stack || err?.message || err}`)
+})
+process.on('unhandledRejection', (reason) => {
+  appendStartupLog(`unhandledRejection: ${reason?.stack || reason?.message || reason}`)
+})
+
+// Process-level crash signals — a GPU process death here is the classic cause of
+// a launched-but-invisible window on old Intel graphics.
+app.on('child-process-gone', (_e, details) => {
+  appendStartupLog(`child-process-gone: type=${details?.type} reason=${details?.reason} exitCode=${details?.exitCode}`)
+})
+app.on('render-process-gone', (_e, _wc, details) => {
+  appendStartupLog(`render-process-gone: reason=${details?.reason} exitCode=${details?.exitCode}`)
+})
+
+// ---------------------------------------------------------------------------
 // Runtime config
 // ---------------------------------------------------------------------------
 let apiBaseUrl = 'https://magnify-app-tau.vercel.app'
@@ -368,13 +412,23 @@ async function createWindow() {
     },
   })
 
+  mainWindow.webContents.on('did-finish-load', () => appendStartupLog('Renderer did-finish-load'))
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) =>
+    appendStartupLog(`Renderer did-fail-load code=${code} desc=${desc} url=${url}`))
+  mainWindow.webContents.on('render-process-gone', (_e, details) =>
+    appendStartupLog(`webContents render-process-gone reason=${details?.reason} exitCode=${details?.exitCode}`))
+  mainWindow.on('unresponsive', () => appendStartupLog('Main window unresponsive'))
+
   // In development load Vite dev server; in production load built index.html
   if (!app.isPackaged) {
     const devUrl = await resolveDevServerUrl()
+    appendStartupLog(`Loading dev server URL: ${devUrl}`)
     await mainWindow.loadURL(devUrl)
     mainWindow.webContents.openDevTools()
   } else {
-    mainWindow.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'))
+    const indexPath = path.join(app.getAppPath(), 'dist', 'index.html')
+    appendStartupLog(`Loading file: ${indexPath}`)
+    mainWindow.loadFile(indexPath)
   }
 }
 
@@ -472,11 +526,20 @@ if (!gotLock) {
   })
 
   app.whenReady().then(async () => {
-    loadRuntimeEnv()
-    initDatabase()
-    registerIpcHandlers()
-    await createWindow()
-    setupAutoUpdater()
+    appendStartupLog(`=== Launch v${app.getVersion()} packaged=${app.isPackaged} platform=${process.platform} arch=${process.arch} ===`)
+    try {
+      loadRuntimeEnv()
+      appendStartupLog(`Runtime env loaded. apiBaseUrl=${apiBaseUrl}`)
+      initDatabase()
+      appendStartupLog('Database initialized')
+      registerIpcHandlers()
+      await createWindow()
+      appendStartupLog('Main window created')
+      setupAutoUpdater()
+    } catch (err) {
+      appendStartupLog(`Startup failed: ${err?.stack || err?.message || err}`)
+      throw err
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow()
