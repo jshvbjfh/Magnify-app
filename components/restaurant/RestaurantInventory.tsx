@@ -434,6 +434,13 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     setShowPurchaseRecorder(true)
   }
 
+  // Open a fresh batch row pre-filled with this ingredient, so the manager can
+  // add stock directly from the "All ingredients" list.
+  function recordStockForItem(item: Ingredient) {
+    openNewPurchaseRow()
+    setPForm(f => ({ ...f, itemName: item.name }))
+  }
+
   function openBatchForNewItem(batchId: string | null, purchasedAt: string) {
     if (!batchId || pSaving) return
 
@@ -873,6 +880,39 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 text-sm text-gray-600 shadow-sm">
         {batchCount} batch{batchCount===1?'':'es'} • {purchases.length} inventory row{purchases.length===1?'':'s'} • {fmt(totalPurchaseCost)} RWF recorded
       </div>
+
+      {items.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-gray-100">
+            <p className="text-sm font-semibold text-gray-700">All ingredients <span className="font-normal text-gray-400">({items.length})</span></p>
+            <p className="text-xs text-gray-400 mt-0.5">Every ingredient on this branch. Items with no batch yet show 0 on hand — use “Record stock” to add a purchase batch.</p>
+          </div>
+          <div className="max-h-96 overflow-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 sticky top-0 z-10">
+                <tr>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500">Ingredient</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500">Category</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500">On hand</th>
+                  <th className="px-4 py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {items.map(item => (
+                  <tr key={item.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-2 font-medium text-gray-800">{item.name}</td>
+                    <td className="px-4 py-2 text-gray-500">{item.category || '—'}</td>
+                    <td className="px-4 py-2 text-gray-600">{getIngredientStockDisplay(item)}</td>
+                    <td className="px-4 py-2 text-right">
+                      <button type="button" onClick={()=>recordStockForItem(item)} className="text-xs font-semibold text-orange-600 hover:text-orange-700">Record stock</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {!purchasesLoading && (purchases.length>0 || showPurchaseForm) && (
         <div className="relative">
