@@ -331,14 +331,26 @@ function registerIpcHandlers() {
         show: false,
         webPreferences: { nodeIntegration: false, contextIsolation: true },
       })
+      let settled = false
+      const finish = (fn, arg) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        try { if (!printWin.isDestroyed()) printWin.destroy() } catch {}
+        fn(arg)
+      }
+      // Guard: never let a hung renderer/printer leave the job (and the hidden
+      // window) stuck forever — reject after 20s so the UI can surface an error.
+      const timer = setTimeout(() => finish(reject, new Error('Print timed out')), 20000)
+      printWin.webContents.on('did-fail-load', (_e, code, desc) =>
+        finish(reject, new Error(`Receipt load failed: ${desc} (${code})`)))
       printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
       printWin.webContents.once('did-finish-load', () => {
         printWin.webContents.print(
           { silent: true, printBackground: true },
           (success, errType) => {
-            printWin.destroy()
-            if (success) resolve({ ok: true })
-            else reject(new Error(errType ?? 'print failed'))
+            if (success) finish(resolve, { ok: true })
+            else finish(reject, new Error(errType ?? 'print failed'))
           }
         )
       })

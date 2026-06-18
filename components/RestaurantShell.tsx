@@ -96,6 +96,8 @@ export default function RestaurantShell() {
   const [showJesse, setShowJesse] = useState(false)
   const [trackingMode, setTrackingMode] = useState<'simple' | 'dish_tracking'>('simple')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [licenseNotice, setLicenseNotice] = useState<{ daysLeft: number; status: string } | null>(null)
+  const [licenseDismissed, setLicenseDismissed] = useState(false)
   const [wastePendingCount, setWastePendingCount] = useState(0)
   const [branches, setBranches] = useState<BranchTab[]>([])
   const [activeBranchId, setActiveBranchId] = useState<string | null>(null)
@@ -317,6 +319,30 @@ useEffect(() => {
     const id = setInterval(ping, 4 * 60 * 1000)
     return () => clearInterval(id)
   }, [])
+
+  // Subscription reminder: warn the manager when the plan has 3 days or fewer left.
+  useEffect(() => {
+    if (status !== 'authenticated' || userRole !== 'admin') return
+    let cancelled = false
+    const checkLicense = () => {
+      fetch('/api/restaurant/license', { credentials: 'include' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (cancelled || !data) return
+          const days = Number(data.daysLeft)
+          if ((data.status === 'active' || data.status === 'trial') && Number.isFinite(days) && days >= 0 && days <= 3) {
+            setLicenseNotice({ daysLeft: days, status: data.status })
+          } else {
+            setLicenseNotice(null)
+          }
+        })
+        .catch(() => {})
+    }
+    checkLicense()
+    // Re-check a few times a day in case the app stays open.
+    const id = setInterval(checkLicense, 6 * 60 * 60 * 1000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [status, userRole])
 
   // Load tracking mode fresh from DB (session may be stale after settings change)
   useEffect(() => {
@@ -596,6 +622,22 @@ useEffect(() => {
 
         {/* Page content */}
         <main className="flex-1 p-3 sm:p-4 lg:p-6 pb-24 lg:pb-6 min-w-0 space-y-4">
+          {licenseNotice && !licenseDismissed && (
+            <div className="flex items-start justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 shadow-sm">
+              <div className="flex items-start gap-2 text-sm text-amber-800">
+                <Bell className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+                <span>
+                  <span className="font-semibold">
+                    Your {licenseNotice.status === 'trial' ? 'free trial' : 'subscription'} ends in {licenseNotice.daysLeft} day{licenseNotice.daysLeft === 1 ? '' : 's'}.
+                  </span>{' '}
+                  Renew now to avoid any interruption to service.
+                </span>
+              </div>
+              <button onClick={() => setLicenseDismissed(true)} className="flex-shrink-0 text-amber-500 hover:text-amber-700" aria-label="Dismiss">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
           <div className="rounded-xl border border-gray-200 bg-white px-3 py-3 shadow-sm">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0 flex-1">

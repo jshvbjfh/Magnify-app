@@ -274,7 +274,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   function printHtml(html: string, delay = 0) {
     const eP = (window as Window & { electronPrint?: { receipt: (h: string) => Promise<void> } }).electronPrint
     if (eP) {
-      setTimeout(() => void eP.receipt(html).catch(console.error), delay)
+      setTimeout(() => void eP.receipt(html).catch((err) => {
+        console.error(err)
+        setSubmitError('Print failed — check the printer is on, has paper, and is set as the default printer in Windows.')
+      }), delay)
       return
     }
     // Fallback: DOM injection for non-Electron environments
@@ -285,7 +288,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       const styleEl = document.createElement('style')
       styleEl.id = SID
       styleEl.textContent = Array.from(parsed.querySelectorAll('style')).map(s => s.textContent ?? '').join('\n')
-        + `\n@media screen{#${ID}{position:fixed;left:-9999px;top:0;width:80mm;opacity:0}}`
+        + `\n@media screen{#${ID}{position:fixed;left:-9999px;top:0;width:58mm;opacity:0}}`
         + `\n@media print{body>*:not(#${ID}){display:none!important}#${ID}{display:block!important;position:static!important}}`
       const div = document.createElement('div')
       div.id = ID; div.innerHTML = parsed.body.innerHTML
@@ -306,7 +309,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     ).join('')
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:monospace;font-size:12px;width:80mm;padding:4mm}
+body{font-family:monospace;font-size:12px;width:58mm;padding:4mm}
 .center{text-align:center;margin-bottom:4px}
 .title{font-size:15px;font-weight:bold}
 .meta{font-size:11px;margin:1px 0}
@@ -314,7 +317,7 @@ body{font-family:monospace;font-size:12px;width:80mm;padding:4mm}
 .row{display:flex;justify-content:space-between;gap:4px;margin:2px 0;font-size:11px}
 .total{font-size:13px;font-weight:bold}
 .footer{text-align:center;font-size:10px;margin-top:6px}
-@media print{@page{margin:0}}
+@media print{@page{margin:0;size:58mm auto}}
 </style></head><body>
 <div class="center"><div class="title">${escHtml(rName || 'Restaurant')}</div></div>
 <div class="meta">Order  : ${escHtml(order.order_number ?? '')}</div>
@@ -355,7 +358,7 @@ ${paymentMethod ? `<div class="meta">Payment: ${escHtml(paymentMethod)}</div>` :
       ).join('')
       const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:monospace;font-size:12px;width:80mm;padding:4mm}
+body{font-family:monospace;font-size:12px;width:58mm;padding:4mm}
 .center{text-align:center;margin-bottom:4px}
 .title{font-size:14px;font-weight:bold;letter-spacing:1px}
 .sub{font-size:11px}
@@ -363,7 +366,7 @@ body{font-family:monospace;font-size:12px;width:80mm;padding:4mm}
 .divider{border-top:1px dashed #000;margin:4px 0}
 .item{display:flex;gap:6px;margin:2px 0}
 .qty{font-weight:bold;min-width:20px}
-@media print{@page{margin:0}}
+@media print{@page{margin:0;size:58mm auto}}
 </style></head><body>
 <div class="center">
 <div class="title">${escHtml(label)}</div>
