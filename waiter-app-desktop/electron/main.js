@@ -3,6 +3,11 @@ const http = require('http')
 const path = require('path')
 const fs = require('fs')
 
+// Disable GPU acceleration to prevent silent crashes on older Intel graphics (HD 4000 etc.)
+app.disableHardwareAcceleration()
+app.commandLine.appendSwitch('disable-gpu')
+app.commandLine.appendSwitch('disable-software-rasterizer')
+
 // ---------------------------------------------------------------------------
 // Runtime config
 // ---------------------------------------------------------------------------
@@ -452,17 +457,32 @@ function setupAutoUpdater() {
 // ---------------------------------------------------------------------------
 // App lifecycle
 // ---------------------------------------------------------------------------
-app.whenReady().then(async () => {
-  loadRuntimeEnv()
-  initDatabase()
-  registerIpcHandlers()
-  await createWindow()
-  setupAutoUpdater()
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) void createWindow()
+// Single-instance lock — prevent multiple processes from spawning on one click
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // Focus the existing window if a second instance is attempted
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
   })
-})
+
+  app.whenReady().then(async () => {
+    loadRuntimeEnv()
+    initDatabase()
+    registerIpcHandlers()
+    await createWindow()
+    setupAutoUpdater()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) void createWindow()
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

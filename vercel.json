@@ -4,6 +4,10 @@
   "buildCommand": "npm run prisma:postgres:migrate:deploy && npm run build:web",
   "regions": ["lhr1"],
   "functions": {
-    "app/api/restaurant/ask-jesse/route.ts": { "maxDuration": 60 }
+    "app/api/restaurant/ask-jesse/route.ts": { "maxDuration": 60 },
+    "app/api/mobile/pull/route.ts": { "maxDuration": 30 },
+    "app/api/mobile/push/route.ts": { "maxDuration": 30 },
+    "app/api/mobile/auth/route.ts": { "maxDuration": 30 },
+    "app/api/mobile/cancel-order/route.ts": { "maxDuration": 30 }
   }
 }

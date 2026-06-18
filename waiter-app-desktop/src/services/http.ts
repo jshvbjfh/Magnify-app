@@ -154,7 +154,10 @@ export async function sendRequest({
 
   const w = window as unknown as { electronHttp?: ElectronHttp }
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 15_000)
+  // 30s tolerates Neon serverless cold starts (DB scales to zero, reconnect can take ~15s);
+  // must stay >= the server's maxDuration for /api/mobile/* so we don't give up before Vercel responds.
+  const REQUEST_TIMEOUT_MS = 30_000
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
   try {
     // Route through main process IPC — Node.js has no CORS restrictions.
@@ -170,7 +173,7 @@ export async function sendRequest({
         url,
         headers: (headers ?? {}) as Record<string, string>,
         body: bodyStr,
-        timeoutMs: 15_000,
+        timeoutMs: REQUEST_TIMEOUT_MS,
       })
 
       return { status: result.status, data: result.data, headers: result.headers, url }

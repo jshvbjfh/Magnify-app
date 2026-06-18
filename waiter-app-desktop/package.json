@@ -1,6 +1,6 @@
 {
   "name": "magnify-pos",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Magnify POS — Waiter Terminal for Windows",
   "main": "electron/main.js",
   "private": true,
@@ -8,6 +8,7 @@
     "dev": "concurrently --kill-others \"vite\" \"electron .\"",
     "build": "vite build",
     "electron:build": "vite build && electron-builder",
+    "electron:build:ia32": "vite build && electron-builder --ia32",
     "electron:publish": "vite build && electron-builder --publish always",
     "preview": "vite preview",
     "postinstall": "electron-rebuild -f -w better-sqlite3"
@@ -49,7 +50,12 @@
       "node_modules/**"
     ],
     "win": {
-      "target": "nsis",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64", "ia32"]
+        }
+      ],
       "icon": "public/icon.ico"
     },
     "nsis": {
