@@ -875,7 +875,7 @@ ${itemRows}
                     <div className={`${bgBottom} px-3 py-2 flex-1 w-full`}>
                       <p className="text-white text-[16px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
                       <p className="text-white/70 font-medium text-[14px] mt-0.5">
-                        {fmtRWF(Math.round(dish.selling_price * (1 + VAT_RATE)))} RWF incl. VAT
+                        {fmtRWF(dish.selling_price)} RWF
                       </p>
                     </div>
                     {qtyInCart > 0 && (

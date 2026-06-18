@@ -6,7 +6,6 @@ import { ChefHat, Minus, Plus } from 'lucide-react'
 
 import { getActiveDishVariants, getDishStartingPrice } from '@/lib/dishVariants'
 import { MENU_TYPE_OPTIONS, MENU_TYPE_SECTION_ORDER, getDishMenuTypeKey, getDishMenuTypeLabel } from '@/lib/menuMetadata'
-import { calculateGrossFromNet } from '@/lib/restaurantVat'
 
 export type QrMenuDishVariant = {
   id: string
@@ -153,7 +152,7 @@ export default function QrMenuPageContent({
           </div>
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <span className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">VAT included</span>
+            <span className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">VAT added at billing</span>
             {qrOrderingMode === 'view_only' ? (
               <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
                 Guests can browse, but staff still take orders.
@@ -288,8 +287,8 @@ export default function QrMenuPageContent({
                                 ) : null}
                               </div>
                               <div className="shrink-0 text-right">
-                                <p className="text-2xl font-black text-[#e24336]">{variants.length > 0 ? `From ${calculateGrossFromNet(startingPrice).toLocaleString()}` : calculateGrossFromNet(dish.sellingPrice).toLocaleString()} RWF</p>
-                                <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-orange-400">VAT included</p>
+                                <p className="text-2xl font-black text-[#e24336]">{variants.length > 0 ? `From ${startingPrice.toLocaleString()}` : dish.sellingPrice.toLocaleString()} RWF</p>
+                                <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-orange-400">excl. VAT</p>
                               </div>
                             </div>
 
@@ -307,7 +306,7 @@ export default function QrMenuPageContent({
                                         <div className="flex items-start justify-between gap-3">
                                           <div>
                                             <p className="text-sm font-bold text-slate-900">{variant.name}</p>
-                                            <p className="text-xs font-semibold text-orange-600">{calculateGrossFromNet(variant.sellingPrice).toLocaleString()} RWF</p>
+                                            <p className="text-xs font-semibold text-orange-600">{variant.sellingPrice.toLocaleString()} RWF</p>
                                           </div>
                                           {qrOrderingMode === 'order' ? (
                                             <div className="flex items-center gap-2">

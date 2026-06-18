@@ -7,7 +7,7 @@ import { getActiveDishVariants, getDishStartingPrice } from '@/lib/dishVariants'
 import { estimateFifoCostForQuantity } from '@/lib/fifoCosting'
 import { DEFAULT_MENU_CATEGORY_SUGGESTIONS, MENU_TYPE_OPTIONS, getDishMenuTypeLabel, normalizeDishMenuType, resolveDishMenuType } from '@/lib/menuMetadata'
 import RestaurantQrMenuStudio from '@/components/restaurant/RestaurantQrMenuStudio'
-import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
+import { calculateVatFromNet } from '@/lib/restaurantVat'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type Ingredient = { id: string; name: string; unit: string; unitCost: number | null; quantity: number }
@@ -61,7 +61,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   const ingSearchRef = useRef<HTMLDivElement>(null)
   const sellingPriceNumber = Number(form.sellingPrice || 0)
   const previewVatAmount = calculateVatFromNet(sellingPriceNumber)
-  const previewMenuPrice = calculateGrossFromNet(sellingPriceNumber)
+  const previewBilledTotal = sellingPriceNumber + previewVatAmount
   const snapshotScopeId = buildRestaurantSnapshotScope({
     restaurantId: restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null,
     branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
@@ -381,9 +381,8 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                 <input required type="number" min="0" step="any" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none" value={form.sellingPrice} onChange={e=>setForm(f=>({...f,sellingPrice:e.target.value}))} placeholder="5000"/></div>
               <div className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-3 text-sm text-orange-900">
                 <p className="font-semibold">Default price shown on the menu</p>
-                <p className="mt-1 text-lg font-bold">{previewMenuPrice.toLocaleString()} RWF</p>
-                <p className="mt-1 text-xs text-orange-700">{sellingPriceNumber.toLocaleString()} + ({sellingPriceNumber.toLocaleString()} × 18%) = {previewMenuPrice.toLocaleString()} RWF</p>
-                <p className="text-xs text-orange-700">VAT included: {previewVatAmount.toLocaleString()} RWF</p>
+                <p className="mt-1 text-lg font-bold">{sellingPriceNumber.toLocaleString()} RWF <span className="text-xs font-medium text-orange-700">excl. VAT</span></p>
+                <p className="mt-1 text-xs text-orange-700">+ 18% VAT ({previewVatAmount.toLocaleString()} RWF) is added on the printed bill → {previewBilledTotal.toLocaleString()} RWF</p>
               </div>
               <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-gray-600 mb-0.5">Sizes</p>
@@ -527,9 +526,9 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                       ) : null}
                       <div className="mt-1 text-xs">
                         <span className="text-gray-700 font-semibold">
-                          {activeVariants.length > 0 ? `From ${calculateGrossFromNet(startingPrice).toLocaleString()}` : calculateGrossFromNet(dish.sellingPrice).toLocaleString()} RWF
+                          {activeVariants.length > 0 ? `From ${startingPrice.toLocaleString()}` : dish.sellingPrice.toLocaleString()} RWF
                         </span>
-                        <span className="ml-2 text-[11px] font-medium text-orange-500">incl. VAT</span>
+                        <span className="ml-2 text-[11px] font-medium text-gray-400">excl. VAT</span>
                         {dish.ingredients.length>0&&<div className="flex items-center gap-2 mt-0.5">
                           <span className="text-gray-400">Cost: {fc.toFixed(0)}</span>
                           <span className={`font-semibold ${mgn>=60?'text-green-600':mgn>=40?'text-amber-600':'text-red-600'}`}>{mgn.toFixed(0)}%</span>
@@ -551,7 +550,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                 </h3>
                 {selectedDish && (
                   <div className="text-right">
-                    <span className="text-sm font-bold text-orange-500">{calculateGrossFromNet(getDishStartingPrice(selectedDish.variants, selectedDish.sellingPrice)).toLocaleString()} RWF</span>
+                    <span className="text-sm font-bold text-orange-500">{getDishStartingPrice(selectedDish.variants, selectedDish.sellingPrice).toLocaleString()} RWF</span>
                     <p className="text-[11px] text-gray-400">Base price {selectedDish.sellingPrice.toLocaleString()} RWF</p>
                   </div>
                 )}
@@ -560,7 +559,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {getActiveDishVariants(selectedDish.variants).map((variant) => (
                       <span key={`${selectedDish.id}:${variant.id ?? variant.name}`} className="rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[11px] font-semibold text-orange-700">
-                        {variant.name} · {calculateGrossFromNet(variant.sellingPrice).toLocaleString()} RWF
+                        {variant.name} · {variant.sellingPrice.toLocaleString()} RWF
                       </span>
                     ))}
                   </div>

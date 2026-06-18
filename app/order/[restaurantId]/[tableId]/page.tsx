@@ -199,7 +199,7 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
             {cart.map((item) => (
               <div key={item.key} className="flex justify-between text-sm">
                 <span className="text-gray-700">{item.qty}× {item.dishName}</span>
-                <span className="text-gray-500">{calculateGrossFromNet(item.qty * item.dishPrice).toLocaleString()} RWF</span>
+                <span className="text-gray-500">{(item.qty * item.dishPrice).toLocaleString()} RWF</span>
               </div>
             ))}
             <div className="mt-2 space-y-1 border-t border-gray-200 pt-2 text-sm">
@@ -298,7 +298,7 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
                     </button>
                   </div>
                   <span className="mx-3 flex-1 text-sm text-gray-800">{item.dishName}</span>
-                  <span className="text-sm font-semibold text-gray-700">{calculateGrossFromNet(item.qty * item.dishPrice).toLocaleString()} RWF</span>
+                  <span className="text-sm font-semibold text-gray-700">{(item.qty * item.dishPrice).toLocaleString()} RWF</span>
                 </div>
               ))}
               <div className="space-y-1 border-t border-gray-100 pt-3">

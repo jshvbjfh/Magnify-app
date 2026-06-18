@@ -1587,7 +1587,7 @@ ${headerLines}
                     </div>
                     <div className={`${bgBottom} px-2.5 py-2.5 flex-1 w-full`}>
                       <p className="text-white text-[13px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
-                      <p className="text-white/70 font-medium text-[11px] mt-1">{fmtRWF(calculateGrossFromNet(dish.sellingPrice))} RWF incl. VAT</p>
+                      <p className="text-white/70 font-medium text-[11px] mt-1">{fmtRWF(dish.sellingPrice)} RWF</p>
                     </div>
                     {qtyInOrder > 0 && (
                       <span className="absolute top-2 right-2 h-6 min-w-[24px] bg-gray-900 border-2 border-white text-white text-xs font-bold rounded-full flex items-center justify-center px-1.5 shadow-sm">
