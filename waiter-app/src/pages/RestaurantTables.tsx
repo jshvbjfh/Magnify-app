@@ -62,7 +62,7 @@ export default function RestaurantTables({ waiterName: _waiterName, activeBranch
       const rId = await getConfig('restaurantId')
       const [t, o, rawBranches] = await Promise.all([
         getTables(),
-        getOrders({ status: 'PENDING', restaurantId: rId }),
+        getOrders({ statuses: ['PENDING', 'UNCONFIRMED'], restaurantId: rId }),
         getConfig('branches'),
       ])
       setTables(t)

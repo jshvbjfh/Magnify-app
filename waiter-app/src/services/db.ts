@@ -310,31 +310,18 @@ export async function replaceTables(tables: RestaurantTable[]): Promise<void> {
     console.warn('[replaceTables] received empty tables array — skipping replace to preserve local data')
     return
   }
-  // Branch-scoped: only wipe tables for the pulled branch so other branches
-  // retain their cached floor plan when the waiter switches branches.
-  const pullBranchId = tables[0].branch_id
+  // Tables are restaurant-wide — every branch shares one floor plan. The pull
+  // returns the full restaurant table set, so replace all local tables wholesale.
   const d = getDB()
-  if (pullBranchId) {
-    await d.executeSet([
-      { statement: 'BEGIN', values: [] },
-      { statement: 'DELETE FROM restaurant_tables WHERE branch_id = ?', values: [pullBranchId] },
-      ...tables.map(table => ({
-        statement: 'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
-        values: [table.id, table.name, table.seats, table.status ?? 'available', table.branch_id, table.restaurant_id],
-      })),
-      { statement: 'COMMIT', values: [] },
-    ])
-  } else {
-    await d.executeSet([
-      { statement: 'BEGIN', values: [] },
-      { statement: 'DELETE FROM restaurant_tables', values: [] },
-      ...tables.map(table => ({
-        statement: 'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
-        values: [table.id, table.name, table.seats, table.status ?? 'available', table.branch_id, table.restaurant_id],
-      })),
-      { statement: 'COMMIT', values: [] },
-    ])
-  }
+  await d.executeSet([
+    { statement: 'BEGIN', values: [] },
+    { statement: 'DELETE FROM restaurant_tables', values: [] },
+    ...tables.map(table => ({
+      statement: 'INSERT INTO restaurant_tables (id, name, seats, status, branch_id, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
+      values: [table.id, table.name, table.seats, table.status ?? 'available', table.branch_id, table.restaurant_id],
+    })),
+    { statement: 'COMMIT', values: [] },
+  ])
 }
 
 export async function getTables(): Promise<RestaurantTable[]> {
@@ -410,7 +397,7 @@ export async function createOrder(order: Order, items: OrderItem[]): Promise<voi
 
 export async function updateOrder(
   orderId: string,
-  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount'>>
+  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount' | 'created_by_name'>>
 ): Promise<void> {
   const now = new Date().toISOString()
   const entries = Object.entries({ ...fields, updated_at: now, synced: 0 })
@@ -419,10 +406,13 @@ export async function updateOrder(
   await getDB().run(`UPDATE orders SET ${setClauses} WHERE id = ?`, [...values, orderId])
 }
 
-export async function getOrders(filter?: { status?: string; restaurantId?: string | null }): Promise<Order[]> {
+export async function getOrders(filter?: { status?: string; statuses?: string[]; restaurantId?: string | null }): Promise<Order[]> {
   const conditions: string[] = []
   const params: (string | null)[] = []
-  if (filter?.status) { conditions.push('status = ?'); params.push(filter.status) }
+  if (filter?.statuses && filter.statuses.length > 0) {
+    conditions.push(`status IN (${filter.statuses.map(() => '?').join(', ')})`)
+    params.push(...filter.statuses)
+  } else if (filter?.status) { conditions.push('status = ?'); params.push(filter.status) }
   if (filter?.restaurantId) { conditions.push('restaurant_id = ?'); params.push(filter.restaurantId) }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
   const res = await getDB().query(`SELECT * FROM orders ${where} ORDER BY created_at DESC`, params)

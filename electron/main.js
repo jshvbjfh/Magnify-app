@@ -388,8 +388,14 @@ function isDesktopSchemaCompatibilityRepairCandidate(details) {
 	//   "We found changes that cannot be executed"  (Prisma 5.x)
 	// Match either format. Table names confirm this is a legacy-upgrade compatibility error,
 	// not a schema change we should silently skip.
-	return /cannot be executed/i.test(message)
-		&& /(branch_devices|dish_ingredients|dish_sale_ingredients|dish_sales|inventory_items|restaurants)/i.test(message)
+	if (/cannot be executed/i.test(message)
+		&& /(branch_devices|dish_ingredients|dish_sale_ingredients|dish_sales|inventory_items|restaurants)/i.test(message)) {
+		return true
+	}
+	// Tables became restaurant-wide (unique on restaurantId+name). On a DB with
+	// same-name tables across branches, db push fails creating the new unique
+	// index; the repair dedupes restaurant_tables, then a retry succeeds.
+	return /unique/i.test(message) && /restaurant_tables/i.test(message)
 }
 
 async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbPath, nodePath, prismaCli, schemaPath, migrationEnv }) {
@@ -523,6 +529,35 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	// restaurant_tables
 	r = dbExecute(`ALTER TABLE "restaurant_tables" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added restaurant_tables.deletedAt')
+
+	// Tables are now restaurant-wide (unique on restaurantId+name, not branchId+name).
+	// Collapse any same-name duplicates across branches BEFORE db push tries to create
+	// the new unique index — otherwise the index creation fails on duplicate data.
+	r = dbExecute(`
+		UPDATE "restaurant_orders"
+		SET "tableId" = (
+			SELECT s."id" FROM "restaurant_tables" s
+			JOIN "restaurant_tables" t ON t."id" = "restaurant_orders"."tableId"
+			WHERE s."restaurantId" = t."restaurantId" AND s."name" = t."name"
+			ORDER BY s."rowid" ASC LIMIT 1
+		)
+		WHERE "tableId" IS NOT NULL AND "tableId" IN (SELECT "id" FROM "restaurant_tables");
+		UPDATE "restaurant_tables" SET "status" = 'occupied'
+		WHERE EXISTS (
+			SELECT 1 FROM "restaurant_tables" d
+			WHERE d."restaurantId" = "restaurant_tables"."restaurantId"
+				AND d."name" = "restaurant_tables"."name" AND d."status" = 'occupied'
+		);
+		DELETE FROM "restaurant_tables"
+		WHERE "rowid" NOT IN (
+			SELECT MIN("rowid") FROM "restaurant_tables" GROUP BY "restaurantId", "name"
+		);
+	`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Deduplicated restaurant_tables by restaurantId+name')
+	r = dbExecute(`DROP INDEX IF EXISTS "restaurant_tables_branchId_name_key";`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Dropped restaurant_tables branchId unique index')
+	r = dbExecute(`CREATE UNIQUE INDEX IF NOT EXISTS "restaurant_tables_restaurantId_name_key" ON "restaurant_tables"("restaurantId", "name");`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Created restaurant_tables restaurantId unique index')
 
 	// restaurant_orders
 	r = dbExecute(`ALTER TABLE "restaurant_orders" ADD COLUMN "staffId" TEXT;`, SKIP_TABLE)

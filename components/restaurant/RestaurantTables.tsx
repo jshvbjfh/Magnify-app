@@ -41,9 +41,11 @@ export default function RestaurantTables({ onAskJesse, restaurantId }: { onAskJe
   const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://magnify-app-tau.vercel.app').replace(/\/$/, '')
+  // Tables are restaurant-wide, so cache the floor plan per restaurant (not per
+  // branch) — every branch shares the same snapshot and switching is instant.
   const snapshotScopeId = buildRestaurantSnapshotScope({
     restaurantId: restaurantBranch?.restaurantId ?? restaurantId ?? ((session?.user as any)?.restaurantId ?? null),
-    branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
+    branchId: null,
     fallbackUserId: session?.user?.id ?? null,
   })
   const snapshotStorageScope = snapshotScopeId ? `restaurant-tables:${snapshotScopeId}` : null

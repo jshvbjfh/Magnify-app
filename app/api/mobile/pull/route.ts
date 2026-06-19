@@ -145,7 +145,9 @@ export async function GET(req: Request) {
         where: {
           restaurantId,
           OR: [
-            { status: { in: ['PENDING', 'OPEN'] } },
+            // UNCONFIRMED = guest QR orders awaiting a waiter's confirmation.
+            // They must reach the waiter device so the waiter can confirm them.
+            { status: { in: ['PENDING', 'OPEN', 'UNCONFIRMED'] } },
             { status: { in: ['PAID', 'CANCELED'] }, updatedAt: { gte: recentOrderSince } },
           ],
         },

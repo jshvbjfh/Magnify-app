@@ -75,9 +75,10 @@ function createId() {
 }
 
 function getDisplayStatus(order: Order) {
-  if (order.status === 'PAID')     return 'PAID'
-  if (order.status === 'CANCELED') return 'CANCELED'
-  if (order.served_at)             return 'SERVED'
+  if (order.status === 'PAID')        return 'PAID'
+  if (order.status === 'CANCELED')    return 'CANCELED'
+  if (order.status === 'UNCONFIRMED') return 'NEW'
+  if (order.served_at)                return 'SERVED'
   return 'PENDING'
 }
 
@@ -133,6 +134,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [submitError,      setSubmitError]      = useState<string | null>(null)
   const [confirmSuccess,   setConfirmSuccess]   = useState<string | null>(null)
   const [showCodeModal,    setShowCodeModal]    = useState(false)
+  // When set, the order-code modal confirms this incoming (guest QR) order instead of submitting a new cart.
+  const [incomingConfirmId, setIncomingConfirmId] = useState<string | null>(null)
   const [payingOrderId,     setPayingOrderId]     = useState<string | null>(null)
   const [payMethod,         setPayMethod]         = useState('Cash')
   const [payingSaving,      setPayingSaving]      = useState(false)
@@ -163,7 +166,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       const [d, t, orders, bId, rName, branchesJson] = await Promise.all([
         getDishes(activeBranch),
         getTables(),
-        getOrders({ status: 'PENDING', restaurantId: rId }),
+        getOrders({ statuses: ['PENDING', 'UNCONFIRMED'], restaurantId: rId }),
         getConfig('branchId'),
         getConfig('restaurantName'),
         getConfig('branches'),
@@ -508,6 +511,32 @@ ${itemRows}
     }
   }
 
+  // Confirm a guest QR order (status UNCONFIRMED) → PENDING so it reaches the kitchen.
+  // Records the confirming waiter (from their order code) while preserving the guest's name.
+  async function confirmIncomingOrder(orderId: string, waiterName: string) {
+    const order = pendingOrders.find(o => o.id === orderId)
+    const items = orderItemsMap[orderId] ?? []
+    try {
+      const base = order?.created_by_name?.trim() || 'Guest QR Order'
+      const createdByName = /confirmed by/i.test(base) ? base : `${base} · confirmed by ${waiterName}`
+      await updateOrder(orderId, { status: 'PENDING', created_by_name: createdByName })
+      if (order) {
+        printKitchenTickets(
+          { ...order, created_by_name: createdByName },
+          items.map(i => ({ dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price, qty: i.qty })),
+          restaurantName ?? '',
+        )
+      }
+      await loadPOS()
+      setConfirmSuccess(`${order?.order_number ?? 'Order'} sent to kitchen`)
+      setTimeout(() => setConfirmSuccess(null), 4000)
+      pushSync().catch(() => {})
+    } catch (err) {
+      void logError('order', 'Confirm incoming order failed', { orderId, error: normalizeErrorForLog(err) })
+      setSubmitError(err instanceof Error ? err.message : 'Failed to confirm order')
+    }
+  }
+
   async function markOrderServed(orderId: string) {
     await updateOrder(orderId, { served_at: new Date().toISOString() })
     await loadPOS()
@@ -573,6 +602,7 @@ ${itemRows}
   const { subtotal, vatAmount, totalAmount } = calcTotals(rightItems)
   const tableNumber        = selectedTableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
   const currentOrderServed = Boolean(currentOrder?.served_at)
+  const currentOrderIsNew  = currentOrder?.status === 'UNCONFIRMED'
   const activeTableKeys    = new Set(pendingOrders.map(o => o.table_id ?? 'takeaway'))
 
   // ── Pay modal ──
@@ -786,33 +816,41 @@ ${itemRows}
                 const key      = table.id
                 const order    = pendingOrders.find(o => o.table_id === key)
                 const hasOrder = Boolean(order)
+                const isNew    = order?.status === 'UNCONFIRMED'
                 const isServed = Boolean(order?.served_at)
                 const isSelected = key === selectedTableKey
                 return (
                   <button key={key}
                     onClick={() => { setSelectedTableKey(key); setShowPanel('order') }}
                     className={`relative flex-shrink-0 flex flex-col items-start px-4 py-2.5 rounded-xl text-left transition-all border ${
+                      isSelected && isNew     ? 'bg-blue-600   text-white border-blue-600   shadow-sm' :
                       isSelected && isServed  ? 'bg-green-500  text-white border-green-500  shadow-sm' :
                       isSelected && hasOrder  ? 'bg-orange-500 text-white border-orange-500 shadow-sm' :
                       isSelected              ? 'bg-gray-900   text-white border-gray-900   shadow-sm' :
+                      isNew                   ? 'bg-blue-50    text-blue-800   border-blue-400   hover:border-blue-500'   :
                       isServed                ? 'bg-green-50   text-green-800  border-green-400  hover:border-green-500'  :
                       hasOrder                ? 'bg-orange-50  text-orange-800 border-orange-300 hover:border-orange-400' :
                                                 'bg-gray-900   text-white border-gray-900 hover:bg-gray-700'
                     }`}>
+                    {isNew && (
+                      <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-blue-500 border-2 border-white animate-pulse" />
+                    )}
                     {isServed && (
                       <span className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-green-600 border-2 border-white flex items-center justify-center">
                         <CheckCircle2 className="h-2.5 w-2.5 text-white" />
                       </span>
                     )}
-                    {hasOrder && !isServed && (
+                    {hasOrder && !isServed && !isNew && (
                       <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white" />
                     )}
                     <span className="text-[18px] font-bold leading-tight">{table.name}</span>
-                    {isServed
-                      ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-green-100' : 'text-green-600'}`}>Served</span>
-                      : hasOrder
-                        ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-orange-100' : 'text-orange-500'}`}>Pending…</span>
-                        : <span className="text-[14px] font-medium text-gray-400">Free</span>
+                    {isNew
+                      ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-blue-100' : 'text-blue-600'}`}>New order</span>
+                      : isServed
+                        ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-green-100' : 'text-green-600'}`}>Served</span>
+                        : hasOrder
+                          ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-orange-100' : 'text-orange-500'}`}>Pending…</span>
+                          : <span className="text-[14px] font-medium text-gray-400">Free</span>
                     }
                   </button>
                 )
@@ -966,22 +1004,32 @@ ${itemRows}
                       <div className="flex justify-between text-sm font-bold text-gray-900 border-t border-gray-100 pt-1.5">
                         <span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span>
                       </div>
-                      <div className="flex gap-1.5 pt-0.5">
-                        {!ord.served_at && (
-                          <button onClick={() => markOrderServed(ord.id)}
-                            className="flex-1 flex items-center justify-center gap-1 border border-green-300 hover:bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-xl transition-colors">
-                            <CheckCircle2 className="h-3.5 w-3.5" /> Served
-                          </button>
-                        )}
-                        <button onClick={() => setPayingOrderId(ord.id)}
-                          className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
-                          <CreditCard className="h-3.5 w-3.5" /> Pay
+                      {ord.status === 'UNCONFIRMED' ? (
+                        <button
+                          onClick={() => { setSubmitError(null); setIncomingConfirmId(ord.id); setShowCodeModal(true) }}
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Confirm & send to kitchen
                         </button>
-                      </div>
-                      <button onClick={() => setCancelingOrderId(ord.id)}
-                        className="w-full flex items-center justify-center gap-1 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
-                        <ShieldAlert className="h-3 w-3" /> Cancel
-                      </button>
+                      ) : (
+                        <>
+                          <div className="flex gap-1.5 pt-0.5">
+                            {!ord.served_at && (
+                              <button onClick={() => markOrderServed(ord.id)}
+                                className="flex-1 flex items-center justify-center gap-1 border border-green-300 hover:bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-xl transition-colors">
+                                <CheckCircle2 className="h-3.5 w-3.5" /> Served
+                              </button>
+                            )}
+                            <button onClick={() => setPayingOrderId(ord.id)}
+                              className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
+                              <CreditCard className="h-3.5 w-3.5" /> Pay
+                            </button>
+                          </div>
+                          <button onClick={() => setCancelingOrderId(ord.id)}
+                            className="w-full flex items-center justify-center gap-1 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
+                            <ShieldAlert className="h-3 w-3" /> Cancel
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 )
@@ -1072,6 +1120,24 @@ ${itemRows}
                   Clear cart
                 </button>
               </>
+            ) : currentOrderIsNew ? (
+              <>
+                <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">
+                  New guest order — confirm to send it to the kitchen.
+                </div>
+                <button
+                  onClick={() => { if (currentOrder) { setSubmitError(null); setIncomingConfirmId(currentOrder.id); setShowCodeModal(true) } }}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm flex items-center justify-center gap-2">
+                  <CheckCircle2 className="h-5 w-5" /> Confirm & send to kitchen
+                </button>
+                {currentOrder && (
+                  <button
+                    onClick={() => setCancelingOrderId(currentOrder.id)}
+                    className="w-full flex items-center justify-center gap-1.5 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
+                    <ShieldAlert className="h-3.5 w-3.5" /> Reject order
+                  </button>
+                )}
+              </>
             ) : (
               <>
                 {currentOrder && !currentOrderServed && (
@@ -1123,8 +1189,17 @@ ${itemRows}
 
       {showCodeModal && (
         <OrderCodeModal
-          onClose={() => setShowCodeModal(false)}
-          onConfirmed={(name) => { setShowCodeModal(false); void confirmOrder(name) }}
+          onClose={() => { setShowCodeModal(false); setIncomingConfirmId(null) }}
+          onConfirmed={(name) => {
+            setShowCodeModal(false)
+            if (incomingConfirmId) {
+              const id = incomingConfirmId
+              setIncomingConfirmId(null)
+              void confirmIncomingOrder(id, name)
+            } else {
+              void confirmOrder(name)
+            }
+          }}
         />
       )}
 

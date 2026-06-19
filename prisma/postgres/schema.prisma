@@ -181,7 +181,9 @@ model RestaurantTable {
 
   orders       RestaurantOrder[]
 
-  @@unique([branchId, name])
+  // Tables belong to the restaurant, not a single branch — every branch shares
+  // the same floor plan. branchId is retained only as origin metadata.
+  @@unique([restaurantId, name])
   @@index([restaurantId, branchId])
   @@map("restaurant_tables")
 }

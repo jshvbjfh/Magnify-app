@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { recordJournalEntry } from '@/lib/accounting'
 import { getActiveFifoUnitCost } from '@/lib/fifoCosting'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 import { toUsageQuantity, toUsageUnitCost, normalizeUnitsPerPurchaseUnit } from '@/lib/inventoryUnits'
 import type { Prisma } from '@prisma/client'
@@ -157,7 +157,7 @@ export async function GET(req: Request) {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const context = await getRestaurantContextForUser(session.user.id)
+    const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 
@@ -192,7 +192,7 @@ export async function POST(req: Request) {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const context = await getRestaurantContextForUser(session.user.id)
+    const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 
@@ -312,7 +312,7 @@ export async function PUT(req: Request) {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const context = await getRestaurantContextForUser(session.user.id)
+    const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 
@@ -428,7 +428,7 @@ export async function DELETE(req: Request) {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const context = await getRestaurantContextForUser(session.user.id)
+    const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 

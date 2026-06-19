@@ -363,7 +363,7 @@ export async function createOrder(order: Order, items: OrderItem[]): Promise<voi
 
 export async function updateOrder(
   orderId: string,
-  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount'>>,
+  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount' | 'created_by_name'>>,
 ): Promise<void> {
   const now = new Date().toISOString()
   const entries = Object.entries({ ...fields, updated_at: now, synced: 0 })
@@ -373,7 +373,7 @@ export async function updateOrder(
   await db.run(`UPDATE orders SET ${setClauses} WHERE id = ?`, [...values, orderId])
 }
 
-export async function getOrders(filter?: { status?: string; branchId?: string | null; restaurantId?: string | null }): Promise<Order[]> {
+export async function getOrders(filter?: { status?: string; statuses?: string[]; branchId?: string | null; restaurantId?: string | null }): Promise<Order[]> {
   const db = getDB()
   const clauses: string[] = []
   const values: unknown[] = []
@@ -384,7 +384,10 @@ export async function getOrders(filter?: { status?: string; branchId?: string | 
     values.push(normalizedRestaurantId)
   }
 
-  if (filter?.status) {
+  if (filter?.statuses && filter.statuses.length > 0) {
+    clauses.push(`status IN (${filter.statuses.map(() => '?').join(', ')})`)
+    values.push(...filter.statuses)
+  } else if (filter?.status) {
     clauses.push('status = ?')
     values.push(filter.status)
   }

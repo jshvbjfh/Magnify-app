@@ -202,6 +202,9 @@ export async function POST(req: Request) {
               tableId: order.table_id,
               tableName: normalizedTableName,
               orderNumber: normalizedOrderNumber,
+              // Keep createdByName in sync so attribution changes (e.g. a waiter
+              // confirming a guest QR order) propagate to the cloud and kitchen.
+              createdByName: normalizedCreatedByName,
               status: persistedStatus,
               paymentMethod: shouldFinalizePaidOrder ? null : order.payment_method,
               subtotalAmount: normalizedSubtotalAmount,

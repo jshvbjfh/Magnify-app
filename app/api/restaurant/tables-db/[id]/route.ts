@@ -10,23 +10,31 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
-  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch' }, { status: 400 })
+  if (!context?.restaurantId) return NextResponse.json({ error: 'No restaurant' }, { status: 400 })
 
   const { id } = await params
   const { status, name, seats } = await req.json()
 
-  const table = await prisma.restaurantTable.updateMany({
-    where: { id, restaurantId: context.restaurantId, branchId: context.branchId },
-    data: {
-      ...(status !== undefined && { status }),
-      ...(name !== undefined && { name }),
-      ...(seats !== undefined && { seats: Number(seats) }),
+  // Tables are restaurant-wide, so match by restaurant only — any branch may edit.
+  try {
+    const table = await prisma.restaurantTable.updateMany({
+      where: { id, restaurantId: context.restaurantId },
+      data: {
+        ...(status !== undefined && { status }),
+        ...(name !== undefined && { name }),
+        ...(seats !== undefined && { seats: Number(seats) }),
+      }
+    })
+    if (table.count > 0) {
+      await enqueueRestaurantTableSync(prisma, id, context.restaurantId)
     }
-  })
-  if (table.count > 0) {
-    await enqueueRestaurantTableSync(prisma, id, context.restaurantId)
+    return NextResponse.json({ ok: true, count: table.count })
+  } catch (error) {
+    if (error && typeof error === 'object' && (error as { code?: string }).code === 'P2002') {
+      return NextResponse.json({ error: `Table "${name}" already exists` }, { status: 409 })
+    }
+    throw error
   }
-  return NextResponse.json({ ok: true, count: table.count })
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -34,13 +42,14 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
-  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch' }, { status: 400 })
+  if (!context?.restaurantId) return NextResponse.json({ error: 'No restaurant' }, { status: 400 })
 
   const { id } = await params
-  const existing = await prisma.restaurantTable.findFirst({ where: { id, restaurantId: context.restaurantId, branchId: context.branchId }, select: { id: true } })
-  await prisma.restaurantTable.deleteMany({ where: { id, restaurantId: context.restaurantId, branchId: context.branchId } })
+  // Tables are restaurant-wide — delete removes it for every branch.
+  const existing = await prisma.restaurantTable.findFirst({ where: { id, restaurantId: context.restaurantId }, select: { branchId: true } })
+  await prisma.restaurantTable.deleteMany({ where: { id, restaurantId: context.restaurantId } })
   if (existing) {
-    await enqueueRestaurantTableDeleteSync(prisma, { tableId: id, restaurantId: context.restaurantId, branchId: context.branchId })
+    await enqueueRestaurantTableDeleteSync(prisma, { tableId: id, restaurantId: context.restaurantId, branchId: existing.branchId })
   }
   return NextResponse.json({ ok: true })
 }

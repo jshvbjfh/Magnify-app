@@ -118,7 +118,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
               data: {
                 restaurantId: resolvedRestaurantId,
                 branchId: orderBranchId,
-                status: 'PENDING',
+                // Guest QR orders are held as UNCONFIRMED until a waiter confirms them.
+                // The kitchen only lists PENDING/OPEN orders, so this gates QR orders
+                // out of the kitchen until the waiter confirms (→ status becomes PENDING).
+                status: 'UNCONFIRMED',
                 tableId: tableId || null,
                 tableName: resolvedTableName,
                 orderNumber: await generateRestaurantOrderNumber(txDb, resolvedRestaurantId),
