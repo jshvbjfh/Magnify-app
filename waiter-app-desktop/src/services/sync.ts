@@ -30,7 +30,7 @@ export interface BranchInfo {
 export interface PullPayload {
   dishes: Dish[]
   tables: RestaurantTable[]
-  restaurant: { id: string; name: string }
+  restaurant: { id: string; name: string; billHeader?: string }
   branches?: BranchInfo[]
   cancellationApprovers?: CancellationApprover[]
 }
@@ -184,6 +184,8 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   }
 
   await setConfig('restaurantName', payload.restaurant.name)
+  // Manager-editable receipt template (top/bottom text); printed verbatim on bills.
+  await setConfig('billHeader', payload.restaurant.billHeader ?? '')
   await setConfig('lastPullAttemptAt', now)
   if (didRefreshLocalSnapshot) {
     await setConfig('lastPulledAt', now)

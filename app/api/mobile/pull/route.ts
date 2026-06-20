@@ -98,7 +98,7 @@ export async function GET(req: Request) {
 
       prisma.restaurant.findUnique({
         where: { id: restaurantId },
-        select: { id: true, name: true },
+        select: { id: true, name: true, billHeader: true },
       }),
 
       // Staff with a stored order code (pin) can confirm orders offline.
@@ -220,10 +220,14 @@ export async function GET(req: Request) {
       })
     }
 
+    // Restaurant-wide receipt template the manager edits in Settings.
+    // The waiter device prints exactly this.
     return jsonNoStore({
       dishes: normalisedDishes,
       tables: normalisedTables,
-      restaurant: restaurant ?? { id: restaurantId, name: 'Restaurant' },
+      restaurant: restaurant
+        ? { id: restaurant.id, name: restaurant.name, billHeader: restaurant.billHeader ?? '' }
+        : { id: restaurantId, name: 'Restaurant', billHeader: '' },
       branches: allBranches,
       cancellationApprovers: approverEmployees
         .filter(e => e.cancellationPin != null)

@@ -175,16 +175,14 @@ CREATE TABLE IF NOT EXISTS cancellation_approvers (
 `,
   },
   {
+    // Idempotent: migration 1's CREATE already bakes in menu_type on fresh
+    // installs, so a blind ALTER would crash with "duplicate column name".
     version: 2,
-    sql: `
-ALTER TABLE dishes ADD COLUMN menu_type TEXT;
-`,
+    run: (database) => addColumnIfMissing(database, 'dishes', 'menu_type', 'TEXT'),
   },
   {
     version: 3,
-    sql: `
-ALTER TABLE orders ADD COLUMN sync_error TEXT;
-`,
+    run: (database) => addColumnIfMissing(database, 'orders', 'sync_error', 'TEXT'),
   },
   {
     version: 4,
@@ -198,6 +196,13 @@ CREATE TABLE IF NOT EXISTS order_code_holders (
   },
 ]
 
+function addColumnIfMissing(database, table, column, definition) {
+  const cols = database.prepare(`PRAGMA table_info(${table})`).all()
+  if (!cols.some((c) => c.name === column)) {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+  }
+}
+
 function runMigrations(database) {
   database.exec(`
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -210,7 +215,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   const maxApplied = maxRow?.max_v ?? 0
 
   const applyMigration = database.transaction((migration) => {
-    database.exec(migration.sql)
+    if (migration.sql) database.exec(migration.sql)
+    if (migration.run) migration.run(database)
     database.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(migration.version, new Date().toISOString())
   })
 
@@ -324,8 +330,27 @@ function registerIpcHandlers() {
     })
   })
 
-  // print:receipt — creates a hidden BrowserWindow, loads HTML, and prints silently
-  ipcMain.handle('print:receipt', (_event, html) => {
+  // printers:list — returns available system printers so the UI can map
+  // each kitchen/bar station (and the bill printer) to a specific device.
+  ipcMain.handle('printers:list', async () => {
+    try {
+      const wc = mainWindow?.webContents
+      if (!wc) return []
+      const printers = await wc.getPrintersAsync()
+      return printers.map(p => ({
+        name: p.name,
+        displayName: p.displayName || p.name,
+        isDefault: Boolean(p.isDefault),
+      }))
+    } catch (err) {
+      appendStartupLog(`printers:list failed: ${err?.message || err}`)
+      return []
+    }
+  })
+
+  // print:receipt — creates a hidden BrowserWindow, loads HTML, and prints silently.
+  // deviceName targets a specific printer; when empty the OS default printer is used.
+  ipcMain.handle('print:receipt', (_event, html, deviceName) => {
     return new Promise((resolve, reject) => {
       const printWin = new BrowserWindow({
         show: false,
@@ -346,8 +371,10 @@ function registerIpcHandlers() {
         finish(reject, new Error(`Receipt load failed: ${desc} (${code})`)))
       printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
       printWin.webContents.once('did-finish-load', () => {
+        const printOptions = { silent: true, printBackground: true, margins: { marginType: 'none' } }
+        if (deviceName && typeof deviceName === 'string') printOptions.deviceName = deviceName
         printWin.webContents.print(
-          { silent: true, printBackground: true },
+          printOptions,
           (success, errType) => {
             if (success) finish(resolve, { ok: true })
             else finish(reject, new Error(errType ?? 'print failed'))

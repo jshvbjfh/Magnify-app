@@ -5,7 +5,7 @@ import { CheckCircle2, ChefHat, Loader2, Minus, Plus, ShoppingCart, X } from 'lu
 
 import QrMenuPageContent, { type QrMenuDish, type QrMenuDishVariant, type QrMenuTypeSelection } from '@/components/QrMenuPageContent'
 import { buildDishVariantLabel } from '@/lib/dishVariants'
-import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
+import { calculateGrossFromNet } from '@/lib/restaurantVat'
 
 type DishVariant = QrMenuDishVariant
 type Dish = QrMenuDish
@@ -128,7 +128,6 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
 
   const totalItems = cart.reduce((sum, item) => sum + item.qty, 0)
   const subtotalPrice = cart.reduce((sum, item) => sum + item.qty * item.dishPrice, 0)
-  const vatAmount = calculateVatFromNet(subtotalPrice)
   const totalPrice = calculateGrossFromNet(subtotalPrice)
 
   async function placeOrder() {
@@ -203,14 +202,6 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
               </div>
             ))}
             <div className="mt-2 space-y-1 border-t border-gray-200 pt-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Price before VAT</span>
-                <span>{subtotalPrice.toLocaleString()} RWF</span>
-              </div>
-              <div className="flex justify-between text-orange-600">
-                <span>VAT (18%)</span>
-                <span>{vatAmount.toLocaleString()} RWF</span>
-              </div>
               <div className="flex justify-between font-bold">
                 <span>Total</span>
                 <span className="text-orange-600">{totalPrice.toLocaleString()} RWF</span>
@@ -237,7 +228,7 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
     <>
       <QrMenuPageContent
         restaurantName={restaurantName}
-        headerDetail={`Table ${tableName || tableId} · All prices already include VAT.`}
+        headerDetail={`Table ${tableName || tableId}`}
         qrOrderingMode={qrOrderingMode}
         qrMenuHeroImageUrl={qrMenuHeroImageUrl}
         dishes={dishes}
@@ -302,8 +293,6 @@ export default function CustomerOrderPage({ params }: { params: { restaurantId: 
                 </div>
               ))}
               <div className="space-y-1 border-t border-gray-100 pt-3">
-                <div className="flex justify-between text-sm text-gray-500"><span>Price before VAT</span><span>{subtotalPrice.toLocaleString()} RWF</span></div>
-                <div className="flex justify-between text-sm text-orange-600"><span>VAT (18%)</span><span>{vatAmount.toLocaleString()} RWF</span></div>
                 <div className="flex justify-between font-bold"><span>Total</span><span className="text-orange-600">{totalPrice.toLocaleString()} RWF</span></div>
               </div>
               <div>

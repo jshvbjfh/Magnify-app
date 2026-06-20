@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import { Search, X, ShoppingBag, CheckCircle2, Sparkles, Receipt, CreditCard, RefreshCw, ArrowLeftRight, UtensilsCrossed, ArrowLeft, Printer, ClipboardList, Ban, CircleHelp, ChefHat, Clock, Trash2 } from 'lucide-react'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
-import { calculateGrossFromNet, calculateVatFromNet } from '@/lib/restaurantVat'
+import { calculateGrossFromNet } from '@/lib/restaurantVat'
 import { parseRestaurantBillTemplate } from '@/lib/restaurantBillTemplate'
 import {
   RESTAURANT_OFFLINE_QUEUE_CHANGED_EVENT,
@@ -80,7 +80,6 @@ type ArOrder = {
   arCustomerName: string | null
   arCollectedAt: string | null
 }
-const VAT_RATE     = 0.18
 const COLOR_POOL   = [
   ['bg-rose-400',    'text-white', 'bg-rose-700'],
   ['bg-amber-400',   'text-white', 'bg-amber-700'],
@@ -614,7 +613,6 @@ export default function RestaurantOrders({
     if (!items.length) return
     const tName    = tableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === tableKey)?.name ?? 'Table')
     const sub      = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
-    const vat      = Math.round(calculateVatFromNet(sub))
     const tot      = Math.round(calculateGrossFromNet(sub))
     const now      = new Date().toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
     // Always fetch the latest saved template so edits in Settings take effect immediately
@@ -657,8 +655,6 @@ ${headerLines}
 <p class="center">Table: ${tName}</p>
 <div class="divider"></div>
 <table>${rows}
-  <tr><td>Price before VAT</td><td>${sub.toLocaleString()} RWF</td></tr>
-  <tr><td>VAT (18%)</td><td>${vat.toLocaleString()} RWF</td></tr>
   <tr class="total-row"><td>TOTAL</td><td>${tot.toLocaleString()} RWF</td></tr>
 </table>
 <div class="divider"></div>
@@ -967,7 +963,6 @@ ${headerLines}
   }, [selectedConfirmedWaiterName, selectedTableKey, storedWaiterName])
   const rightItems     = isBuilding ? cartItems : confirmedItems
   const subtotal       = rightItems.reduce((s, i) => s + i.dishPrice * i.qty, 0)
-  const vatAmt         = calculateVatFromNet(subtotal)
   const total          = calculateGrossFromNet(subtotal)
   const tableNumber    = selectedTableKey === 'takeaway'
     ? 'T/A'
@@ -1021,7 +1016,6 @@ ${headerLines}
   function PayModal({ tableKey, onClose }: { tableKey: string; onClose: () => void }) {
     const items = pending.filter(p => (p.tableId ?? 'takeaway') === tableKey)
     const sub   = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
-    const vat   = calculateVatFromNet(sub)
     const tot   = calculateGrossFromNet(sub)
     const name  = tableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === tableKey)?.name ?? 'Table')
     return (
@@ -1038,10 +1032,8 @@ ${headerLines}
                 <span className="font-medium text-gray-900">{fmtRWF(item.dishPrice * item.qty)} RWF</span>
               </div>
             ))}
-            <div className="border-t border-gray-200 pt-2 space-y-1">
-              <div className="flex justify-between text-sm text-gray-500"><span>Subtotal</span><span>{fmtRWF(sub)} RWF</span></div>
-              <div className="flex justify-between text-sm text-orange-600 font-medium"><span>VAT 18%</span><span>+{fmtRWF(vat)} RWF</span></div>
-              <div className="flex justify-between font-bold text-base pt-1 border-t border-gray-200">
+            <div className="border-t border-gray-200 pt-2">
+              <div className="flex justify-between font-bold text-base">
                 <span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span>
               </div>
             </div>
@@ -1152,9 +1144,7 @@ ${headerLines}
                     ))}
                   </div>
                   <div className="px-4 pb-4 pt-2 border-t border-gray-100 space-y-1">
-                    <div className="flex justify-between text-xs text-gray-500"><span>Price before VAT</span><span>{fmtRWF(sub)} RWF</span></div>
-                    <div className="flex justify-between text-xs text-orange-600"><span>VAT (18%)</span><span>+{fmtRWF(sub * VAT_RATE)} RWF</span></div>
-                    <div className="flex justify-between text-sm font-bold text-gray-900 border-t border-gray-100 pt-1.5"><span>Total</span><span>{fmtRWF(tot)} RWF</span></div>
+                    <div className="flex justify-between text-sm font-bold text-gray-900"><span>Total</span><span>{fmtRWF(tot)} RWF</span></div>
                     {orderId && allReady && !orderServed && canMarkServed && (
                       <button onClick={() => markOrderServed(orderId)}
                         className="w-full mt-2 bg-white border border-green-300 hover:bg-green-50 text-green-700 text-sm font-semibold py-2.5 rounded-xl flex items-center justify-center gap-2">
@@ -1735,9 +1725,7 @@ ${headerLines}
                     {submitError}
                   </div>
                 )}
-                <div className="flex justify-between text-sm text-gray-600"><span>Price before VAT</span><span>{fmtRWF(subtotal)} RWF</span></div>
-                <div className="flex justify-between text-sm text-gray-600"><span>Tax (18%)</span><span>{fmtRWF(vatAmt)} RWF</span></div>
-                <div className="flex justify-between text-base font-bold text-gray-900 border-t border-gray-100 pt-2">
+                <div className="flex justify-between text-base font-bold text-gray-900">
                   <span>Total</span><span>{fmtRWF(total)} RWF</span>
                 </div>
                 {isBuilding ? (

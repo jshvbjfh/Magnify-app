@@ -1,6 +1,6 @@
 {
   "name": "magnify-pos",
-  "version": "1.0.8",
+  "version": "1.0.16",
   "description": "Magnify POS — Waiter Terminal for Windows",
   "main": "electron/main.js",
   "private": true,

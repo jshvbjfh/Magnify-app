@@ -82,14 +82,12 @@ export async function GET() {
       : Promise.resolve(null),
   ])
 
-  const effectiveBillHeader = activeBranch?.billHeader ?? restaurant.billHeader ?? ''
-  const billHeaderInherited = activeBranch !== null && (activeBranch.billHeader === null || activeBranch.billHeader === '')
-
+  // Bill template is restaurant-wide (not per-branch).
   return NextResponse.json({
     restaurant: {
       ...restaurant,
-      billHeader: effectiveBillHeader,
-      billHeaderInherited,
+      billHeader: restaurant.billHeader ?? '',
+      billHeaderInherited: false,
       qrMenuHeroImageUrl: activeBranch?.qrMenuHeroImageUrl ?? null,
     },
     waiters,
@@ -131,11 +129,14 @@ export async function POST(req: Request) {
 
   const restaurantUpdateData: {
     name?: string
+    billHeader?: string | null
     qrOrderingMode?: 'order' | 'view_only' | 'disabled'
     fifoEnabled?: boolean
     fifoConfiguredAt?: Date
   } = {}
   if (name !== undefined) restaurantUpdateData.name = name || 'My Restaurant'
+  // Bill template is restaurant-wide.
+  if (billHeader !== undefined) restaurantUpdateData.billHeader = billHeader ?? null
   if (qrOrderingMode === 'order' || qrOrderingMode === 'view_only' || qrOrderingMode === 'disabled') {
     restaurantUpdateData.qrOrderingMode = qrOrderingMode
   }
@@ -168,24 +169,16 @@ export async function POST(req: Request) {
     select: settingsRestaurantSelect,
   })
 
-  // Save billHeader to the active branch (falls back to restaurant-level for receipt rendering)
+  // QR menu artwork remains branch-level; the bill template is saved on the restaurant above.
   const activeBranchId = context?.branchId ?? null
   if (qrMenuHeroImageUrl !== undefined && !activeBranchId) {
     return NextResponse.json({ error: 'Active branch required to save QR menu artwork.' }, { status: 400 })
   }
 
-  if ((billHeader !== undefined || qrMenuHeroImageUrl !== undefined) && activeBranchId) {
-    const branchUpdateData: { billHeader?: string | null; qrMenuHeroImageUrl?: string | null } = {}
-    if (billHeader !== undefined) {
-      branchUpdateData.billHeader = billHeader ?? null
-    }
-    if (qrMenuHeroImageUrl !== undefined) {
-      branchUpdateData.qrMenuHeroImageUrl = qrMenuHeroImageUrl
-    }
-
+  if (qrMenuHeroImageUrl !== undefined && activeBranchId) {
     await prisma.branch.update({
       where: { id: activeBranchId },
-      data: branchUpdateData,
+      data: { qrMenuHeroImageUrl },
     })
   }
 
@@ -201,7 +194,7 @@ export async function POST(req: Request) {
     ? await prisma.branch.findUnique({ where: { id: activeBranchId }, select: branchSyncSelect })
     : null
 
-  if (activeBranch && (billHeader !== undefined || qrMenuHeroImageUrl !== undefined)) {
+  if (activeBranch && qrMenuHeroImageUrl !== undefined) {
     await enqueueSyncChange(prisma, {
       restaurantId: restaurant.id,
       entityType: 'branch',
@@ -211,14 +204,11 @@ export async function POST(req: Request) {
     })
   }
 
-  const effectiveBillHeader = activeBranch?.billHeader ?? restaurant.billHeader ?? ''
-  const billHeaderInherited = activeBranch !== null && (activeBranch.billHeader === null || activeBranch.billHeader === '')
-
   return NextResponse.json({
     restaurant: {
       ...restaurant,
-      billHeader: effectiveBillHeader,
-      billHeaderInherited,
+      billHeader: restaurant.billHeader ?? '',
+      billHeaderInherited: false,
       qrMenuHeroImageUrl: activeBranch?.qrMenuHeroImageUrl ?? null,
     },
   })

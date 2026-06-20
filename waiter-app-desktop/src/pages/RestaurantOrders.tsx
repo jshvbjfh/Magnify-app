@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
-  ArrowLeft, Trash2, X, Receipt, ShieldAlert, WifiOff, AlertCircle, Cloud, Printer,
+  ArrowLeft, Trash2, X, ShieldAlert, WifiOff, AlertCircle, Cloud, Printer,
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
@@ -9,6 +9,7 @@ import {
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline, validateOrderCode, type BranchInfo } from '../services/sync'
+import { getPrinterMap, getBillPrinter, resolveStationPrinter, listPrinters, isVirtualPrinter, parseBillTemplate, type PrinterMap, type PrinterInfo } from '../services/printing'
 import { useOnline } from '../hooks/useOnline'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -32,8 +33,6 @@ const COLOR_POOL = [
   ['bg-fuchsia-400', 'text-white', 'bg-fuchsia-700'],
 ] as const
 
-const VAT_RATE = 0.18
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function fmtRWF(n: number) {
@@ -42,9 +41,8 @@ function fmtRWF(n: number) {
 
 function calcTotals(items: Array<{ dishPrice: number; qty: number }>) {
   const subtotal    = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
-  const vatAmount   = Math.round(subtotal * VAT_RATE)
-  const totalAmount = Math.round(subtotal * (1 + VAT_RATE))
-  return { subtotal, vatAmount, totalAmount }
+  // No VAT: the total is simply the sum of the item prices.
+  return { subtotal, vatAmount: 0, totalAmount: subtotal }
 }
 
 function getTimeLabel() {
@@ -101,14 +99,17 @@ let historyCache: Order[] | null = null
 // ─── Component ───────────────────────────────────────────────────────────────
 
 interface Props {
-  mode?: 'pos' | 'history'
+  mode?: 'pos' | 'history' | 'pending'
   waiterName: string
   activeBranchId?: string | null
   onPendingCountChange?: (count: number) => void
   syncVersion?: number
+  // Selected table is owned by the shell so the Tables tab can drive it.
+  selectedTableKey?: string
+  onSelectTableKey?: (key: string) => void
 }
 
-export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId = null, onPendingCountChange, syncVersion }: Props) {
+export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId = null, onPendingCountChange, syncVersion, selectedTableKey: controlledTableKey, onSelectTableKey }: Props) {
   const { isOnline } = useOnline()
   // ── Shared state ──
   const [dishes,        setDishes]        = useState<Dish[]>([])
@@ -116,7 +117,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [pendingOrders, setPendingOrders] = useState<Order[]>([])
   const [orderItemsMap, setOrderItemsMap] = useState<Record<string, OrderItem[]>>({})
   const [allOrders,     setAllOrders]     = useState<Order[]>([])
-  const [loading,       setLoading]       = useState(mode === 'pos' ? !posCache : !historyCache)
+  const [loading,       setLoading]       = useState(mode === 'history' ? !historyCache : !posCache)
   const [isRefreshing,  setIsRefreshing]  = useState(false)
   const [restaurantId,  setRestaurantId]  = useState<string | null>(null)
   const [branchId,      setBranchId]      = useState<string | null>(null)
@@ -125,11 +126,14 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
 
   // ── POS-only state ──
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
-  const [selectedTableKey, setSelectedTableKey] = useState<string>('takeaway')
+  const [internalTableKey, setInternalTableKey] = useState<string>('takeaway')
+  const selectedTableKey = controlledTableKey ?? internalTableKey
+  const setSelectedTableKey = onSelectTableKey ?? setInternalTableKey
   const [localCart,        setLocalCart]        = useState<Record<string, CartItem[]>>({})
   const [showPanel,        setShowPanel]        = useState<'dishes' | 'order'>('dishes')
   const [addedFlash,       setAddedFlash]       = useState(false)
   const [searchQuery,      setSearchQuery]      = useState('')
+  const [pendingSearch,    setPendingSearch]    = useState('')
   const [confirmingOrder,  setConfirmingOrder]  = useState(false)
   const [submitError,      setSubmitError]      = useState<string | null>(null)
   const [confirmSuccess,   setConfirmSuccess]   = useState<string | null>(null)
@@ -140,6 +144,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [payMethod,         setPayMethod]         = useState('Cash')
   const [payingSaving,      setPayingSaving]      = useState(false)
   const [cancelingOrderId,  setCancelingOrderId]  = useState<string | null>(null)
+
+  // Device-local printer routing (branchId → deviceName) + bill printer.
+  const [printerMap,  setPrinterMap]  = useState<PrinterMap>({})
+  const [billPrinter, setBillPrinter] = useState<string>('')
+  const [printers,    setPrinters]    = useState<PrinterInfo[]>([])
+  // Manager-editable receipt template (raw billHeader; parsed into top/bottom at print time).
+  const [billHeaderTpl, setBillHeaderTpl] = useState<string>('')
 
   const orderSubmitLockRef = useRef(false)
   const paymentLockRef     = useRef(false)
@@ -230,9 +241,21 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   }, [activeBranchId])
 
   useEffect(() => {
-    if (mode === 'pos') loadPOS()
-    else loadHistory()
+    if (mode === 'history') loadHistory()
+    else loadPOS()
   }, [mode, loadPOS, loadHistory, syncVersion])
+
+  // Load device-local printer routing for kitchen/bar tickets and bills.
+  useEffect(() => {
+    if (mode === 'history') return
+    void (async () => {
+      const [map, bill, list, tpl] = await Promise.all([getPrinterMap(), getBillPrinter(), listPrinters(), getConfig('billHeader')])
+      setPrinterMap(map)
+      setBillPrinter(bill)
+      setPrinters(list)
+      setBillHeaderTpl(tpl ?? '')
+    })()
+  }, [mode, syncVersion])
 
   // Notify parent of how many tables have active orders (drives shell badge)
   useEffect(() => {
@@ -269,17 +292,21 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
   }
 
-  function fmtDt() {
-    const d = new Date()
-    return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
-  }
-
-  function printHtml(html: string, delay = 0) {
-    const eP = (window as Window & { electronPrint?: { receipt: (h: string) => Promise<void> } }).electronPrint
+  function printHtml(html: string, delay = 0, deviceName = '') {
+    const eP = (window as Window & { electronPrint?: { receipt: (h: string, deviceName?: string) => Promise<void> } }).electronPrint
     if (eP) {
-      setTimeout(() => void eP.receipt(html).catch((err) => {
+      // No real printer to target — warn instead of dumping the user into
+      // Windows' "Save as PDF" dialog (the default printer is virtual).
+      if (!deviceName) {
+        const def = printers.find(p => p.isDefault)
+        if (!def || isVirtualPrinter(def.name)) {
+          setSubmitError('No receipt printer set — choose one in the Printers tab.')
+          return
+        }
+      }
+      setTimeout(() => void eP.receipt(html, deviceName || undefined).catch((err) => {
         console.error(err)
-        setSubmitError('Print failed — check the printer is on, has paper, and is set as the default printer in Windows.')
+        setSubmitError('Print failed — check the printer is on, has paper, and is assigned in the Printers tab.')
       }), delay)
       return
     }
@@ -305,40 +332,47 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     }, delay)
   }
 
-  function printBill(order: Order, items: OrderItem[], paymentMethod: string, rName: string) {
-    const dt = fmtDt()
+  function printBill(order: Order, items: OrderItem[]) {
+    // The header (top) and footer (bottom) come from the manager's editable
+    // bill template; the pricing block in the middle is generated from the order.
+    const { topText, bottomText } = parseBillTemplate(billHeaderTpl)
+    const headerLines = topText
+      ? topText.split('\n').map(l => `<div class="center">${escHtml(l)}</div>`).join('')
+      : '<div class="center title">RECEIPT</div>'
+    const footerLines = bottomText
+      ? bottomText.split('\n').map(l => `<div class="center">${escHtml(l)}</div>`).join('')
+      : '<div class="center">Thank you for dining with us!</div>'
+    const { totalAmount } = calcTotals(items.map(i => ({ dishPrice: i.dish_price, qty: i.qty })))
+    // Match the manager's Settings receipt preview format exactly.
+    const dt = new Date().toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
     const rows = items.map(i =>
-      `<div class="row"><span>${escHtml(i.dish_name)}</span><span>${i.qty}x</span><span>${fmtRWF(i.dish_price * i.qty)}</span></div>`
+      `<div class="row"><span>${escHtml(i.dish_name)}${i.qty > 1 ? ` x${i.qty}` : ''}</span><span>${fmtRWF(i.dish_price * i.qty)} RWF</span></div>`
     ).join('')
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:monospace;font-size:12px;width:58mm;padding:4mm}
-.center{text-align:center;margin-bottom:4px}
+/* Fixed 15cm-long bill: page is exactly 80mm x 150mm so the printer always feeds 15cm. */
+body{font-family:'Courier New',monospace;font-size:13px;width:80mm;min-height:150mm;padding:20mm 4mm;color:#000}
+.center{text-align:center}
 .title{font-size:15px;font-weight:bold}
-.meta{font-size:11px;margin:1px 0}
-.divider{border-top:1px dashed #000;margin:4px 0}
-.row{display:flex;justify-content:space-between;gap:4px;margin:2px 0;font-size:11px}
-.total{font-size:13px;font-weight:bold}
-.footer{text-align:center;font-size:10px;margin-top:6px}
-@media print{@page{margin:0;size:58mm auto}}
+.divider{border-top:1px dashed #000;margin:5px 0}
+.row{display:flex;justify-content:space-between;gap:8px;margin:3px 0;font-size:13px}
+.total{font-size:15px;font-weight:bold}
+.footer{margin-top:8px;font-size:12px}
+@media print{@page{margin:0;size:80mm 150mm}}
 </style></head><body>
-<div class="center"><div class="title">${escHtml(rName || 'Restaurant')}</div></div>
-<div class="meta">Order  : ${escHtml(order.order_number ?? '')}</div>
-<div class="meta">Table  : ${escHtml(order.table_name ?? 'Takeaway')}</div>
-<div class="meta">Waiter : ${escHtml(order.created_by_name ?? '—')}</div>
-<div class="meta">Date   : ${escHtml(dt)}</div>
+${headerLines}
 <div class="divider"></div>
-<div class="row"><span><b>Item</b></span><span><b>Qty</b></span><span><b>Amount</b></span></div>
+<div class="center">${escHtml(dt)}</div>
+<div class="center">Table: ${escHtml(order.table_name ?? 'Takeaway')}</div>
 <div class="divider"></div>
 ${rows}
 <div class="divider"></div>
-<div class="row total"><span>VAT (18%)</span><span></span><span>${fmtRWF(order.vat_amount)}</span></div>
-<div class="row total"><span>TOTAL</span><span></span><span>${fmtRWF(order.total_amount)} RWF</span></div>
+<div class="row total"><span>TOTAL</span><span>${fmtRWF(totalAmount)} RWF</span></div>
 <div class="divider"></div>
-${paymentMethod ? `<div class="meta">Payment: ${escHtml(paymentMethod)}</div>` : ''}
-<div class="footer">Thank you for dining with us!</div>
+<div class="footer">${footerLines}</div>
+<div style="color:transparent;font-size:1px">.</div>
 </body></html>`
-    printHtml(html)
+    printHtml(html, 0, billPrinter)
   }
 
   function printKitchenTickets(order: Order, cart: CartItem[], rName: string) {
@@ -352,39 +386,56 @@ ${paymentMethod ? `<div class="meta">Payment: ${escHtml(paymentMethod)}</div>` :
       if (!byBranch.has(bId)) byBranch.set(bId, { branchName: bName, branchType: bType, items: [] })
       byBranch.get(bId)!.items.push(ci)
     }
+    const now      = new Date()
+    const dateStr  = `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`
+    const timeStr  = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })
+    const isTakeaway = !order.table_id
+    const orderType  = isTakeaway ? 'Take Away' : 'Dine In'
+    const stars      = '*'.repeat(48)
     let delay = 300
-    for (const [, group] of byBranch) {
-      const label = group.branchType === 'bar' ? `BAR – ${group.branchName}` : `KITCHEN – ${group.branchName}`
-      const dt = fmtDt()
+    let ticketIndex = 1
+    for (const [bId, group] of byBranch) {
+      const deviceName = resolveStationPrinter(printerMap, billPrinter, bId === '__none__' ? null : bId)
+      const station = group.branchType === 'bar' ? 'BAR' : 'KITCHEN'
       const itemRows = group.items.map(i =>
-        `<div class="item"><span class="qty">${i.qty}x</span><span>${escHtml(i.dishName)}</span></div>`
+        `<div class="item"><span class="qty">${i.qty}</span><span class="iname">${escHtml(i.dishName)}</span></div>`
       ).join('')
       const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:monospace;font-size:12px;width:58mm;padding:4mm}
-.center{text-align:center;margin-bottom:4px}
-.title{font-size:14px;font-weight:bold;letter-spacing:1px}
-.sub{font-size:11px}
-.meta{font-size:11px;margin:1px 0}
-.divider{border-top:1px dashed #000;margin:4px 0}
-.item{display:flex;gap:6px;margin:2px 0}
-.qty{font-weight:bold;min-width:20px}
-@media print{@page{margin:0;size:58mm auto}}
+body{font-family:'Courier New',monospace;font-size:13px;width:80mm;padding:20mm 4mm 0;color:#000}
+.center{text-align:center}
+.name{font-size:17px;font-weight:bold;letter-spacing:1px;margin:2px 0}
+.type{font-size:18px;font-weight:bold;margin:5px 0}
+.row{display:flex;justify-content:space-between;gap:10px;font-size:13px;margin:2px 0}
+.div{border-top:1px dashed #000;margin:5px 0}
+.stars{overflow:hidden;white-space:nowrap;font-size:12px;letter-spacing:1px;margin:3px 0}
+.table{font-size:16px;font-weight:bold;margin:2px 0}
+.item{display:flex;gap:12px;font-size:15px;margin:5px 0}
+.qty{min-width:22px;font-weight:bold;text-align:right}
+.iname{font-weight:bold}
+.ticket{font-size:16px;font-weight:bold;margin:2px 0}
+@media print{@page{margin:0;size:80mm auto}}
 </style></head><body>
-<div class="center">
-<div class="title">${escHtml(label)}</div>
-<div class="sub">${escHtml(rName || 'Restaurant')}</div>
-</div>
-<div class="meta">Order ID: ${escHtml(order.order_number ?? '')}</div>
-<div class="divider"></div>
+<div class="center name">*** ${escHtml(group.branchName || rName || 'Kitchen')} ***</div>
+<div class="div"></div>
+<div class="row"><span>Server: ${escHtml(order.created_by_name ?? '—')}</span><span>${station}</span></div>
+<div class="center type">${orderType}</div>
+<div class="row"><span>${dateStr}</span><span>${timeStr}</span></div>
+<div class="div"></div>
+${isTakeaway ? '' : `<div class="table">Table: ${escHtml(order.table_name ?? 'Table')}</div>`}
+${isTakeaway ? '' : '<div class="div"></div>'}
 ${itemRows}
-<div class="divider"></div>
-<div class="meta">Table : ${escHtml(order.table_name ?? 'Takeaway')}</div>
-<div class="meta">Date  : ${escHtml(dt)}</div>
-<div class="meta">Waiter: ${escHtml(order.created_by_name ?? '—')}</div>
+<div class="div"></div>
+<div class="center stars">${stars}</div>
+<div class="center ticket">Ticket #: ${ticketIndex}</div>
+<div class="center">Order #: ${escHtml(order.order_number ?? '')}</div>
+<div class="center stars">${stars}</div>
+<div style="height:30mm">&nbsp;</div>
+<div>&nbsp;</div>
 </body></html>`
-      printHtml(html, delay)
+      printHtml(html, delay, deviceName)
       delay += 600
+      ticketIndex += 1
     }
   }
 
@@ -555,7 +606,7 @@ ${itemRows}
         payment_method: payMethod,
         paid_at:        new Date().toISOString(),
       })
-      printBill(order, billItems, payMethod, restaurantName ?? '')
+      printBill(order, billItems)
       await logInfo('order', 'Payment collected — queuing push', {
         orderId: order.id,
         orderNumber: order.order_number,
@@ -588,31 +639,24 @@ ${itemRows}
     return true
   })
 
+  // The Menu panel is a build-only cart; confirmed orders live in the Pending Orders tab.
   const cartItems      = localCart[selectedTableKey] ?? []
-  const currentOrders  = pendingOrders
-    .filter(o => (o.table_id ?? 'takeaway') === selectedTableKey)
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-  const currentOrder   = currentOrders[0] ?? null
-  const confirmedItems = currentOrder ? (orderItemsMap[currentOrder.id] ?? []) : []
   const isBuilding     = cartItems.length > 0
-  const isMultiOrder   = !isBuilding && currentOrders.length > 1
-  const rightItems     = isBuilding
-    ? cartItems
-    : confirmedItems.map(i => ({ dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price, qty: i.qty }))
-  const { subtotal, vatAmount, totalAmount } = calcTotals(rightItems)
+  const { totalAmount } = calcTotals(cartItems)
   const tableNumber        = selectedTableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
-  const currentOrderServed = Boolean(currentOrder?.served_at)
-  const currentOrderIsNew  = currentOrder?.status === 'UNCONFIRMED'
   const activeTableKeys    = new Set(pendingOrders.map(o => o.table_id ?? 'takeaway'))
+  // Pending Orders tab: all active orders, newest first, filtered by table-name search.
+  const pendingQuery   = pendingSearch.trim().toLowerCase()
+  const pendingList    = pendingOrders
+    .filter(o => !pendingQuery || (o.table_name ?? 'Takeaway').toLowerCase().includes(pendingQuery))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
   // ── Pay modal ──
 
   function PayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
     const order   = pendingOrders.find(o => o.id === orderId)
     const items   = order ? (orderItemsMap[order.id] ?? []) : []
-    const sub     = items.reduce((s, i) => s + i.dish_price * i.qty, 0)
-    const vat     = Math.round(sub * VAT_RATE)
-    const tot     = Math.round(sub * (1 + VAT_RATE))
+    const tot     = items.reduce((s, i) => s + i.dish_price * i.qty, 0)
     const name    = order?.table_name ?? (order?.table_id ? (tables.find(t => t.id === order.table_id)?.name ?? 'Table') : 'Takeaway')
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -628,10 +672,8 @@ ${itemRows}
                 <span className="font-medium text-gray-900">{fmtRWF(item.dish_price * item.qty)} RWF</span>
               </div>
             ))}
-            <div className="border-t border-gray-200 pt-2 space-y-1">
-              <div className="flex justify-between text-sm text-gray-500"><span>Subtotal</span><span>{fmtRWF(sub)} RWF</span></div>
-              <div className="flex justify-between text-sm text-orange-600 font-medium"><span>VAT 18%</span><span>+{fmtRWF(vat)} RWF</span></div>
-              <div className="flex justify-between font-bold text-base pt-1 border-t border-gray-200">
+            <div className="border-t border-gray-200 pt-2">
+              <div className="flex justify-between font-bold text-base">
                 <span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span>
               </div>
             </div>
@@ -764,6 +806,130 @@ ${itemRows}
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // PENDING ORDERS MODE — every active order as a card, searchable by table
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  if (mode === 'pending') {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-lg font-bold text-gray-800">Pending Orders</h2>
+            <p className="text-sm text-gray-500">{pendingOrders.length} active</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="text" value={pendingSearch}
+              onChange={e => setPendingSearch(e.target.value)}
+              placeholder="Search table…"
+              className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-orange-400 w-40"
+            />
+            <button onClick={loadPOS} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" title="Refresh">
+              <RefreshCw className={`h-4 w-4 text-gray-500 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        {confirmSuccess && (
+          <div className="rounded-xl border border-green-300 bg-green-50 px-3 py-2.5 text-sm font-semibold text-green-800 flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-600" /> {confirmSuccess}
+          </div>
+        )}
+        {submitError && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">{submitError}</div>
+        )}
+
+        {loading ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">Loading…</div>
+        ) : pendingList.length === 0 ? (
+          <div className="bg-white rounded-xl border-2 border-dashed border-gray-200 p-12 text-center">
+            <ShoppingBag className="h-8 w-8 text-gray-300 mx-auto mb-2" />
+            <p className="text-sm text-gray-500">{pendingSearch ? 'No matching tables' : 'No pending orders'}</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {pendingList.map(ord => {
+              const oi  = orderItemsMap[ord.id] ?? []
+              const tot = oi.reduce((s, i) => s + i.dish_price * i.qty, 0)
+              return (
+                <div key={ord.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                  <div className="bg-gray-50 px-3 py-2 flex justify-between items-center border-b border-gray-100">
+                    <span className="text-xs font-bold text-gray-700">{ord.order_number}</span>
+                    <span className="text-xs text-gray-500 truncate ml-2">{ord.table_name ?? 'Takeaway'}</span>
+                  </div>
+                  <div className="px-3 py-2 space-y-1.5">
+                    {oi.map(item => (
+                      <div key={item.id} className="flex items-start justify-between">
+                        <span className="text-sm text-gray-800 font-medium flex-1 min-w-0 leading-snug">
+                          {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                        </span>
+                        <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)} RWF</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border-t border-gray-100 px-3 py-2 space-y-1.5">
+                    <div className="flex justify-between text-sm font-bold text-gray-900"><span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span></div>
+                    {ord.status === 'UNCONFIRMED' ? (
+                      <button
+                        onClick={() => { setSubmitError(null); setIncomingConfirmId(ord.id); setShowCodeModal(true) }}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Confirm & send to kitchen
+                      </button>
+                    ) : (
+                      <>
+                        <div className="flex gap-1.5 pt-0.5">
+                          {!ord.served_at && (
+                            <button onClick={() => markOrderServed(ord.id)}
+                              className="flex-1 flex items-center justify-center gap-1 border border-green-300 hover:bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-xl transition-colors">
+                              <CheckCircle2 className="h-3.5 w-3.5" /> Served
+                            </button>
+                          )}
+                          <button onClick={() => setPayingOrderId(ord.id)}
+                            className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
+                            <CreditCard className="h-3.5 w-3.5" /> Pay
+                          </button>
+                        </div>
+                        <button onClick={() => printBill(ord, oi)}
+                          className="w-full flex items-center justify-center gap-1 border border-gray-300 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 rounded-xl transition-colors">
+                          <Printer className="h-3.5 w-3.5" /> Print Bill
+                        </button>
+                        <button onClick={() => setCancelingOrderId(ord.id)}
+                          className="w-full flex items-center justify-center gap-1 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
+                          <ShieldAlert className="h-3 w-3" /> Cancel
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {payingOrderId && (
+          <PayModal orderId={payingOrderId} onClose={() => { setPayingOrderId(null); setPayMethod('Cash') }} />
+        )}
+        {cancelingOrderId && (
+          <CancelModal orderId={cancelingOrderId} onClose={() => setCancelingOrderId(null)} />
+        )}
+        {showCodeModal && (
+          <OrderCodeModal
+            onClose={() => { setShowCodeModal(false); setIncomingConfirmId(null) }}
+            onConfirmed={(name) => {
+              setShowCodeModal(false)
+              if (incomingConfirmId) {
+                const id = incomingConfirmId
+                setIncomingConfirmId(null)
+                void confirmIncomingOrder(id, name)
+              }
+            }}
+          />
+        )}
+      </div>
+    )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // POS MODE
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -788,12 +954,12 @@ ${itemRows}
             )}
             <div className="flex items-center gap-2 flex-shrink-0">
               {/* Mobile: jump to order panel */}
-              {(cartItems.length > 0 || confirmedItems.length > 0) && (
+              {cartItems.length > 0 && (
                 <button
                   onClick={() => setShowPanel('order')}
                   className="md:hidden flex items-center gap-1 bg-orange-500 text-white px-2.5 py-1 rounded-full text-xs font-bold">
                   <ShoppingBag className="h-3.5 w-3.5" />
-                  <span>{cartItems.length > 0 ? cartItems.length : confirmedItems.length}</span>
+                  <span>{cartItems.length}</span>
                 </button>
               )}
               <input
@@ -808,55 +974,6 @@ ${itemRows}
               </button>
             </div>
           </div>
-
-          {/* Row 2: compact table chips directly under Afternoon */}
-          {tables.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 pb-2">
-              {tables.map(table => {
-                const key      = table.id
-                const order    = pendingOrders.find(o => o.table_id === key)
-                const hasOrder = Boolean(order)
-                const isNew    = order?.status === 'UNCONFIRMED'
-                const isServed = Boolean(order?.served_at)
-                const isSelected = key === selectedTableKey
-                return (
-                  <button key={key}
-                    onClick={() => { setSelectedTableKey(key); setShowPanel('order') }}
-                    className={`relative flex-shrink-0 flex flex-col items-start px-4 py-2.5 rounded-xl text-left transition-all border ${
-                      isSelected && isNew     ? 'bg-blue-600   text-white border-blue-600   shadow-sm' :
-                      isSelected && isServed  ? 'bg-green-500  text-white border-green-500  shadow-sm' :
-                      isSelected && hasOrder  ? 'bg-orange-500 text-white border-orange-500 shadow-sm' :
-                      isSelected              ? 'bg-gray-900   text-white border-gray-900   shadow-sm' :
-                      isNew                   ? 'bg-blue-50    text-blue-800   border-blue-400   hover:border-blue-500'   :
-                      isServed                ? 'bg-green-50   text-green-800  border-green-400  hover:border-green-500'  :
-                      hasOrder                ? 'bg-orange-50  text-orange-800 border-orange-300 hover:border-orange-400' :
-                                                'bg-gray-900   text-white border-gray-900 hover:bg-gray-700'
-                    }`}>
-                    {isNew && (
-                      <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-blue-500 border-2 border-white animate-pulse" />
-                    )}
-                    {isServed && (
-                      <span className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-green-600 border-2 border-white flex items-center justify-center">
-                        <CheckCircle2 className="h-2.5 w-2.5 text-white" />
-                      </span>
-                    )}
-                    {hasOrder && !isServed && !isNew && (
-                      <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white" />
-                    )}
-                    <span className="text-[18px] font-bold leading-tight">{table.name}</span>
-                    {isNew
-                      ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-blue-100' : 'text-blue-600'}`}>New order</span>
-                      : isServed
-                        ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-green-100' : 'text-green-600'}`}>Served</span>
-                        : hasOrder
-                          ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-orange-100' : 'text-orange-500'}`}>Pending…</span>
-                          : <span className="text-[14px] font-medium text-gray-400">Free</span>
-                    }
-                  </button>
-                )
-              })}
-            </div>
-          )}
         </div>
 
         {/* Category strip */}
@@ -952,223 +1069,68 @@ ${itemRows}
         </div>
 
         {/* Mode label strip */}
-        <div className={`flex-shrink-0 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-widest ${
-          isBuilding             ? 'bg-orange-50 text-orange-600' :
-          isMultiOrder           ? 'bg-amber-50  text-amber-700'  :
-          confirmedItems.length  ? 'bg-amber-50  text-amber-700'  :
-                                   'bg-gray-50   text-gray-400'
+        <div className={`flex-shrink-0 px-4 py-1 text-[11px] font-semibold uppercase tracking-widest ${
+          isBuilding ? 'bg-orange-50 text-orange-600' : 'bg-gray-50 text-gray-400'
         }`}>
-          {isBuilding
-            ? 'Building order — not sent yet'
-            : isMultiOrder
-              ? `${currentOrders.length} active orders`
-              : confirmedItems.length
-                ? `Order · ${currentOrder?.order_number ?? ''}`
-                : 'No items'}
+          {isBuilding ? 'Building order — not sent yet' : 'No items'}
         </div>
 
-        {/* Items list */}
-        <div className="flex-1 overflow-y-auto px-4 py-3">
-          {isMultiOrder ? (
-            <div className="space-y-3">
-              {currentOrders.map(ord => {
-                const oi  = orderItemsMap[ord.id] ?? []
-                const sub = oi.reduce((s, i) => s + i.dish_price * i.qty, 0)
-                const vat = Math.round(sub * VAT_RATE)
-                const tot = Math.round(sub * (1 + VAT_RATE))
-                return (
-                  <div key={ord.id} className="border border-gray-200 rounded-xl overflow-hidden">
-                    <div className="bg-gray-50 px-3 py-2 flex justify-between items-center border-b border-gray-100">
-                      <span className="text-xs font-bold text-gray-700">{ord.order_number}</span>
-                      <span className="text-xs text-gray-500 truncate ml-2">{ord.created_by_name}</span>
-                    </div>
-                    <div className="px-3 py-2 space-y-1.5">
-                      {oi.map(item => (
-                        <div key={item.id} className="flex items-start justify-between">
-                          <span className="text-sm text-gray-800 font-medium flex-1 min-w-0 leading-snug">
-                            {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
-                          </span>
-                          <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
-                            {fmtRWF(item.dish_price * item.qty)} RWF
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="border-t border-gray-100 px-3 py-2 space-y-1.5">
-                      <div className="flex justify-between text-xs text-gray-500">
-                        <span>Subtotal</span><span>{fmtRWF(sub)} RWF</span>
-                      </div>
-                      <div className="flex justify-between text-xs text-orange-600 font-medium">
-                        <span>VAT 18%</span><span>+{fmtRWF(vat)} RWF</span>
-                      </div>
-                      <div className="flex justify-between text-sm font-bold text-gray-900 border-t border-gray-100 pt-1.5">
-                        <span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span>
-                      </div>
-                      {ord.status === 'UNCONFIRMED' ? (
-                        <button
-                          onClick={() => { setSubmitError(null); setIncomingConfirmId(ord.id); setShowCodeModal(true) }}
-                          className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
-                          <CheckCircle2 className="h-3.5 w-3.5" /> Confirm & send to kitchen
-                        </button>
-                      ) : (
-                        <>
-                          <div className="flex gap-1.5 pt-0.5">
-                            {!ord.served_at && (
-                              <button onClick={() => markOrderServed(ord.id)}
-                                className="flex-1 flex items-center justify-center gap-1 border border-green-300 hover:bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-xl transition-colors">
-                                <CheckCircle2 className="h-3.5 w-3.5" /> Served
-                              </button>
-                            )}
-                            <button onClick={() => setPayingOrderId(ord.id)}
-                              className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
-                              <CreditCard className="h-3.5 w-3.5" /> Pay
-                            </button>
-                          </div>
-                          <button onClick={() => setCancelingOrderId(ord.id)}
-                            className="w-full flex items-center justify-center gap-1 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
-                            <ShieldAlert className="h-3 w-3" /> Cancel
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          ) : rightItems.length === 0 ? (
+        {/* Items list — cart only (confirmed orders live in the Pending Orders tab) */}
+        <div className="flex-1 overflow-y-auto px-4 py-2">
+          {cartItems.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full py-12 text-gray-400">
               <ShoppingBag className="h-8 w-8 mb-3 text-gray-300" />
               <p className="text-sm">No items yet</p>
               <p className="text-xs mt-1">Tap a dish to add it</p>
+              {confirmSuccess && (
+                <div className="mt-4 rounded-xl border border-green-300 bg-green-50 px-3 py-2 text-xs font-semibold text-green-800 flex items-center gap-2">
+                  <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-600" /> {confirmSuccess}
+                </div>
+              )}
             </div>
           ) : (
-            <div className="space-y-4">
-              {isBuilding
-                ? cartItems.map(item => (
-                    <div key={item.dishId} className="flex items-start justify-between group">
-                      <div className="flex-1 min-w-0 flex items-center gap-1">
-                        <button onClick={() => removeLocalCartItem(item.dishId)}
-                          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
-                          <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                        </button>
-                        <span className="text-sm text-gray-800 font-medium leading-snug">
-                          {item.dishName}{item.qty > 1 ? ` ×${item.qty}` : ''}
-                        </span>
-                      </div>
-                      <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
-                        {fmtRWF(item.dishPrice * item.qty)} RWF
-                      </span>
-                    </div>
-                  ))
-                : confirmedItems.map(item => (
-                    <div key={item.id} className="flex items-start justify-between">
-                      <span className="text-sm text-gray-800 font-medium leading-snug flex-1 min-w-0">
-                        {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
-                      </span>
-                      <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
-                        {fmtRWF(item.dish_price * item.qty)} RWF
-                      </span>
-                    </div>
-                  ))
-              }
+            <div className="space-y-2.5">
+              {cartItems.map(item => (
+                <div key={item.dishId} className="flex items-start justify-between group">
+                  <div className="flex-1 min-w-0 flex items-center gap-1">
+                    <button onClick={() => removeLocalCartItem(item.dishId)}
+                      className="p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
+                      <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                    </button>
+                    <span className="text-sm text-gray-800 font-medium leading-snug">
+                      {item.dishName}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                    </span>
+                  </div>
+                  <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
+                    {fmtRWF(item.dishPrice * item.qty)} RWF
+                  </span>
+                </div>
+              ))}
             </div>
           )}
         </div>
 
-        {/* Totals + action buttons */}
-        {!isMultiOrder && rightItems.length > 0 && (
-          <div className="flex-shrink-0 border-t border-gray-200 px-4 py-4 space-y-2">
-
-            {/* ── Success banner ── */}
-            {confirmSuccess && (
-              <div className="rounded-xl border border-green-300 bg-green-50 px-3 py-2.5 text-sm font-semibold text-green-800 flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-600" />
-                {confirmSuccess}
-              </div>
-            )}
-
-            {/* ── Error banner ── */}
+        {/* Totals + confirm — only while building a cart */}
+        {isBuilding && (
+          <div className="flex-shrink-0 border-t border-gray-200 px-4 py-2 space-y-1.5">
             {submitError && (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700">
                 {submitError}
               </div>
             )}
-
-            <div className="flex justify-between text-sm text-gray-600">
-              <span>Price before VAT</span><span>{fmtRWF(subtotal)} RWF</span>
-            </div>
-            <div className="flex justify-between text-sm text-gray-600">
-              <span>Tax (18%)</span><span>{fmtRWF(vatAmount)} RWF</span>
-            </div>
-            <div className="flex justify-between text-base font-bold text-gray-900 border-t border-gray-100 pt-2">
+            <div className="flex justify-between text-base font-bold text-gray-900">
               <span>Total</span><span>{fmtRWF(totalAmount)} RWF</span>
             </div>
-
-            {isBuilding ? (
-              <>
-                <button onClick={() => { setSubmitError(null); setShowCodeModal(true) }} disabled={confirmingOrder}
-                  className="w-full bg-orange-500 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm">
-                  {confirmingOrder ? 'Confirming…' : 'Confirm Order'}
-                </button>
-                <button
-                  onClick={() => {
-                    setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
-                    setSubmitError(null)
-                  }}
-                  disabled={confirmingOrder}
-                  className="w-full text-xs text-gray-400 hover:text-red-500 py-1 transition-colors">
-                  Clear cart
-                </button>
-              </>
-            ) : currentOrderIsNew ? (
-              <>
-                <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">
-                  New guest order — confirm to send it to the kitchen.
-                </div>
-                <button
-                  onClick={() => { if (currentOrder) { setSubmitError(null); setIncomingConfirmId(currentOrder.id); setShowCodeModal(true) } }}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm flex items-center justify-center gap-2">
-                  <CheckCircle2 className="h-5 w-5" /> Confirm & send to kitchen
-                </button>
-                {currentOrder && (
-                  <button
-                    onClick={() => setCancelingOrderId(currentOrder.id)}
-                    className="w-full flex items-center justify-center gap-1.5 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
-                    <ShieldAlert className="h-3.5 w-3.5" /> Reject order
-                  </button>
-                )}
-              </>
-            ) : (
-              <>
-                {currentOrder && !currentOrderServed && (
-                  <button onClick={() => markOrderServed(currentOrder.id)}
-                    className="w-full flex items-center justify-center gap-2 bg-white border border-green-300 hover:bg-green-50 text-green-700 font-semibold py-3 rounded-2xl text-sm transition-colors mt-1 shadow-sm">
-                    <CheckCircle2 className="h-4 w-4" /> Mark Served
-                  </button>
-                )}
-                <button onClick={() => currentOrder && setPayingOrderId(currentOrder.id)}
-                  className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-2xl text-base transition-colors shadow-sm flex items-center justify-center gap-2">
-                  <CreditCard className="h-4 w-4" /> Collect Payment
-                </button>
-                {currentOrder && (
-                  <button onClick={() => printBill(currentOrder, orderItemsMap[currentOrder.id] ?? [], '', restaurantName ?? '')}
-                    className="w-full flex items-center justify-center gap-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-semibold py-3 rounded-2xl text-sm transition-colors shadow-sm">
-                    <Printer className="h-4 w-4" /> Print Bill
-                  </button>
-                )}
-                <button onClick={() => { loadPOS() }}
-                  className="w-full flex items-center justify-center gap-2 text-xs text-gray-500 hover:text-gray-800 border border-gray-200 hover:bg-gray-50 py-2.5 rounded-xl transition-colors">
-                  <Receipt className="h-3.5 w-3.5" /> Refresh order
-                </button>
-                {currentOrder && (
-                  <button
-                    onClick={() => setCancelingOrderId(currentOrder.id)}
-                    className="w-full flex items-center justify-center gap-1.5 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
-                    <ShieldAlert className="h-3.5 w-3.5" /> Cancel order
-                  </button>
-                )}
-              </>
-            )}
+            <button onClick={() => { setSubmitError(null); setShowCodeModal(true) }} disabled={confirmingOrder}
+              className="w-full bg-orange-500 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-3 rounded-2xl text-base transition-colors shadow-sm">
+              {confirmingOrder ? 'Confirming…' : 'Confirm Order'}
+            </button>
+            <button
+              onClick={() => { setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] })); setSubmitError(null) }}
+              disabled={confirmingOrder}
+              className="w-full text-xs text-gray-400 hover:text-red-500 py-0.5 transition-colors">
+              Clear cart
+            </button>
           </div>
         )}
       </div>
@@ -1236,17 +1198,41 @@ ${itemRows}
             </button>
           </div>
           <p className="text-sm text-gray-500">Enter your 4-digit code to confirm this order.</p>
+          {/* readOnly + inputMode none: use the on-screen keypad, never the OS virtual keyboard */}
           <input
             type="password"
-            inputMode="numeric"
+            inputMode="none"
+            readOnly
             maxLength={4}
             value={code}
-            autoFocus
-            onChange={e => { setCode(e.target.value.replace(/\D/g, '').slice(0, 4)); setError(null) }}
-            onKeyDown={e => { if (e.key === 'Enter' && code.length === 4) void submit() }}
             placeholder="● ● ● ●"
             className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-orange-400"
           />
+          {/* On-screen number pad for touch terminals — compact so it never overflows */}
+          <div className="grid grid-cols-3 gap-1.5 max-w-[220px] mx-auto">
+            {['1','2','3','4','5','6','7','8','9'].map(d => (
+              <button key={d} type="button" disabled={saving}
+                onClick={() => { setCode(c => (c + d).slice(0, 4)); setError(null) }}
+                className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+                {d}
+              </button>
+            ))}
+            <button type="button" disabled={saving}
+              onClick={() => { setCode(''); setError(null) }}
+              className="py-2 rounded-lg border border-gray-300 text-xs font-semibold text-gray-500 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+              Clear
+            </button>
+            <button type="button" disabled={saving}
+              onClick={() => { setCode(c => (c + '0').slice(0, 4)); setError(null) }}
+              className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+              0
+            </button>
+            <button type="button" disabled={saving}
+              onClick={() => setCode(c => c.slice(0, -1))}
+              className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+              ⌫
+            </button>
+          </div>
           {error && (
             <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
               {error}

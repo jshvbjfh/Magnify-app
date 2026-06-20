@@ -267,7 +267,7 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
             <div className="pointer-events-none max-h-[720px] overflow-y-auto">
               <QrMenuPageContent
                 restaurantName={restaurantName || 'Your restaurant'}
-                headerDetail="Preview layout · All prices already include VAT."
+                headerDetail="Preview layout"
                 qrOrderingMode={qrOrderingMode}
                 qrMenuHeroImageUrl={qrMenuHeroImageUrl}
                 dishes={qrMenuItems}

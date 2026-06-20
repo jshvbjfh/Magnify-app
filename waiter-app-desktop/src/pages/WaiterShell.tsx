@@ -1,22 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { UtensilsCrossed, ArrowLeftRight, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText } from 'lucide-react'
+import { UtensilsCrossed, ClipboardList, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Printer } from 'lucide-react'
 import { useOnline } from '../hooks/useOnline'
 import { isOfflineLikeErrorMessage } from '../services/http'
-import { getConfig, setConfig } from '../services/db'
+import { getConfig, setConfig, getOrders } from '../services/db'
 import { logInfo } from '../services/logger'
 import { syncAll, type BranchInfo } from '../services/sync'
 import type { WaiterUser } from '../services/auth'
 import RestaurantOrders from './RestaurantOrders'
 import RestaurantTables from './RestaurantTables'
+import PrinterSettings from './PrinterSettings'
 import StartupLogPage from './StartupLogPage'
 
-type TabId = 'menu' | 'transactions' | 'tables' | 'logs'
+type TabId = 'menu' | 'pending' | 'tables' | 'printers' | 'logs'
 
 const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
-  { id: 'menu',         label: 'Menu',         icon: <UtensilsCrossed className="h-4 w-4" /> },
-  { id: 'transactions', label: 'Transactions', icon: <ArrowLeftRight className="h-4 w-4" /> },
-  { id: 'tables',       label: 'Tables',       icon: <Layout className="h-4 w-4" /> },
-  { id: 'logs',         label: 'Logs',         icon: <ScrollText className="h-4 w-4" /> },
+  { id: 'menu',     label: 'Menu',           icon: <UtensilsCrossed className="h-4 w-4" /> },
+  { id: 'tables',   label: 'Tables',         icon: <Layout className="h-4 w-4" /> },
+  { id: 'pending',  label: 'Pending Orders', icon: <ClipboardList className="h-4 w-4" /> },
+  { id: 'printers', label: 'Printers',       icon: <Printer className="h-4 w-4" /> },
+  { id: 'logs',     label: 'Logs',           icon: <ScrollText className="h-4 w-4" /> },
 ]
 
 interface WaiterShellProps {
@@ -27,6 +29,8 @@ interface WaiterShellProps {
 export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   const { isOnline } = useOnline()
   const [activeTab, setActiveTab] = useState<TabId>('menu')
+  // Selected table is shared: waiters pick it on the Tables tab, serve it on the Menu tab.
+  const [selectedTableKey, setSelectedTableKey] = useState<string>('takeaway')
   const [branches, setBranches] = useState<BranchInfo[]>([])
   const [activeBranchId, setActiveBranchId] = useState<string | null>(user?.branchId ?? null)
   const [branchSwitchingId, setBranchSwitchingId] = useState<string | null>(null)
@@ -107,6 +111,19 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   useEffect(() => {
     void loadStoredBranchState()
   }, [loadStoredBranchState])
+
+  // Keep the Pending Orders badge current regardless of which tab is open.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const restaurantId = await getConfig('restaurantId')
+        const orders = await getOrders({ statuses: ['PENDING', 'UNCONFIRMED'], restaurantId })
+        if (!cancelled) setPendingCount(orders.length)
+      } catch { /* DB not ready yet */ }
+    })()
+    return () => { cancelled = true }
+  }, [syncVersion, activeTab])
 
   // Auto-sync when app comes online
   useEffect(() => {
@@ -205,7 +222,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
               >
                 {t.icon}
                 <span className="hidden sm:inline">{t.label}</span>
-                {t.id === 'menu' && pendingCount > 0 && (
+                {t.id === 'pending' && pendingCount > 0 && (
                   <span className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] bg-orange-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">
                     {pendingCount}
                   </span>
@@ -271,18 +288,28 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             mode="pos"
             waiterName={waiterName}
             activeBranchId={activeBranchId}
-            onPendingCountChange={setPendingCount}
             syncVersion={syncVersion}
+            selectedTableKey={selectedTableKey}
+            onSelectTableKey={setSelectedTableKey}
           />
         )}
-        {activeTab === 'transactions' && (
+        {activeTab === 'pending' && (
           <div className="max-w-5xl mx-auto px-4 py-6">
-            <RestaurantOrders mode="history" waiterName={waiterName} activeBranchId={activeBranchId} />
+            <RestaurantOrders mode="pending" waiterName={waiterName} activeBranchId={activeBranchId} syncVersion={syncVersion} />
           </div>
         )}
         {activeTab === 'tables' && (
           <div className="max-w-5xl mx-auto px-4 py-6">
-            <RestaurantTables waiterName={waiterName} activeBranchId={activeBranchId} />
+            <RestaurantTables
+              waiterName={waiterName}
+              activeBranchId={activeBranchId}
+              onSelectTable={(key) => { setSelectedTableKey(key); setActiveTab('menu') }}
+            />
+          </div>
+        )}
+        {activeTab === 'printers' && (
+          <div className="max-w-5xl mx-auto px-4 py-6">
+            <PrinterSettings />
           </div>
         )}
         {activeTab === 'logs' && (
