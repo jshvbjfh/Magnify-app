@@ -39,6 +39,35 @@ function fmtRWF(n: number) {
   return n.toLocaleString('en-RW', { maximumFractionDigits: 0 })
 }
 
+// Two-decimal amount for the bill's price column (e.g. 13,500.00).
+function fmt2(n: number) {
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+// Code128-B barcode as inline SVG — the scannable order number at the foot of
+// the bill. Self-contained (no font/lib needed) so it prints on any thermal unit.
+const CODE128_PATTERNS = ["212222","222122","222221","121223","121322","131222","122213","122312","132212","221213","221312","231212","112232","122132","122231","113222","123122","123221","223211","221132","221231","213212","223112","312131","311222","321122","321221","312212","322112","322211","212123","212321","232121","111323","131123","131321","112313","132113","132311","211313","231113","231311","112133","112331","132131","113123","113321","133121","313121","211331","231131","213113","213311","213131","311123","311321","331121","312113","312311","332111","314111","221411","431111","111224","111422","121124","121421","141122","141221","112214","112412","122114","122411","142112","142211","241211","221114","413111","241112","134111","111242","121142","121241","114212","124112","124211","411212","421112","421211","212141","214121","412121","111143","111341","131141","114113","114311","411113","411311","113141","114131","311141","411131","211412","211214","211232","2331112"]
+function code128svg(text: string, mod = 1.4, h = 46) {
+  const codes = [104]; let sum = 104
+  for (let i = 0; i < text.length; i++) { const v = text.charCodeAt(i) - 32; codes.push(v); sum += v * (i + 1) }
+  codes.push(sum % 103); codes.push(106)
+  let x = 0, rects = ''
+  for (const c of codes) {
+    const pat = CODE128_PATTERNS[c]; let bar = true
+    for (const d of pat) { const w = parseInt(d) * mod; if (bar) rects += `<rect x="${x.toFixed(2)}" y="0" width="${w.toFixed(2)}" height="${h}" fill="#000"/>`; x += w; bar = !bar }
+  }
+  return `<svg width="${x.toFixed(0)}" height="${h}" viewBox="0 0 ${x.toFixed(0)} ${h}" xmlns="http://www.w3.org/2000/svg">${rects}</svg>`
+}
+
+// Serialise every silent print job. Multiple receipts — a bill plus its kitchen
+// and bar tickets, or several orders confirmed/paid in quick succession — must
+// never print at the same time: concurrent hidden print windows collide on a
+// single thermal printer, which cuts one receipt short and skips to the next.
+// Each job waits for the previous to finish, then a short gap so the cutter and
+// paper feed settle before the next starts.
+let electronPrintQueue: Promise<void> = Promise.resolve()
+const PRINT_GAP_MS = 250
+
 function calcTotals(items: Array<{ dishPrice: number; qty: number }>) {
   const subtotal    = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
   // No VAT: the total is simply the sum of the item prices.
@@ -313,10 +342,18 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
           return
         }
       }
-      setTimeout(() => void eP.receipt(html, deviceName || undefined).catch((err) => {
-        console.error(err)
-        setSubmitError('Print failed — check the printer is on, has paper, and is assigned in the Printers tab.')
-      }), delay)
+      // Chain onto the shared queue so this job only starts once the previous
+      // one has fully printed — never two hidden print windows at once. The
+      // `delay` arg is now just spacing between staggered jobs (kitchen tickets),
+      // applied before this job rather than as a fixed wall-clock offset.
+      electronPrintQueue = electronPrintQueue
+        .then(() => new Promise<void>(res => setTimeout(res, delay)))
+        .then(() => eP.receipt(html, deviceName || undefined))
+        .catch((err) => {
+          console.error(err)
+          setSubmitError('Print failed — check the printer is on, has paper, and is assigned in the Printers tab.')
+        })
+        .then(() => new Promise<void>(res => setTimeout(res, PRINT_GAP_MS)))
       return
     }
     // Fallback: DOM injection for non-Electron environments
@@ -342,50 +379,79 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   }
 
   function printBill(order: Order, items: OrderItem[]) {
-    // The header (top) and footer (bottom) come from the manager's editable
-    // bill template; the pricing block in the middle is generated from the order.
+    // Rich High 5ive receipt. The header (first line big + bold, rest the
+    // address/phone) and the footer (MOMO code + thank-you) come from the
+    // manager's editable bill template; the order block is built here.
     const { topText, bottomText } = parseBillTemplate(billHeaderTpl)
-    const headerLines = topText
-      ? topText.split('\n').map(l => `<div class="center">${escHtml(l)}</div>`).join('')
-      : '<div class="center title">RECEIPT</div>'
-    const footerLines = bottomText
-      ? bottomText.split('\n').map(l => `<div class="center">${escHtml(l)}</div>`).join('')
-      : '<div class="center">Thank you for dining with us!</div>'
-    const { totalAmount } = calcTotals(items.map(i => ({ dishPrice: i.dish_price, qty: i.qty })))
-    // Match the manager's Settings receipt preview format exactly.
-    const dt = new Date().toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
-    const rows = items.map(i =>
-      `<div class="row"><span>${escHtml(i.dish_name)}${i.qty > 1 ? ` x${i.qty}` : ''}</span><span>${fmtRWF(i.dish_price * i.qty)} RWF</span></div>`
+    const topLines = (topText || 'RECEIPT').split('\n').filter(l => l.trim() !== '')
+    const headerLines = topLines.map((l, i) =>
+      i === 0 ? `<div class="name">${escHtml(l)}</div>` : `<div class="addr">${escHtml(l)}</div>`
     ).join('')
+    const footerLines = (bottomText && bottomText.trim() ? bottomText : 'Thank you for dining with us!')
+      .split('\n').map(l => `<div class="center foot">${escHtml(l)}</div>`).join('')
+    const { totalAmount } = calcTotals(items.map(i => ({ dishPrice: i.dish_price, qty: i.qty })))
+    const now = new Date()
+    const dt  = now.toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })
+    const isTakeaway = !order.table_id
+    const orderType  = isTakeaway ? 'Take Away' : 'Dine In'
+    const server     = order.created_by_name ?? '—'
+    const station    = (order.branch_id ? branches.find(b => b.id === order.branch_id)?.name : null) ?? restaurantName ?? ''
+    const orderNo    = order.order_number ?? ''
+    // Thermal printers don't reliably honour CSS flexbox (justify-between) — it
+    // left the price stuck to the item name — so every two-column line is laid
+    // out as fixed-width monospace text, padding the gap so the right column ends
+    // at the printable edge. 32 cols ≈ 80mm page − 5mm padding each side @13px.
+    const pad = (left: string, right: string, cols = 32) => {
+      const max = cols - right.length - 1
+      const l = left.length > max ? left.slice(0, Math.max(1, max)) : left
+      return l + ' '.repeat(Math.max(1, cols - l.length - right.length)) + right
+    }
+    const itemRows = items.map(i =>
+      `<div class="row item">${escHtml(pad(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.dish_price * i.qty)))}</div>`
+    ).join('')
+    const barcode = orderNo ? code128svg(orderNo) : ''
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
 /* Bill length is set by the print window (electron/main.js, data-doc="bill"):
-   short orders stay a fixed 15cm; longer orders grow to their content + an 8cm
-   tail so the printer never feeds a wasted second page. 150mm here is just the
-   default for the non-electron fallback. */
-body{font-family:'Courier New',monospace;font-size:13px;width:80mm;min-height:150mm;padding:20mm 4mm;color:#000;display:flex;flex-direction:column}
+   short orders stay a fixed 15cm; longer ones grow to their content + an 8cm
+   tail so the printer never feeds a wasted second page. */
+body{font-family:'Courier New',monospace;font-size:13px;width:80mm;min-height:150mm;padding:8mm 5mm;color:#000;display:flex;flex-direction:column}
 #bill-content{flex:0 0 auto}
 .center{text-align:center}
-.title{font-size:15px;font-weight:bold}
-.divider{border-top:1px dashed #000;margin:5px 0}
-.row{display:flex;justify-content:space-between;gap:8px;margin:3px 0;font-size:13px}
-.total{font-size:15px;font-weight:bold}
-.footer{margin-top:8px;font-size:12px}
+.name{text-align:center;font-size:19px;font-weight:bold;letter-spacing:1px}
+.addr{text-align:center;font-size:12px;margin-top:1px}
+.div{border-top:1px solid #000;margin:7px 0}
+.info{white-space:pre;font-size:13px;margin:3px 0}
+.row{white-space:pre;font-size:13px;margin:3px 0}
+.item{font-size:13px}
+.total{white-space:pre;font-size:16px;font-weight:bold;margin:6px 0}
+.ticket{font-size:16px;font-weight:bold;margin-top:8px}
+.foot{font-size:12px}
+.bc{margin-top:10px;text-align:center}
+.bc svg{max-width:64mm;height:auto}
+.bcnum{font-size:11px;letter-spacing:1px;margin-top:2px}
 /* Tiny "cut here" line pinned to the bottom of the (dynamically sized) bill. */
 .cutline{margin-top:auto;align-self:center;width:24mm;border-top:1px solid #000}
 @media print{@page{margin:0;size:80mm 150mm}}
 </style></head><body data-doc="bill">
 <div id="bill-content">
 ${headerLines}
-<div class="divider"></div>
+<div class="div"></div>
+<div class="info">Server: ${escHtml(server)}</div>
+${station ? `<div class="info">Station: ${escHtml(station)}</div>` : ''}
+<div class="div"></div>
+<div class="row">${escHtml(pad(`Order #: ${orderNo}`, orderType))}</div>
+${isTakeaway ? '' : `<div class="info">Table: ${escHtml(order.table_name ?? 'Table')}</div>`}
+<div class="div"></div>
+${itemRows}
+<div class="div"></div>
+<div class="total">${escHtml(pad('TOTAL:', `Rwf ${fmtRWF(totalAmount)}`, 26))}</div>
+<div class="div"></div>
+<div class="center ticket">&gt;&gt; ${escHtml(orderNo)} &lt;&lt;</div>
 <div class="center">${escHtml(dt)}</div>
-<div class="center">Table: ${escHtml(order.table_name ?? 'Takeaway')}</div>
-<div class="divider"></div>
-${rows}
-<div class="divider"></div>
-<div class="row total"><span>TOTAL</span><span>${fmtRWF(totalAmount)} RWF</span></div>
-<div class="divider"></div>
-<div class="footer">${footerLines}</div>
+<div style="height:8px"></div>
+${footerLines}
+${barcode ? `<div class="bc">${barcode}<div class="bcnum">${escHtml(orderNo)}</div></div>` : ''}
 </div>
 <div class="cutline"></div>
 </body></html>`
@@ -409,7 +475,8 @@ ${rows}
     const isTakeaway = !order.table_id
     const orderType  = isTakeaway ? 'Take Away' : 'Dine In'
     const stars      = '*'.repeat(48)
-    let delay = 300
+    // The print queue (printHtml) serialises these tickets, so no per-ticket
+    // wall-clock stagger is needed — each just follows the previous in order.
     let ticketIndex = 1
     for (const [bId, group] of byBranch) {
       const deviceName = resolveStationPrinter(printerMap, billPrinter, bId === '__none__' ? null : bId)
@@ -452,8 +519,7 @@ ${itemRows}
 <div style="height:30mm">&nbsp;</div>
 <div>&nbsp;</div>
 </body></html>`
-      printHtml(html, delay, deviceName)
-      delay += 600
+      printHtml(html, 0, deviceName)
       ticketIndex += 1
     }
   }
