@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
-  ArrowLeft, Trash2, X, ShieldAlert, WifiOff, AlertCircle, Cloud, Printer,
+  ArrowLeft, Trash2, X, ShieldAlert, WifiOff, AlertCircle, Cloud, Printer, StickyNote,
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
@@ -14,7 +14,7 @@ import { useOnline } from '../hooks/useOnline'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: number }
+type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: number; note?: string }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -134,6 +134,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [addedFlash,       setAddedFlash]       = useState(false)
   const [searchQuery,      setSearchQuery]      = useState('')
   const [pendingSearch,    setPendingSearch]    = useState('')
+  const [noteEditId,       setNoteEditId]       = useState<string | null>(null)
+  const [activeItemId,     setActiveItemId]     = useState<string | null>(null)
   const [confirmingOrder,  setConfirmingOrder]  = useState(false)
   const [submitError,      setSubmitError]      = useState<string | null>(null)
   const [confirmSuccess,   setConfirmSuccess]   = useState<string | null>(null)
@@ -286,6 +288,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     })
   }
 
+  function setCartItemNote(dishId: string, note: string) {
+    setLocalCart(prev => {
+      const updated = (prev[selectedTableKey] ?? []).map(i => i.dishId === dishId ? { ...i, note } : i)
+      return { ...prev, [selectedTableKey]: updated }
+    })
+  }
+
   // ── Print helpers ──
 
   function escHtml(s: string) {
@@ -350,16 +359,23 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     ).join('')
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
-/* Fixed 15cm-long bill: page is exactly 80mm x 150mm so the printer always feeds 15cm. */
-body{font-family:'Courier New',monospace;font-size:13px;width:80mm;min-height:150mm;padding:20mm 4mm;color:#000}
+/* Bill length is set by the print window (electron/main.js, data-doc="bill"):
+   short orders stay a fixed 15cm; longer orders grow to their content + an 8cm
+   tail so the printer never feeds a wasted second page. 150mm here is just the
+   default for the non-electron fallback. */
+body{font-family:'Courier New',monospace;font-size:13px;width:80mm;min-height:150mm;padding:20mm 4mm;color:#000;display:flex;flex-direction:column}
+#bill-content{flex:0 0 auto}
 .center{text-align:center}
 .title{font-size:15px;font-weight:bold}
 .divider{border-top:1px dashed #000;margin:5px 0}
 .row{display:flex;justify-content:space-between;gap:8px;margin:3px 0;font-size:13px}
 .total{font-size:15px;font-weight:bold}
 .footer{margin-top:8px;font-size:12px}
+/* Tiny "cut here" line pinned to the bottom of the (dynamically sized) bill. */
+.cutline{margin-top:auto;align-self:center;width:24mm;border-top:1px solid #000}
 @media print{@page{margin:0;size:80mm 150mm}}
-</style></head><body>
+</style></head><body data-doc="bill">
+<div id="bill-content">
 ${headerLines}
 <div class="divider"></div>
 <div class="center">${escHtml(dt)}</div>
@@ -370,7 +386,8 @@ ${rows}
 <div class="row total"><span>TOTAL</span><span>${fmtRWF(totalAmount)} RWF</span></div>
 <div class="divider"></div>
 <div class="footer">${footerLines}</div>
-<div style="color:transparent;font-size:1px">.</div>
+</div>
+<div class="cutline"></div>
 </body></html>`
     printHtml(html, 0, billPrinter)
   }
@@ -399,6 +416,7 @@ ${rows}
       const station = group.branchType === 'bar' ? 'BAR' : 'KITCHEN'
       const itemRows = group.items.map(i =>
         `<div class="item"><span class="qty">${i.qty}</span><span class="iname">${escHtml(i.dishName)}</span></div>`
+        + (i.note ? `<div class="note">&gt; ${escHtml(i.note)}</div>` : '')
       ).join('')
       const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -413,6 +431,7 @@ body{font-family:'Courier New',monospace;font-size:13px;width:80mm;padding:20mm 
 .item{display:flex;gap:12px;font-size:15px;margin:5px 0}
 .qty{min-width:22px;font-weight:bold;text-align:right}
 .iname{font-weight:bold}
+.note{font-size:14px;margin:0 0 6px 34px;font-style:italic}
 .ticket{font-size:16px;font-weight:bold;margin:2px 0}
 @media print{@page{margin:0;size:80mm auto}}
 </style></head><body>
@@ -631,7 +650,11 @@ ${itemRows}
 
   // ── Derived values ──
 
-  const categories = Array.from(new Set(dishes.map(d => d.category).filter(Boolean))) as string[]
+  // Tab order: "add-ons" categories always last, everything else alphabetical
+  // (e.g. Tiamo → Pasta, Sauces, Add-ons).
+  const isAddonCat = (c: string) => /add[\s-]?ons?/i.test(c)
+  const categories = (Array.from(new Set(dishes.map(d => d.category).filter(Boolean))) as string[])
+    .sort((a, b) => (isAddonCat(a) !== isAddonCat(b) ? (isAddonCat(a) ? 1 : -1) : a.localeCompare(b)))
 
   const filteredDishes = dishes.filter(d => {
     if (selectedCategory && d.category !== selectedCategory) return false
@@ -1031,8 +1054,8 @@ ${itemRows}
                       <span className="text-white font-black text-3xl tracking-tight select-none drop-shadow">{initials}</span>
                     </div>
                     <div className={`${bgBottom} px-3 py-2 flex-1 w-full`}>
-                      <p className="text-white text-[16px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
-                      <p className="text-white/70 font-medium text-[14px] mt-0.5">
+                      <p className="text-white text-[13px] font-semibold leading-tight line-clamp-3">{dish.name}</p>
+                      <p className="text-white/70 font-medium text-[13px] mt-0.5">
                         {fmtRWF(dish.selling_price)} RWF
                       </p>
                     </div>
@@ -1091,19 +1114,29 @@ ${itemRows}
           ) : (
             <div className="space-y-2.5">
               {cartItems.map(item => (
-                <div key={item.dishId} className="flex items-start justify-between group">
-                  <div className="flex-1 min-w-0 flex items-center gap-1">
-                    <button onClick={() => removeLocalCartItem(item.dishId)}
-                      className="p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
-                      <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                    </button>
-                    <span className="text-sm text-gray-800 font-medium leading-snug">
+                <div key={item.dishId}>
+                  <button onClick={() => setActiveItemId(item.dishId)}
+                    className="w-full flex items-start justify-between text-left rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+                    <span className="text-sm text-gray-800 font-medium leading-snug flex-1 min-w-0">
                       {item.dishName}{item.qty > 1 ? ` ×${item.qty}` : ''}
                     </span>
-                  </div>
-                  <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
-                    {fmtRWF(item.dishPrice * item.qty)} RWF
-                  </span>
+                    <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
+                      {fmtRWF(item.dishPrice * item.qty)} RWF
+                    </span>
+                  </button>
+                  {noteEditId === item.dishId ? (
+                    <input
+                      autoFocus
+                      value={item.note ?? ''}
+                      onChange={e => setCartItemNote(item.dishId, e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') setNoteEditId(null) }}
+                      onBlur={() => setNoteEditId(null)}
+                      placeholder="Modifiers — e.g. extra pickles"
+                      className="ml-2 mt-1 w-[calc(100%-0.5rem)] border border-orange-200 rounded-lg px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-orange-400"
+                    />
+                  ) : item.note ? (
+                    <p className="ml-2 mt-0.5 text-xs text-orange-600 italic leading-snug">&gt; {item.note}</p>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -1164,6 +1197,31 @@ ${itemRows}
           }}
         />
       )}
+
+      {/* Item actions popup — tap a cart item to add modifiers (a note) or delete it */}
+      {activeItemId && (() => {
+        const it = cartItems.find(i => i.dishId === activeItemId)
+        if (!it) return null
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setActiveItemId(null)}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-4 space-y-3" onClick={e => e.stopPropagation()}>
+              <p className="text-sm font-bold text-gray-900 text-center leading-snug">
+                {it.dishName}{it.qty > 1 ? ` ×${it.qty}` : ''}
+              </p>
+              <button onClick={() => { setNoteEditId(activeItemId); setActiveItemId(null) }}
+                className="w-full flex items-center justify-center gap-2 border border-orange-300 text-orange-700 font-semibold py-3 rounded-xl hover:bg-orange-50 transition-colors">
+                <StickyNote className="h-4 w-4" /> Modifiers
+              </button>
+              <button onClick={() => { removeLocalCartItem(activeItemId); setActiveItemId(null) }}
+                className="w-full flex items-center justify-center gap-2 border border-red-300 text-red-600 font-semibold py-3 rounded-xl hover:bg-red-50 transition-colors">
+                <Trash2 className="h-4 w-4" /> Delete item
+              </button>
+              <button onClick={() => setActiveItemId(null)}
+                className="w-full text-xs text-gray-400 hover:text-gray-600 py-1">Cancel</button>
+            </div>
+          </div>
+        )
+      })()}
 
     </div>
   )

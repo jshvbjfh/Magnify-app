@@ -370,9 +370,35 @@ function registerIpcHandlers() {
       printWin.webContents.on('did-fail-load', (_e, code, desc) =>
         finish(reject, new Error(`Receipt load failed: ${desc} (${code})`)))
       printWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
-      printWin.webContents.once('did-finish-load', () => {
+      printWin.webContents.once('did-finish-load', async () => {
         const printOptions = { silent: true, printBackground: true, margins: { marginType: 'none' } }
         if (deviceName && typeof deviceName === 'string') printOptions.deviceName = deviceName
+        // Bills (data-doc="bill") size to content: an order under 15cm stays a
+        // fixed 15cm; a longer one grows to its content height + an 8cm tail so
+        // the printer never feeds a wasted second 15cm page. The script returns
+        // the chosen page height in mm (or null for non-bill docs e.g. kitchen
+        // tickets, which keep their own fixed @page size).
+        try {
+          const heightMm = await printWin.webContents.executeJavaScript(`(function(){
+            try {
+              if (document.body.getAttribute('data-doc') !== 'bill') return null;
+              var content = document.getElementById('bill-content');
+              if (!content) return null;
+              var PX_TO_MM = 25.4 / 96;
+              var endMm = content.getBoundingClientRect().bottom * PX_TO_MM;
+              var h = endMm <= 150 ? 150 : Math.ceil(endMm + 80);
+              document.body.style.height = h + 'mm';
+              var s = document.createElement('style');
+              s.textContent = '@page{margin:0;size:80mm ' + h + 'mm}';
+              document.head.appendChild(s);
+              return h;
+            } catch (e) { return null; }
+          })()`)
+          if (typeof heightMm === 'number' && isFinite(heightMm) && heightMm > 0) {
+            // Electron pageSize is in microns (1mm = 1000µm).
+            printOptions.pageSize = { width: 80000, height: Math.round(heightMm * 1000) }
+          }
+        } catch { /* fall back to the HTML's own @page size */ }
         printWin.webContents.print(
           printOptions,
           (success, errType) => {
@@ -435,6 +461,10 @@ async function resolveDevServerUrl() {
   return candidates[0]
 }
 
+// Global UI scale for the whole POS — shrinks every button, text and element
+// uniformly so more fits on screen. 0.67 ≈ the "150→100" reduction. Tune here.
+const UI_ZOOM = 0.67
+
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -451,7 +481,11 @@ async function createWindow() {
     },
   })
 
-  mainWindow.webContents.on('did-finish-load', () => appendStartupLog('Renderer did-finish-load'))
+  mainWindow.webContents.on('did-finish-load', () => {
+    appendStartupLog('Renderer did-finish-load')
+    // Apply the global UI scale once the page is loaded (persists per load).
+    mainWindow.webContents.setZoomFactor(UI_ZOOM)
+  })
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) =>
     appendStartupLog(`Renderer did-fail-load code=${code} desc=${desc} url=${url}`))
   mainWindow.webContents.on('render-process-gone', (_e, details) =>
