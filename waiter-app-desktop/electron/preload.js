@@ -29,16 +29,20 @@ contextBridge.exposeInMainWorld('electronHttp', {
 
 // Pull config synchronously from main (main sets it via ipcMain.on before window loads)
 let resolvedApiBaseUrl = ''
+let resolvedAppVersion = ''
 try {
   const config = ipcRenderer.sendSync('get:config')
   if (config && config.apiBaseUrl) {
     resolvedApiBaseUrl = config.apiBaseUrl
   }
+  if (config && config.appVersion) {
+    resolvedAppVersion = config.appVersion
+  }
 } catch {
   // config injection failed — config.ts will fall back to VITE_API_BASE_URL
 }
 
-contextBridge.exposeInMainWorld('electronConfig', { apiBaseUrl: resolvedApiBaseUrl })
+contextBridge.exposeInMainWorld('electronConfig', { apiBaseUrl: resolvedApiBaseUrl, appVersion: resolvedAppVersion })
 
 contextBridge.exposeInMainWorld('electronPrint', {
   receipt: (html, deviceName) => ipcRenderer.invoke('print:receipt', html, deviceName),

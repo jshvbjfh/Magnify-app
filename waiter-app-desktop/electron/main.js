@@ -420,7 +420,7 @@ function registerIpcHandlers() {
 
   // get:config — preload reads this synchronously to inject window.electronConfig
   ipcMain.on('get:config', (event) => {
-    event.returnValue = { apiBaseUrl }
+    event.returnValue = { apiBaseUrl, appVersion: app.getVersion() }
   })
 }
 

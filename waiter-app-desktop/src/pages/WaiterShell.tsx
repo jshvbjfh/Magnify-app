@@ -206,6 +206,10 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             {waiterName && (
               <span className="text-sm font-bold text-white leading-none hidden sm:block">{waiterName}</span>
             )}
+            {/* Build version — so any terminal's installed version is visible at a glance. */}
+            <span className="text-[10px] font-mono text-gray-400 leading-none select-none">
+              v{(window as Window & { electronConfig?: { appVersion?: string } }).electronConfig?.appVersion || '?'}
+            </span>
           </div>
 
           {/* Tab navigation */}
