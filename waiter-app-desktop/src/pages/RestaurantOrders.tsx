@@ -109,6 +109,212 @@ function getDisplayStatus(order: Order) {
   return 'PENDING'
 }
 
+// ─── Modals ──────────────────────────────────────────────────────────────────
+// Defined at module scope (NOT nested inside RestaurantOrders) so their function
+// identity is stable across the parent's frequent re-renders (sync ticks). A
+// component defined inside the parent is re-created every render, which makes
+// React remount the modal and wipe its input state mid-typing — that was the bug
+// where a half-typed PIN / reason / order code kept resetting itself.
+
+function OrderCodeModal({ onClose, onConfirmed }: { onClose: () => void; onConfirmed: (waiterName: string) => void }) {
+  const [code,   setCode]   = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState<string | null>(null)
+
+  async function submit() {
+    if (code.length !== 4) { setError('Code must be exactly 4 digits'); return }
+    setSaving(true)
+    setError(null)
+    try {
+      const { waiterName } = await validateOrderCode(code)
+      onConfirmed(waiterName)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-gray-900">Enter Your Order Code</h3>
+          <button onClick={onClose} disabled={saving}>
+            <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
+          </button>
+        </div>
+        <p className="text-sm text-gray-500">Enter your 4-digit code to confirm this order.</p>
+        {/* readOnly + inputMode none: use the on-screen keypad, never the OS virtual keyboard */}
+        <input
+          type="password"
+          inputMode="none"
+          readOnly
+          maxLength={4}
+          value={code}
+          placeholder="● ● ● ●"
+          className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-orange-400"
+        />
+        {/* On-screen number pad for touch terminals — compact so it never overflows */}
+        <div className="grid grid-cols-3 gap-1.5 max-w-[220px] mx-auto">
+          {['1','2','3','4','5','6','7','8','9'].map(d => (
+            <button key={d} type="button" disabled={saving}
+              onClick={() => { setCode(c => (c + d).slice(0, 4)); setError(null) }}
+              className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+              {d}
+            </button>
+          ))}
+          <button type="button" disabled={saving}
+            onClick={() => { setCode(''); setError(null) }}
+            className="py-2 rounded-lg border border-gray-300 text-xs font-semibold text-gray-500 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+            Clear
+          </button>
+          <button type="button" disabled={saving}
+            onClick={() => { setCode(c => (c + '0').slice(0, 4)); setError(null) }}
+            className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+            0
+          </button>
+          <button type="button" disabled={saving}
+            onClick={() => setCode(c => c.slice(0, -1))}
+            className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+            ⌫
+          </button>
+        </div>
+        {error && (
+          <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
+            {error}
+          </div>
+        )}
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} disabled={saving}
+            className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 disabled:opacity-50">
+            Cancel
+          </button>
+          <button onClick={() => void submit()} disabled={saving || code.length !== 4}
+            className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
+            {saving ? 'Checking…' : 'Confirm Order'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CancelModal({ order, onClose, onCanceled }: {
+  order: Order | undefined
+  onClose: () => void
+  onCanceled: (approvedBy: string, tableKey: string) => void
+}) {
+  const [pin,    setPin]    = useState('')
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState<string | null>(null)
+
+  const tableKey  = order ? (order.table_id ?? 'takeaway') : 'takeaway'
+  const tableName = order?.table_name ?? 'Order'
+
+  async function submit() {
+    if (pin.length !== 5) { setError('PIN must be exactly 5 digits'); return }
+    if (!reason.trim())   { setError('Please enter a reason');        return }
+    if (!order) { setError('Order not found'); return }
+
+    setSaving(true)
+    setError(null)
+    try {
+      let result: { approvedBy: string }
+      try {
+        result = await cancelOrderOnServer({
+          orderId:       order.id,
+          supervisorPin: pin,
+          cancelReason:  reason.trim(),
+        })
+      } catch (serverErr) {
+        const isNetworkErr = (serverErr as Error).name === 'NetworkRequestError'
+        if (!isNetworkErr) throw serverErr
+        // Server unreachable — validate PIN against cached bcrypt hashes
+        result = await validateCancellationPinOffline(pin)
+      }
+      // Mirror cancellation in local DB so POS is consistent offline
+      await updateOrder(order.id, {
+        status:        'CANCELED',
+        canceled_at:   new Date().toISOString(),
+        cancel_reason: reason.trim(),
+      })
+      onCanceled(result.approvedBy, tableKey)
+      onClose()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-gray-900 flex items-center gap-2">
+            <ShieldAlert className="h-5 w-5 text-red-500" />
+            Cancel Order — {tableName}
+          </h3>
+          <button onClick={onClose} disabled={saving}>
+            <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
+          </button>
+        </div>
+
+        <p className="text-sm text-gray-500">
+          A supervisor must enter their 5-digit PIN to approve this cancellation.
+        </p>
+
+        <div>
+          <label className="text-xs font-semibold text-gray-600 mb-1 block">Supervisor PIN</label>
+          <input
+            type="password"
+            inputMode="numeric"
+            maxLength={5}
+            value={pin}
+            onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 5)); setError(null) }}
+            placeholder="● ● ● ● ●"
+            className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-gray-600 mb-1 block">Reason</label>
+          <input
+            type="text"
+            value={reason}
+            onChange={e => { setReason(e.target.value); setError(null) }}
+            placeholder="e.g. Customer changed mind"
+            className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+        </div>
+
+        {error && (
+          <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
+            {error}
+          </div>
+        )}
+
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 disabled:opacity-50">
+            Go Back
+          </button>
+          <button
+            onClick={submit}
+            disabled={saving || pin.length !== 5 || !reason.trim()}
+            className="flex-1 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
+            {saving ? 'Canceling…' : 'Confirm Cancel'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Module-level stale-while-revalidate caches ──────────────────────────────
 // Survive tab switches; cleared only on app restart.
 
@@ -715,7 +921,17 @@ ${itemRows}
     }
   }
 
-  // cancelOrder is now handled by CancelModal — this stub kept for reference only
+  // CancelModal (module-scope) handles the PIN/reason entry and the DB write;
+  // this runs the POS-side side effects once a cancellation is approved.
+  function handleOrderCanceled(approvedBy: string, tableKey: string) {
+    setLocalCart(prev => ({ ...prev, [tableKey]: [] }))
+    setSelectedTableKey('takeaway')
+    setShowPanel('dishes')
+    setConfirmSuccess(`Order canceled · approved by ${approvedBy}`)
+    setTimeout(() => setConfirmSuccess(null), 5000)
+    loadPOS()
+    pushSync().catch(() => {})
+  }
 
   // ── Derived values ──
 
@@ -1002,7 +1218,11 @@ ${itemRows}
           <PayModal orderId={payingOrderId} onClose={() => { setPayingOrderId(null); setPayMethod('Cash') }} />
         )}
         {cancelingOrderId && (
-          <CancelModal orderId={cancelingOrderId} onClose={() => setCancelingOrderId(null)} />
+          <CancelModal
+            order={pendingOrders.find(o => o.id === cancelingOrderId)}
+            onClose={() => setCancelingOrderId(null)}
+            onCanceled={handleOrderCanceled}
+          />
         )}
         {showCodeModal && (
           <OrderCodeModal
@@ -1246,8 +1466,9 @@ ${itemRows}
 
       {cancelingOrderId && (
         <CancelModal
-          orderId={cancelingOrderId}
+          order={pendingOrders.find(o => o.id === cancelingOrderId)}
           onClose={() => setCancelingOrderId(null)}
+          onCanceled={handleOrderCanceled}
         />
       )}
 
@@ -1294,209 +1515,4 @@ ${itemRows}
 
     </div>
   )
-
-  // ── Order Code Modal ── waiter enters their 4-digit code to confirm an order
-  function OrderCodeModal({ onClose, onConfirmed }: { onClose: () => void; onConfirmed: (waiterName: string) => void }) {
-    const [code,   setCode]   = useState('')
-    const [saving, setSaving] = useState(false)
-    const [error,  setError]  = useState<string | null>(null)
-
-    async function submit() {
-      if (code.length !== 4) { setError('Code must be exactly 4 digits'); return }
-      setSaving(true)
-      setError(null)
-      try {
-        const { waiterName } = await validateOrderCode(code)
-        onConfirmed(waiterName)
-      } catch (err) {
-        setError((err as Error).message)
-      } finally {
-        setSaving(false)
-      }
-    }
-
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-gray-900">Enter Your Order Code</h3>
-            <button onClick={onClose} disabled={saving}>
-              <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
-            </button>
-          </div>
-          <p className="text-sm text-gray-500">Enter your 4-digit code to confirm this order.</p>
-          {/* readOnly + inputMode none: use the on-screen keypad, never the OS virtual keyboard */}
-          <input
-            type="password"
-            inputMode="none"
-            readOnly
-            maxLength={4}
-            value={code}
-            placeholder="● ● ● ●"
-            className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-orange-400"
-          />
-          {/* On-screen number pad for touch terminals — compact so it never overflows */}
-          <div className="grid grid-cols-3 gap-1.5 max-w-[220px] mx-auto">
-            {['1','2','3','4','5','6','7','8','9'].map(d => (
-              <button key={d} type="button" disabled={saving}
-                onClick={() => { setCode(c => (c + d).slice(0, 4)); setError(null) }}
-                className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
-                {d}
-              </button>
-            ))}
-            <button type="button" disabled={saving}
-              onClick={() => { setCode(''); setError(null) }}
-              className="py-2 rounded-lg border border-gray-300 text-xs font-semibold text-gray-500 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
-              Clear
-            </button>
-            <button type="button" disabled={saving}
-              onClick={() => { setCode(c => (c + '0').slice(0, 4)); setError(null) }}
-              className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
-              0
-            </button>
-            <button type="button" disabled={saving}
-              onClick={() => setCode(c => c.slice(0, -1))}
-              className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
-              ⌫
-            </button>
-          </div>
-          {error && (
-            <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
-              {error}
-            </div>
-          )}
-          <div className="flex gap-2 pt-1">
-            <button onClick={onClose} disabled={saving}
-              className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 disabled:opacity-50">
-              Cancel
-            </button>
-            <button onClick={() => void submit()} disabled={saving || code.length !== 4}
-              className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
-              {saving ? 'Checking…' : 'Confirm Order'}
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // ── Cancel Modal ── (defined inside component to access closure state)
-  function CancelModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
-    const [pin,    setPin]    = useState('')
-    const [reason, setReason] = useState('')
-    const [saving, setSaving] = useState(false)
-    const [error,  setError]  = useState<string | null>(null)
-
-    const order     = pendingOrders.find(o => o.id === orderId)
-    const tableKey  = order ? (order.table_id ?? 'takeaway') : 'takeaway'
-    const tableName = order?.table_name ?? 'Order'
-
-    async function submit() {
-      if (pin.length !== 5) { setError('PIN must be exactly 5 digits'); return }
-      if (!reason.trim())   { setError('Please enter a reason');        return }
-
-      if (!order) { setError('Order not found'); return }
-
-      setSaving(true)
-      setError(null)
-      try {
-        let result: { approvedBy: string }
-        try {
-          result = await cancelOrderOnServer({
-            orderId:       order.id,
-            supervisorPin: pin,
-            cancelReason:  reason.trim(),
-          })
-        } catch (serverErr) {
-          const isNetworkErr = (serverErr as Error).name === 'NetworkRequestError'
-          if (!isNetworkErr) throw serverErr
-          // Server unreachable — validate PIN against cached bcrypt hashes
-          result = await validateCancellationPinOffline(pin)
-        }
-        // Mirror cancellation in local DB so POS is consistent offline
-        await updateOrder(order.id, {
-          status:        'CANCELED',
-          canceled_at:   new Date().toISOString(),
-          cancel_reason: reason.trim(),
-        })
-        setLocalCart(prev => ({ ...prev, [tableKey]: [] }))
-        setSelectedTableKey('takeaway')
-        setShowPanel('dishes')
-        setConfirmSuccess(`Order canceled · approved by ${result.approvedBy}`)
-        setTimeout(() => setConfirmSuccess(null), 5000)
-        await loadPOS()
-        pushSync().catch(() => {})
-        onClose()
-      } catch (err) {
-        setError((err as Error).message)
-      } finally {
-        setSaving(false)
-      }
-    }
-
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-gray-900 flex items-center gap-2">
-              <ShieldAlert className="h-5 w-5 text-red-500" />
-              Cancel Order — {tableName}
-            </h3>
-            <button onClick={onClose} disabled={saving}>
-              <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
-            </button>
-          </div>
-
-          <p className="text-sm text-gray-500">
-            A supervisor must enter their 5-digit PIN to approve this cancellation.
-          </p>
-
-          <div>
-            <label className="text-xs font-semibold text-gray-600 mb-1 block">Supervisor PIN</label>
-            <input
-              type="password"
-              inputMode="numeric"
-              maxLength={5}
-              value={pin}
-              onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 5)); setError(null) }}
-              placeholder="● ● ● ● ●"
-              className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-red-400"
-            />
-          </div>
-
-          <div>
-            <label className="text-xs font-semibold text-gray-600 mb-1 block">Reason</label>
-            <input
-              type="text"
-              value={reason}
-              onChange={e => { setReason(e.target.value); setError(null) }}
-              placeholder="e.g. Customer changed mind"
-              className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-            />
-          </div>
-
-          {error && (
-            <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
-              {error}
-            </div>
-          )}
-
-          <div className="flex gap-2 pt-1">
-            <button
-              onClick={onClose}
-              disabled={saving}
-              className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 disabled:opacity-50">
-              Go Back
-            </button>
-            <button
-              onClick={submit}
-              disabled={saving || pin.length !== 5 || !reason.trim()}
-              className="flex-1 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
-              {saving ? 'Canceling…' : 'Confirm Cancel'}
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
 }
