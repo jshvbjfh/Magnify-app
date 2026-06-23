@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS order_items (
   dish_price REAL NOT NULL,
   qty INTEGER NOT NULL,
   status TEXT DEFAULT 'ACTIVE',
+  notes TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -193,6 +194,13 @@ CREATE TABLE IF NOT EXISTS order_code_holders (
   pin_hash TEXT NOT NULL
 );
 `,
+  },
+  {
+    // Per-item modifier note (e.g. "no sauce") so it prints on the bill too,
+    // not just the kitchen ticket. Migration 1's CREATE bakes it in on fresh
+    // installs, so guard the ALTER for existing databases.
+    version: 5,
+    run: (database) => addColumnIfMissing(database, 'order_items', 'notes', 'TEXT'),
   },
 ]
 

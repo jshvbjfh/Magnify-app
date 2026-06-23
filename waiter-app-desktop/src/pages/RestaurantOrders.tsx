@@ -408,6 +408,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     }
     const itemRows = items.map(i =>
       `<div class="row item">${escHtml(pad(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.dish_price * i.qty)))}</div>`
+      + (i.notes ? `<div class="note">&gt; ${escHtml(i.notes)}</div>` : '')
     ).join('')
     const barcode = orderNo ? code128svg(orderNo) : ''
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
@@ -424,6 +425,7 @@ body{font-family:'Courier New',monospace;font-size:13px;width:80mm;min-height:15
 .info{white-space:pre;font-size:13px;margin:3px 0}
 .row{white-space:pre;font-size:13px;margin:3px 0}
 .item{font-size:13px}
+.note{margin:0 0 4px 12px;font-size:12px;font-style:italic}
 .total{white-space:pre;font-size:16px;font-weight:bold;margin:6px 0}
 .ticket{font-size:16px;font-weight:bold;margin-top:8px}
 .foot{font-size:12px}
@@ -609,6 +611,7 @@ ${itemRows}
         dish_price: item.dishPrice,
         qty:        item.qty,
         status:     'ACTIVE',
+        notes:      item.note ?? null,
         created_at: now,
         updated_at: now,
       }))

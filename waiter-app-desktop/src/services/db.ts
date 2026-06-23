@@ -331,6 +331,7 @@ export interface OrderItem {
   dish_price: number
   qty: number
   status: string
+  notes: string | null
   created_at: string
   updated_at: string
 }
@@ -354,8 +355,8 @@ export async function createOrder(order: Order, items: OrderItem[]): Promise<voi
     },
     ...items.map((item) => ({
       statement:
-        'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.created_at, item.updated_at],
+        'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.created_at, item.updated_at],
     })),
   ]
   await db.executeSet(statements)
@@ -476,7 +477,7 @@ export async function reconcileOrderStatuses(remoteOrders: RemoteOrderStatus[]):
 // synced=1 so these are never re-pushed to the server.
 export interface IncomingOrderItem {
   id: string; order_id: string; dish_id: string; dish_name: string
-  dish_price: number; qty: number; status: string; created_at: string; updated_at: string
+  dish_price: number; qty: number; status: string; notes?: string | null; created_at: string; updated_at: string
 }
 export interface IncomingOrder {
   id: string; restaurant_id: string; branch_id: string | null; table_id: string | null
@@ -506,9 +507,9 @@ export async function upsertIncomingOrders(orders: IncomingOrder[]): Promise<voi
       },
       ...order.items.map((item) => ({
         statement: `INSERT OR IGNORE INTO order_items
-          (id, order_id, dish_id, dish_name, dish_price, qty, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.created_at, item.updated_at],
+          (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.created_at, item.updated_at],
       })),
     ]
     await db.executeSet(statements)
