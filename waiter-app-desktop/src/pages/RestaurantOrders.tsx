@@ -639,40 +639,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     const station    = (order.branch_id ? branches.find(b => b.id === order.branch_id)?.name : null) ?? restaurantName ?? ''
     const orderNo    = order.order_number ?? ''
 
-    // tmpl: center a template line using its display width (markdown stripped),
-    // then emit HTML with **bold** → <strong> and _italic_ → <em> so GDI
-    // printers render the actual weight/style.
-    const tmpl = (l: string): string => {
-      const display = l.replace(/\*\*(.+?)\*\*/g, '$1').replace(/_(.+?)_/g, '$1')
-      const pad = display.length >= LINE ? '' : ' '.repeat(Math.floor((LINE - display.length) / 2))
-      const html = escHtml(l)
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/_(.+?)_/g, '<em>$1</em>')
-      return pad + html
-    }
-
-    const htmlLines: string[] = []
-    for (const l of (topText || 'RECEIPT').split('\n')) htmlLines.push(tmpl(l.trim()))
-    htmlLines.push(escHtml(rule))
-    htmlLines.push(escHtml(`Server: ${server}`))
-    if (station) htmlLines.push(escHtml(`Station: ${station}`))
-    htmlLines.push(escHtml(rule))
-    htmlLines.push(escHtml(cols(`Order #: ${orderNo}`, orderType)))
-    if (!isTakeaway) htmlLines.push(escHtml(`Table: ${order.table_name ?? 'Table'}`))
-    htmlLines.push(escHtml(rule))
-    for (const i of items) {
-      htmlLines.push(escHtml(cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.dish_price * i.qty))))
-      if (i.notes) htmlLines.push(escHtml(`  > ${i.notes}`))
-    }
-    htmlLines.push(escHtml(rule))
-    htmlLines.push(escHtml(cols('TOTAL:', `Rwf ${fmtRWF(totalAmount)}`)))
-    htmlLines.push(escHtml(rule))
-    htmlLines.push(escHtml(center(`>> ${orderNo} <<`)))
-    htmlLines.push(escHtml(center(dt)))
-    for (const l of (bottomText && bottomText.trim() ? bottomText : 'Thank you for dining with us!').split('\n')) htmlLines.push(tmpl(l.trim()))
-
-    // ESC/POS path: if a network printer IP is configured, send raw thermal
-    // bytes so bold and auto-cut work without Windows driver involvement.
+    // ESC/POS path: if a network printer IP is configured, send raw thermal bytes.
     if (billNetworkPrinter?.ip) {
       printBillRaw({
         topText, bottomText, server, station, orderNo, orderType,
@@ -688,19 +655,53 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       return
     }
 
-    // HTML / system-printer fallback path (unchanged behaviour when no network IP set).
-    const body = htmlLines.join('\n')
+    // HTML / system-printer path.
+    // Each line is a <div> so CSS font-weight renders correctly on GDI thermal
+    // drivers — <strong> inside <pre> is silently ignored by many drivers.
+    const tmpl = (l: string): string => {
+      const display = l.replace(/\*\*(.+?)\*\*/g, '$1').replace(/_(.+?)_/g, '$1')
+      const pad = display.length >= LINE ? '' : ' '.repeat(Math.floor((LINE - display.length) / 2))
+      const inner = escHtml(l)
+        .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+        .replace(/_(.+?)_/g, '<i>$1</i>')
+      return `<div class="line">${pad}${inner}</div>`
+    }
+    const ln = (s: string, bold = false) =>
+      `<div class="${bold ? 'line bold' : 'line'}">${escHtml(s)}</div>`
+
+    const divLines: string[] = []
+    for (const l of (topText || 'RECEIPT').split('\n')) divLines.push(tmpl(l.trim()))
+    divLines.push(ln(rule))
+    divLines.push(ln(`Server: ${server}`))
+    if (station) divLines.push(ln(`Station: ${station}`))
+    divLines.push(ln(rule))
+    divLines.push(ln(cols(`Order #: ${orderNo}`, orderType)))
+    if (!isTakeaway) divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`))
+    divLines.push(ln(rule))
+    for (const i of items) {
+      divLines.push(ln(cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.dish_price * i.qty))))
+      if (i.notes) divLines.push(ln(`  > ${i.notes}`))
+    }
+    divLines.push(ln(rule))
+    divLines.push(ln(cols('TOTAL:', `Rwf ${fmtRWF(totalAmount)}`), true))
+    divLines.push(ln(rule))
+    divLines.push(ln(center(`>> ${orderNo} <<`)))
+    divLines.push(ln(center(dt)))
+    for (const l of (bottomText && bottomText.trim() ? bottomText : 'Thank you for dining with us!').split('\n')) divLines.push(tmpl(l.trim()))
+
     const barcodeEl = orderNo ? code128svg(orderNo) : ''
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
-/* Pure monospace text — see printBill comment. The print window
-   (electron/main.js, data-doc="bill") sizes the page snugly to this content. */
 body{font-family:'Courier New',monospace;font-size:13px;width:80mm;padding:5mm 4mm;color:#000}
-#bill-content{white-space:pre;line-height:1.35}
+.line{white-space:pre;line-height:1.35;display:block}
+.bold{font-weight:bold}
+b{font-weight:bold}
+i{font-style:italic}
 @media print{@page{margin:0;size:80mm auto}}
-</style></head><body data-doc="bill">
-<pre id="bill-content">${body}</pre>
+</style></head><body>
+<div id="bill-content">${divLines.join('')}</div>
 ${barcodeEl}
+<div style="height:30mm">&nbsp;</div>
 </body></html>`
     printHtml(html, 0, billPrinter)
   }
