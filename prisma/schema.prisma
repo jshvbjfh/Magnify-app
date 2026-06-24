@@ -41,6 +41,8 @@ model Restaurant {
   manager          User?     @relation("RestaurantManager", fields: [managerId], references: [id], onDelete: SetNull)
   joinCode         String    @unique
   billHeader       String?
+  billPrinterIp    String?
+  billPrinterPort  Int?
   qrOrderingMode   String    @default("order")
   licenseExpiry    DateTime?
   licenseActive    Boolean   @default(true)

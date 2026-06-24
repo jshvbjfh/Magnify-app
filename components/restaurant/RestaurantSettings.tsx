@@ -165,8 +165,13 @@ type StartupLogResponse = {
 }
 
 export default function RestaurantSettings() {
+  const billTopRef = useRef<HTMLTextAreaElement>(null)
+  const billBottomRef = useRef<HTMLTextAreaElement>(null)
+
   const [billTopText, setBillTopText] = useState('')
   const [billBottomText, setBillBottomText] = useState('')
+  const [billPrinterIp, setBillPrinterIp] = useState('')
+  const [billPrinterPort, setBillPrinterPort] = useState('9100')
   const [restaurantName, setRestaurantName] = useState('')
   const [qrOrderingMode, setQrOrderingMode] = useState<'order' | 'view_only' | 'disabled'>('disabled')
   const [trackingMode, setTrackingMode] = useState<'simple' | 'dish_tracking'>('simple')
@@ -390,6 +395,8 @@ export default function RestaurantSettings() {
           const template = parseRestaurantBillTemplate(setupData.restaurant?.billHeader)
           setBillTopText(template.topText)
           setBillBottomText(template.bottomText)
+          setBillPrinterIp(setupData.restaurant?.billPrinterIp ?? '')
+          setBillPrinterPort(setupData.restaurant?.billPrinterPort != null ? String(setupData.restaurant.billPrinterPort) : '9100')
           setFifoEnabled(true)
           setFifoConfiguredAt(typeof setupData.restaurant?.fifoConfiguredAt === 'string' ? setupData.restaurant.fifoConfiguredAt : null)
           setFifoCutoverAt(typeof setupData.restaurant?.fifoCutoverAt === 'string' ? setupData.restaurant.fifoCutoverAt : null)
@@ -476,6 +483,31 @@ export default function RestaurantSettings() {
         ? 'Run preview reconciliation, review the planned layer fixes, then apply reconciliation so strict FIFO can go live cleanly.'
         : 'Save settings to record FIFO cutover for this restaurant, then validate live sales and waste activity.'
 
+  function wrapSelection(
+    ref: React.RefObject<HTMLTextAreaElement>,
+    setter: (v: string) => void,
+    open: string,
+    close: string
+  ) {
+    const el = ref.current
+    if (!el) return
+    const { selectionStart: s, selectionEnd: e, value } = el
+    const newVal = value.slice(0, s) + open + value.slice(s, e) + close + value.slice(e)
+    setter(newVal)
+    requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(s + open.length, e + open.length)
+    })
+  }
+
+  function mdPreview(text: string): string {
+    return text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/_(.+?)_/g, '<em>$1</em>')
+      .replace(/\n/g, '<br/>')
+  }
+
   async function save() {
     setSaving(true)
     setSaveError(null)
@@ -485,7 +517,7 @@ export default function RestaurantSettings() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ name: restaurantName, billHeader, qrOrderingMode, fifoEnabled: true }),
+        body: JSON.stringify({ name: restaurantName, billHeader, billPrinterIp: billPrinterIp.trim() || null, billPrinterPort: billPrinterPort.trim() ? parseInt(billPrinterPort) || 9100 : null, qrOrderingMode, fifoEnabled: true }),
       })
 
       const data = await response.json().catch(() => null)
@@ -501,6 +533,8 @@ export default function RestaurantSettings() {
         const template = parseRestaurantBillTemplate(savedRestaurant.billHeader)
         setBillTopText(template.topText)
         setBillBottomText(template.bottomText)
+        setBillPrinterIp(savedRestaurant.billPrinterIp ?? '')
+        setBillPrinterPort(savedRestaurant.billPrinterPort != null ? String(savedRestaurant.billPrinterPort) : '9100')
         if (savedRestaurant.qrOrderingMode === 'view_only') setQrOrderingMode('view_only')
         else if (savedRestaurant.qrOrderingMode === 'order') setQrOrderingMode('order')
         else setQrOrderingMode('disabled')
@@ -764,19 +798,37 @@ export default function RestaurantSettings() {
             <div className="space-y-4">
               <div>
                 <label className="mb-1 block text-xs font-semibold text-gray-600 uppercase tracking-wide">Top of receipt</label>
+                <div className="mb-1.5 flex gap-1">
+                  <button type="button" title="Bold — select text then click"
+                    onClick={() => wrapSelection(billTopRef, setBillTopText, '**', '**')}
+                    className="h-6 w-6 rounded border border-gray-300 bg-white text-xs font-bold text-gray-700 hover:bg-gray-100 leading-none">B</button>
+                  <button type="button" title="Italic — select text then click"
+                    onClick={() => wrapSelection(billTopRef, setBillTopText, '_', '_')}
+                    className="h-6 w-6 rounded border border-gray-300 bg-white text-xs italic text-gray-700 hover:bg-gray-100 leading-none">I</button>
+                </div>
                 <textarea
+                  ref={billTopRef}
                   value={billTopText}
                   onChange={e => setBillTopText(e.target.value)}
                   rows={7}
                   placeholder={`e.g.\nSUNSET GRILL\n123 Kigali Heights, KG 7 Ave\nTel: +250 788 000 000\nMoMo: *182*1*1*0788000000#\nTIN: 123456789`}
                   className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm font-mono outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent resize-y leading-relaxed"
                 />
-                <p className="mt-2 text-xs text-gray-400">Use this for your restaurant name, address, TIN, phone number, MoMo code, or bank details.</p>
+                <p className="mt-2 text-xs text-gray-400">Use this for your restaurant name, address, TIN, phone number, MoMo code, or bank details. Select text then click <strong>B</strong> or <em>I</em> to format.</p>
               </div>
 
               <div>
                 <label className="mb-1 block text-xs font-semibold text-gray-600 uppercase tracking-wide">Bottom message</label>
+                <div className="mb-1.5 flex gap-1">
+                  <button type="button" title="Bold — select text then click"
+                    onClick={() => wrapSelection(billBottomRef, setBillBottomText, '**', '**')}
+                    className="h-6 w-6 rounded border border-gray-300 bg-white text-xs font-bold text-gray-700 hover:bg-gray-100 leading-none">B</button>
+                  <button type="button" title="Italic — select text then click"
+                    onClick={() => wrapSelection(billBottomRef, setBillBottomText, '_', '_')}
+                    className="h-6 w-6 rounded border border-gray-300 bg-white text-xs italic text-gray-700 hover:bg-gray-100 leading-none">I</button>
+                </div>
                 <textarea
+                  ref={billBottomRef}
                   value={billBottomText}
                   onChange={e => setBillBottomText(e.target.value)}
                   rows={4}
@@ -785,23 +837,44 @@ export default function RestaurantSettings() {
                 />
                 <p className="mt-2 text-xs text-gray-400">This prints at the bottom center of the receipt, after the totals.</p>
               </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-gray-600 uppercase tracking-wide">Receipt printer IP (optional)</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={billPrinterIp}
+                    onChange={e => setBillPrinterIp(e.target.value)}
+                    placeholder="e.g. 192.168.1.100"
+                    className="flex-1 border border-gray-300 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                  />
+                  <input
+                    type="text"
+                    value={billPrinterPort}
+                    onChange={e => setBillPrinterPort(e.target.value)}
+                    placeholder="9100"
+                    className="w-24 border border-gray-300 rounded-xl px-4 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                  />
+                </div>
+                <p className="mt-2 text-xs text-gray-400">If the receipt printer is on the network, enter its IP and port here. This enables bold text and auto-cut on printed bills. Leave blank to use the default Windows printer.</p>
+              </div>
             </div>
 
             <div className="bg-gray-50 border border-dashed border-gray-300 rounded-xl p-4">
               <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">Receipt preview</p>
               <div className="mx-auto max-w-[280px] rounded-lg bg-white px-4 py-3 font-mono text-[12px] leading-relaxed text-gray-800 shadow-sm">
-                <div className="border-b border-dashed border-gray-300 pb-2 text-center whitespace-pre-wrap">{billTopText.trim() || 'RECEIPT'}</div>
+                <div className="border-b border-dashed border-gray-300 pb-2 text-center whitespace-pre-wrap" dangerouslySetInnerHTML={{__html: mdPreview(billTopText.trim() || 'RECEIPT')}} />
                 <div className="border-b border-dashed border-gray-300 py-2 text-center">
                   <div>23 Mar 2026, 00:13</div>
                   <div>Table: Takeaway</div>
                 </div>
                 <div className="border-b border-dashed border-gray-300 py-2 space-y-1">
                   <div className="flex items-start justify-between gap-3"><span>Trey way burger</span><span>6,500 RWF</span></div>
-                  <div className="flex items-start justify-between gap-3"><span>Price before VAT</span><span>6,500 RWF</span></div>
-                  <div className="flex items-start justify-between gap-3"><span>VAT (18%)</span><span>1,170 RWF</span></div>
-                  <div className="flex items-start justify-between gap-3 font-bold"><span>TOTAL</span><span>7,670 RWF</span></div>
+                  <div className="flex items-start justify-between gap-3 font-bold"><span>TOTAL</span><span>6,500 RWF</span></div>
                 </div>
-                <div className="pt-2 text-center whitespace-pre-wrap">{billBottomText.trim() || 'Thank you for dining with us!'}</div>
+                <div className="pt-2 text-center whitespace-pre-wrap" dangerouslySetInnerHTML={{__html: mdPreview(billBottomText.trim() || 'Thank you for dining with us!')}} />
+                {/* Cut/tear line — mirrors the small line printed at the end of every bill */}
+                <div className="mx-auto mt-4 h-px w-16 bg-gray-800"></div>
               </div>
             </div>
           </div>

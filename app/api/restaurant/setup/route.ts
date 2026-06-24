@@ -11,6 +11,8 @@ const settingsRestaurantSelect = {
   id: true,
   name: true,
   billHeader: true,
+  billPrinterIp: true,
+  billPrinterPort: true,
   qrOrderingMode: true,
   fifoEnabled: true,
   fifoConfiguredAt: true,
@@ -100,7 +102,7 @@ export async function POST(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const userId = session.user.id
   const body = await req.json()
-  const { name, billHeader, qrOrderingMode, fifoEnabled } = body
+  const { name, billHeader, billPrinterIp, billPrinterPort, qrOrderingMode, fifoEnabled } = body
   const qrMenuHeroImageUrl = body?.qrMenuHeroImageUrl === null
     ? null
     : typeof body?.qrMenuHeroImageUrl === 'string'
@@ -130,6 +132,8 @@ export async function POST(req: Request) {
   const restaurantUpdateData: {
     name?: string
     billHeader?: string | null
+    billPrinterIp?: string | null
+    billPrinterPort?: number | null
     qrOrderingMode?: 'order' | 'view_only' | 'disabled'
     fifoEnabled?: boolean
     fifoConfiguredAt?: Date
@@ -137,6 +141,8 @@ export async function POST(req: Request) {
   if (name !== undefined) restaurantUpdateData.name = name || 'My Restaurant'
   // Bill template is restaurant-wide.
   if (billHeader !== undefined) restaurantUpdateData.billHeader = billHeader ?? null
+  if (billPrinterIp !== undefined) restaurantUpdateData.billPrinterIp = typeof billPrinterIp === 'string' ? billPrinterIp.trim() || null : null
+  if (billPrinterPort !== undefined) restaurantUpdateData.billPrinterPort = typeof billPrinterPort === 'number' && billPrinterPort > 0 ? billPrinterPort : null
   if (qrOrderingMode === 'order' || qrOrderingMode === 'view_only' || qrOrderingMode === 'disabled') {
     restaurantUpdateData.qrOrderingMode = qrOrderingMode
   }

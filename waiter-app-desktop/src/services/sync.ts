@@ -30,7 +30,7 @@ export interface BranchInfo {
 export interface PullPayload {
   dishes: Dish[]
   tables: RestaurantTable[]
-  restaurant: { id: string; name: string; billHeader?: string }
+  restaurant: { id: string; name: string; billHeader?: string; billPrinterIp?: string | null; billPrinterPort?: number | null }
   branches?: BranchInfo[]
   cancellationApprovers?: CancellationApprover[]
 }
@@ -186,6 +186,9 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   await setConfig('restaurantName', payload.restaurant.name)
   // Manager-editable receipt template (top/bottom text); printed verbatim on bills.
   await setConfig('billHeader', payload.restaurant.billHeader ?? '')
+  // Network thermal printer for ESC/POS bill printing (set in manager app → synced here).
+  await setConfig('billPrinterIp', payload.restaurant.billPrinterIp ?? '')
+  await setConfig('billPrinterPort', payload.restaurant.billPrinterPort != null ? String(payload.restaurant.billPrinterPort) : '')
   await setConfig('lastPullAttemptAt', now)
   if (didRefreshLocalSnapshot) {
     await setConfig('lastPulledAt', now)

@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron')
 const http = require('http')
+const net = require('net')
 const path = require('path')
 const fs = require('fs')
 
@@ -244,6 +245,115 @@ function initDatabase() {
 }
 
 // ---------------------------------------------------------------------------
+// ESC/POS bill printing (network thermal printer path)
+// ---------------------------------------------------------------------------
+
+// Send raw bytes to a network printer over TCP (port 9100 by default).
+function printViaRawTcp(host, port, buffer) {
+  return new Promise((resolve, reject) => {
+    const socket = new net.Socket()
+    const timeout = setTimeout(() => {
+      socket.destroy()
+      reject(new Error('Printer TCP connection timed out'))
+    }, 10000)
+    socket.once('error', err => { clearTimeout(timeout); reject(err) })
+    socket.connect(parseInt(port) || 9100, host, () => {
+      socket.write(buffer, err => {
+        clearTimeout(timeout)
+        socket.end()
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+  })
+}
+
+// Build a full ESC/POS byte sequence for a customer bill.
+// data: { topText, bottomText, server, station, orderNo, orderType,
+//         tableName, dt, items[{qty,name,unitPrice,notes}], totalAmount }
+function buildBillEscPos(data) {
+  const LINE = 32
+  const ESC = 0x1B, GS = 0x1D
+  const parts = []
+  const b = bytes => Buffer.from(bytes)
+  const t = s => Buffer.from(s + '\n', 'utf8')
+  const fmtNum = n => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+
+  const center = s => {
+    if (s.length >= LINE) return s.slice(0, LINE)
+    return ' '.repeat(Math.floor((LINE - s.length) / 2)) + s
+  }
+  const cols = (left, right) => {
+    const max = LINE - right.length - 1
+    const l = left.length > max ? left.slice(0, Math.max(1, max)) : left
+    return l + ' '.repeat(Math.max(1, LINE - l.length - right.length)) + right
+  }
+  const rule = '-'.repeat(LINE)
+  const parse = line => ({
+    text: line.replace(/\*\*(.+?)\*\*/g, '$1').replace(/_(.+?)_/g, '$1').trim(),
+    hasBold: /\*\*/.test(line),
+  })
+
+  // Init + center align
+  parts.push(b([ESC, 0x40]))
+  parts.push(b([ESC, 0x61, 0x01]))
+
+  // Top template text (supports **bold** markers)
+  for (const line of (data.topText || 'RECEIPT').split('\n')) {
+    const { text, hasBold } = parse(line)
+    if (hasBold) parts.push(b([ESC, 0x45, 0x01]))
+    parts.push(t(center(text || '')))
+    if (hasBold) parts.push(b([ESC, 0x45, 0x00]))
+  }
+
+  // Left-align body
+  parts.push(b([ESC, 0x61, 0x00]))
+  parts.push(t(rule))
+  parts.push(t(`Server: ${data.server || ''}`))
+  if (data.station) parts.push(t(`Station: ${data.station}`))
+  parts.push(t(rule))
+  parts.push(t(cols(`Order #: ${data.orderNo || ''}`, data.orderType || '')))
+  if (data.tableName) parts.push(t(`Table: ${data.tableName}`))
+  parts.push(t(rule))
+
+  // Items
+  for (const item of (data.items || [])) {
+    parts.push(t(cols(`${item.qty} ${(item.name || '').toUpperCase()}`, fmtNum(item.unitPrice * item.qty))))
+    if (item.notes) parts.push(t(`  > ${item.notes}`))
+  }
+  parts.push(t(rule))
+
+  // Total in bold
+  parts.push(b([ESC, 0x45, 0x01]))
+  parts.push(t(cols('TOTAL:', `Rwf ${fmtNum(data.totalAmount || 0)}`)))
+  parts.push(b([ESC, 0x45, 0x00]))
+  parts.push(t(rule))
+
+  // Center for order ref + datetime
+  parts.push(b([ESC, 0x61, 0x01]))
+  if (data.orderNo) parts.push(t(center(`>> ${data.orderNo} <<`)))
+  if (data.dt) parts.push(t(center(data.dt)))
+
+  // Bottom template text (supports **bold** markers)
+  const bottomRaw = (data.bottomText && data.bottomText.trim())
+    ? data.bottomText
+    : 'Thank you for dining with us!'
+  for (const line of bottomRaw.split('\n')) {
+    const { text, hasBold } = parse(line)
+    if (hasBold) parts.push(b([ESC, 0x45, 0x01]))
+    parts.push(t(center(text || '')))
+    if (hasBold) parts.push(b([ESC, 0x45, 0x00]))
+  }
+
+  // Feed + full cut
+  parts.push(b([ESC, 0x61, 0x00]))
+  parts.push(b([0x0A, 0x0A, 0x0A, 0x0A]))
+  parts.push(b([GS, 0x56, 0x00]))
+
+  return Buffer.concat(parts)
+}
+
+// ---------------------------------------------------------------------------
 // IPC handlers
 // ---------------------------------------------------------------------------
 function registerIpcHandlers() {
@@ -381,11 +491,11 @@ function registerIpcHandlers() {
       printWin.webContents.once('did-finish-load', async () => {
         const printOptions = { silent: true, printBackground: true, margins: { marginType: 'none' } }
         if (deviceName && typeof deviceName === 'string') printOptions.deviceName = deviceName
-        // Bills (data-doc="bill") size to content: an order under 15cm stays a
-        // fixed 15cm; a longer one grows to its content height + an 8cm tail so
-        // the printer never feeds a wasted second 15cm page. The script returns
-        // the chosen page height in mm (or null for non-bill docs e.g. kitchen
-        // tickets, which keep their own fixed @page size).
+        // Bills (data-doc="bill") size the page snugly to their content plus a
+        // small tail for the tear-off — no fixed minimum, so a short bill doesn't
+        // feed a long blank strip of paper. The script returns the chosen page
+        // height in mm (or null for non-bill docs e.g. kitchen tickets, which
+        // keep their own fixed @page size).
         try {
           const heightMm = await printWin.webContents.executeJavaScript(`(function(){
             try {
@@ -393,8 +503,11 @@ function registerIpcHandlers() {
               var content = document.getElementById('bill-content');
               if (!content) return null;
               var PX_TO_MM = 25.4 / 96;
-              var endMm = content.getBoundingClientRect().bottom * PX_TO_MM;
-              var h = endMm <= 150 ? 150 : Math.ceil(endMm + 80);
+              // scrollHeight includes body padding; getBoundingClientRect only
+              // gives the pre element's bottom, missing the 4mm bottom padding.
+              // Add 35mm so the last line exits the print head (~20mm) before tear.
+              var endMm = document.body.scrollHeight * PX_TO_MM;
+              var h = Math.max(40, Math.ceil(endMm + 35));
               document.body.style.height = h + 'mm';
               var s = document.createElement('style');
               s.textContent = '@page{margin:0;size:80mm ' + h + 'mm}';
@@ -416,6 +529,23 @@ function registerIpcHandlers() {
         )
       })
     })
+  })
+
+  // print:bill-raw — sends a structured bill as ESC/POS bytes over TCP to a
+  // network thermal printer. Bypasses the Windows GDI driver so bold and
+  // auto-cut work correctly without printer-driver configuration.
+  // data: { ip, port, topText, bottomText, server, station, orderNo, orderType,
+  //         tableName, dt, items[{qty,name,unitPrice,notes}], totalAmount }
+  ipcMain.handle('print:bill-raw', async (_event, data) => {
+    try {
+      const { ip, port, ...billData } = data || {}
+      if (!ip) return { ok: false, error: 'No printer IP configured' }
+      const buffer = buildBillEscPos(billData)
+      await printViaRawTcp(ip, parseInt(port) || 9100, buffer)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: String(err?.message || err) }
+    }
   })
 
   // get:config — preload reads this synchronously to inject window.electronConfig

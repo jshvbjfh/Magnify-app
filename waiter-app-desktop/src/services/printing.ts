@@ -18,11 +18,14 @@ export type PrinterMap = Record<string, string>
 const MAP_KEY = 'stationPrinters'
 const BILL_KEY = 'billPrinter'
 
+export interface NetworkPrinterConfig { ip: string; port: number }
+
 function getElectronPrint() {
   return (window as Window & {
     electronPrint?: {
       receipt: (html: string, deviceName?: string) => Promise<void>
       listPrinters?: () => Promise<PrinterInfo[]>
+      printBillRaw?: (data: object) => Promise<{ ok: boolean; error?: string }>
     }
   }).electronPrint
 }
@@ -56,7 +59,8 @@ const BILL_FOOTER_DELIMITER = '\n---MAGNIFY-FOOTER---\n'
 export function parseBillTemplate(raw: string | null | undefined): { topText: string; bottomText: string } {
   const normalized = typeof raw === 'string' ? raw : ''
   const parts = normalized.split(BILL_FOOTER_DELIMITER)
-  return { topText: (parts[0] ?? '').trim(), bottomText: (parts[1] ?? '').trim() }
+  // Preserve blank lines — they're the manager's intentional vertical spacing.
+  return { topText: parts[0] ?? '', bottomText: parts[1] ?? '' }
 }
 
 // Virtual printers (PDF/XPS/OneNote/Fax) pop a file-save dialog instead of
@@ -96,6 +100,22 @@ export async function getBillPrinter(): Promise<string> {
 
 export async function setBillPrinter(deviceName: string): Promise<void> {
   await setConfig(BILL_KEY, deviceName)
+}
+
+export async function getBillNetworkPrinter(): Promise<NetworkPrinterConfig | null> {
+  try {
+    const ip = await getConfig('billPrinterIp')
+    if (!ip) return null
+    const portStr = await getConfig('billPrinterPort')
+    const port = portStr ? parseInt(portStr) : 9100
+    return { ip, port }
+  } catch { return null }
+}
+
+export async function printBillRaw(data: object): Promise<{ ok: boolean; error?: string }> {
+  const ep = getElectronPrint()
+  if (!ep?.printBillRaw) throw new Error('ESC/POS bill printing not available')
+  return ep.printBillRaw(data)
 }
 
 // Resolve the printer for a station: its own mapping, else the bill printer,
