@@ -530,7 +530,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   async function updatePurchase(e?: React.FormEvent) {
     e?.preventDefault()
     const unitConfig = resolvePurchaseFormUnits()
-    if (!editingPurchaseId || !pForm.itemName || !unitConfig.purchaseUnit || !unitConfig.usageUnit || !pForm.purchaseQuantity || !pForm.purchaseUnitCost) return
+    if (!editingPurchaseId || !pForm.itemName || !unitConfig.purchaseUnit || !unitConfig.usageUnit || pForm.purchaseQuantity === '' || !pForm.purchaseUnitCost) return
     if (!unitConfig.sameUnit && (!Number.isFinite(unitConfig.unitsPerPurchaseUnit) || unitConfig.unitsPerPurchaseUnit <= 0)) {
       setPurchaseError('Enter how many usage units exist in one purchase unit.')
       return
@@ -812,17 +812,30 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         </td>
         <td className="px-4 py-3 font-semibold text-gray-900">{fmt(displayedStockValue)} RWF</td>
         <td className="px-4 py-3">
-          <button
-            type="button"
-            onClick={()=>void deletePurchase(purchase)}
-            disabled={purchaseLocked || pSaving}
-            title={purchaseLocked ? purchaseLockReason : 'Delete stock row'}
-            className={purchaseLocked || pSaving
-              ? 'rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-300 cursor-not-allowed'
-              : 'rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600 transition-colors hover:bg-red-100'}
-          >
-            Delete
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={()=>openEditPurchase(purchase)}
+              disabled={purchaseLocked || pSaving}
+              title={purchaseLocked ? purchaseLockReason : 'Edit stock row'}
+              className={purchaseLocked || pSaving
+                ? 'rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-300 cursor-not-allowed'
+                : 'rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-50'}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={()=>void deletePurchase(purchase)}
+              disabled={purchaseLocked || pSaving}
+              title={purchaseLocked ? purchaseLockReason : 'Delete stock row'}
+              className={purchaseLocked || pSaving
+                ? 'rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-300 cursor-not-allowed'
+                : 'rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600 transition-colors hover:bg-red-100'}
+            >
+              Delete
+            </button>
+          </div>
         </td>
       </tr>
     )

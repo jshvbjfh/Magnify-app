@@ -324,6 +324,13 @@ function parseIntents(q: string): Intent[] {
   if (/\blow\s*stock\b|\brun(ning)?\s*out\b|\breorder\b|\bshortage\b|\bfinish(ing|ed)?\b|\brestock\b|\bstock\s*up\b|\bwhat\s+should\s+i\s+restock\b|\bwhat.*restock\b|\bneed\s+to\s+buy\b|\bneed\s+restocking\b/i.test(q)) s.add('low_stock')
   if (/\bmomo\b|\bmobile\s*money\b|\bbank\b|\bcheque\b|\bcheck\b|\bcard\b|\bcash\b|\bcredit\b|\bpayment\s*method\b|\bpaid\s*by\b|\bbreakdown\b/i.test(q)) s.add('payment')
   if (/\bin\s+stock\b|\bstock\s+level\b|\bstock\s+of\b|\bquantity\s+of\b|\bdo\s+we\s+have\b|\bhow\s+much\s+.{2,40}\s+(do\s+we|is\s+left|remaining|available)\b|\bhow\s+many\s+\w+\s+of\b/i.test(q)) s.add('stock_level')
+  // General inventory / stock status — "how's our stock", "our inventory",
+  // "stock report", "inventory for <branch>". Without this, a bare stock/inventory
+  // question matches no intent and wrongly falls through to the revenue default.
+  if (!s.has('stock_level') && !s.has('low_stock')
+    && /\b(stock|inventory)\b/i.test(q)
+    && !/\binventory\s+(cost|purchases?|expenses?)\b/i.test(q)
+    && !/\bspend\b|\bspent\b/i.test(q)) s.add('low_stock')
   // Specific dish revenue/sales — "how much from burgers", "how many chicken wings did we sell"
   if (
     (/\b(revenue|sales|income|made|earned)\s+(from|of)\s+[a-z]/i.test(q) ||
@@ -2076,7 +2083,7 @@ export async function POST(req: Request) {
     const ingredientName = parseIngredientName(question)
     if (ingredientName) {
       const items = await prisma.inventoryItem.findMany({
-        where: { restaurantId, name: { contains: ingredientName, mode: 'insensitive' } },
+        where: { restaurantId, ...branchFilter, name: { contains: ingredientName, mode: 'insensitive' } },
         select: { name: true, quantity: true, unit: true, reorderLevel: true, branch: { select: { name: true } } },
         orderBy: { name: 'asc' },
       })
@@ -2109,9 +2116,10 @@ export async function POST(req: Request) {
   // ── Low Stock ─────────────────────────────────────────────────────────────────
   if (intents.includes('low_stock')) {
     const items = await prisma.inventoryItem.findMany({
-      where: { restaurantId },
+      where: { restaurantId, ...branchFilter },
       select: { name: true, quantity: true, reorderLevel: true, unit: true, branch: { select: { name: true } } },
     })
+    const branchLabel = targetBranch ? ` · ${targetBranch.name}` : ''
     const all  = items.length
     const low  = items
       .filter(i => i.quantity <= (i.reorderLevel ?? 0))
@@ -2121,7 +2129,7 @@ export async function POST(req: Request) {
     const isRestockQuery = /restock|what\s+should|need\s+to\s+buy/i.test(question)
 
     if (low.length === 0) {
-      lines.push(`**::CheckCircle:: Stock Alert** — All ${all} item${all !== 1 ? 's' : ''} are above reorder levels`)
+      lines.push(`**::CheckCircle:: Stock Alert${branchLabel}** — All ${all} item${all !== 1 ? 's' : ''} are above reorder levels`)
       lines.push(`  No restocking needed right now.`)
     } else {
       const critical = low.filter(i => i.quantity <= 0)
@@ -2129,9 +2137,9 @@ export async function POST(req: Request) {
       const warning  = low.filter(i => i.pctLeft >= 50)
 
       if (isRestockQuery) {
-        lines.push(`**Restock Priority** — ${low.length} item${low.length !== 1 ? 's' : ''} need attention`)
+        lines.push(`**Restock Priority${branchLabel}** — ${low.length} item${low.length !== 1 ? 's' : ''} need attention`)
       } else {
-        lines.push(`**::AlertTriangle:: Low Stock Alert** — ${low.length} of ${all} item${all !== 1 ? 's' : ''} below reorder level`)
+        lines.push(`**::AlertTriangle:: Low Stock Alert${branchLabel}** — ${low.length} of ${all} item${all !== 1 ? 's' : ''} below reorder level`)
       }
       lines.push(``)
 
