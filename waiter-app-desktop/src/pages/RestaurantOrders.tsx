@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
   ArrowLeft, Trash2, X, ShieldAlert, WifiOff, AlertCircle, Cloud, Printer, StickyNote,
+  Search, ChevronDown,
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
@@ -390,6 +391,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [internalTableKey, setInternalTableKey] = useState<string>('takeaway')
   const selectedTableKey = controlledTableKey ?? internalTableKey
   const setSelectedTableKey = onSelectTableKey ?? setInternalTableKey
+  const [tablePickerOpen,  setTablePickerOpen]  = useState(false)
+  const [tablePickerQuery, setTablePickerQuery] = useState('')
+  const tablePickerRef = useRef<HTMLDivElement>(null)
+  const tablePickerInputRef = useRef<HTMLInputElement>(null)
   const [localCart,        setLocalCart]        = useState<Record<string, CartItem[]>>({})
   const [showPanel,        setShowPanel]        = useState<'dishes' | 'order'>('dishes')
   const [addedFlash,       setAddedFlash]       = useState(false)
@@ -412,6 +417,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [printerMap,        setPrinterMap]        = useState<PrinterMap>({})
   const [billPrinter,       setBillPrinter]       = useState<string>('')
   const [billNetworkPrinter, setBillNetworkPrinter] = useState<NetworkPrinterConfig | null>(null)
+  const [billColumns,       setBillColumns]       = useState<number>(42)
   const [printers,          setPrinters]          = useState<PrinterInfo[]>([])
   // Manager-editable receipt template (raw billHeader; parsed into top/bottom at print time).
   const [billHeaderTpl, setBillHeaderTpl] = useState<string>('')
@@ -504,6 +510,25 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     }
   }, [activeBranchId])
 
+  // Close the table picker on an outside click or Escape.
+  useEffect(() => {
+    if (!tablePickerOpen) return
+    function handlePointerDown(e: MouseEvent) {
+      if (tablePickerRef.current && !tablePickerRef.current.contains(e.target as Node)) {
+        setTablePickerOpen(false)
+      }
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setTablePickerOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [tablePickerOpen])
+
   useEffect(() => {
     if (mode === 'history') loadHistory()
     else loadPOS()
@@ -513,12 +538,14 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   useEffect(() => {
     if (mode === 'history') return
     void (async () => {
-      const [map, bill, list, tpl, net] = await Promise.all([getPrinterMap(), getBillPrinter(), listPrinters(), getConfig('billHeader'), getBillNetworkPrinter()])
+      const [map, bill, list, tpl, net, colsRaw] = await Promise.all([getPrinterMap(), getBillPrinter(), listPrinters(), getConfig('billHeader'), getBillNetworkPrinter(), getConfig('billColumns')])
       setPrinterMap(map)
       setBillPrinter(bill)
       setPrinters(list)
       setBillHeaderTpl(tpl ?? '')
       setBillNetworkPrinter(net)
+      const parsedCols = parseInt(colsRaw ?? '', 10)
+      setBillColumns(Number.isFinite(parsedCols) && parsedCols >= 24 && parsedCols <= 64 ? parsedCols : 42)
     })()
   }, [mode, syncVersion])
 
@@ -613,23 +640,39 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   }
 
   function printBill(order: Order, items: OrderItem[]) {
-    // The M-PoS thermal printer renders in TEXT mode: it uses its own built-in
-    // monospace font and ignores CSS layout (text-align, font-weight, borders,
-    // inline SVG). Only literal characters print. So the whole bill is laid out
-    // as monospace text — centred with spaces, two columns padded with spaces,
-    // dividers drawn with dashes. A scannable barcode isn't possible here (it
-    // would need raw ESC/POS, a separate path), so we show the order number.
-    const LINE = 32                                  // printable monospace columns
+    // Bill printers are commonly installed with a "Generic / Text Only"-class
+    // driver that discards ALL CSS — no text-align, no flex, no borders, no
+    // bold, no SVG. Only the literal characters print, in the printer's own
+    // built-in font. So the bill is laid out as monospace TEXT: centred with
+    // spaces, columns padded with spaces, dividers drawn with dashes. Because
+    // the HTML font is also monospace, the same layout renders identically on
+    // graphics drivers. Column count is device-configurable in the Printers
+    // tab (58mm paper ≈ 32 cols, 80mm ≈ 42–48 cols).
+    const LINE = billColumns
     const center = (s: string) =>
       s.length >= LINE ? s : ' '.repeat(Math.floor((LINE - s.length) / 2)) + s
-    const cols = (left: string, right: string) => {
-      const max = LINE - right.length - 1
-      const l = left.length > max ? left.slice(0, Math.max(1, max)) : left
-      return l + ' '.repeat(Math.max(1, LINE - l.length - right.length)) + right
+    // Left + right on one line when they fit; otherwise keep the left text at
+    // full length (wrapped at LINE) and right-align the value on the last
+    // line — long dish names are never truncated.
+    const cols = (left: string, right: string): string[] => {
+      if (!right) return [left]
+      if (left.length + 1 + right.length <= LINE) {
+        return [left + ' '.repeat(LINE - left.length - right.length) + right]
+      }
+      const lines: string[] = []
+      let rest = left
+      while (rest.length > LINE) { lines.push(rest.slice(0, LINE)); rest = rest.slice(LINE) }
+      if (rest && rest.length + 1 + right.length <= LINE) {
+        lines.push(rest + ' '.repeat(LINE - rest.length - right.length) + right)
+      } else {
+        if (rest) lines.push(rest)
+        lines.push(' '.repeat(Math.max(0, LINE - right.length)) + right)
+      }
+      return lines
     }
     const rule = '-'.repeat(LINE)
 
-    const { topText, bottomText } = parseBillTemplate(billHeaderTpl)
+    const { topText, bottomText, footer2Text } = parseBillTemplate(billHeaderTpl)
     const { totalAmount } = calcTotals(items.map(i => ({ dishPrice: i.dish_price, qty: i.qty })))
     const now = new Date()
     const dt  = now.toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
@@ -642,11 +685,12 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     // ESC/POS path: if a network printer IP is configured, send raw thermal bytes.
     if (billNetworkPrinter?.ip) {
       printBillRaw({
-        topText, bottomText, server, station, orderNo, orderType,
+        topText, bottomText, footer2Text, server, station, orderNo, orderType,
         tableName: isTakeaway ? null : (order.table_name ?? 'Table'),
         dt,
         items: items.map(i => ({ qty: i.qty, name: i.dish_name, unitPrice: i.dish_price, notes: i.notes ?? null })),
         totalAmount,
+        columns: LINE,
         ip: billNetworkPrinter.ip,
         port: billNetworkPrinter.port,
       }).then(result => {
@@ -655,45 +699,63 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       return
     }
 
-    // HTML / system-printer path.
-    // Each line is a <div> so CSS font-weight renders correctly on GDI thermal
-    // drivers — <strong> inside <pre> is silently ignored by many drivers.
+    // HTML / system-printer path: plain monospace lines (see comment above).
     const tmpl = (l: string): string => {
       const display = l.replace(/\*\*(.+?)\*\*/g, '$1').replace(/_(.+?)_/g, '$1')
       const pad = display.length >= LINE ? '' : ' '.repeat(Math.floor((LINE - display.length) / 2))
       const inner = escHtml(l)
         .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
         .replace(/_(.+?)_/g, '<i>$1</i>')
-      return `<div class="line">${pad}${inner}</div>`
+      return `<div class="line">${pad}${inner || ' '}</div>`
     }
     const ln = (s: string, bold = false) =>
-      `<div class="${bold ? 'line bold' : 'line'}">${escHtml(s)}</div>`
+      `<div class="${bold ? 'line bold' : 'line'}">${escHtml(s) || ' '}</div>`
 
     const divLines: string[] = []
     for (const l of (topText || 'RECEIPT').split('\n')) divLines.push(tmpl(l.trim()))
     divLines.push(ln(rule))
-    divLines.push(ln(`Server: ${server}`))
-    if (station) divLines.push(ln(`Station: ${station}`))
+    for (const s of cols(`Server: ${server}`, station ? `Station: ${station}` : '')) divLines.push(ln(s))
     divLines.push(ln(rule))
-    divLines.push(ln(cols(`Order #: ${orderNo}`, orderType)))
+    for (const s of cols(`Order #: ${orderNo}`, orderType)) divLines.push(ln(s))
     if (!isTakeaway) divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`))
     divLines.push(ln(rule))
     for (const i of items) {
-      divLines.push(ln(cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.dish_price * i.qty))))
+      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.dish_price * i.qty))) divLines.push(ln(s))
       if (i.notes) divLines.push(ln(`  > ${i.notes}`))
     }
     divLines.push(ln(rule))
-    divLines.push(ln(cols('TOTAL:', `Rwf ${fmtRWF(totalAmount)}`), true))
+    for (const s of cols('TOTAL:', `Rwf ${fmtRWF(totalAmount)}`)) divLines.push(ln(s, true))
     divLines.push(ln(rule))
     divLines.push(ln(center(`>> ${orderNo} <<`)))
     divLines.push(ln(center(dt)))
     for (const l of (bottomText && bottomText.trim() ? bottomText : 'Thank you for dining with us!').split('\n')) divLines.push(tmpl(l.trim()))
+    divLines.push(ln(center('Powered by Magnify')))
+    // Footer 2 (from the bill editor) prints below "Powered by Magnify" —
+    // typically blank lines the manager adds to push the footer up past the
+    // cutter on printers that need extra feed.
+    if (footer2Text) for (const l of footer2Text.split('\n')) divLines.push(tmpl(l.trim()))
+    // Text-only drivers ignore CSS heights entirely — paper only advances on
+    // literal line feeds, so blank lines are what push the footer past the
+    // cutter. (This is also why manual blank lines in the template used to be
+    // the only way to feed paper.)
+    for (let k = 0; k < 8; k++) divLines.push(ln(' '))
 
+    // Font size scales down as the column count goes up so LINE characters
+    // always fit the 72mm printable width on graphics drivers (Courier's
+    // advance width is 0.6em). Text-only drivers ignore this and use the
+    // printer's own font, where LINE was chosen to match its real columns.
+    const fontPx = Math.max(8, Math.min(14, Math.floor(272 / (LINE * 0.6))))
     const barcodeEl = orderNo ? code128svg(orderNo) : ''
-    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+    // Whole bill prints bold — thin regular strokes come out grey on thermal
+    // heads (the kitchen tickets read well because their text is bold). And no
+    // custom page-size override (no data-doc): the driver sizes the page from
+    // content exactly like the kitchen tickets, which feed and cut correctly;
+    // forcing an exact page height makes some drivers squeeze the content
+    // vertically (overlapping lines, even thinner strokes).
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Bill ${escHtml(orderNo || '')}</title><style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Courier New',monospace;font-size:13px;width:80mm;padding:5mm 4mm;color:#000}
-.line{white-space:pre;line-height:1.35;display:block}
+body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;width:80mm;padding:5mm 4mm 0;color:#000}
+.line{white-space:pre;line-height:1.35;display:block;min-height:1.35em}
 .bold{font-weight:bold}
 b{font-weight:bold}
 i{font-style:italic}
@@ -701,7 +763,6 @@ i{font-style:italic}
 </style></head><body>
 <div id="bill-content">${divLines.join('')}</div>
 ${barcodeEl}
-<div style="height:30mm">&nbsp;</div>
 </body></html>`
     printHtml(html, 0, billPrinter)
   }
@@ -717,55 +778,87 @@ ${barcodeEl}
       if (!byBranch.has(bId)) byBranch.set(bId, { branchName: bName, branchType: bType, items: [] })
       byBranch.get(bId)!.items.push(ci)
     }
+    // Same "Generic / Text Only"-class driver problem as the bill (see printBill
+    // above): flex/gap/height are silently dropped, so the old .row/.item layout
+    // ran qty, dish name and the Server/Station pair together with no space at
+    // all. Laid out as monospace TEXT instead — padded columns, explicit spaces
+    // between fields — so it reads correctly on both text-only and graphics
+    // drivers.
+    const LINE = billColumns
+    const center = (s: string) =>
+      s.length >= LINE ? s : ' '.repeat(Math.floor((LINE - s.length) / 2)) + s
+    const cols = (left: string, right: string): string[] => {
+      if (!right) return [left]
+      if (left.length + 1 + right.length <= LINE) {
+        return [left + ' '.repeat(LINE - left.length - right.length) + right]
+      }
+      const lines: string[] = []
+      let rest = left
+      while (rest.length > LINE) { lines.push(rest.slice(0, LINE)); rest = rest.slice(LINE) }
+      if (rest && rest.length + 1 + right.length <= LINE) {
+        lines.push(rest + ' '.repeat(LINE - rest.length - right.length) + right)
+      } else {
+        if (rest) lines.push(rest)
+        lines.push(' '.repeat(Math.max(0, LINE - right.length)) + right)
+      }
+      return lines
+    }
+    const rule = '-'.repeat(LINE)
+    const ln = (s: string, bold = false) =>
+      `<div class="${bold ? 'line bold' : 'line'}">${escHtml(s) || ' '}</div>`
+
     const now      = new Date()
     const dateStr  = `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`
     const timeStr  = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })
     const isTakeaway = !order.table_id
     const orderType  = isTakeaway ? 'Take Away' : 'Dine In'
-    const stars      = '*'.repeat(48)
+    const stars      = '*'.repeat(LINE)
+    const fontPx = Math.max(8, Math.min(14, Math.floor(272 / (LINE * 0.6))))
     // The print queue (printHtml) serialises these tickets, so no per-ticket
     // wall-clock stagger is needed — each just follows the previous in order.
     let ticketIndex = 1
     for (const [bId, group] of byBranch) {
       const deviceName = resolveStationPrinter(printerMap, billPrinter, bId === '__none__' ? null : bId)
       const station = group.branchType === 'bar' ? 'BAR' : 'KITCHEN'
-      const itemRows = group.items.map(i =>
-        `<div class="item"><span class="qty">${i.qty}</span><span class="iname">${escHtml(i.dishName)}</span></div>`
-        + (i.note ? `<div class="note">&gt; ${escHtml(i.note)}</div>` : '')
-      ).join('')
-      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+
+      const divLines: string[] = []
+      divLines.push(ln(center(`*** ${group.branchName || rName || 'Kitchen'} ***`), true))
+      divLines.push(ln(rule))
+      for (const s of cols(`Server: ${order.created_by_name ?? '—'}`, station)) divLines.push(ln(s, true))
+      divLines.push(ln(center(orderType), true))
+      for (const s of cols(dateStr, timeStr)) divLines.push(ln(s))
+      divLines.push(ln(rule))
+      if (!isTakeaway) {
+        divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`, true))
+        divLines.push(ln(rule))
+      }
+      for (const i of group.items) {
+        // Explicit spaces between qty and dish name — a flex `gap` collapses to
+        // nothing on text-only drivers and the two run together as one word.
+        for (const s of cols(`${i.qty}x  ${i.dishName.toUpperCase()}`, '')) divLines.push(ln(s, true))
+        if (i.note) divLines.push(ln(`  > ${i.note}`))
+      }
+      divLines.push(ln(rule))
+      divLines.push(ln(center(stars)))
+      divLines.push(ln(center(`Ticket #: ${ticketIndex}`), true))
+      divLines.push(ln(center(`Order #: ${order.order_number ?? ''}`)))
+      divLines.push(ln(center(stars)))
+      // Text-only drivers ignore CSS height entirely — paper only advances on
+      // literal line feeds, and some drivers also trim a fully-blank tail
+      // before cutting, which is why tickets were coming out short/stuck. Blank
+      // lines plus one visible dot at the very end push real paper past the
+      // tear bar and stop the tail from being trimmed away.
+      for (let k = 0; k < 8; k++) divLines.push(ln(' '))
+      divLines.push(ln(center('.')))
+
+      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Ticket ${escHtml(order.order_number ?? '')} ${escHtml(station)}</title><style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Courier New',monospace;font-size:13px;width:80mm;padding:20mm 4mm 0;color:#000}
-.center{text-align:center}
-.name{font-size:17px;font-weight:bold;letter-spacing:1px;margin:2px 0}
-.type{font-size:18px;font-weight:bold;margin:5px 0}
-.row{display:flex;justify-content:space-between;gap:10px;font-size:13px;margin:2px 0}
-.div{border-top:1px dashed #000;margin:5px 0}
-.stars{overflow:hidden;white-space:nowrap;font-size:12px;letter-spacing:1px;margin:3px 0}
-.table{font-size:16px;font-weight:bold;margin:2px 0}
-.item{display:flex;gap:12px;font-size:15px;margin:5px 0}
-.qty{min-width:22px;font-weight:bold;text-align:right}
-.iname{font-weight:bold}
-.note{font-size:14px;margin:0 0 6px 34px;font-style:italic}
-.ticket{font-size:16px;font-weight:bold;margin:2px 0}
+body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;width:80mm;padding:20mm 4mm 0;color:#000}
+.line{white-space:pre;line-height:1.35;display:block;min-height:1.35em}
+.bold{font-weight:bold}
 @media print{@page{margin:0;size:80mm auto}}
 </style></head><body>
-<div class="center name">*** ${escHtml(group.branchName || rName || 'Kitchen')} ***</div>
-<div class="div"></div>
-<div class="row"><span>Server: ${escHtml(order.created_by_name ?? '—')}</span><span>${station}</span></div>
-<div class="center type">${orderType}</div>
-<div class="row"><span>${dateStr}</span><span>${timeStr}</span></div>
-<div class="div"></div>
-${isTakeaway ? '' : `<div class="table">Table: ${escHtml(order.table_name ?? 'Table')}</div>`}
-${isTakeaway ? '' : '<div class="div"></div>'}
-${itemRows}
-<div class="div"></div>
-<div class="center stars">${stars}</div>
-<div class="center ticket">Ticket #: ${ticketIndex}</div>
-<div class="center">Order #: ${escHtml(order.order_number ?? '')}</div>
-<div class="center stars">${stars}</div>
-<div style="height:30mm">&nbsp;</div>
-<div>&nbsp;</div>
+<div>${divLines.join('')}</div>
 </body></html>`
       printHtml(html, 0, deviceName)
       ticketIndex += 1
@@ -1413,11 +1506,61 @@ ${itemRows}
             <ArrowLeft className="h-5 w-5 text-gray-600" />
           </button>
           <span className="text-2xl font-black text-gray-900">{tableNumber}</span>
-          <select value={selectedTableKey} onChange={e => setSelectedTableKey(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-white text-gray-600">
-            <option value="takeaway">Takeaway</option>
-            {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
+          <div className="relative" ref={tablePickerRef}>
+            <button
+              type="button"
+              onClick={() => {
+                setTablePickerOpen(o => !o)
+                setTablePickerQuery('')
+                requestAnimationFrame(() => tablePickerInputRef.current?.focus())
+              }}
+              className="flex items-center gap-1.5 text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-white text-gray-600 hover:bg-gray-50"
+            >
+              {tableNumber}
+              <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+            </button>
+            {tablePickerOpen && (
+              <div className="absolute right-0 top-full mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-20 overflow-hidden">
+                <div className="flex items-center gap-1.5 border-b border-gray-100 px-2.5 py-2">
+                  <Search className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                  <input
+                    ref={tablePickerInputRef}
+                    type="text"
+                    value={tablePickerQuery}
+                    onChange={e => setTablePickerQuery(e.target.value)}
+                    placeholder="Search table…"
+                    className="flex-1 text-sm outline-none text-gray-700 placeholder:text-gray-400"
+                  />
+                </div>
+                <div className="max-h-56 overflow-y-auto py-1">
+                  {(() => {
+                    const q = tablePickerQuery.trim().toLowerCase()
+                    const rows: Array<{ key: string; label: string }> = [
+                      { key: 'takeaway', label: 'Takeaway' },
+                      ...tables.map(t => ({ key: t.id, label: t.name })),
+                    ].filter(row => !q || row.label.toLowerCase().includes(q))
+
+                    if (rows.length === 0) {
+                      return <div className="px-3 py-4 text-center text-sm text-gray-400">No tables found</div>
+                    }
+
+                    return rows.map(row => (
+                      <button
+                        key={row.key}
+                        type="button"
+                        onClick={() => { setSelectedTableKey(row.key); setTablePickerOpen(false); setTablePickerQuery('') }}
+                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-orange-50 ${
+                          row.key === selectedTableKey ? 'bg-orange-50 text-orange-600 font-semibold' : 'text-gray-700'
+                        }`}
+                      >
+                        {row.label}
+                      </button>
+                    ))
+                  })()}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Mode label strip */}

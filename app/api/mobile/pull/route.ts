@@ -44,7 +44,7 @@ export async function GET(req: Request) {
 
     if (!userBranchId) {
       return jsonNoStore(
-        { error: 'Your account has no branch assigned. Ask your manager to assign a branch before using the waiter app.' },
+        { error: 'Your account has no station assigned. Ask your manager to assign a station before using the waiter app.' },
         { status: 403 }
       )
     }
@@ -61,7 +61,7 @@ export async function GET(req: Request) {
         select: { id: true },
       })
       if (!validBranch) {
-        return jsonNoStore({ error: 'Branch not found or not accessible.' }, { status: 403 })
+        return jsonNoStore({ error: 'Station not found or not accessible.' }, { status: 403 })
       }
       effectiveBranchId = requestedBranchId
     }
@@ -103,11 +103,13 @@ export async function GET(req: Request) {
 
       // Staff with a stored order code (pin) can confirm orders offline.
       // Staff with a stored cancellationPin can approve order cancellations offline.
+      // Restaurant-wide, not scoped to effectiveBranchId — order codes and
+      // cancellation PINs identify a *person*, not a station, so anyone on
+      // staff can confirm/cancel regardless of which station tab is active.
       // Hashes are sent, never plaintext.
       prisma.staff.findMany({
         where: {
           restaurantId,
-          branches: { some: { branchId: effectiveBranchId } },
           isActive: true,
           OR: [{ pin: { not: null } }, { cancellationPin: { not: null } }],
         },
