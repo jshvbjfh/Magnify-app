@@ -348,9 +348,13 @@ export async function PUT(req: Request) {
     })
 
     if (!existingPurchase) return NextResponse.json({ error: 'Stock entry not found' }, { status: 404 })
-    if (hasConsumedPurchaseQuantity(existingPurchase)) {
-      return NextResponse.json({ error: 'This stock entry has already been used by orders, so editing is locked.' }, { status: 409 })
-    }
+
+    // Editing is allowed even after partial consumption. remainingQuantity is
+    // re-derived below to preserve whatever has already been consumed from
+    // this batch, instead of resetting it to the newly-entered total - that
+    // would otherwise silently hand back stock that was already sold.
+    const consumedSoFar = existingPurchase.quantityPurchased - existingPurchase.remainingQuantity
+    const newRemainingQuantity = Math.max(0, quantityPurchased - consumedSoFar)
 
     const normalizedPaymentMethod = typeof paymentMethod === 'string' && paymentMethod.trim() ? paymentMethod.trim() : 'Cash'
 
@@ -367,11 +371,11 @@ export async function PUT(req: Request) {
       if (existingPurchase.ingredientId === nextIngredient.id) {
         await tx.inventoryItem.update({
           where: { id: nextIngredient.id },
-          data: { quantity: { increment: quantityPurchased - existingPurchase.quantityPurchased } },
+          data: { quantity: { increment: newRemainingQuantity - existingPurchase.remainingQuantity } },
         })
       } else {
-        await tx.inventoryItem.update({ where: { id: existingPurchase.ingredientId }, data: { quantity: { decrement: existingPurchase.quantityPurchased } } })
-        await tx.inventoryItem.update({ where: { id: nextIngredient.id }, data: { quantity: { increment: quantityPurchased } } })
+        await tx.inventoryItem.update({ where: { id: existingPurchase.ingredientId }, data: { quantity: { decrement: existingPurchase.remainingQuantity } } })
+        await tx.inventoryItem.update({ where: { id: nextIngredient.id }, data: { quantity: { increment: newRemainingQuantity } } })
       }
 
       // Update journal entry description/date if linked
@@ -395,7 +399,7 @@ export async function PUT(req: Request) {
           unitsPerPurchaseUnit,
           purchaseUnitCost,
           quantityPurchased,
-          remainingQuantity: quantityPurchased,
+          remainingQuantity: newRemainingQuantity,
           unitCost,
           totalCost,
           paymentMethod: normalizedPaymentMethod,
@@ -451,16 +455,17 @@ export async function DELETE(req: Request) {
     })
 
     if (!existingPurchase) return NextResponse.json({ error: 'Stock entry not found' }, { status: 404 })
-    if (hasConsumedPurchaseQuantity(existingPurchase)) {
-      return NextResponse.json({ error: 'This stock entry has already been used by orders, so deleting is locked.' }, { status: 409 })
-    }
 
     const updatedIngredient = await prisma.$transaction(async (tx) => {
       const journalEntryId = existingPurchase.journalEntryId
 
+      // Only remove what's still actually on hand from this batch
+      // (remainingQuantity) - anything already consumed was already deducted
+      // from on-hand stock at the time it was used, so decrementing by the
+      // original quantityPurchased here would double-subtract it.
       await tx.inventoryItem.update({
         where: { id: existingPurchase.ingredientId },
-        data: { quantity: { decrement: existingPurchase.quantityPurchased } },
+        data: { quantity: { decrement: existingPurchase.remainingQuantity } },
       })
 
       await tx.inventoryPurchase.delete({ where: { id } })

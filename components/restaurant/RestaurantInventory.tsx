@@ -653,8 +653,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       || (purchase.batchId??'').toLowerCase().includes(searchQuery)
   }
   const canMutatePurchase = (purchase: Purchase) => {
-    if (ingredientsWithLayerDrift.has(purchase.ingredientId)) return false
-    return purchase.quantityPurchased - purchase.remainingQuantity <= PURCHASE_USAGE_EPSILON
+    return !ingredientsWithLayerDrift.has(purchase.ingredientId)
   }
   const activeBatchId = showPurchaseForm && activeBatchSuffix ? formatInventoryBatchId(parseDateInput(activeBatchDate), activeBatchSuffix) : ''
   const activeBatchPurchases = activeBatchId
@@ -714,9 +713,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     const displayedStockQuantity = purchase.remainingQuantity
     const displayedStockValue = displayedStockQuantity * purchase.unitCost
     const trackedStockDisplay = ingredient ? getIngredientStockDisplay(ingredient) : null
-    const purchaseLockReason = hasLayerDrift
-      ? 'This stock row is locked because stock has already moved on this ingredient.'
-      : 'This stock entry has already been used by orders and cannot be edited.'
+    const purchaseLockReason = 'This stock row is locked because stock has already moved on this ingredient.'
 
     if (editingPurchaseId === purchase.id) {
       return (
