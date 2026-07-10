@@ -81,11 +81,12 @@ async function resolveInventoryIngredient(
     const usageUnit = params.unit?.trim() || matched.unit
     const unitChanged = matched.unit.toLowerCase() !== usageUnit.toLowerCase()
     if (unitChanged) {
-      const openPurchaseCount = await tx.inventoryPurchase.count({
-        where: { restaurantId: params.restaurantId, branchId: params.branchId, ingredientId: matched.id, remainingQuantity: { gt: PURCHASE_USAGE_EPSILON } },
+      const ingredientPurchases = await tx.inventoryPurchase.findMany({
+        where: { restaurantId: params.restaurantId, branchId: params.branchId, ingredientId: matched.id },
+        select: { quantityPurchased: true, remainingQuantity: true },
       })
-      if (Number(matched.quantity || 0) > PURCHASE_USAGE_EPSILON || openPurchaseCount > 0) {
-        throw new Error('This ingredient already has stock history. You cannot change the usage unit until existing stock is cleared.')
+      if (ingredientPurchases.some(hasConsumedPurchaseQuantity)) {
+        throw new Error('This ingredient has recorded stock consumption from orders. You cannot change the usage unit while that history exists.')
       }
     }
     if (!unitChanged && params.unitCost === undefined) return matched
@@ -403,18 +404,25 @@ export async function PUT(req: Request) {
       })
 
       const syncedIngredientIds = new Set([existingPurchase.ingredientId, nextIngredient.id])
+      const syncedIngredients: ResolvedInventoryIngredient[] = []
       for (const syncedIngredientId of syncedIngredientIds) {
         const syncedIngredient = await syncIngredientActiveUnitCost(tx, { restaurantId, branchId, ingredientId: syncedIngredientId })
         if (!syncedIngredient) continue
         await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryItem', entityId: syncedIngredient.id, operation: 'upsert', payload: syncedIngredient })
+        syncedIngredients.push(syncedIngredient)
       }
 
       await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryPurchase', entityId: purchase.id, operation: 'upsert', payload: purchase })
 
-      return purchase
+      const hydratedPurchase = await tx.inventoryPurchase.findUnique({
+        where: { id: purchase.id },
+        include: { ingredient: { select: { name: true, unit: true } } },
+      })
+
+      return { purchase: hydratedPurchase ?? purchase, ingredients: syncedIngredients }
     }, INVENTORY_TRANSACTION_OPTIONS)
 
-    return NextResponse.json({ purchase: updatedPurchase })
+    return NextResponse.json({ purchase: updatedPurchase.purchase, ingredients: updatedPurchase.ingredients })
   } catch (error: any) {
     console.error('Failed to update inventory purchase:', error)
     const status = ['Ingredient not found', 'itemName is required', 'unit is required when recording a new item'].includes(error?.message)
@@ -447,7 +455,7 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: 'This stock entry has already been used by orders, so deleting is locked.' }, { status: 409 })
     }
 
-    await prisma.$transaction(async (tx) => {
+    const updatedIngredient = await prisma.$transaction(async (tx) => {
       const journalEntryId = existingPurchase.journalEntryId
 
       await tx.inventoryItem.update({
@@ -466,9 +474,11 @@ export async function DELETE(req: Request) {
 
       await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryPurchase', entityId: id, operation: 'delete', payload: { id } })
       await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryItem', entityId: updatedIngredient.id, operation: 'upsert', payload: updatedIngredient })
+
+      return updatedIngredient
     }, INVENTORY_TRANSACTION_OPTIONS)
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, ingredient: updatedIngredient })
   } catch (error: any) {
     console.error('Failed to delete inventory purchase:', error)
     return NextResponse.json({ error: error?.message || 'Failed to delete inventory purchase', code: error?.code || null }, { status: 500 })

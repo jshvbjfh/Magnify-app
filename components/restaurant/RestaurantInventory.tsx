@@ -559,8 +559,15 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         setPurchaseError(err?.error || 'Update failed')
         return
       }
+      const payload = await res.json().catch(() => null)
+      if (payload?.purchase) {
+        const updated = payload.purchase as Purchase
+        setPurchases((current) => current.map((p) => (p.id === updated.id ? updated : p)))
+      }
+      for (const ingredient of (payload?.ingredients ?? []) as Ingredient[]) {
+        upsertIngredient(ingredient)
+      }
       cancelPurchaseEdit()
-      await Promise.all([load(), loadPurchases()])
       window.dispatchEvent(new CustomEvent('refreshTransactions'))
     } finally {
       setPSaving(false)
@@ -582,9 +589,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         setPurchaseError(err?.error || 'Delete failed')
         return
       }
+      const payload = await res.json().catch(() => null)
       const lastInActiveBatch = activeBatchId && purchase.batchId === activeBatchId && activeBatchPurchases.length <= 1
       if (editingPurchaseId === purchase.id || lastInActiveBatch) closePurchaseForm()
-      await Promise.all([load(), loadPurchases()])
+      setPurchases((current) => current.filter((p) => p.id !== purchase.id))
+      upsertIngredient((payload?.ingredient ?? null) as Ingredient | null)
       window.dispatchEvent(new CustomEvent('refreshTransactions'))
     } finally {
       setPSaving(false)
