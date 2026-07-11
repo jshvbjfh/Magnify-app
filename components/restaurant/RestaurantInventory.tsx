@@ -12,6 +12,8 @@ import {
   INVENTORY_UNITS,
   isDualUnitPurchaseUnit,
   splitUsageQuantity,
+  toUsageQuantity,
+  toUsageUnitCost,
 } from '@/lib/inventoryUnits'
 
 type Ingredient = {
@@ -535,8 +537,45 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       setPurchaseError('Enter how many usage units exist in one purchase unit.')
       return
     }
-    setPSaving(true)
-    setPurchaseError(null)
+    const existingPurchase = purchases.find((p) => p.id === editingPurchaseId)
+    if (!existingPurchase) return
+
+    const unitsPerPurchaseUnit = unitConfig.sameUnit ? 1 : unitConfig.unitsPerPurchaseUnit
+    const purchaseQuantityInput = Number(pForm.purchaseQuantity)
+    const purchaseUnitCostInput = Number(pForm.purchaseUnitCost)
+    const quantityPurchased = toUsageQuantity(purchaseQuantityInput, unitsPerPurchaseUnit)
+    const unitCost = toUsageUnitCost(purchaseUnitCostInput, unitsPerPurchaseUnit)
+    const consumedSoFar = existingPurchase.quantityPurchased - existingPurchase.remainingQuantity
+    const remainingQuantity = Math.max(0, quantityPurchased - consumedSoFar)
+    const sameIngredient = normalizeInventoryItemName(existingPurchase.ingredient.name) === normalizeInventoryItemName(pForm.itemName)
+
+    const optimisticPurchase: Purchase = {
+      ...existingPurchase,
+      supplier: pForm.supplier || null,
+      purchaseQuantity: purchaseQuantityInput,
+      purchaseUnit: unitConfig.purchaseUnit,
+      unitsPerPurchaseUnit,
+      purchaseUnitCost: purchaseUnitCostInput,
+      quantityPurchased,
+      remainingQuantity,
+      unitCost,
+      totalCost: quantityPurchased * unitCost,
+      purchasedAt: pForm.purchasedAt,
+      ingredient: { ...existingPurchase.ingredient, name: pForm.itemName, unit: unitConfig.usageUnit },
+    }
+
+    const previousPurchases = purchases
+    const previousItems = items
+
+    // Apply instantly and close the form - the save happens in the background.
+    setPurchases((current) => current.map((p) => (p.id === editingPurchaseId ? optimisticPurchase : p)))
+    if (sameIngredient) {
+      setItems((current) => current.map((item) => item.id === existingPurchase.ingredientId
+        ? { ...item, quantity: item.quantity + (remainingQuantity - existingPurchase.remainingQuantity) }
+        : item))
+    }
+    cancelPurchaseEdit()
+
     try {
       const res = await fetch('/api/restaurant/inventory-purchases', {
         method: 'PUT',
@@ -546,17 +585,19 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           itemName: pForm.itemName,
           unit: unitConfig.usageUnit,
           purchaseUnit: unitConfig.purchaseUnit,
-          unitsPerPurchaseUnit: unitConfig.sameUnit ? 1 : unitConfig.unitsPerPurchaseUnit,
+          unitsPerPurchaseUnit,
           supplier: pForm.supplier || null,
           paymentMethod: pForm.paymentMethod || 'Cash',
-          purchaseQuantity: Number(pForm.purchaseQuantity),
-          purchaseUnitCost: Number(pForm.purchaseUnitCost),
+          purchaseQuantity: purchaseQuantityInput,
+          purchaseUnitCost: purchaseUnitCostInput,
           purchasedAt: pForm.purchasedAt,
         })
       })
       if (!res.ok) {
         const err = await res.json().catch(() => null)
-        setPurchaseError(err?.error || 'Update failed')
+        setPurchases(previousPurchases)
+        setItems(previousItems)
+        setPurchaseError(err?.error || 'Update failed - change was reverted')
         return
       }
       const payload = await res.json().catch(() => null)
@@ -567,10 +608,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       for (const ingredient of (payload?.ingredients ?? []) as Ingredient[]) {
         upsertIngredient(ingredient)
       }
-      cancelPurchaseEdit()
       window.dispatchEvent(new CustomEvent('refreshTransactions'))
-    } finally {
-      setPSaving(false)
+    } catch {
+      setPurchases(previousPurchases)
+      setItems(previousItems)
+      setPurchaseError('Update failed - change was reverted')
     }
   }
 
@@ -578,25 +620,36 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     const confirmed = window.confirm(`Delete stock entry for ${purchase.ingredient.name}?`)
     if (!confirmed) return
 
-    setPSaving(true)
+    const previousPurchases = purchases
+    const previousItems = items
+    const lastInActiveBatch = activeBatchId && purchase.batchId === activeBatchId && activeBatchPurchases.length <= 1
+
+    // Remove instantly and adjust on-hand stock right away - the delete happens in the background.
+    if (editingPurchaseId === purchase.id || lastInActiveBatch) closePurchaseForm()
+    setPurchases((current) => current.filter((p) => p.id !== purchase.id))
+    setItems((current) => current.map((item) => item.id === purchase.ingredientId
+      ? { ...item, quantity: item.quantity - purchase.remainingQuantity }
+      : item))
     setPurchaseError(null)
+
     try {
       const res = await fetch(`/api/restaurant/inventory-purchases?id=${encodeURIComponent(purchase.id)}`, {
         method: 'DELETE',
       })
       if (!res.ok) {
         const err = await res.json().catch(() => null)
-        setPurchaseError(err?.error || 'Delete failed')
+        setPurchases(previousPurchases)
+        setItems(previousItems)
+        setPurchaseError(err?.error || 'Delete failed - item was restored')
         return
       }
       const payload = await res.json().catch(() => null)
-      const lastInActiveBatch = activeBatchId && purchase.batchId === activeBatchId && activeBatchPurchases.length <= 1
-      if (editingPurchaseId === purchase.id || lastInActiveBatch) closePurchaseForm()
-      setPurchases((current) => current.filter((p) => p.id !== purchase.id))
       upsertIngredient((payload?.ingredient ?? null) as Ingredient | null)
       window.dispatchEvent(new CustomEvent('refreshTransactions'))
-    } finally {
-      setPSaving(false)
+    } catch {
+      setPurchases(previousPurchases)
+      setItems(previousItems)
+      setPurchaseError('Delete failed - item was restored')
     }
   }
 
@@ -774,8 +827,8 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
             <td className="px-4 py-2 text-sm font-semibold text-gray-800">{estimatedTotal!=null?`${fmt(estimatedTotal)} RWF`:'auto'}</td>
             <td className="px-4 py-2">
               <div className="flex items-center gap-2">
-                <button type="button" onClick={()=>void updatePurchase()} disabled={pSaving} className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-amber-700 disabled:opacity-50">Done</button>
-                <button type="button" onClick={cancelPurchaseEdit} disabled={pSaving} className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-50">Cancel</button>
+                <button type="button" onClick={()=>void updatePurchase()} className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-amber-700">Done</button>
+                <button type="button" onClick={cancelPurchaseEdit} className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-100">Cancel</button>
               </div>
             </td>
           </tr>
@@ -822,9 +875,9 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
             <button
               type="button"
               onClick={()=>openEditPurchase(purchase)}
-              disabled={purchaseLocked || pSaving}
+              disabled={purchaseLocked}
               title={purchaseLocked ? purchaseLockReason : 'Edit stock row'}
-              className={purchaseLocked || pSaving
+              className={purchaseLocked
                 ? 'rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-300 cursor-not-allowed'
                 : 'rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-50'}
             >
@@ -833,9 +886,9 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
             <button
               type="button"
               onClick={()=>void deletePurchase(purchase)}
-              disabled={purchaseLocked || pSaving}
+              disabled={purchaseLocked}
               title={purchaseLocked ? purchaseLockReason : 'Delete stock row'}
-              className={purchaseLocked || pSaving
+              className={purchaseLocked
                 ? 'rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-300 cursor-not-allowed'
                 : 'rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600 transition-colors hover:bg-red-100'}
             >
