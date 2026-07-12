@@ -54,10 +54,12 @@ export default function MepPage({ waiterName, activeBranchId, syncVersion, isOnl
 
   const reload = useCallback(async () => {
     try {
+      // Dishes are stored restaurant-wide locally, but MEP is per-station:
+      // only offer this branch's own dishes in the search.
       const [mepItems, catalog, dishes, logs] = await Promise.all([
         getMepItems(activeBranchId),
         getMepCatalog(activeBranchId),
-        getDishes(),
+        getDishes(activeBranchId),
         getTodayMepLogs(activeBranchId),
       ])
 
