@@ -69,7 +69,7 @@ export async function POST(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
-  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
   const restaurantId = context.restaurantId
   const branchId = context.branchId
@@ -197,7 +197,7 @@ export async function DELETE(req: Request) {
   const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
-  if (!restaurantId || !branchId || !context) return NextResponse.json({ error: 'No restaurant branch' }, { status: 400 })
+  if (!restaurantId || !branchId || !context) return NextResponse.json({ error: 'No restaurant station' }, { status: 400 })
 
   const { orderId, tableKey, clearTable, cancelReason, supervisorPin, actionKey } = await req.json()
   const reason = String(cancelReason || 'Canceled by staff').trim()

@@ -26,6 +26,7 @@ type Ingredient = {
   quantity: number
   reorderLevel: number
   category: string | null
+  type: string | null
 }
 type Purchase = {
   id: string
@@ -45,6 +46,7 @@ type Purchase = {
   ingredient: { name: string; unit: string; purchaseUnit: string | null; unitsPerPurchaseUnit: number | null }
 }
 type PurchaseBatchGroup = { key: string; batchId: string | null; purchasedAt: string; earliestCreatedAt: string; totalCost: number; purchases: Purchase[] }
+type PrepRecipeRow = { id: string; prepItemId: string; ingredientItemId: string; quantityRequired: number; ingredient: { id: string; name: string; unit: string } }
 const INVENTORY_COLUMN_LABELS = ['Item', 'Supplier', 'Unit', 'Qty bought', 'Cost/unit', 'Stock on hand', 'Tot. stock value', 'Actions'] as const
 const FRESH_FETCH_OPTIONS = { credentials: 'include' as const, cache: 'no-store' as const }
 
@@ -236,6 +238,21 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const [purchaseAutofillMatchKey, setPurchaseAutofillMatchKey] = useState('')
   const [pForm, setPForm] = useState(createEmptyPurchaseForm())
   const [pSaving, setPSaving] = useState(false)
+  const [inventoryView, setInventoryView] = useState<'stock' | 'preps'>('stock')
+  const [showPrepForm, setShowPrepForm] = useState(false)
+  const [prepSaving, setPrepSaving] = useState(false)
+  const [prepError, setPrepError] = useState<string | null>(null)
+  const [prepForm, setPrepForm] = useState({ name: '', unit: '', category: '' })
+  const [editingPrepId, setEditingPrepId] = useState<string | null>(null)
+  const [editPrepForm, setEditPrepForm] = useState({ name: '', unit: '', category: '' })
+  const [expandedPrepId, setExpandedPrepId] = useState<string | null>(null)
+  const [prepRecipes, setPrepRecipes] = useState<Record<string, PrepRecipeRow[]>>({})
+  const [prepRecipeLoading, setPrepRecipeLoading] = useState<string | null>(null)
+  const [prepRecipeError, setPrepRecipeError] = useState<string | null>(null)
+  const [subRecipeForm, setSubRecipeForm] = useState({ ingredientItemId: '', quantityRequired: '' })
+  const [editingSubRecipeId, setEditingSubRecipeId] = useState<string | null>(null)
+  const [editSubRecipeQty, setEditSubRecipeQty] = useState('')
+  const [subRecipeSaving, setSubRecipeSaving] = useState(false)
 
   async function load() {
     setItemsLoading(true)
@@ -683,6 +700,124 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
 
   const [purSearch, setPurSearch] = useState('')
 
+  async function savePrep() {
+    if (!prepForm.name.trim() || !prepForm.unit.trim()) return
+    setPrepSaving(true)
+    setPrepError(null)
+    try {
+      const res = await fetch('/api/restaurant/ingredients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: prepForm.name.trim(), unit: prepForm.unit.trim(), category: prepForm.category.trim() || null, type: 'prep' }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setPrepError(data.error || 'Failed to save'); return }
+      upsertIngredient(data as Ingredient)
+      setPrepForm({ name: '', unit: '', category: '' })
+      setShowPrepForm(false)
+    } catch (e: any) {
+      setPrepError(e?.message || 'Failed to save')
+    } finally {
+      setPrepSaving(false)
+    }
+  }
+
+  async function updatePrep() {
+    if (!editingPrepId || !editPrepForm.name.trim() || !editPrepForm.unit.trim()) return
+    setPrepSaving(true)
+    setPrepError(null)
+    try {
+      const res = await fetch('/api/restaurant/ingredients', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: editingPrepId, name: editPrepForm.name.trim(), unit: editPrepForm.unit.trim(), category: editPrepForm.category.trim() || null, type: 'prep', quantity: 0, reorderLevel: 0 }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setPrepError(data.error || 'Failed to update'); return }
+      upsertIngredient(data as Ingredient)
+      setEditingPrepId(null)
+    } catch (e: any) {
+      setPrepError(e?.message || 'Failed to update')
+    } finally {
+      setPrepSaving(false)
+    }
+  }
+
+  async function deletePrep(id: string) {
+    if (!window.confirm('Delete this prep? It will be removed from any dish recipes using it.')) return
+    setPrepSaving(true)
+    setPrepError(null)
+    try {
+      const res = await fetch(`/api/restaurant/ingredients?id=${id}`, { method: 'DELETE' })
+      if (!res.ok) { setPrepError('Failed to delete'); return }
+      setItems(cur => cur.filter(i => i.id !== id))
+    } catch (e: any) {
+      setPrepError(e?.message || 'Failed to delete')
+    } finally {
+      setPrepSaving(false)
+    }
+  }
+
+  async function togglePrepRecipe(prepId: string) {
+    if (expandedPrepId === prepId) { setExpandedPrepId(null); return }
+    setExpandedPrepId(prepId)
+    setSubRecipeForm({ ingredientItemId: '', quantityRequired: '' })
+    setEditingSubRecipeId(null)
+    if (prepRecipes[prepId] !== undefined) return
+    setPrepRecipeLoading(prepId)
+    setPrepRecipeError(null)
+    try {
+      const data = await fetch(`/api/restaurant/ingredients/prep-recipe?prepItemId=${prepId}`, FRESH_FETCH_OPTIONS).then(r => r.json())
+      setPrepRecipes(cur => ({ ...cur, [prepId]: Array.isArray(data) ? data : [] }))
+    } catch { setPrepRecipeError('Failed to load sub-recipe') }
+    finally { setPrepRecipeLoading(null) }
+  }
+
+  async function addSubRecipeRow(prepId: string) {
+    if (!subRecipeForm.ingredientItemId || !subRecipeForm.quantityRequired) return
+    setSubRecipeSaving(true); setPrepRecipeError(null)
+    try {
+      const res = await fetch('/api/restaurant/ingredients/prep-recipe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prepItemId: prepId, ingredientItemId: subRecipeForm.ingredientItemId, quantityRequired: Number(subRecipeForm.quantityRequired) }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setPrepRecipeError(data.error || 'Failed to add'); return }
+      setPrepRecipes(cur => ({ ...cur, [prepId]: [...(cur[prepId] || []), data as PrepRecipeRow] }))
+      setSubRecipeForm({ ingredientItemId: '', quantityRequired: '' })
+    } catch (e: any) { setPrepRecipeError(e?.message || 'Failed to add') }
+    finally { setSubRecipeSaving(false) }
+  }
+
+  async function updateSubRecipeRow(id: string, prepId: string) {
+    const qty = Number(editSubRecipeQty)
+    if (!qty || qty <= 0) return
+    setSubRecipeSaving(true); setPrepRecipeError(null)
+    try {
+      const res = await fetch('/api/restaurant/ingredients/prep-recipe', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, quantityRequired: qty }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setPrepRecipeError(data.error || 'Failed to update'); return }
+      setPrepRecipes(cur => ({ ...cur, [prepId]: (cur[prepId] || []).map(r => r.id === id ? data as PrepRecipeRow : r) }))
+      setEditingSubRecipeId(null)
+    } catch (e: any) { setPrepRecipeError(e?.message || 'Failed to update') }
+    finally { setSubRecipeSaving(false) }
+  }
+
+  async function deleteSubRecipeRow(id: string, prepId: string) {
+    setSubRecipeSaving(true); setPrepRecipeError(null)
+    try {
+      const res = await fetch(`/api/restaurant/ingredients/prep-recipe?id=${id}`, { method: 'DELETE' })
+      if (!res.ok) { setPrepRecipeError('Failed to remove'); return }
+      setPrepRecipes(cur => ({ ...cur, [prepId]: (cur[prepId] || []).filter(r => r.id !== id) }))
+    } catch (e: any) { setPrepRecipeError(e?.message || 'Failed to remove') }
+    finally { setSubRecipeSaving(false) }
+  }
+
+  const prepItems = items.filter(i => i.type === 'prep')
+
   const lowStock = items.filter(i=>i.quantity<=i.reorderLevel)
   const totalValue = items.reduce((s,i)=>s+i.quantity*(i.unitCost??0),0)
   const totalPurchaseCost = purchases.reduce((s,p)=>s+p.totalCost,0)
@@ -911,12 +1046,30 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse
           </button>
-          <button onClick={openNewPurchaseRow} className="bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-            + Record new Batch
-          </button>
+          {inventoryView === 'stock' ? (
+            <button onClick={openNewPurchaseRow} className="bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+              + Record new Batch
+            </button>
+          ) : (
+            <button onClick={() => { setShowPrepForm(true); setEditingPrepId(null) }} className="bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+              + New Prep
+            </button>
+          )}
         </div>
       </div>
 
+      <div className="flex border-b border-gray-200">
+        <button type="button" onClick={() => setInventoryView('stock')}
+          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${inventoryView === 'stock' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+          Stock
+        </button>
+        <button type="button" onClick={() => setInventoryView('preps')}
+          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${inventoryView === 'preps' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+          Preps
+        </button>
+      </div>
+
+      {inventoryView === 'stock' && (<>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
         <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
           <p className="text-xs text-gray-500">Total Items</p>
@@ -1126,6 +1279,199 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
               ))}
             </tbody>
           </table></div>
+        </div>
+      )}
+      </>)}
+
+      {inventoryView === 'preps' && (
+        <div className="space-y-4">
+          {(prepError || prepRecipeError) && (
+            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">{prepError || prepRecipeError}</div>
+          )}
+
+          {showPrepForm && (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 space-y-3">
+              <p className="text-sm font-semibold text-gray-700">New Prep Item</p>
+              <div className="flex flex-wrap gap-3">
+                <input
+                  value={prepForm.name}
+                  onChange={e => setPrepForm(f => ({...f, name: e.target.value}))}
+                  placeholder="Name (e.g. Fresh noodles)"
+                  className="flex-1 min-w-[160px] rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
+                />
+                <select
+                  value={prepForm.unit}
+                  onChange={e => setPrepForm(f => ({...f, unit: e.target.value}))}
+                  className="rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
+                >
+                  <option value="">Unit…</option>
+                  {INVENTORY_UNITS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
+                </select>
+                <input
+                  value={prepForm.category}
+                  onChange={e => setPrepForm(f => ({...f, category: e.target.value}))}
+                  placeholder="Category (optional)"
+                  className="rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => void savePrep()} disabled={!prepForm.name.trim() || !prepForm.unit.trim() || prepSaving}
+                  className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 disabled:opacity-50">
+                  Save
+                </button>
+                <button type="button" onClick={() => { setShowPrepForm(false); setPrepForm({ name: '', unit: '', category: '' }) }} disabled={prepSaving}
+                  className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-100 disabled:opacity-50">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {prepItems.length === 0 && !showPrepForm ? (
+            <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
+              <p className="font-medium text-gray-600">No prep items yet</p>
+              <p className="text-sm text-gray-400 mt-1">Add in-house prepared ingredients like fresh noodles, dumplings, or sauces — they appear as normal ingredients when building dish recipes.</p>
+            </div>
+          ) : prepItems.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200">
+                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Item</th>
+                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Unit</th>
+                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Category</th>
+                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {prepItems.map(item => (
+                    <Fragment key={item.id}>
+                    {editingPrepId === item.id ? (
+                      <tr className="bg-amber-50/80">
+                        <td className="px-3 py-2">
+                          <input value={editPrepForm.name} onChange={e => setEditPrepForm(f => ({...f, name: e.target.value}))}
+                            className="w-full rounded-md border border-amber-300 bg-white px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-amber-300"/>
+                        </td>
+                        <td className="px-3 py-2">
+                          <select value={editPrepForm.unit} onChange={e => setEditPrepForm(f => ({...f, unit: e.target.value}))}
+                            className="w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-amber-300">
+                            <option value="">Unit…</option>
+                            {INVENTORY_UNITS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <input value={editPrepForm.category} onChange={e => setEditPrepForm(f => ({...f, category: e.target.value}))}
+                            className="w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-amber-300"/>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex gap-2">
+                            <button type="button" onClick={() => void updatePrep()} disabled={prepSaving}
+                              className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50">Save</button>
+                            <button type="button" onClick={() => setEditingPrepId(null)} disabled={prepSaving}
+                              className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-100 disabled:opacity-50">Cancel</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr className="hover:bg-gray-50 transition-colors">
+                        <td className="px-4 py-3 font-medium text-gray-900">{item.name}</td>
+                        <td className="px-4 py-3 text-gray-700">{item.unit}</td>
+                        <td className="px-4 py-3 text-gray-500">{item.category || '—'}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-2 flex-wrap">
+                            <button type="button"
+                              onClick={() => void togglePrepRecipe(item.id)}
+                              className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${expandedPrepId === item.id ? 'border-orange-400 bg-orange-50 text-orange-600' : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'}`}>
+                              Recipe {expandedPrepId === item.id ? '▲' : '▼'}
+                            </button>
+                            <button type="button"
+                              onClick={() => { setEditingPrepId(item.id); setEditPrepForm({ name: item.name, unit: item.unit, category: item.category || '' }) }}
+                              disabled={prepSaving}
+                              className="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                              Edit
+                            </button>
+                            <button type="button"
+                              onClick={() => void deletePrep(item.id)}
+                              disabled={prepSaving}
+                              className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-100 disabled:opacity-50">
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    {expandedPrepId === item.id && editingPrepId !== item.id && (
+                      <tr className="bg-orange-50/60">
+                        <td colSpan={4} className="px-6 py-4 border-b border-orange-100">
+                          <p className="text-xs font-semibold text-gray-700 mb-2">
+                            Sub-recipe for <span className="text-orange-600">{item.name}</span> — quantities per 1 {item.unit}
+                          </p>
+                          {prepRecipeLoading === item.id ? (
+                            <p className="text-xs text-gray-400">Loading…</p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {(prepRecipes[item.id] || []).length === 0 && (
+                                <p className="text-xs text-gray-400 italic">No raw ingredients defined yet — add them below.</p>
+                              )}
+                              {(prepRecipes[item.id] || []).map(row => (
+                                <div key={row.id} className="flex items-center gap-2 text-xs">
+                                  {editingSubRecipeId === row.id ? (
+                                    <>
+                                      <span className="font-medium text-gray-700 w-40 shrink-0">{row.ingredient.name}</span>
+                                      <input type="number" min="0.0001" step="any" value={editSubRecipeQty}
+                                        onChange={e => setEditSubRecipeQty(e.target.value)}
+                                        className="w-20 rounded border border-gray-200 px-2 py-1 outline-none focus:ring-2 focus:ring-orange-300"/>
+                                      <span className="text-gray-500">{row.ingredient.unit}</span>
+                                      <button type="button" onClick={() => void updateSubRecipeRow(row.id, item.id)} disabled={subRecipeSaving}
+                                        className="text-green-600 font-semibold hover:underline disabled:opacity-50">Save</button>
+                                      <button type="button" onClick={() => setEditingSubRecipeId(null)}
+                                        className="text-gray-400 hover:underline">Cancel</button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="font-medium text-gray-700 w-40 shrink-0">{row.ingredient.name}</span>
+                                      <span className="text-gray-900 font-mono">{row.quantityRequired}</span>
+                                      <span className="text-gray-500">{row.ingredient.unit}</span>
+                                      <button type="button"
+                                        onClick={() => { setEditingSubRecipeId(row.id); setEditSubRecipeQty(String(row.quantityRequired)) }}
+                                        className="text-blue-500 hover:underline">Edit</button>
+                                      <button type="button" onClick={() => void deleteSubRecipeRow(row.id, item.id)} disabled={subRecipeSaving}
+                                        className="text-red-400 hover:underline disabled:opacity-50">Remove</button>
+                                    </>
+                                  )}
+                                </div>
+                              ))}
+                              <div className="flex items-center gap-2 pt-2 border-t border-orange-100 mt-2">
+                                <select value={subRecipeForm.ingredientItemId}
+                                  onChange={e => setSubRecipeForm(f => ({...f, ingredientItemId: e.target.value}))}
+                                  className="text-xs rounded border border-gray-200 px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-300 min-w-[160px]">
+                                  <option value="">+ Raw ingredient…</option>
+                                  {items.filter(i => i.type !== 'prep').map(i => (
+                                    <option key={i.id} value={i.id}>{i.name} ({i.unit})</option>
+                                  ))}
+                                </select>
+                                <input type="number" min="0.0001" step="any" value={subRecipeForm.quantityRequired}
+                                  onChange={e => setSubRecipeForm(f => ({...f, quantityRequired: e.target.value}))}
+                                  placeholder="Qty"
+                                  className="w-20 text-xs rounded border border-gray-200 px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-300"/>
+                                <button type="button"
+                                  onClick={() => void addSubRecipeRow(item.id)}
+                                  disabled={!subRecipeForm.ingredientItemId || !subRecipeForm.quantityRequired || subRecipeSaving}
+                                  className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 disabled:opacity-40">
+                                  Add
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

@@ -14,7 +14,7 @@ export async function GET() {
     const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
-    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
     const orders = await prisma.restaurantOrder.findMany({
       where: {

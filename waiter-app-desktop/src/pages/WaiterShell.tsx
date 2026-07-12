@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { UtensilsCrossed, ClipboardList, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Printer } from 'lucide-react'
+import { UtensilsCrossed, ClipboardList, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Printer, ChefHat } from 'lucide-react'
 import { useOnline } from '../hooks/useOnline'
 import { isOfflineLikeErrorMessage } from '../services/http'
 import { getConfig, setConfig, getOrders } from '../services/db'
@@ -8,15 +8,17 @@ import { syncAll, type BranchInfo } from '../services/sync'
 import type { WaiterUser } from '../services/auth'
 import RestaurantOrders from './RestaurantOrders'
 import RestaurantTables from './RestaurantTables'
+import MepPage from './MepPage'
 import PrinterSettings from './PrinterSettings'
 import StartupLogPage from './StartupLogPage'
 
-type TabId = 'menu' | 'pending' | 'tables' | 'printers' | 'logs'
+type TabId = 'menu' | 'pending' | 'tables' | 'mep' | 'printers' | 'logs'
 
 const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'menu',     label: 'Menu',           icon: <UtensilsCrossed className="h-4 w-4" /> },
   { id: 'tables',   label: 'Tables',         icon: <Layout className="h-4 w-4" /> },
   { id: 'pending',  label: 'Pending Orders', icon: <ClipboardList className="h-4 w-4" /> },
+  { id: 'mep',      label: 'MEP',            icon: <ChefHat className="h-4 w-4" /> },
   { id: 'printers', label: 'Printers',       icon: <Printer className="h-4 w-4" /> },
   { id: 'logs',     label: 'Logs',           icon: <ScrollText className="h-4 w-4" /> },
 ]
@@ -147,7 +149,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   const handleBranchSelect = async (branchId: string) => {
     if (branchId === activeBranchId || branchSwitchingId) return
     if (!isOnline) {
-      setLastSyncWarning('Connect to the internet to switch branches.')
+      setLastSyncWarning('Connect to the internet to switch stations.')
       return
     }
 
@@ -308,6 +310,17 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
               waiterName={waiterName}
               activeBranchId={activeBranchId}
               onSelectTable={(key) => { setSelectedTableKey(key); setActiveTab('menu') }}
+            />
+          </div>
+        )}
+        {activeTab === 'mep' && (
+          <div className="max-w-5xl mx-auto px-4 py-6">
+            <MepPage
+              waiterName={waiterName}
+              activeBranchId={activeBranchId}
+              syncVersion={syncVersion}
+              isOnline={isOnline && !transportOfflineMode}
+              requestSync={() => { void runSync() }}
             />
           </div>
         )}

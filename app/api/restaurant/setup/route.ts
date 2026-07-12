@@ -178,7 +178,7 @@ export async function POST(req: Request) {
   // QR menu artwork remains branch-level; the bill template is saved on the restaurant above.
   const activeBranchId = context?.branchId ?? null
   if (qrMenuHeroImageUrl !== undefined && !activeBranchId) {
-    return NextResponse.json({ error: 'Active branch required to save QR menu artwork.' }, { status: 400 })
+    return NextResponse.json({ error: 'Active station required to save QR menu artwork.' }, { status: 400 })
   }
 
   if (qrMenuHeroImageUrl !== undefined && activeBranchId) {

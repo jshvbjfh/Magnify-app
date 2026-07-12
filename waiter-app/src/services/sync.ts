@@ -146,12 +146,12 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
       dishes: payload.dishes.length,
       tables: payload.tables.length,
     })
-    throw new Error('No menu is available for your assigned branch. Ask your manager to sync the branch menu and verify your branch assignment.')
+    throw new Error('No menu is available for your assigned station. Ask your manager to sync the station menu and verify your station assignment.')
   }
 
   if (payload.dishes.length === 0) {
     if (existingDishes.length > 0) {
-      warnings.push('No menu received for this branch yet — using cached menu.')
+      warnings.push('No menu received for this station yet — using cached menu.')
     }
   } else {
     await replaceDishes(payload.dishes)
@@ -160,7 +160,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
 
   if (payload.tables.length === 0) {
     if (existingTables.length > 0) {
-      warnings.push('No tables received for this branch yet — using cached tables.')
+      warnings.push('No tables received for this station yet — using cached tables.')
     }
   } else {
     await replaceTables(payload.tables)

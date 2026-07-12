@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Printer, RefreshCw, CheckCircle2 } from 'lucide-react'
-import { getConfig } from '../services/db'
+import { getConfig, setConfig } from '../services/db'
 import {
   listPrinters, getPrinterMap, setPrinterMap, getBillPrinter, setBillPrinter, testPrint,
   type PrinterInfo, type PrinterMap,
@@ -12,20 +12,22 @@ export default function PrinterSettings() {
   const [branches,   setBranches]   = useState<BranchInfo[]>([])
   const [map,        setMap]        = useState<PrinterMap>({})
   const [bill,       setBill]       = useState<string>('')
+  const [billCols,   setBillCols]   = useState<string>('42')
   const [loading,    setLoading]    = useState(true)
   const [savedFlash, setSavedFlash] = useState(false)
   const [testMsg,    setTestMsg]    = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [p, branchesJson, m, b] = await Promise.all([
-      listPrinters(), getConfig('branches'), getPrinterMap(), getBillPrinter(),
+    const [p, branchesJson, m, b, cols] = await Promise.all([
+      listPrinters(), getConfig('branches'), getPrinterMap(), getBillPrinter(), getConfig('billColumns'),
     ])
     setPrinters(p)
     try { setBranches(branchesJson ? (JSON.parse(branchesJson) as BranchInfo[]) : []) }
     catch { setBranches([]) }
     setMap(m)
     setBill(b)
+    setBillCols(cols && ['32', '40', '42', '48'].includes(cols) ? cols : '42')
     setLoading(false)
   }, [])
 
@@ -44,6 +46,12 @@ export default function PrinterSettings() {
   const assignBill = async (deviceName: string) => {
     setBill(deviceName)
     await setBillPrinter(deviceName)
+    flashSaved()
+  }
+
+  const assignBillCols = async (cols: string) => {
+    setBillCols(cols)
+    await setConfig('billColumns', cols)
     flashSaved()
   }
 
@@ -113,6 +121,21 @@ export default function PrinterSettings() {
           <button onClick={() => runTest(bill, 'Main printer')}
             className="text-xs font-semibold border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50">Test</button>
         </div>
+      </div>
+
+      {/* Bill width — must match the physical printer's characters-per-line */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-900">Bill width</p>
+          <p className="text-xs text-gray-500">Characters per line on the bill printer. 80mm paper is usually 42 or 48; 58mm paper is 32. If bill text sits too far left or lines wrap, change this.</p>
+        </div>
+        <select value={billCols} onChange={e => void assignBillCols(e.target.value)}
+          className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-white text-gray-700">
+          <option value="32">32 — 58mm paper</option>
+          <option value="40">40 — 80mm (narrow font)</option>
+          <option value="42">42 — 80mm (standard)</option>
+          <option value="48">48 — 80mm (wide)</option>
+        </select>
       </div>
 
       {/* Per-station printers — optional, only for separate kitchen/bar printers */}

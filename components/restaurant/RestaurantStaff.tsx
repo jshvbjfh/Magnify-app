@@ -208,6 +208,12 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
     load()
   }
 
+  async function deleteEmployee(emp:Employee) {
+    if(!confirm(`Remove ${emp.name}?`)) return
+    await fetch('/api/restaurant/employees/'+emp.id,{method:'DELETE',credentials:'include'})
+    load()
+  }
+
   async function logShift(e:React.FormEvent) {
     e.preventDefault()
     const res = await fetch('/api/restaurant/shifts',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({staffId:shiftForm.staffId,date:shiftForm.date,durationMins:Number(shiftForm.durationMins),notes:shiftForm.notes||null})})
@@ -646,7 +652,7 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-200"><tr>{['Name','Role','Phone','Order Code','Cancel PIN','Status'].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>)}</tr></thead>
+              <thead className="bg-gray-50 border-b border-gray-200"><tr>{['Name','Role','Phone','Order Code','Cancel PIN','Status','Actions'].map(h=><th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600">{h}</th>)}</tr></thead>
               <tbody className="divide-y divide-gray-50">
                 {employees.map(emp=>(
                   <tr key={emp.id} className="hover:bg-gray-50 transition-colors">
@@ -673,6 +679,11 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
                     </td>
                     <td className="px-4 py-3">
                       <button onClick={()=>toggleEmployee(emp)} className={emp.isActive?'text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium':'text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium'}>{emp.isActive?'Active':'Inactive'}</button>
+                    </td>
+                    <td className="px-4 py-3">
+                      <button onClick={()=>deleteEmployee(emp)} className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 font-medium">
+                        <Trash2 className="h-3.5 w-3.5"/>Remove
+                      </button>
                     </td>
                   </tr>
                 ))}

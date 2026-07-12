@@ -31,7 +31,7 @@ async function requireRestaurantAdminContext() {
 
 	const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 	if (!context?.restaurantId || !context.branchId) {
-		return { error: NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 }) }
+		return { error: NextResponse.json({ error: 'No restaurant station found' }, { status: 400 }) }
 	}
 
 	return {
@@ -90,7 +90,7 @@ export async function POST(req: Request) {
 	}
 
 	if (!getRestaurantFifoAvailability({ id: result.context.restaurantId! })) {
-		return NextResponse.json({ error: 'FIFO cutover apply is only available for pilot-enabled branches. Add this branch to FIFO_PILOT_RESTAURANTS first.' }, { status: 409 })
+		return NextResponse.json({ error: 'FIFO cutover apply is only available for pilot-enabled stations. Add this station to FIFO_PILOT_RESTAURANTS first.' }, { status: 409 })
 	}
 
 	const applied = await prisma.$transaction((tx) => applyRestaurantInventoryReconciliation(tx, {

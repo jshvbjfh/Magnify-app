@@ -565,3 +565,210 @@ export async function getOrderCodeHolders(): Promise<CancellationApprover[]> {
   const rows = await db.query('SELECT * FROM order_code_holders ORDER BY name', [])
   return (rows ?? []) as unknown as CancellationApprover[]
 }
+
+// ---- MEP (mise en place) ----------------------------------------------------
+// mep_items: this station's persistent MEP list (server-authoritative, replaced
+// on pull). mep_catalog: preps available in the search box. mep_logs: local
+// "qty prepared" queue — id doubles as the server clientLogId, synced=0 rows are
+// pushed by pushMepSync.
+
+export interface MepItem {
+  id: string
+  restaurant_id: string | null
+  branch_id: string | null
+  target_type: 'prep' | 'dish'
+  target_id: string
+  name: string
+  unit: string | null
+  remaining: number
+  updated_at: string | null
+}
+
+export interface MepCatalogEntry {
+  target_id: string
+  branch_id: string | null
+  name: string
+  unit: string | null
+  remaining: number
+}
+
+export interface MepLog {
+  id: string
+  restaurant_id: string | null
+  branch_id: string | null
+  target_type: 'prep' | 'dish'
+  target_id: string
+  name: string | null
+  quantity: number
+  made_by: string | null
+  made_at: string
+  reversed: number
+  pending_undo: number
+  synced: number
+  sync_error: string | null
+}
+
+export async function replaceMepItems(items: MepItem[], branchId: string): Promise<void> {
+  const normalizedBranchId = normalizeScopeId(branchId)
+  if (!normalizedBranchId) return
+  const db = getDB()
+  await db.executeSet([
+    { statement: 'DELETE FROM mep_items WHERE branch_id = ?', values: [normalizedBranchId] },
+    ...items.map((item) => ({
+      statement:
+        'INSERT OR REPLACE INTO mep_items (id, restaurant_id, branch_id, target_type, target_id, name, unit, remaining, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      values: [item.id, item.restaurant_id, item.branch_id, item.target_type, item.target_id, item.name, item.unit, item.remaining, item.updated_at],
+    })),
+  ])
+}
+
+export async function replaceMepCatalog(preps: MepCatalogEntry[], branchId: string): Promise<void> {
+  const normalizedBranchId = normalizeScopeId(branchId)
+  if (!normalizedBranchId) return
+  const db = getDB()
+  await db.executeSet([
+    { statement: 'DELETE FROM mep_catalog WHERE branch_id = ? OR branch_id IS NULL', values: [normalizedBranchId] },
+    ...preps.map((prep) => ({
+      statement: 'INSERT OR REPLACE INTO mep_catalog (target_id, branch_id, name, unit, remaining) VALUES (?, ?, ?, ?, ?)',
+      values: [prep.target_id, normalizedBranchId, prep.name, prep.unit, prep.remaining],
+    })),
+  ])
+}
+
+export async function getMepItems(branchId?: string | null): Promise<MepItem[]> {
+  const db = getDB()
+  const normalized = normalizeScopeId(branchId)
+  const rows = normalized
+    ? await db.query('SELECT * FROM mep_items WHERE branch_id = ? ORDER BY name', [normalized])
+    : await db.query('SELECT * FROM mep_items ORDER BY name', [])
+  return (rows ?? []) as unknown as MepItem[]
+}
+
+export async function getMepCatalog(branchId?: string | null): Promise<MepCatalogEntry[]> {
+  const db = getDB()
+  const normalized = normalizeScopeId(branchId)
+  const rows = normalized
+    ? await db.query('SELECT * FROM mep_catalog WHERE branch_id = ? ORDER BY name', [normalized])
+    : await db.query('SELECT * FROM mep_catalog ORDER BY name', [])
+  return (rows ?? []) as unknown as MepCatalogEntry[]
+}
+
+export async function upsertMepItem(item: MepItem): Promise<void> {
+  const db = getDB()
+  await db.run(
+    'INSERT OR REPLACE INTO mep_items (id, restaurant_id, branch_id, target_type, target_id, name, unit, remaining, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [item.id, item.restaurant_id, item.branch_id, item.target_type, item.target_id, item.name, item.unit, item.remaining, item.updated_at],
+  )
+}
+
+export async function deleteMepItem(id: string): Promise<void> {
+  const db = getDB()
+  await db.run('DELETE FROM mep_items WHERE id = ?', [id])
+}
+
+// Optimistic "remaining" adjustment; clamped at 0 like the server.
+export async function adjustMepRemaining(targetType: string, targetId: string, delta: number): Promise<void> {
+  const db = getDB()
+  await db.run(
+    'UPDATE mep_items SET remaining = MAX(0, remaining + ?) WHERE target_type = ? AND target_id = ?',
+    [delta, targetType, targetId],
+  )
+}
+
+export async function setMepRemaining(targetType: string, targetId: string, remaining: number): Promise<void> {
+  const db = getDB()
+  await db.run(
+    'UPDATE mep_items SET remaining = MAX(0, ?) WHERE target_type = ? AND target_id = ?',
+    [remaining, targetType, targetId],
+  )
+}
+
+export async function insertMepLog(log: MepLog): Promise<void> {
+  const db = getDB()
+  await db.run(
+    `INSERT INTO mep_logs (id, restaurant_id, branch_id, target_type, target_id, name, quantity, made_by, made_at, reversed, pending_undo, synced, sync_error)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [log.id, log.restaurant_id, log.branch_id, log.target_type, log.target_id, log.name, log.quantity, log.made_by, log.made_at, log.reversed, log.pending_undo, log.synced, log.sync_error],
+  )
+}
+
+export async function getTodayMepLogs(branchId?: string | null): Promise<MepLog[]> {
+  const db = getDB()
+  const startOfDay = new Date()
+  startOfDay.setHours(0, 0, 0, 0)
+  const normalized = normalizeScopeId(branchId)
+  const rows = normalized
+    ? await db.query('SELECT * FROM mep_logs WHERE branch_id = ? AND made_at >= ? ORDER BY made_at DESC', [normalized, startOfDay.toISOString()])
+    : await db.query('SELECT * FROM mep_logs WHERE made_at >= ? ORDER BY made_at DESC', [startOfDay.toISOString()])
+  return (rows ?? []) as unknown as MepLog[]
+}
+
+export async function getUnsyncedMepLogs(): Promise<MepLog[]> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM mep_logs WHERE synced = 0 AND reversed = 0 ORDER BY made_at ASC', [])
+  return (rows ?? []) as unknown as MepLog[]
+}
+
+export async function getPendingMepUndos(): Promise<MepLog[]> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM mep_logs WHERE pending_undo = 1 ORDER BY made_at ASC', [])
+  return (rows ?? []) as unknown as MepLog[]
+}
+
+export async function markMepLogsSynced(ids: string[]): Promise<void> {
+  if (!ids.length) return
+  const db = getDB()
+  for (const id of ids) {
+    await db.run('UPDATE mep_logs SET synced = 1, sync_error = NULL WHERE id = ?', [id])
+  }
+}
+
+export async function markMepLogReversed(id: string): Promise<void> {
+  const db = getDB()
+  await db.run('UPDATE mep_logs SET reversed = 1, pending_undo = 0, sync_error = NULL WHERE id = ?', [id])
+}
+
+export async function clearMepLogPendingUndo(id: string, error: string | null): Promise<void> {
+  const db = getDB()
+  await db.run('UPDATE mep_logs SET pending_undo = 0, sync_error = ? WHERE id = ?', [error, id])
+}
+
+export async function setMepLogPendingUndo(id: string): Promise<void> {
+  const db = getDB()
+  await db.run('UPDATE mep_logs SET pending_undo = 1 WHERE id = ?', [id])
+}
+
+export async function setMepLogSyncError(id: string, error: string | null): Promise<void> {
+  const db = getDB()
+  await db.run('UPDATE mep_logs SET sync_error = ? WHERE id = ?', [error, id])
+}
+
+// Hard server rejection (4xx): stop retrying — synced=1 keeps it out of the
+// push queue, sync_error keeps the reason visible in the UI.
+export async function markMepLogFailed(id: string, error: string): Promise<void> {
+  const db = getDB()
+  await db.run('UPDATE mep_logs SET synced = 1, sync_error = ? WHERE id = ?', [error, id])
+}
+
+// Marks server-known logs as synced (and reversed when the server says so),
+// so a reinstalled device doesn't re-push logs the server already applied.
+export async function reconcileMepLogs(remote: Array<{ client_log_id: string | null; reversed: number }>): Promise<void> {
+  if (!remote.length) return
+  const db = getDB()
+  for (const log of remote) {
+    if (!log.client_log_id) continue
+    await db.run(
+      'UPDATE mep_logs SET synced = 1, reversed = ?, sync_error = NULL WHERE id = ? AND pending_undo = 0',
+      [log.reversed ? 1 : 0, log.client_log_id],
+    )
+  }
+}
+
+export async function getMepOutDishIds(branchId?: string | null): Promise<string[]> {
+  const db = getDB()
+  const normalized = normalizeScopeId(branchId)
+  const rows = normalized
+    ? await db.query("SELECT target_id FROM mep_items WHERE target_type = 'dish' AND remaining <= 0 AND branch_id = ?", [normalized])
+    : await db.query("SELECT target_id FROM mep_items WHERE target_type = 'dish' AND remaining <= 0", [])
+  return ((rows ?? []) as Array<{ target_id: string }>).map((row) => row.target_id)
+}

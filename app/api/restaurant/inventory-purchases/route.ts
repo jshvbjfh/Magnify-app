@@ -162,7 +162,7 @@ export async function GET(req: Request) {
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 
-    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
     const { searchParams } = new URL(req.url)
     const ingredientId = searchParams.get('ingredientId')
@@ -197,7 +197,7 @@ export async function POST(req: Request) {
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 
-    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
     const body = await req.json()
     const { ingredientId, itemName, unit, supplier, paymentMethod, purchaseUnit } = body
@@ -317,7 +317,7 @@ export async function PUT(req: Request) {
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 
-    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
     const body = await req.json()
     const { id, ingredientId, itemName, unit, supplier, paymentMethod, purchaseUnit } = body
@@ -444,7 +444,7 @@ export async function DELETE(req: Request) {
     const restaurantId = context?.restaurantId ?? null
     const branchId = context?.branchId ?? null
 
-    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
     const { searchParams } = new URL(req.url)
     const id = searchParams.get('id')

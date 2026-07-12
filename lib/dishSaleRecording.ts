@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 
 import { recordJournalEntry } from '@/lib/accounting'
 import { consumeIngredientStock, getRestaurantFifoEnabled, InsufficientFifoStockError, InsufficientInventoryStockError } from '@/lib/inventoryConsumption'
+import { consumePrepAwareIngredient } from '@/lib/mepProduction'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
@@ -54,7 +55,13 @@ export async function recordDishSalesForPaidOrder(
     include: {
       ingredients: {
         include: {
-          inventoryItem: true,
+          inventoryItem: {
+            include: {
+              prepIngredients: {
+                include: { ingredient: true },
+              },
+            },
+          },
         },
       },
     },
@@ -116,35 +123,94 @@ export async function recordDishSalesForPaidOrder(
     let calculatedFoodCost = 0
     const ingredientLines: Array<{ ingredientId: string; quantityUsed: number; actualCost: number }> = []
 
+    // MEP-FIRST (dish level): batch-cooked portions cover the sale before the
+    // recipe runs. Re-read live counters — the same dish can appear on multiple
+    // lines of this order, so dishMap's copy may already be stale.
+    let recipeQuantity = quantitySold
+    const freshDish = await db.dish.findUnique({
+      where: { id: dish.id },
+      select: { preparedPortions: true, preparedPortionCost: true },
+    })
+    const portionsAvailable = Math.max(0, roundQuantity(Number(freshDish?.preparedPortions ?? 0)))
+    const portionsUsed = roundQuantity(Math.min(portionsAvailable, quantitySold))
+    if (portionsUsed > 0) {
+      calculatedFoodCost = roundQuantity(calculatedFoodCost + portionsUsed * Number(freshDish?.preparedPortionCost ?? 0))
+      recipeQuantity = roundQuantity(quantitySold - portionsUsed)
+
+      const updatedDish = await db.dish.update({
+        where: { id: dish.id },
+        data: { preparedPortions: roundQuantity(Math.max(0, portionsAvailable - portionsUsed)) },
+      })
+      await enqueueSyncChange(db, {
+        restaurantId: params.restaurantId,
+        branchId: dishBranchId,
+        entityType: 'dish',
+        entityId: updatedDish.id,
+        operation: 'upsert',
+        sourceDeviceId: params.sourceDeviceId ?? null,
+        payload: updatedDish,
+      })
+    }
+
     for (const row of dish.ingredients) {
+      if (recipeQuantity <= 0) break
+
       const quantityRequired = Number(row.quantityRequired || 0)
       if (!Number.isFinite(quantityRequired) || quantityRequired <= 0) {
         console.warn(`[dishSale] ingredient ${row.inventoryItemId} has invalid quantityRequired=${row.quantityRequired} for dish ${dish.id} — skipping COGS for this ingredient (order: ${params.orderId ?? 'unknown'})`)
         continue
       }
 
-      const totalNeeded = roundQuantity(quantityRequired * quantitySold)
+      const totalNeeded = roundQuantity(quantityRequired * recipeQuantity)
       try {
-        const consumption = await consumeIngredientStock(db, {
-          restaurantId: params.restaurantId,
-          branchId: dishBranchId,
-          ingredientId: row.inventoryItemId,
-          quantity: totalNeeded,
-          fifoEnabled,
-          sourceType: 'dishSale',
-          sourceId: dishSale.id,
-          consumedAt: params.saleDate,
-          reason: params.orderId
-            ? `Dish sale consumption for paid order ${params.orderId}`
-            : 'Dish sale consumption',
-        })
+        if (row.inventoryItem.type === 'prep' && row.inventoryItem.prepIngredients.length > 0) {
+          // MEP-FIRST (prep level): drain the prep's own kitchen-made stock, then
+          // cascade only the uncovered shortfall to raw ingredients. The old code
+          // consumed both unconditionally, double-counting whenever the prep held stock.
+          const prepConsumption = await consumePrepAwareIngredient(db, {
+            restaurantId: params.restaurantId,
+            branchId: dishBranchId,
+            ingredient: row.inventoryItem,
+            quantityNeeded: totalNeeded,
+            fifoEnabled,
+            sourceType: 'dishSale',
+            sourceId: dishSale.id,
+            consumedAt: params.saleDate,
+            reason: params.orderId
+              ? `Dish sale consumption for paid order ${params.orderId}`
+              : 'Dish sale consumption',
+          })
+          calculatedFoodCost = roundQuantity(calculatedFoodCost + prepConsumption.totalCost)
+          ingredientLines.push(...prepConsumption.lines.map((line) => ({
+            ingredientId: line.ingredientId,
+            quantityUsed: line.quantityUsed,
+            actualCost: line.actualCost,
+          })))
+        } else {
+          const consumption = await consumeIngredientStock(db, {
+            restaurantId: params.restaurantId,
+            branchId: dishBranchId,
+            ingredientId: row.inventoryItemId,
+            quantity: totalNeeded,
+            fifoEnabled,
+            sourceType: 'dishSale',
+            sourceId: dishSale.id,
+            consumedAt: params.saleDate,
+            reason: params.orderId
+              ? `Dish sale consumption for paid order ${params.orderId}`
+              : 'Dish sale consumption',
+            allowPartial: true,
+          })
 
-        calculatedFoodCost = roundQuantity(calculatedFoodCost + consumption.totalCost)
-        ingredientLines.push({
-          ingredientId: row.inventoryItemId,
-          quantityUsed: consumption.quantityConsumed,
-          actualCost: consumption.totalCost,
-        })
+          calculatedFoodCost = roundQuantity(calculatedFoodCost + consumption.totalCost)
+          if (consumption.quantityConsumed > 0) {
+            ingredientLines.push({
+              ingredientId: row.inventoryItemId,
+              quantityUsed: consumption.quantityConsumed,
+              actualCost: consumption.totalCost,
+            })
+          }
+        }
       } catch (stockError) {
         if (stockError instanceof InsufficientFifoStockError || stockError instanceof InsufficientInventoryStockError) {
           continue

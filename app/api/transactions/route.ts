@@ -42,7 +42,7 @@ export async function GET(req: Request) {
     const context = await requireContext()
 
     if (!context.restaurantId || !context.branchId) {
-      return new NextResponse('No restaurant branch linked to this account. Contact your administrator.', { status: 400 })
+      return new NextResponse('No restaurant station linked to this account. Contact your administrator.', { status: 400 })
     }
 
     const { searchParams } = new URL(req.url)
@@ -122,7 +122,7 @@ export async function POST(req: Request) {
   try {
     const context = await requireContext()
     if (!context.restaurantId || !context.branchId) {
-      return new NextResponse('No restaurant branch found for this write operation', { status: 400 })
+      return new NextResponse('No restaurant station found for this write operation', { status: 400 })
     }
 
     const body = await req.json()

@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
 
   const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   if (!context?.restaurantId || !context.branchId) {
-    return NextResponse.json({ error: 'No active restaurant branch found.' }, { status: 400 })
+    return NextResponse.json({ error: 'No active restaurant station found.' }, { status: 400 })
   }
 
   if (!process.env.BLOB_READ_WRITE_TOKEN) {

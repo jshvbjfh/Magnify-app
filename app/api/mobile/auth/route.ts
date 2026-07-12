@@ -119,7 +119,7 @@ export async function POST(req: Request) {
 
       const branchId = await resolveStaffBranchId(matchedStaff.id, matchedStaff.restaurantId)
       if (!branchId) {
-        return jsonNoStore({ error: 'Your account is not linked to a branch. Contact your manager.' }, { status: 403 })
+        return jsonNoStore({ error: 'Your account is not linked to a station. Contact your manager.' }, { status: 403 })
       }
 
       const token = await new SignJWT({
@@ -176,7 +176,7 @@ export async function POST(req: Request) {
 
       const branchId = await resolveStaffBranchId(matchedStaff.id, matchedStaff.restaurantId)
       if (!branchId) {
-        return jsonNoStore({ error: 'Your account is not linked to a branch. Contact your manager.' }, { status: 403 })
+        return jsonNoStore({ error: 'Your account is not linked to a station. Contact your manager.' }, { status: 403 })
       }
 
       const token = await new SignJWT({

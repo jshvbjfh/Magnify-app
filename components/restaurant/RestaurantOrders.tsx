@@ -659,6 +659,8 @@ ${headerLines}
 </table>
 <div class="divider"></div>
 <div class="footer">${footerLines}</div>
+<p class="center" style="margin-top:6px;font-size:9px;color:#888">Powered by Magnify</p>
+${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${template.footer2Text.split('\n').map(l => `<p class="center">${l || '&nbsp;'}</p>`).join('')}</div>` : ''}
 </body></html>`
     if (typeof window !== 'undefined' && window.electronPrinter) {
       window.electronPrinter.printCustomerBill(html).catch(() => {})

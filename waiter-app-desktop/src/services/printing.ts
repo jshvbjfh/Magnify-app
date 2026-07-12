@@ -52,15 +52,19 @@ body{font-family:monospace;font-size:12px;width:58mm;padding:4mm;text-align:cent
   await ep.receipt(html, deviceName || undefined)
 }
 
-// The manager stores the editable bill as top + bottom text joined by this
-// delimiter (see lib/restaurantBillTemplate.ts on the server). Keep in sync.
+// The manager stores the editable bill as top + bottom (+ optional footer2)
+// text joined by these delimiters (see lib/restaurantBillTemplate.ts on the
+// server). Keep in sync. footer2 prints below the hard-coded "Powered by
+// Magnify" line — mostly blank lines that push the footer past the cutter.
 const BILL_FOOTER_DELIMITER = '\n---MAGNIFY-FOOTER---\n'
+const BILL_FOOTER2_DELIMITER = '\n---MAGNIFY-FOOTER2---\n'
 
-export function parseBillTemplate(raw: string | null | undefined): { topText: string; bottomText: string } {
+export function parseBillTemplate(raw: string | null | undefined): { topText: string; bottomText: string; footer2Text: string } {
   const normalized = typeof raw === 'string' ? raw : ''
-  const parts = normalized.split(BILL_FOOTER_DELIMITER)
+  const [beforeFooter2, footer2] = normalized.split(BILL_FOOTER2_DELIMITER)
+  const parts = (beforeFooter2 ?? '').split(BILL_FOOTER_DELIMITER)
   // Preserve blank lines — they're the manager's intentional vertical spacing.
-  return { topText: parts[0] ?? '', bottomText: parts[1] ?? '' }
+  return { topText: parts[0] ?? '', bottomText: parts[1] ?? '', footer2Text: footer2 ?? '' }
 }
 
 // Virtual printers (PDF/XPS/OneNote/Fax) pop a file-save dialog instead of

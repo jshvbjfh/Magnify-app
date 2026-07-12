@@ -12,14 +12,14 @@ export async function GET() {
 
   const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   const restaurantId = context?.restaurantId ?? null
-  const branchId = context?.branchId ?? null
 
-  if (!restaurantId || !branchId) return NextResponse.json([])
+  if (!restaurantId) return NextResponse.json([])
 
+  // Employees are restaurant-wide, not scoped to the station they were created under —
+  // deliberately no branchId filter here so an employee added at one station shows at every station.
   const staff = await prisma.staff.findMany({
     where: {
       restaurantId,
-      branches: { some: { branchId } },
       deletedAt: null,
       username: null, // exclude waiter/kitchen login accounts; employees have no login credentials
     },
@@ -51,7 +51,7 @@ export async function POST(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
-  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
   const ALLOWED_ROLES = ['Chef', 'Sous Chef', 'Waiter', 'Cashier', 'Manager', 'Host', 'Dishwasher', 'Bartender']
 

@@ -37,7 +37,7 @@ export async function POST(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
-  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+  if (!context?.restaurantId || !context.branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
   const { staffId, date, durationMins, notes } = await req.json()
   if (!staffId || !date) {

@@ -137,7 +137,7 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
       setQrMenuHeroImageUrl(typeof restaurant?.qrMenuHeroImageUrl === 'string'
         ? restaurant.qrMenuHeroImageUrl
         : null)
-      setMessage(nextPath ? 'QR menu header image saved for this branch.' : 'QR menu header image removed.')
+      setMessage(nextPath ? 'QR menu header image saved for this station.' : 'QR menu header image removed.')
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Unable to save QR menu image.')
     } finally {
@@ -185,14 +185,14 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
             <p className="text-[11px] font-semibold uppercase tracking-[0.26em] text-orange-500">Public QR Menu</p>
             <h3 className="mt-2 text-xl font-bold text-gray-900">Hero Artwork</h3>
             <p className="mt-2 text-sm leading-relaxed text-gray-500">
-              Upload the branch image that appears at the top of the QR menu after a guest scans a table code.
-              The public QR menu combines active dishes from every branch in this restaurant and keeps Magnify&apos;s orange-to-red flow under this artwork.
+              Upload the station image that appears at the top of the QR menu after a guest scans a table code.
+              The public QR menu combines active dishes from every station in this restaurant and keeps Magnify&apos;s orange-to-red flow under this artwork.
             </p>
           </div>
           <div className="rounded-2xl border border-orange-100 bg-orange-50 px-3 py-2 text-right">
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-orange-500">QR Scope</p>
-            <p className="mt-1 text-sm font-bold text-gray-900">All branches</p>
-            <p className="mt-1 text-[11px] text-gray-500">Artwork from {restaurantBranch?.branchName ?? 'current branch'}</p>
+            <p className="mt-1 text-sm font-bold text-gray-900">All stations</p>
+            <p className="mt-1 text-[11px] text-gray-500">Artwork from {restaurantBranch?.branchName ?? 'current station'}</p>
           </div>
         </div>
 

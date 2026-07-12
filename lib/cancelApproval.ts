@@ -20,12 +20,13 @@ export async function resolveCancellationApprover(params: {
   const normalizedPin = String(params.pin || '').trim()
   if (!isValidCancellationPin(normalizedPin)) return null
 
+  // Employees (and their cancellation PINs) are restaurant-wide, not scoped to a single
+  // station, so an approver's PIN works no matter which station the cancellation happens at.
   const staffList = await prisma.staff.findMany({
     where: {
       ...(params.restaurantId ? { restaurantId: params.restaurantId } : {}),
       isActive: true,
       cancellationPin: { not: null },
-      ...(params.branchId ? { branches: { some: { branchId: params.branchId } } } : {}),
     },
     select: {
       id: true,

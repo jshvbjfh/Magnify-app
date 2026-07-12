@@ -162,6 +162,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
+  const [salesTotals, setSalesTotals] = useState<{ revenue: number; cost: number; profit: number } | null>(null)
   const initializedSelectedDateRef = useRef(false)
   const descriptionRef = useRef<HTMLInputElement>(null)
 
@@ -223,6 +224,83 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
       setLoading(false)
     }
   }, [persistSnapshot])
+
+  const fetchSalesTotals = useCallback(async (dateKey: string) => {
+    try {
+      const res = await fetch(`/api/restaurant/reports/dish-profitability?from=${dateKey}&to=${dateKey}`, { credentials: 'include' })
+      if (!res.ok) throw new Error('Failed to load sales totals')
+      const data = await res.json()
+      setSalesTotals({
+        revenue: Number(data.totals?.totalRevenue ?? 0),
+        cost: Number(data.totals?.totalCost ?? 0),
+        profit: Number(data.totals?.totalProfit ?? 0),
+      })
+    } catch {
+      setSalesTotals(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    void fetchSalesTotals(selectedDate)
+  }, [selectedDate, fetchSalesTotals])
+
+  useEffect(() => {
+    const handler = () => fetchSalesTotals(selectedDate)
+    window.addEventListener('refreshTransactions', handler)
+    window.addEventListener('online', handler)
+    return () => {
+      window.removeEventListener('refreshTransactions', handler)
+      window.removeEventListener('online', handler)
+    }
+  }, [selectedDate, fetchSalesTotals])
+
+  const [viewMode, setViewMode] = useState<'all' | 'grouped'>('all')
+  const [dishSales, setDishSales] = useState<any[]>([])
+
+  const fetchDishSales = useCallback(async (dateKey: string) => {
+    try {
+      const res = await fetch(`/api/restaurant/dish-sales?from=${dateKey}&to=${dateKey}`, { credentials: 'include' })
+      if (!res.ok) throw new Error('Failed to load dish sales')
+      const data = await res.json()
+      setDishSales(Array.isArray(data) ? data : [])
+    } catch {
+      setDishSales([])
+    }
+  }, [])
+
+  useEffect(() => {
+    void fetchDishSales(selectedDate)
+  }, [selectedDate, fetchDishSales])
+
+  useEffect(() => {
+    const handler = () => fetchDishSales(selectedDate)
+    window.addEventListener('refreshTransactions', handler)
+    window.addEventListener('online', handler)
+    return () => {
+      window.removeEventListener('refreshTransactions', handler)
+      window.removeEventListener('online', handler)
+    }
+  }, [selectedDate, fetchDishSales])
+
+  const groupedDishRows = (() => {
+    const map = new Map<string, { dishName: string; qty: number; amount: number }>()
+    for (const sale of dishSales) {
+      if (sale?.deletedAt) continue
+      const key = String(sale?.dishName ?? 'Unknown')
+      const qty = Number(sale?.quantitySold ?? 0)
+      const amount = Number(sale?.totalSaleAmount ?? 0)
+      const existing = map.get(key)
+      if (existing) {
+        existing.qty += qty
+        existing.amount += amount
+      } else {
+        map.set(key, { dishName: key, qty, amount })
+      }
+    }
+    return Array.from(map.values())
+      .filter((row) => !search || row.dishName.toLowerCase().includes(search.toLowerCase()))
+      .sort((a, b) => b.qty - a.qty)
+  })()
 
   useEffect(() => {
     if (!snapshotStorageScope) return
@@ -493,36 +571,129 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
             </div>
           )}
 
-          {/* Summary cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
-            <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-gray-500 font-medium">Revenue</span>
-                <div className="p-1.5 bg-green-100 rounded-lg"><TrendingUp className="h-4 w-4 text-green-600" /></div>
+          {/* Summary cards — general ledger + sales P&L, compact single row */}
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+            <div className="bg-white rounded-lg border border-gray-100 p-2.5 shadow-sm">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-gray-500 font-medium truncate">Revenue</span>
+                <div className="p-1 bg-green-100 rounded-md flex-shrink-0"><TrendingUp className="h-3 w-3 text-green-600" /></div>
               </div>
-              <p className="text-xl font-bold text-green-600">{fmtRWF(totalRevenue)}</p>
-              <p className="text-xs text-gray-400 mt-1">{dateLabel}</p>
+              <p className="text-sm font-bold text-green-600 truncate">{fmtRWF(totalRevenue)}</p>
+              <p className="text-[9px] text-gray-400 mt-0.5 truncate">General</p>
             </div>
-            <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-gray-500 font-medium">Expenses</span>
-                <div className="p-1.5 bg-red-100 rounded-lg"><TrendingDown className="h-4 w-4 text-red-600" /></div>
+            <div className="bg-white rounded-lg border border-gray-100 p-2.5 shadow-sm">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-gray-500 font-medium truncate">Expenses</span>
+                <div className="p-1 bg-red-100 rounded-md flex-shrink-0"><TrendingDown className="h-3 w-3 text-red-600" /></div>
               </div>
-              <p className="text-xl font-bold text-red-600">{fmtRWF(totalExpenses)}</p>
-              <p className="text-xs text-gray-400 mt-1">{dateLabel}</p>
+              <p className="text-sm font-bold text-red-600 truncate">{fmtRWF(totalExpenses)}</p>
+              <p className="text-[9px] text-gray-400 mt-0.5 truncate">General</p>
             </div>
-            <div className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-gray-500 font-medium">Profit / Loss</span>
-                <div className="p-1.5 bg-orange-100 rounded-lg"><Layers className="h-4 w-4 text-orange-600" /></div>
+            <div className="bg-white rounded-lg border border-gray-100 p-2.5 shadow-sm">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-gray-500 font-medium truncate">Profit / Loss</span>
+                <div className="p-1 bg-orange-100 rounded-md flex-shrink-0"><Layers className="h-3 w-3 text-orange-600" /></div>
               </div>
-              <p className={`text-xl font-bold ${totalRevenue - totalExpenses >= 0 ? 'text-orange-600' : 'text-red-600'}`}>
+              <p className={`text-sm font-bold truncate ${totalRevenue - totalExpenses >= 0 ? 'text-orange-600' : 'text-red-600'}`}>
                 {fmtRWF(Math.abs(totalRevenue - totalExpenses))}
               </p>
-              <p className="text-xs text-gray-400 mt-1">{totalRevenue - totalExpenses >= 0 ? 'Profitable' : 'Loss recorded'}</p>
+              <p className="text-[9px] text-gray-400 mt-0.5 truncate">General</p>
+            </div>
+            <div className="bg-white rounded-lg border border-gray-100 p-2.5 shadow-sm">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-gray-500 font-medium truncate">Cost of Goods</span>
+                <div className="p-1 bg-red-100 rounded-md flex-shrink-0"><TrendingDown className="h-3 w-3 text-red-600" /></div>
+              </div>
+              <p className="text-sm font-bold text-red-600 truncate">{fmtRWF(salesTotals?.cost ?? 0)}</p>
+              <p className="text-[9px] text-gray-400 mt-0.5 truncate">Sales</p>
+            </div>
+            <div className="bg-white rounded-lg border border-gray-100 p-2.5 shadow-sm">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-gray-500 font-medium truncate">Sales Profit</span>
+                <div className="p-1 bg-orange-100 rounded-md flex-shrink-0"><Layers className="h-3 w-3 text-orange-600" /></div>
+              </div>
+              <p className={`text-sm font-bold truncate ${(salesTotals?.profit ?? 0) >= 0 ? 'text-orange-600' : 'text-red-600'}`}>
+                {fmtRWF(Math.abs(salesTotals?.profit ?? 0))}
+              </p>
+              <p className="text-[9px] text-gray-400 mt-0.5 truncate">Sales</p>
             </div>
           </div>
 
+          {/* All / Grouped toggle */}
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setViewMode('all')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${viewMode === 'all' ? 'bg-orange-500 text-white shadow-sm' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setViewMode('grouped')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${viewMode === 'grouped' ? 'bg-orange-500 text-white shadow-sm' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+            >
+              Grouped
+            </button>
+          </div>
+
+          {viewMode === 'grouped' && (
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-gray-800">{dateLabel}</p>
+                  <p className="text-xs text-gray-400">{groupedDishRows.length} {groupedDishRows.length === 1 ? 'item' : 'items'} sold</p>
+                </div>
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    placeholder="Search dish&hellip;"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    className="pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm w-40 focus:outline-none focus:ring-2 focus:ring-orange-300"
+                  />
+                </div>
+              </div>
+              {groupedDishRows.length === 0 ? (
+                <div className="text-center py-16">
+                  <Calendar className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500 font-medium">No items sold</p>
+                  <p className="text-gray-400 text-sm mt-1">
+                    {search ? 'Try a different search term' : `No dishes sold on ${dateLabel}`}
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-100 bg-gray-50">
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Dish</th>
+                        <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Qty Sold</th>
+                        <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Net Amount (RWF)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {groupedDishRows.map((row) => (
+                        <tr key={row.dishName} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 text-gray-800 font-medium">{fmtDesc(row.dishName)}</td>
+                          <td className="px-4 py-3 text-right text-gray-600">{row.qty}</td>
+                          <td className="px-4 py-3 text-right font-semibold text-green-600">{row.amount >= 0 ? '+' : '-'}{fmtRWF(Math.abs(row.amount))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-gray-900 text-white font-bold">
+                        <td className="px-4 py-2.5 text-xs">TOTAL</td>
+                        <td className="px-4 py-2.5 text-xs text-right">{groupedDishRows.reduce((s, r) => s + r.qty, 0)}</td>
+                        <td className="px-4 py-2.5 text-xs text-right">{fmtRWF(groupedDishRows.reduce((s, r) => s + r.amount, 0))}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {viewMode === 'all' && <>
           {/* Controls */}
           <div className="bg-white rounded-xl border border-gray-100 px-4 py-3 shadow-sm flex items-center justify-between gap-3">
             <div>
@@ -779,6 +950,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
               </div>
             )}
           </div>
+          </>}
 
         </div>{/* end main content */}
       </div>{/* end two-column */}

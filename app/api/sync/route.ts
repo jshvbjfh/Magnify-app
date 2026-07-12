@@ -379,6 +379,8 @@ export async function POST(req: Request) {
       restaurantOrder: 13,
       orderItem: 14,
       journalEntry: 15,
+      mepListItem: 16,
+      prepLog: 17,
     }
 
     const sortedChanges = [...changes].sort(

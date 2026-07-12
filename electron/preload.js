@@ -8,3 +8,7 @@ contextBridge.exposeInMainWorld('electronPrinter', {
   printCustomerBill: (html)   => ipcRenderer.invoke('printer:print-bill', html),
   testPrint:         ()       => ipcRenderer.invoke('printer:test'),
 })
+
+contextBridge.exposeInMainWorld('electronFiles', {
+  saveAndReveal: (filename, dataBase64) => ipcRenderer.invoke('files:save-and-reveal', { filename, dataBase64 }),
+})

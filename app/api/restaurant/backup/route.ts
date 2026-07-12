@@ -161,7 +161,7 @@ export async function POST(req: Request) {
         : null
 
       if (restaurant && hasBranchScopedBackupData(backup) && !restoreBranchId) {
-        throw new Error('Active branch is required to restore branch-scoped restaurant data.')
+        throw new Error('Active station is required to restore station-scoped restaurant data.')
       }
 
       // ── Restaurant settings ──

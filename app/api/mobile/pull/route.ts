@@ -77,12 +77,18 @@ export async function GET(req: Request) {
     // made by the manager without re-pushing. Scoped to the waiter's branch.
     const recentOrderSince = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
 
-    const [dishes, tables, restaurant, approverEmployees, allBranches, recentOrders, incomingOrders] = await Promise.all([
+    // "Today" window for MEP log reconciliation (server timezone — the device's
+    // own local log list is the primary UI source).
+    const startOfToday = new Date()
+    startOfToday.setHours(0, 0, 0, 0)
+
+    const [dishes, tables, restaurant, approverEmployees, allBranches, recentOrders, incomingOrders, mepItems, mepTodayLogs, prepCatalog] = await Promise.all([
       prisma.dish.findMany({
         where: dishWhere,
         select: {
           id: true, name: true, sellingPrice: true,
           category: true, menuType: true, isActive: true, branchId: true, restaurantId: true,
+          preparedPortions: true,
         },
         orderBy: { name: 'asc' },
       }),
@@ -190,6 +196,26 @@ export async function GET(req: Request) {
         orderBy: { createdAt: 'asc' },
         take: 300,
       }),
+
+      // MEP list for this station — persists until removed by staff.
+      prisma.mepListItem.findMany({
+        where: { restaurantId, branchId: effectiveBranchId, deletedAt: null },
+        orderBy: { createdAt: 'asc' },
+      }),
+
+      // Today's prep logs for offline reconciliation on the device.
+      prisma.prepLog.findMany({
+        where: { restaurantId, branchId: effectiveBranchId, madeAt: { gte: startOfToday } },
+        orderBy: { madeAt: 'desc' },
+        take: 200,
+      }),
+
+      // Prep catalog for the MEP search box (dishes come from the dishes array).
+      prisma.inventoryItem.findMany({
+        where: { restaurantId, branchId: effectiveBranchId, type: 'prep', deletedAt: null },
+        select: { id: true, name: true, unit: true, quantity: true },
+        orderBy: { name: 'asc' },
+      }),
     ])
 
     // Normalise Prisma Decimal → number for SQLite
@@ -202,7 +228,43 @@ export async function GET(req: Request) {
       is_active: d.isActive ? 1 : 0,
       branch_id: d.branchId ?? null,
       restaurant_id: d.restaurantId,
+      prepared_portions: Number(d.preparedPortions ?? 0),
     }))
+
+    // Resolve MEP target names/remaining server-side so the device never needs
+    // an inventory table. Targets that no longer resolve are skipped.
+    const prepById = new Map(prepCatalog.map(p => [p.id, p]))
+    const dishById = new Map(dishes.map(d => [d.id, d]))
+    const normalisedMepItems = mepItems.flatMap(item => {
+      if (item.targetType === 'prep') {
+        const prep = prepById.get(item.targetId)
+        if (!prep) return []
+        return [{
+          id: item.id,
+          restaurant_id: item.restaurantId,
+          branch_id: item.branchId,
+          target_type: 'prep',
+          target_id: item.targetId,
+          name: prep.name,
+          unit: prep.unit ?? null,
+          remaining: Number(prep.quantity ?? 0),
+          updated_at: item.updatedAt.toISOString(),
+        }]
+      }
+      const dish = dishById.get(item.targetId)
+      if (!dish) return []
+      return [{
+        id: item.id,
+        restaurant_id: item.restaurantId,
+        branch_id: item.branchId,
+        target_type: 'dish',
+        target_id: item.targetId,
+        name: dish.name,
+        unit: 'portion',
+        remaining: Number(dish.preparedPortions ?? 0),
+        updated_at: item.updatedAt.toISOString(),
+      }]
+    })
 
     const normalisedTables = tables.map(t => ({
       id: t.id,
@@ -291,6 +353,31 @@ export async function GET(req: Request) {
           updated_at: item.updatedAt.toISOString(),
         })),
       })),
+
+      // MEP: per-station prep list + today's logs + prep catalog for the search box.
+      mep: {
+        items: normalisedMepItems,
+        todayLogs: mepTodayLogs.map(log => ({
+          id: log.id,
+          client_log_id: log.clientLogId ?? null,
+          target_type: log.targetType,
+          target_id: log.targetId,
+          name: log.targetType === 'prep'
+            ? (prepById.get(log.targetId)?.name ?? null)
+            : (dishById.get(log.targetId)?.name ?? null),
+          quantity: Number(log.quantity),
+          unit: log.unit ?? null,
+          made_by: log.madeBy ?? null,
+          made_at: log.madeAt.toISOString(),
+          reversed: log.reversedAt ? 1 : 0,
+        })),
+        preps: prepCatalog.map(p => ({
+          id: p.id,
+          name: p.name,
+          unit: p.unit ?? null,
+          remaining: Number(p.quantity ?? 0),
+        })),
+      },
     })
   } catch (err: any) {
     if (err.message === 'Unauthorized') {

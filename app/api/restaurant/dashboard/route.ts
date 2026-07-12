@@ -58,7 +58,7 @@ export async function GET(req: Request) {
   const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
-  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
   const user = await prisma.user.findUnique({
     where: { id: session.user.id },

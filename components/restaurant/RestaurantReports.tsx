@@ -1,12 +1,22 @@
 ﻿'use client'
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange } from 'lucide-react'
+import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange, Store, Share2 } from 'lucide-react'
 import { fmtDesc } from '@/lib/displayId'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { BranchBadge, useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
 
-type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory'
+type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory' | 'general'
+
+type BranchSummaryRow = {
+  branchId: string
+  branchName: string
+  sales: number
+  cost: number
+  profit: number
+  percentOfSales: number
+  marginPercent: number
+}
 type Period = 'today' | 'week' | 'month' | 'quarter' | 'year'
 
 type PaymentMethodEvent = {
@@ -36,6 +46,7 @@ function statusLabel(value: string | null | undefined) {
 }
 
 const TABS: { id: ReportTab; label: string; short: string; icon: React.ElementType; desc: string }[] = [
+  { id:'general',    label:'General Report',         short:'General',   icon:Store,          desc:'Sales, cost of goods sold and profit by station, across your whole restaurant account' },
   { id:'journal',    label:'Journal Ledger',         short:'Journal',   icon:BookOpen,       desc:'All recorded transactions in chronological order' },
   { id:'receivable', label:'Accounts Receivable',    short:'A/R',       icon:TrendingUp,     desc:'Money customers owe your business' },
   { id:'payable',    label:'Accounts Payable',       short:'A/P',       icon:CreditCard,     desc:'Money your business owes to suppliers' },
@@ -105,6 +116,16 @@ function formatDayChip(date: string) {
 }
 
 function fmt(n: number) { return n.toLocaleString('en-RW',{maximumFractionDigits:0}) }
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  let binary = ''
+  const bytes = new Uint8Array(buffer)
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
 
 function normalizeTransactions(rows: any[]) {
   return rows.map((row) => ({
@@ -708,6 +729,55 @@ function DishProfitTable({ data }: { data: any }) {
   )
 }
 
+function BranchSummaryTable({ data, onExportPdf, onSharePdf, exporting }: {
+  data: { rows: BranchSummaryRow[]; totals: { totalSales: number; totalCost: number; totalProfit: number } } | null
+  onExportPdf: () => void
+  onSharePdf: () => void
+  exporting: boolean
+}) {
+  if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading general report…</div>
+  const rows = data.rows ?? []
+  const totals = data.totals ?? { totalSales: 0, totalCost: 0, totalProfit: 0 }
+  const overallMargin = totals.totalSales > 0 ? Math.round((totals.totalProfit / totals.totalSales) * 1000) / 10 : 0
+  return (
+    <>
+      <div className="flex items-center justify-end gap-2 mb-4">
+        <button onClick={onSharePdf} disabled={exporting}
+          className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 text-gray-700 text-xs font-semibold px-3 py-1.5 rounded-lg shadow-sm transition-colors">
+          <Share2 className="h-3.5 w-3.5"/> Share PDF
+        </button>
+        <button onClick={onExportPdf} disabled={exporting}
+          className="flex items-center gap-1.5 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-sm transition-colors">
+          {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin"/> : <Download className="h-3.5 w-3.5"/>} Export PDF
+        </button>
+      </div>
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <StatCard label="Gross Sales" value={`${fmt(totals.totalSales)} RWF`} color="bg-green-50 border-green-200" />
+        <StatCard label="Cost of Goods Sold" value={`${fmt(totals.totalCost)} RWF`} color="bg-red-50 border-red-200" />
+        <StatCard label="Net Profit / Loss" value={`${totals.totalProfit >= 0 ? '+' : '-'}${fmt(Math.abs(totals.totalProfit))} RWF`}
+          color={totals.totalProfit >= 0 ? 'bg-green-100 border-green-300' : 'bg-red-100 border-red-300'} />
+      </div>
+      {rows.length === 0 ? (
+        <div className="py-8 text-center text-gray-400 text-sm">No sales found for this period.</div>
+      ) : (
+        <DataTable
+          head={['Station', 'Sales Amount (RWF)', '% of Sales', 'Cost of Goods (RWF)', 'Profit / Loss (RWF)', 'Margin %']}
+          rows={rows.map((r) => [
+            r.branchName,
+            fmt(r.sales),
+            `${r.percentOfSales.toFixed(1)}%`,
+            fmt(r.cost),
+            `${r.profit >= 0 ? '' : '-'}${fmt(Math.abs(r.profit))}`,
+            `${r.marginPercent.toFixed(1)}%`,
+          ])}
+          foot={['GROSS TOTAL', fmt(totals.totalSales), '100.0%', fmt(totals.totalCost), `${totals.totalProfit >= 0 ? '' : '-'}${fmt(Math.abs(totals.totalProfit))}`, `${overallMargin.toFixed(1)}%`]}
+        />
+      )}
+      <p className="mt-3 text-xs text-gray-400">Refunds, if any, are not reflected in this report.</p>
+    </>
+  )
+}
+
 function InventoryMovementTable({ data }: { data: any }) {
   if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading inventory movement data…</div>
   const items: any[] = data.items ?? []
@@ -893,7 +963,7 @@ const _branchReportCache = new Map<string, ReportSnapshot>()
 //  MAIN COMPONENT
 
 export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => void }) {
-  const [activeTab, setActiveTab] = useState<ReportTab>('journal')
+  const [activeTab, setActiveTab] = useState<ReportTab>('general')
   const [period, setPeriod] = useState<Period>('today')
   const today = todayStr()
   const [rangeMode, setRangeMode] = useState<'preset' | 'custom'>('preset')
@@ -907,6 +977,8 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
   const [dishProfitData, setDishProfitData] = useState<any>(null)
   const [invMovementData, setInvMovementData] = useState<any>(null)
   const [theoreticalInvData, setTheoreticalInvData] = useState<any>(null)
+  const [branchSummaryData, setBranchSummaryData] = useState<{ rows: BranchSummaryRow[]; totals: { totalSales: number; totalCost: number; totalProfit: number } } | null>(null)
+  const [branchSummaryExporting, setBranchSummaryExporting] = useState(false)
   const [loadedPeriod, setLoadedPeriod] = useState<string>('')
   const [exporting, setExporting] = useState(false)
   const branchCtx = useRestaurantBranch()
@@ -1115,6 +1187,100 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         .finally(() => setLoading(false))
     }
   }, [branchId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // General Report (branch summary) is restaurant-account-wide, not branch-scoped —
+  // fetched independently of the other tabs' per-branch Promise.all calls above
+  useEffect(() => {
+    if (activeTab !== 'general') return
+    const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)
+    let cancelled = false
+    fetch(`/api/restaurant/reports/branch-summary?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (!cancelled) setBranchSummaryData(data) })
+      .catch(() => { if (!cancelled) setBranchSummaryData(null) })
+    return () => { cancelled = true }
+  }, [activeTab, period, rangeMode, draftFrom, draftTo])
+
+  const buildBranchSummaryDoc = useCallback((rangeLabel: string) => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const ORANGE: [number, number, number] = [234, 88, 12]
+    const td = { headStyles: { fillColor: ORANGE, textColor: 255, fontStyle: 'bold' as const, fontSize: 9 }, bodyStyles: { fontSize: 8 }, alternateRowStyles: { fillColor: [255, 247, 237] as [number, number, number] }, margin: { left: 14, right: 14 }, styles: { cellPadding: 2.5 } }
+
+    doc.setFontSize(16); doc.setFont('helvetica', 'bold'); doc.setTextColor(20, 20, 20)
+    doc.text('General Report — Sales by Station', 14, 18)
+    doc.setFontSize(10); doc.setFont('helvetica', 'normal'); doc.setTextColor(110, 110, 110)
+    doc.text(`Report period: ${rangeLabel}`, 14, 25)
+
+    const rows = branchSummaryData?.rows ?? []
+    const totals = branchSummaryData?.totals ?? { totalSales: 0, totalCost: 0, totalProfit: 0 }
+    const overallMargin = totals.totalSales > 0 ? Math.round((totals.totalProfit / totals.totalSales) * 1000) / 10 : 0
+
+    autoTable(doc, {
+      ...td,
+      startY: 32,
+      head: [['Station', 'Sales Amount (RWF)', '% of Sales', 'Cost of Goods (RWF)', 'Profit / Loss (RWF)', 'Margin %']],
+      body: rows.map((r) => [r.branchName, fmt(r.sales), `${r.percentOfSales.toFixed(1)}%`, fmt(r.cost), `${r.profit >= 0 ? '' : '-'}${fmt(Math.abs(r.profit))}`, `${r.marginPercent.toFixed(1)}%`]),
+      foot: [['GROSS TOTAL', fmt(totals.totalSales), '100.0%', fmt(totals.totalCost), `${totals.totalProfit >= 0 ? '' : '-'}${fmt(Math.abs(totals.totalProfit))}`, `${overallMargin.toFixed(1)}%`]],
+      footStyles: { fillColor: [17, 24, 39], textColor: 255, fontStyle: 'bold' },
+    })
+    return doc
+  }, [branchSummaryData])
+
+  const exportBranchSummaryPdf = useCallback(async () => {
+    setBranchSummaryExporting(true)
+    try {
+      const rangeLabel = rangeMode === 'custom' ? `${draftFrom} to ${draftTo}` : loadedPeriod
+      const doc = buildBranchSummaryDoc(rangeLabel)
+      const fileName = `General-Report-${todayStr()}.pdf`
+
+      // Electron desktop: write straight to disk (auto-numbered if the name already exists)
+      // and reveal it in Explorer, instead of relying on the browser download flow.
+      if (typeof window !== 'undefined' && window.electronFiles) {
+        const base64 = arrayBufferToBase64(doc.output('arraybuffer'))
+        const result = await window.electronFiles.saveAndReveal(fileName, base64)
+        if (result.ok) return
+      }
+      doc.save(fileName)
+    } finally {
+      setBranchSummaryExporting(false)
+    }
+  }, [buildBranchSummaryDoc, rangeMode, draftFrom, draftTo, loadedPeriod])
+
+  const shareBranchSummaryPdf = useCallback(async () => {
+    setBranchSummaryExporting(true)
+    try {
+      const rangeLabel = rangeMode === 'custom' ? `${draftFrom} to ${draftTo}` : loadedPeriod
+      const doc = buildBranchSummaryDoc(rangeLabel)
+      const fileName = `General-Report-${todayStr()}.pdf`
+
+      // Real "choose an app" share sheet — only exists on mobile browsers / some desktop
+      // browsers via the Web Share API. Electron does not implement this API at all.
+      const blob = doc.output('blob')
+      const file = new File([blob], fileName, { type: 'application/pdf' })
+      const nav = typeof navigator !== 'undefined' ? (navigator as Navigator & { canShare?: (data?: any) => boolean; share?: (data: any) => Promise<void> }) : null
+      if (nav?.canShare?.({ files: [file] }) && nav.share) {
+        try {
+          await nav.share({ files: [file], title: 'General Report', text: `General Report (${rangeLabel})` })
+        } catch {
+          // user cancelled the native share sheet — nothing else to do
+        }
+        return
+      }
+
+      // Electron desktop has no native share-sheet API. Best available option: save the
+      // file and reveal it in Explorer, where right-click > Share opens Windows' real
+      // share flyout (WhatsApp Desktop, Mail, Nearby Share, etc.).
+      if (typeof window !== 'undefined' && window.electronFiles) {
+        const base64 = arrayBufferToBase64(doc.output('arraybuffer'))
+        const result = await window.electronFiles.saveAndReveal(fileName, base64)
+        if (result.ok) return
+      }
+
+      doc.save(fileName)
+    } finally {
+      setBranchSummaryExporting(false)
+    }
+  }, [buildBranchSummaryDoc, rangeMode, draftFrom, draftTo, loadedPeriod])
 
   const exportAllPDF = useCallback(async () => {
     setExporting(true)
@@ -1426,7 +1592,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         {/* Content area */}
         <div className="p-5">
 
-          {activeTab !== 'payment_methods' && dailyRows.length > 0 ? (
+          {activeTab !== 'payment_methods' && activeTab !== 'general' && dailyRows.length > 0 ? (
             <div className="mb-4 space-y-2">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-gray-500">{rangeMode === 'custom' ? `Custom range: ${draftFrom} - ${draftTo}` : loadedPeriod}</p>
@@ -1478,7 +1644,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
           )}
 
           {/* Report tables */}
-          {(txData || activeTab==='dish_profit' || activeTab==='inventory_movement' || activeTab==='theoretical_inventory')&&!loading&&(
+          {(txData || activeTab==='dish_profit' || activeTab==='inventory_movement' || activeTab==='theoretical_inventory' || activeTab==='general')&&!loading&&(
             <div className="space-y-2">
               {/* Attribution */}
               <div className="flex items-center justify-between mb-4">
@@ -1499,6 +1665,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
                 </button>
               </div>
 
+              {activeTab==='general'    &&<BranchSummaryTable data={branchSummaryData} exporting={branchSummaryExporting} onExportPdf={exportBranchSummaryPdf} onSharePdf={shareBranchSummaryPdf}/>}
               {activeTab==='journal'    &&<JournalTable     txs={txData??[]}/>}
               {activeTab==='receivable' &&<ReceivableTable  txs={txData??[]}/>}
               {activeTab==='payable'    &&<PayableTable     txs={txData??[]}/>}

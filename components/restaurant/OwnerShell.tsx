@@ -168,7 +168,7 @@ const EMPTY_COST_BREAKDOWN: DashboardData['costBreakdown'] = {
 const EMPTY_STATUS: DashboardData['status'] = {
   level: 'stale',
   label: 'Quiet',
-  detail: 'No synced branch activity yet.',
+  detail: 'No synced station activity yet.',
   lastActivityAt: null,
   activeOrders: 0,
 }
@@ -273,7 +273,7 @@ const NAV_ITEMS: { id: OwnerView; label: string; icon: React.ReactNode }[] = [
   { id: 'details',   label: 'Details',   icon: <FileText className="h-5 w-5" /> },
   { id: 'history',   label: 'History',   icon: <CalendarDays className="h-5 w-5" /> },
   { id: 'reports',   label: 'Reports',   icon: <BarChart3 className="h-5 w-5" /> },
-  { id: 'inventory',    label: 'Inventory',    icon: <Package className="h-5 w-5" /> },
+  { id: 'inventory',    label: 'Stock',    icon: <Package className="h-5 w-5" /> },
   { id: 'receivable',  label: 'Receivable',   icon: <ArrowDownLeft className="h-5 w-5" /> },
   { id: 'payable',     label: 'Payable',      icon: <ArrowUpRight className="h-5 w-5" /> },
   { id: 'diagnostics', label: 'Diagnostics', icon: <Activity className="h-5 w-5" /> },
@@ -615,13 +615,13 @@ export default function OwnerShell() {
       })
       const payload = await response.json().catch(() => null)
       if (!response.ok) {
-        throw new Error(payload?.error || 'Failed to switch branch')
+        throw new Error(payload?.error || 'Failed to switch station')
       }
 
       const nextBranchId = typeof payload?.activeBranchId === 'string' ? payload.activeBranchId : branchId
       await load(filters, nextBranchId, view)
     } catch (switchError) {
-      setError(switchError instanceof Error ? switchError.message : 'Failed to switch branch')
+      setError(switchError instanceof Error ? switchError.message : 'Failed to switch station')
     } finally {
       setBranchSwitchingId(null)
     }
@@ -754,7 +754,7 @@ export default function OwnerShell() {
             </div>
             {ownerBranches.length > 0 ? (
               <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-1">
-                <span className="whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">Branches</span>
+                <span className="whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.22em] text-slate-400">Stations</span>
                 {ownerBranches.map((branch) => {
                   const isActive = selectedBranchId === branch.id
                   const isSwitching = branchSwitchingId === branch.id
@@ -1116,7 +1116,7 @@ export default function OwnerShell() {
                     {isFinancialOnly ? (
                       <div className="space-y-3">
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                          Food cost, labor, and prime cost stay unavailable until this owner view has a full branch data source.
+                          Food cost, labor, and prime cost stay unavailable until this owner view has a full station data source.
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="rounded-2xl bg-red-50 p-4">
@@ -1183,7 +1183,7 @@ export default function OwnerShell() {
 
                   <SectionCard title="Top dishes" sub={isFinancialOnly ? 'Dish-level sales are not included in cloud financial sync.' : 'Best earners in the selected range.'}>
                     {isFinancialOnly ? (
-                      <p className="text-sm text-gray-500">Top dishes become available only when this owner view has a full branch data source instead of financial-only sync.</p>
+                      <p className="text-sm text-gray-500">Top dishes become available only when this owner view has a full station data source instead of financial-only sync.</p>
                     ) : data.topDishes.length === 0 ? (
                       <p className="text-sm text-gray-400">No dish sales in this range yet.</p>
                     ) : (
@@ -1208,7 +1208,7 @@ export default function OwnerShell() {
                 isFinancialOnly ? (
                   <div className="grid grid-cols-1 gap-5">
                     <SectionCard title="Inventory unavailable" sub="Cloud financial sync does not include stock balances or ingredient usage.">
-                      <p className="text-sm text-gray-600">Inventory value, low-stock watchlists, and ingredient usage stay unavailable here until this owner view has a full branch data source.</p>
+                      <p className="text-sm text-gray-600">Inventory value, low-stock watchlists, and ingredient usage stay unavailable here until this owner view has a full station data source.</p>
                     </SectionCard>
                   </div>
                 ) : (
@@ -1328,7 +1328,7 @@ export default function OwnerShell() {
                         <div className="grid grid-cols-2 gap-2 text-sm">
                           <div><p className="text-gray-400 text-xs">Database</p><p className="font-medium">{debugInfo.dbMode}</p></div>
                           <div><p className="text-gray-400 text-xs">Role</p><p className="font-medium capitalize">{debugInfo.role}</p></div>
-                          <div className="col-span-2"><p className="text-gray-400 text-xs">Branch ID</p><p className="font-medium font-mono text-xs break-all">{debugInfo.branchId ?? '—'}</p></div>
+                          <div className="col-span-2"><p className="text-gray-400 text-xs">Station ID</p><p className="font-medium font-mono text-xs break-all">{debugInfo.branchId ?? '—'}</p></div>
                         </div>
                       </section>
 
@@ -1338,7 +1338,7 @@ export default function OwnerShell() {
                           <div><p className="text-gray-400 text-xs">Total orders</p><p className="font-bold text-lg">{debugInfo.counts.orderCount}</p></div>
                           <div><p className="text-gray-400 text-xs">Paid orders</p><p className="font-bold text-lg text-green-600">{debugInfo.counts.paidOrderCount}</p></div>
                           <div><p className="text-gray-400 text-xs">Pending orders</p><p className="font-bold text-lg text-orange-500">{debugInfo.counts.pendingOrderCount}</p></div>
-                          <div><p className="text-gray-400 text-xs">Transactions (branch)</p><p className="font-bold text-lg">{debugInfo.counts.restaurantScopedTransactionCount}</p></div>
+                          <div><p className="text-gray-400 text-xs">Transactions (station)</p><p className="font-bold text-lg">{debugInfo.counts.restaurantScopedTransactionCount}</p></div>
                         </div>
                       </section>
 

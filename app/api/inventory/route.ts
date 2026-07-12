@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
 		const { name, description, unit, unitCost, unitPrice, quantity, category, reorderLevel, skipOpeningPurchase } = body
 
 		if (!restaurantId || !branchId) {
-			return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+			return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 		}
 
 		const missingFields = []

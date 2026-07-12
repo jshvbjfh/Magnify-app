@@ -132,7 +132,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   const handleBranchSelect = async (branchId: string) => {
     if (branchId === activeBranchId || branchSwitchingId) return
     if (!isOnline) {
-      setLastSyncWarning('Connect to the internet to switch branches.')
+      setLastSyncWarning('Connect to the internet to switch stations.')
       return
     }
 

@@ -20,7 +20,7 @@ export async function GET() {
 
 	const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 	if (!context?.restaurantId || !context.branchId) {
-		return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+		return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 	}
 
 	const validation = await getRestaurantFifoValidation(prisma, {

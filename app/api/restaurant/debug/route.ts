@@ -16,7 +16,7 @@ export async function GET() {
 
 	const context = await getRestaurantContextForUser(session.user.id)
 	if (!context?.restaurantId || !context.branchId) {
-		return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+		return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 	}
 
 	const branchWhere = { restaurantId: context.restaurantId, branchId: context.branchId }

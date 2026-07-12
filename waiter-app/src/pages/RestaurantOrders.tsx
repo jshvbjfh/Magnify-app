@@ -465,6 +465,7 @@ ${order.created_by_name ? `<p class="c">Waiter: ${escHtml(order.created_by_name)
 <hr>
 <p class="c">Paid: ${escHtml(order.payment_method ?? 'Cash')}</p>
 <p class="c" style="margin-top:8px;font-size:11px">Thank you for dining with us!</p>
+<p class="c" style="margin-top:6px;font-size:9px;color:#888">Powered by Magnify</p>
 </body></html>`
 
     const iframe = document.createElement('iframe')

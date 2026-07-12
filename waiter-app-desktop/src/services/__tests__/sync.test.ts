@@ -125,7 +125,7 @@ describe('pullSync', () => {
       restaurantId: 'rest-1',
     })
     expect(result).toEqual({
-      warning: 'This branch currently has no menu. This branch currently has no tables.',
+      warning: 'This station currently has no menu. This station currently has no tables.',
     })
     expect(setConfigMock).toHaveBeenCalledWith('lastPulledAt', expect.any(String))
   })
@@ -153,7 +153,7 @@ describe('pullSync', () => {
     })
 
     await expect(pullSync()).rejects.toThrow(
-      'No menu is available for your assigned branch. Ask your manager to sync the branch menu and verify your branch assignment.',
+      'No menu is available for your assigned station. Ask your manager to sync the station menu and verify your station assignment.',
     )
 
     expect(replaceDishesMock).toHaveBeenCalledWith([], {

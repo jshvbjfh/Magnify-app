@@ -11,7 +11,7 @@ export async function GET(req: Request) {
 
     const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
     if (!context?.restaurantId || !context.branchId) {
-      return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+      return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
     }
 
     const { searchParams } = new URL(req.url)
@@ -49,7 +49,7 @@ export async function POST(req: Request) {
 
     const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
     if (!context?.restaurantId || !context.branchId) {
-      return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+      return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
     }
 
     const body = await req.json().catch(() => null)

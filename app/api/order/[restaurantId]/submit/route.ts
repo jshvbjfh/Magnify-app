@@ -40,7 +40,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
     }
 
     const fallbackBranchId = tableBranchId ?? (await ensureMainBranchForRestaurant(resolvedRestaurantId))?.id ?? null
-    if (!fallbackBranchId) return NextResponse.json({ error: 'No branch found for this restaurant' }, { status: 400 })
+    if (!fallbackBranchId) return NextResponse.json({ error: 'No station found for this restaurant' }, { status: 400 })
 
     // Fetch dishes across ALL branches — dishes are restaurant-wide on the QR menu
     const requestedDishIds = Array.from(new Set(items.map((item: { dishId: string }) => String(item?.dishId || '')).filter(Boolean)))

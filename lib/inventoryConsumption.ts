@@ -14,7 +14,7 @@ type IngredientSnapshot = {
   quantity: number
 }
 
-type ConsumptionSourceType = 'dishSale' | 'waste' | 'adjustment'
+type ConsumptionSourceType = 'dishSale' | 'waste' | 'adjustment' | 'prepProduction'
 
 type ConsumeIngredientStockParams = {
   restaurantId: string
@@ -28,6 +28,9 @@ type ConsumeIngredientStockParams = {
   reason?: string | null
   ingredientSnapshot?: IngredientSnapshot
   updateIngredientQuantity?: boolean
+  // Consume min(quantity, available) instead of throwing Insufficient*Error.
+  // Callers read `shortfall` from the result to handle the uncovered remainder.
+  allowPartial?: boolean
 }
 
 function roundQuantity(value: number) {
@@ -129,8 +132,28 @@ export async function consumeIngredientStock(
     layerSnapshots.reduce((sum, layer) => sum + Number(layer.remainingQuantity || 0), 0),
   )
 
+  const availableQuantityForMode = consumesFromBatches
+    ? availableBatchQuantity
+    : roundQuantity(Number(ingredient.quantity || 0))
+  const quantityToConsume = params.allowPartial
+    ? roundQuantity(Math.min(quantityRequested, Math.max(0, availableQuantityForMode)))
+    : quantityRequested
+
+  if (params.allowPartial && quantityToConsume <= 0) {
+    return {
+      ingredient,
+      updatedIngredient: null,
+      fifoEnabled: consumesFromBatches,
+      quantityRequested,
+      quantityConsumed: 0,
+      shortfall: quantityRequested,
+      totalCost: 0,
+      allocations,
+    }
+  }
+
   if (consumesFromBatches) {
-    if (availableBatchQuantity + Number.EPSILON < quantityRequested) {
+    if (!params.allowPartial && availableBatchQuantity + Number.EPSILON < quantityRequested) {
       throw new InsufficientFifoStockError(
         params.ingredientId,
         ingredient.name,
@@ -140,7 +163,7 @@ export async function consumeIngredientStock(
       )
     }
 
-    let remaining = quantityRequested
+    let remaining = quantityToConsume
     for (const layer of layerSnapshots) {
       if (remaining <= Number.EPSILON) break
 
@@ -208,7 +231,7 @@ export async function consumeIngredientStock(
     }
   } else {
     const availableQuantity = roundQuantity(Number(ingredient.quantity || 0))
-    if (availableQuantity + Number.EPSILON < quantityRequested) {
+    if (!params.allowPartial && availableQuantity + Number.EPSILON < quantityRequested) {
       throw new InsufficientInventoryStockError(
         params.ingredientId,
         ingredient.name,
@@ -218,7 +241,7 @@ export async function consumeIngredientStock(
       )
     }
 
-    totalCost = roundQuantity(quantityRequested * Number(ingredient.unitCost ?? 0))
+    totalCost = roundQuantity(quantityToConsume * Number(ingredient.unitCost ?? 0))
   }
 
   let updatedIngredient = null
@@ -231,10 +254,10 @@ export async function consumeIngredientStock(
       where: { id: params.ingredientId },
       data: consumesFromBatches
         ? {
-            quantity: roundQuantity(Math.max(0, availableBatchQuantity - quantityRequested)),
+            quantity: roundQuantity(Math.max(0, availableBatchQuantity - quantityToConsume)),
             unitCost: nextActiveUnitCost ?? 0,
           }
-        : { quantity: { decrement: quantityRequested } },
+        : { quantity: { decrement: quantityToConsume } },
     })
 
     await enqueueSyncChange(db, {
@@ -251,7 +274,9 @@ export async function consumeIngredientStock(
     ingredient,
     updatedIngredient,
     fifoEnabled: consumesFromBatches,
-    quantityConsumed: quantityRequested,
+    quantityRequested,
+    quantityConsumed: quantityToConsume,
+    shortfall: roundQuantity(Math.max(0, quantityRequested - quantityToConsume)),
     totalCost,
     allocations,
   }

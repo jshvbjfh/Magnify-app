@@ -278,6 +278,9 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           menuType: payload.menuType ?? null,
           description: payload.description ?? null,
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
+          // undefined (not 0) when absent: payloads from devices predating MEP must not zero the counters
+          preparedPortions: payload.preparedPortions == null ? undefined : Number(payload.preparedPortions),
+          preparedPortionCost: payload.preparedPortionCost == null ? undefined : Number(payload.preparedPortionCost),
           createdAt: asDate(payload.createdAt) ?? undefined,
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
@@ -291,6 +294,8 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
           menuType: payload.menuType ?? null,
           description: payload.description ?? null,
           isActive: payload.isActive == null ? true : Boolean(payload.isActive),
+          preparedPortions: payload.preparedPortions == null ? undefined : Number(payload.preparedPortions),
+          preparedPortionCost: payload.preparedPortionCost == null ? undefined : Number(payload.preparedPortionCost),
           createdAt: asDate(payload.createdAt) ?? new Date(),
           updatedAt: asDate(payload.updatedAt) ?? new Date(),
         },
@@ -891,6 +896,101 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
         console.warn(`[syncEngine] restaurantOrder ${String(payload.id || change.entityId)} arrived with 0 items (status=${payload.status})`)
       }
 
+      break
+    }
+    case 'mepListItem': {
+      if (change.operation === 'delete') {
+        await db.mepListItem.deleteMany({ where: { id: change.entityId } })
+        break
+      }
+
+      const mepRestaurantId = String(payload.restaurantId ?? '').trim()
+      const mepBranchId = await resolveSyncBranchId(
+        db, payload.branchId, mepRestaurantId, 'mepListItem', change.entityId,
+      )
+      if (!mepBranchId) throw new Error(`[syncEngine] mepListItem:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
+      // Resolve targetId via batch remap in case the parent dish/inventoryItem was C1-displaced.
+      const mepTargetId = options?.idRemap?.get(String(payload.targetId)) ?? String(payload.targetId)
+
+      await db.mepListItem.upsert({
+        where: { id: String(payload.id || change.entityId) },
+        update: {
+          restaurantId: mepRestaurantId,
+          branchId: mepBranchId,
+          targetType: String(payload.targetType ?? 'prep'),
+          targetId: mepTargetId,
+          addedBy: payload.addedBy ?? null,
+          deletedAt: asDate(payload.deletedAt),
+          createdAt: asDate(payload.createdAt) ?? undefined,
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
+        },
+        create: {
+          id: String(payload.id || change.entityId),
+          restaurantId: mepRestaurantId,
+          branchId: mepBranchId,
+          targetType: String(payload.targetType ?? 'prep'),
+          targetId: mepTargetId,
+          addedBy: payload.addedBy ?? null,
+          deletedAt: asDate(payload.deletedAt),
+          createdAt: asDate(payload.createdAt) ?? new Date(),
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
+        },
+      })
+      break
+    }
+    case 'prepLog': {
+      if (change.operation === 'delete') {
+        await db.prepLog.deleteMany({ where: { id: change.entityId } })
+        break
+      }
+
+      const prepLogRestaurantId = String(payload.restaurantId ?? '').trim()
+      const prepLogBranchId = await resolveSyncBranchId(
+        db, payload.branchId, prepLogRestaurantId, 'prepLog', change.entityId,
+      )
+      if (!prepLogBranchId) throw new Error(`[syncEngine] prepLog:${change.entityId} — no resolvable branchId; restaurant has no active branches`)
+
+      const prepLogTargetId = options?.idRemap?.get(String(payload.targetId)) ?? String(payload.targetId)
+
+      await db.prepLog.upsert({
+        where: { id: String(payload.id || change.entityId) },
+        update: {
+          restaurantId: prepLogRestaurantId,
+          branchId: prepLogBranchId,
+          targetType: String(payload.targetType ?? 'prep'),
+          targetId: prepLogTargetId,
+          quantity: Number(payload.quantity ?? 0),
+          unit: payload.unit ?? null,
+          totalCost: Number(payload.totalCost ?? 0),
+          costPerUnit: Number(payload.costPerUnit ?? 0),
+          producedPurchaseId: payload.producedPurchaseId ?? null,
+          madeBy: payload.madeBy ?? null,
+          madeAt: asDate(payload.madeAt) ?? new Date(),
+          clientLogId: payload.clientLogId ?? null,
+          reversedAt: asDate(payload.reversedAt),
+          createdAt: asDate(payload.createdAt) ?? undefined,
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
+        },
+        create: {
+          id: String(payload.id || change.entityId),
+          restaurantId: prepLogRestaurantId,
+          branchId: prepLogBranchId,
+          targetType: String(payload.targetType ?? 'prep'),
+          targetId: prepLogTargetId,
+          quantity: Number(payload.quantity ?? 0),
+          unit: payload.unit ?? null,
+          totalCost: Number(payload.totalCost ?? 0),
+          costPerUnit: Number(payload.costPerUnit ?? 0),
+          producedPurchaseId: payload.producedPurchaseId ?? null,
+          madeBy: payload.madeBy ?? null,
+          madeAt: asDate(payload.madeAt) ?? new Date(),
+          clientLogId: payload.clientLogId ?? null,
+          reversedAt: asDate(payload.reversedAt),
+          createdAt: asDate(payload.createdAt) ?? new Date(),
+          updatedAt: asDate(payload.updatedAt) ?? new Date(),
+        },
+      })
       break
     }
     default:

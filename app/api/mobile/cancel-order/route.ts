@@ -51,7 +51,7 @@ export async function POST(req: Request) {
     // branchId=null is a critical security gap — reject hard
     if (!effectiveBranchId) {
       return jsonNoStore(
-        { error: 'Branch assignment required to cancel orders. Contact your manager.' },
+        { error: 'Station assignment required to cancel orders. Contact your manager.' },
         { status: 403 },
       )
     }

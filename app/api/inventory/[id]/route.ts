@@ -16,7 +16,7 @@ export async function PATCH(
 
 		const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 		if (!context?.restaurantId || !context.branchId) {
-			return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+			return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 		}
 
 		const { id } = await params
@@ -69,7 +69,7 @@ export async function DELETE(
 
 		const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
 		if (!context?.restaurantId || !context.branchId) {
-			return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+			return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 		}
 
 		const { id } = await params

@@ -48,7 +48,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, syncedAt: snapshot.generatedAt, restaurantId: restaurant.id })
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to import branch snapshot' },
+      { error: error instanceof Error ? error.message : 'Failed to import station snapshot' },
       { status: 500 }
     )
   }

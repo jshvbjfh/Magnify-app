@@ -65,7 +65,7 @@ export async function POST(req: Request) {
     const restaurant = adminContext?.restaurant
     if (!restaurant) return NextResponse.json({ error: 'No restaurant is linked to this account' }, { status: 409 })
     if (!adminContext.branchId) {
-      return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+      return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
     }
     const branchId = adminContext.branchId
 

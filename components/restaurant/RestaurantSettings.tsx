@@ -57,12 +57,12 @@ function getSyncReadiness(syncStatus: OwnerSyncStatus | null, syncConfig: OwnerS
     return {
       label: 'Recovery attention needed',
       tone: 'warning' as const,
-      detail: `This branch has unresolved sync recovery state: ${issues}. Retry sync now and review recent batches below until this clears.`,
+      detail: `This station has unresolved sync recovery state: ${issues}. Retry sync now and review recent batches below until this clears.`,
     }
   }
 
   if (!syncStatus.branchLinked) {
-    return { label: 'Branch not linked', tone: 'warning' as const, detail: 'This branch is missing its cloud sync identity and cannot export yet.' }
+    return { label: 'Station not linked', tone: 'warning' as const, detail: 'This station is missing its cloud sync identity and cannot export yet.' }
   }
 
   if (syncConfiguredByServer) {
@@ -72,22 +72,22 @@ function getSyncReadiness(syncStatus: OwnerSyncStatus | null, syncConfig: OwnerS
     if (!syncConfig.enabled) {
       return { label: 'Auto sync disabled', tone: 'neutral' as const, detail: 'Server-managed owner sync is available, but background sync is turned off on this device.' }
     }
-    return { label: 'Ready to sync', tone: 'success' as const, detail: 'Server-managed owner sync is configured for this branch.' }
+    return { label: 'Ready to sync', tone: 'success' as const, detail: 'Server-managed owner sync is configured for this station.' }
   }
 
   if (!syncConfig.targetUrl.trim() || !syncConfig.email.trim()) {
-    return { label: 'Device sync incomplete', tone: 'warning' as const, detail: 'Enter the remote target URL and branch email on this device.' }
+    return { label: 'Device sync incomplete', tone: 'warning' as const, detail: 'Enter the remote target URL and station email on this device.' }
   }
 
   if (!syncConfig.password.trim()) {
-    return { label: 'Device sync incomplete', tone: 'warning' as const, detail: 'Enter the branch sync password on this device before background sync can run, or sign out and sign back in once to let Magnify save it automatically.' }
+    return { label: 'Device sync incomplete', tone: 'warning' as const, detail: 'Enter the station sync password on this device before background sync can run, or sign out and sign back in once to let Magnify save it automatically.' }
   }
 
   if (!syncConfig.enabled) {
     return { label: 'Auto sync disabled', tone: 'neutral' as const, detail: 'This device is configured but background sync is turned off.' }
   }
 
-  return { label: 'Ready to sync', tone: 'success' as const, detail: 'This device can push local branch data to the owner cloud.' }
+  return { label: 'Ready to sync', tone: 'success' as const, detail: 'This device can push local station data to the owner cloud.' }
 }
 
 type InventoryIntegritySummary = {
@@ -170,6 +170,7 @@ export default function RestaurantSettings() {
 
   const [billTopText, setBillTopText] = useState('')
   const [billBottomText, setBillBottomText] = useState('')
+  const [billFooter2Text, setBillFooter2Text] = useState('')
   const [billPrinterIp, setBillPrinterIp] = useState('')
   const [billPrinterPort, setBillPrinterPort] = useState('9100')
   const [restaurantName, setRestaurantName] = useState('')
@@ -332,7 +333,7 @@ export default function RestaurantSettings() {
   }
 
   async function applyInventoryReconciliation() {
-    const confirmation = window.prompt('Type RECONCILE to apply inventory layer reconciliation for this branch.')
+    const confirmation = window.prompt('Type RECONCILE to apply inventory layer reconciliation for this station.')
     if (confirmation !== 'RECONCILE') return
 
     setApplyingInventoryReconciliation(true)
@@ -395,6 +396,7 @@ export default function RestaurantSettings() {
           const template = parseRestaurantBillTemplate(setupData.restaurant?.billHeader)
           setBillTopText(template.topText)
           setBillBottomText(template.bottomText)
+          setBillFooter2Text(template.footer2Text)
           setBillPrinterIp(setupData.restaurant?.billPrinterIp ?? '')
           setBillPrinterPort(setupData.restaurant?.billPrinterPort != null ? String(setupData.restaurant.billPrinterPort) : '9100')
           setFifoEnabled(true)
@@ -512,12 +514,18 @@ export default function RestaurantSettings() {
     setSaving(true)
     setSaveError(null)
     try {
-      const billHeader = composeRestaurantBillTemplate(billTopText, billBottomText)
+      const billHeader = composeRestaurantBillTemplate(billTopText, billBottomText, billFooter2Text)
+      // Only send fifoEnabled when FIFO hasn't been activated yet for this restaurant — once
+      // fifoConfiguredAt is set, re-sending it on every unrelated settings save (name, bill
+      // header, printer IP, QR mode) would re-trigger the strict FIFO integrity gate and block
+      // saving anything else until a full inventory reconciliation is done.
+      const body: Record<string, unknown> = { name: restaurantName, billHeader, billPrinterIp: billPrinterIp.trim() || null, billPrinterPort: billPrinterPort.trim() ? parseInt(billPrinterPort) || 9100 : null, qrOrderingMode }
+      if (!fifoConfiguredAt) body.fifoEnabled = true
       const response = await fetch('/api/restaurant/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ name: restaurantName, billHeader, billPrinterIp: billPrinterIp.trim() || null, billPrinterPort: billPrinterPort.trim() ? parseInt(billPrinterPort) || 9100 : null, qrOrderingMode, fifoEnabled: true }),
+        body: JSON.stringify(body),
       })
 
       const data = await response.json().catch(() => null)
@@ -533,6 +541,7 @@ export default function RestaurantSettings() {
         const template = parseRestaurantBillTemplate(savedRestaurant.billHeader)
         setBillTopText(template.topText)
         setBillBottomText(template.bottomText)
+        setBillFooter2Text(template.footer2Text)
         setBillPrinterIp(savedRestaurant.billPrinterIp ?? '')
         setBillPrinterPort(savedRestaurant.billPrinterPort != null ? String(savedRestaurant.billPrinterPort) : '9100')
         if (savedRestaurant.qrOrderingMode === 'view_only') setQrOrderingMode('view_only')
@@ -792,7 +801,7 @@ export default function RestaurantSettings() {
             <h2 className="text-base font-bold text-gray-900">Receipt / Bill editor</h2>
           </div>
           <p className="text-sm text-gray-500">
-            Edit the printed bill in two parts: the top block and the bottom message. The middle pricing section is generated automatically from the order. This applies to the whole restaurant — all branches use the same receipt.
+            Edit the printed bill in two parts: the top block and the bottom message. The middle pricing section is generated automatically from the order. This applies to the whole restaurant — all stations use the same receipt.
           </p>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div className="space-y-4">
@@ -839,6 +848,18 @@ export default function RestaurantSettings() {
               </div>
 
               <div>
+                <label className="mb-1 block text-xs font-semibold text-gray-600 uppercase tracking-wide">Footer 2 (below &quot;Powered by Magnify&quot;)</label>
+                <textarea
+                  value={billFooter2Text}
+                  onChange={e => setBillFooter2Text(e.target.value)}
+                  rows={3}
+                  placeholder={`Optional — add blank lines here if the bottom of the bill gets cut off, to push it up past the cutter.`}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 text-sm font-mono outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent resize-y leading-relaxed"
+                />
+                <p className="mt-2 text-xs text-gray-400">Prints under &quot;Powered by Magnify&quot;. Mostly for blank lines that feed extra paper before the cut.</p>
+              </div>
+
+              <div>
                 <label className="mb-1 block text-xs font-semibold text-gray-600 uppercase tracking-wide">Receipt printer IP (optional)</label>
                 <div className="flex gap-2">
                   <input
@@ -873,6 +894,10 @@ export default function RestaurantSettings() {
                   <div className="flex items-start justify-between gap-3 font-bold"><span>TOTAL</span><span>6,500 RWF</span></div>
                 </div>
                 <div className="pt-2 text-center whitespace-pre-wrap" dangerouslySetInnerHTML={{__html: mdPreview(billBottomText.trim() || 'Thank you for dining with us!')}} />
+                <div className="pt-1.5 text-center text-[9px] text-gray-400">Powered by Magnify</div>
+                {billFooter2Text !== '' && (
+                  <div className="text-center whitespace-pre-wrap" dangerouslySetInnerHTML={{__html: mdPreview(billFooter2Text)}} />
+                )}
                 {/* Cut/tear line — mirrors the small line printed at the end of every bill */}
                 <div className="mx-auto mt-4 h-px w-16 bg-gray-800"></div>
               </div>
@@ -1025,12 +1050,12 @@ export default function RestaurantSettings() {
             </p>
             {fifoConfiguredAt && (
               <p className="text-xs text-gray-400">
-                Last saved for this branch: {formatSyncTimestamp(fifoConfiguredAt)}
+                Last saved for this station: {formatSyncTimestamp(fifoConfiguredAt)}
               </p>
             )}
             {fifoCutoverAt && (
               <p className="text-xs font-medium text-green-700">
-                FIFO cutover locked for this branch at {formatSyncTimestamp(fifoCutoverAt)}.
+                FIFO cutover locked for this station at {formatSyncTimestamp(fifoCutoverAt)}.
               </p>
             )}
             <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
@@ -1123,7 +1148,7 @@ export default function RestaurantSettings() {
                       Negative drift: {inventoryReconciliation.summary.totalNegativeDrift.toLocaleString('en-RW')} units.
                     </p>
                     {inventoryReconciliation.summary.totalActions === 0 ? (
-                      <p className="text-green-700">No reconciliation actions are needed for the current branch state.</p>
+                      <p className="text-green-700">No reconciliation actions are needed for the current station state.</p>
                     ) : (
                       <div className="space-y-1 text-amber-800">
                         {inventoryReconciliation.actions.slice(0, 3).map((action) => (
@@ -1162,7 +1187,7 @@ export default function RestaurantSettings() {
                   </button>
                 </div>
                 {loadingFifoValidation ? (
-                  <p className="mt-3 text-xs text-gray-500">Checking branch FIFO validation…</p>
+                  <p className="mt-3 text-xs text-gray-500">Checking station FIFO validation…</p>
                 ) : fifoValidation ? (
                   <div className="mt-3 space-y-2 text-xs text-gray-700">
                     <p className={
@@ -1343,7 +1368,7 @@ export default function RestaurantSettings() {
             />
           </label>
           <label className="space-y-1.5 text-sm text-gray-600">
-            <span className="font-medium">Remote branch email</span>
+            <span className="font-medium">Remote station email</span>
             <input
               type="email"
               value={syncConfig.email}
@@ -1355,12 +1380,12 @@ export default function RestaurantSettings() {
           </label>
           {!syncConfiguredByServer ? (
             <label className="space-y-1.5 text-sm text-gray-600 md:col-span-2">
-              <span className="font-medium">Remote branch password</span>
+              <span className="font-medium">Remote station password</span>
               <input
                 type="password"
                 value={syncConfig.password}
                 onChange={e => setSyncConfig(current => ({ ...current, password: e.target.value }))}
-                placeholder="Enter the cloud account password for this branch"
+                placeholder="Enter the cloud account password for this station"
                 className="w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm outline-none focus:border-orange-400"
               />
             </label>
@@ -1529,7 +1554,7 @@ export default function RestaurantSettings() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-gray-900">Recent sync history</h3>
-                <p className="text-xs text-gray-500">Latest branch-to-owner sync attempts for this restaurant.</p>
+                <p className="text-xs text-gray-500">Latest station-to-owner sync attempts for this restaurant.</p>
               </div>
             </div>
             <div className="mt-3 space-y-2">
@@ -1735,7 +1760,7 @@ export default function RestaurantSettings() {
               <h2 className="text-base font-bold text-gray-900">Startup log</h2>
             </div>
             <p className="mt-1 text-sm text-gray-500">
-              Desktop startup, migration, and local server boot output for this admin device. Use it when branch login, sync, or startup errors need a first-pass trace.
+              Desktop startup, migration, and local server boot output for this admin device. Use it when station login, sync, or startup errors need a first-pass trace.
             </p>
           </div>
 

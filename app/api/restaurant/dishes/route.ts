@@ -29,7 +29,7 @@ export async function GET(req: Request) {
 
   if (!restaurantId || (!branchId && !restaurantWideScope)) {
     return NextResponse.json(
-      { error: 'No restaurant branch found for this account. Ask your administrator to check your account configuration.' },
+      { error: 'No restaurant station found for this account. Ask your administrator to check your account configuration.' },
       { status: 400 },
     )
   }
@@ -66,7 +66,7 @@ export async function POST(req: Request) {
   }
 
   if (!resolvedBranchId) {
-    return NextResponse.json({ error: 'No branch configured for this restaurant. Contact support.' }, { status: 400 })
+    return NextResponse.json({ error: 'No station configured for this restaurant. Contact support.' }, { status: 400 })
   }
 
   const { name, sellingPrice, category, menuType, variants } = await req.json()

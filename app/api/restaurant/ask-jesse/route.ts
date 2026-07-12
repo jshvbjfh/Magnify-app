@@ -339,8 +339,9 @@ function parseIntents(q: string): Intent[] {
      /\b[a-z][\w\s]+\s+(sales|revenue)\s+(today|yesterday|this|last|past)\b/i.test(q)) &&
     !/\b(momo|cash|bank|cheque|card|credit)\b/i.test(q)
   ) s.add('dish_query')
-  // Branch comparison — "which branch made the most", "revenue by branch", "expenses branch by branch"
-  if (/\bwhich\s+branch\b|\bbranch(es)?\s+(comparison|performance|revenue|sales|ranking)\b|\brevenue\s+by\s+branch\b|\btop\s+branch\b|\bper\s+branch\b|\bbranch\s+by\s+branch\b|\bby\s+branch\b/i.test(q)) s.add('branch_comparison')
+  // Station comparison — "which station made the most", "revenue by station", "expenses station by station"
+  // (also recognizes the legacy "branch" wording so older habits still work)
+  if (/\bwhich\s+(branch|station)\b|\b(branch|station)(es|s)?\s+(comparison|performance|revenue|sales|ranking)\b|\brevenue\s+by\s+(branch|station)\b|\btop\s+(branch|station)\b|\bper\s+(branch|station)\b|\b(branch|station)\s+by\s+(branch|station)\b|\bby\s+(branch|station)\b/i.test(q)) s.add('branch_comparison')
   // Pending / outstanding orders right now
   if (/\bpending\s+orders?\b|\boutstanding\s+orders?\b|\bopen\s+orders?\b|\borders?\s+(still\s+)?(pending|open|outstanding)\b|\bright\s+now\b.*orders?\b|\borders?.*right\s+now\b/i.test(q)) s.add('pending_orders')
   // Average order value
@@ -393,22 +394,22 @@ function getFollowUps(intents: Intent[], branchCount: number): string[] {
     return ["Today's revenue?", 'Any pending orders?', 'Low stock alert?']
   }
   if (has('why')) {
-    return ['Compare this week vs last week', 'Revenue by branch', 'Show top selling dishes']
+    return ['Compare this week vs last week', 'Revenue by station', 'Show top selling dishes']
   }
   if (has('trends')) {
-    return ['This month vs last month', 'Which branch is growing?', "What's profit this week?"]
+    return ['This month vs last month', 'Which station is growing?', "What's profit this week?"]
   }
   if (has('branch_comparison')) {
-    return ['Profit by branch', 'Expenses by branch', 'Top dishes this month?']
+    return ['Profit by station', 'Expenses by station', 'Top dishes this month?']
   }
   if (has('profit')) {
     return branchCount > 1
-      ? ['Which branch has best margin?', "What's the food cost this period?", 'Compare to last week']
+      ? ['Which station has best margin?', "What's the food cost this period?", 'Compare to last week']
       : ["What's the food cost?", 'Top dishes this month?', 'Compare to last week']
   }
   if (has('revenue')) {
     return branchCount > 1
-      ? ['Revenue by branch', 'What are the top dishes?', 'Why did revenue change?']
+      ? ['Revenue by station', 'What are the top dishes?', 'Why did revenue change?']
       : ['What about expenses?', 'Top dishes this period?', 'Why did revenue change?']
   }
   if (has('expenses')) {
@@ -418,13 +419,13 @@ function getFollowUps(intents: Intent[], branchCount: number): string[] {
     return ["What's the revenue?", 'Average order value?', 'Pending orders right now?']
   }
   if (has('top_dishes')) {
-    return ['Revenue from top dish this month?', 'Which branch sells it most?', "What's the profit this month?"]
+    return ['Revenue from top dish this month?', 'Which station sells it most?', "What's the profit this month?"]
   }
   if (has('low_stock')) {
     return ['What should I restock first?', 'Expenses this week?', 'How much did we spend on inventory?']
   }
   if (has('payment')) {
-    return ['Total revenue this period?', "What's the profit?", 'Revenue by branch']
+    return ['Total revenue this period?', "What's the profit?", 'Revenue by station']
   }
   if (has('record_transaction')) {
     return ["Today's expenses?", "What's today's profit?", 'Revenue this week?']
@@ -596,7 +597,7 @@ export async function POST(req: Request) {
         answer: [
           `::BarChart2:: I see **${branches.length} branches** in this restaurant.`,
           ``,
-          `Which branch should I record the **${importRows.length} rows** from **${fileName}** to?`,
+          `Which station should I record the **${importRows.length} rows** from **${fileName}** to?`,
         ].join('\n'),
         period: 'N/A',
         intents: ['import_branch_select'],
@@ -894,7 +895,7 @@ export async function POST(req: Request) {
   const pmFilter     = parsePaymentFilter(question)
   const targetBranch = resolveBranch(question, allBranches)
   const branchFilter = targetBranch ? { branchId: targetBranch.id } : {}
-  const branchLabel  = targetBranch ? targetBranch.name : 'All Branches'
+  const branchLabel  = targetBranch ? targetBranch.name : 'All Stations'
   const lines: string[] = []
 
   // ── CAT 1: CATCH-UP — executive business snapshot ────────────────────────────
@@ -1122,7 +1123,7 @@ export async function POST(req: Request) {
       for (const b of branchDrivers) {
         if (Math.abs(b.delta) < 100 || allBranches.length < 2) continue
         const icon = b.delta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
-        drivers.push(`  ${icon} **${b.name}** branch: ${b.delta >= 0 ? '+' : ''}${fmt(b.delta)} vs last week`)
+        drivers.push(`  ${icon} **${b.name}** station: ${b.delta >= 0 ? '+' : ''}${fmt(b.delta)} vs last week`)
       }
 
       if (drivers.length === 0 && thisRev === 0) {
@@ -1210,7 +1211,7 @@ export async function POST(req: Request) {
       } else if (completionRate < 50) {
         lines.push(`  Low completion rate (${completionRate.toFixed(0)}%) — many orders are not being marked PAID or COMPLETED.`)
       } else if (lastOrders > 0 && thisOrders < lastOrders) {
-        lines.push(`  Order volume dropped by ${lastOrders - thisOrders} compared to last week. Check if any branch was less active.`)
+        lines.push(`  Order volume dropped by ${lastOrders - thisOrders} compared to last week. Check if any station was less active.`)
       } else {
         lines.push(`  Order volume is ${thisOrders >= lastOrders ? 'up or stable' : 'lower'} vs last week. Completion rate is ${completionRate.toFixed(0)}%.`)
       }
@@ -1231,7 +1232,7 @@ export async function POST(req: Request) {
     const thisWeekStart = kigaliStart(kigaliDateStr(shiftDays(todayD, -6)))
     const lastWeekStart = kigaliStart(kigaliDateStr(shiftDays(todayD, -13)))
     const lastWeekEnd   = kigaliEnd(kigaliDateStr(shiftDays(todayD, -7)))
-    const scopeLabel    = targetBranch ? targetBranch.name : 'All Branches'
+    const scopeLabel    = targetBranch ? targetBranch.name : 'All Stations'
 
     const [thisWeekSales, lastWeekSales, thisCompletedOrders, lastCompletedOrders, byBranchThis, byBranchLast, byDishThis, byDishLast] = await Promise.all([
       prisma.dishSale.findMany({ where: { restaurantId, ...branchFilter, saleDate: { gte: thisWeekStart, lte: kigaliEnd(todayStr) } }, select: { totalSaleAmount: true, calculatedFoodCost: true } }),
@@ -1327,7 +1328,7 @@ export async function POST(req: Request) {
 
     // Which branch caused it?
     if (branchDeltas.length > 1) {
-      lines.push(`**::BarChart2:: Which Branch Caused It?**`)
+      lines.push(`**::BarChart2:: Which Station Caused It?**`)
       branchDeltas.slice(0, 4).forEach(b => {
         const icon = b.delta >= 0 ? '::TrendingUp::' : '::TrendingDown::'
         lines.push(`  ${icon} **${b.name}**: ${b.delta >= 0 ? '+' : ''}${fmt(b.delta)} (this week ${fmt(b.thisRev)} vs last ${fmt(b.lastRev)})`)
@@ -1486,7 +1487,7 @@ export async function POST(req: Request) {
         // Branch breakdown
         if (bRanked.length > 1) {
           lines.push(``)
-          lines.push(`**By Branch**`)
+          lines.push(`**By Station**`)
           bRanked.forEach((b, i) => {
             const medal = i === 0 ? '::Star::' : i === 1 ? '::Award::' : '  '
             lines.push(`  ${medal} **${b.name}**: ${fmt(b.rev)} (${pct(b.rev, totalRev)})`)
@@ -1630,7 +1631,7 @@ export async function POST(req: Request) {
       const bRanked = Object.entries(bMap).sort((a, b) => b[1] - a[1])
       if (bRanked.length > 1) {
         lines.push(``)
-        lines.push(`**By Branch**`)
+        lines.push(`**By Station**`)
         bRanked.forEach(([b, c], i) => {
           const medal = i === 0 ? '::Star::' : '  '
           lines.push(`  ${medal} **${b}**: ${c} orders (${pct(c, orders.length)})`)
@@ -1679,7 +1680,7 @@ export async function POST(req: Request) {
         const bRanked = Object.entries(byBranch).sort((a, b) => b[1].count - a[1].count)
         if (bRanked.length > 1) {
           lines.push(``)
-          lines.push(`**By Branch**`)
+          lines.push(`**By Station**`)
           bRanked.forEach(([b, d]) => lines.push(`  ::Clock:: **${b}**: ${d.count} order${d.count !== 1 ? 's' : ''} · ${fmt(d.value)}`))
         }
       }
@@ -1735,7 +1736,7 @@ export async function POST(req: Request) {
       const bRanked = Object.values(bMap).map(b => ({ ...b, avg: b.count > 0 ? b.total / b.count : 0 })).sort((a, b) => b.avg - a.avg)
       if (bRanked.length > 1) {
         lines.push(``)
-        lines.push(`**By Branch**`)
+        lines.push(`**By Station**`)
         bRanked.forEach((b, i) => {
           const medal = i === 0 ? '::Star::' : '  '
           lines.push(`  ${medal} **${b.name}**: ${fmt(b.avg)} avg (${b.count} orders)`)
@@ -1823,7 +1824,7 @@ export async function POST(req: Request) {
       const bRanked = Object.values(bMap).sort((a, b) => b.total - a.total)
       if (bRanked.length > 1) {
         lines.push(``)
-        lines.push(`**By Branch**`)
+        lines.push(`**By Station**`)
         bRanked.forEach((b, i) => {
           const medal = i === 0 ? '::Star::' : '  '
           lines.push(`  ${medal} **${b.name}**: ${fmt(b.total)} (${pct(b.total, total)})`)
@@ -1853,7 +1854,7 @@ export async function POST(req: Request) {
       select: { calculatedCost: true },
     })
     const total = wasteLogs.reduce((s, w) => s + (w.calculatedCost ?? 0), 0)
-    lines.push(`**Waste** — ${range.label} · All Branches`)
+    lines.push(`**Waste** — ${range.label} · All Stations`)
     lines.push(`  Total Loss: **${fmt(total)}**`)
     lines.push(`  Incidents: ${wasteLogs.length}`)
   }
@@ -1942,7 +1943,7 @@ export async function POST(req: Request) {
           map[key].qty     += s.quantitySold ?? 0
         }
         const results = Object.values(map).sort((a, b) => b.revenue - a.revenue)
-        lines.push(`**"${dishName}" Sales** — ${range.label} · All Branches`)
+        lines.push(`**"${dishName}" Sales** — ${range.label} · All Stations`)
         results.forEach(d => {
           lines.push(`  ${d.name}`)
           lines.push(`    Revenue: **${fmt(d.revenue)}**`)
@@ -1970,11 +1971,11 @@ export async function POST(req: Request) {
       }
       const ranked  = Object.values(byBranch).sort((a, b) => b.total - a.total)
       const grandTotal = ranked.reduce((s, b) => s + b.total, 0)
-      lines.push(`**Expenses by Branch** — ${range.label}`)
+      lines.push(`**Expenses by Station** — ${range.label}`)
       if (ranked.length === 0) {
         lines.push(`  No purchase data for this period.`)
       } else {
-        lines.push(`  Total across all branches: **${fmt(grandTotal)}**`)
+        lines.push(`  Total across all stations: **${fmt(grandTotal)}**`)
         lines.push(``)
         ranked.forEach((b, i) => {
           const medal = i === 0 ? '::AlertTriangle::' : i === 1 ? '::Award::' : '  '
@@ -1983,7 +1984,7 @@ export async function POST(req: Request) {
         lines.push(``)
         lines.push(`**::Lightbulb:: Jesse's Take**`)
         const top = ranked[0]
-        lines.push(`  **${top.name}** is spending the most at ${fmt(top.total)} (${pct(top.total, grandTotal)} of total). ${ranked.length > 1 ? `That's ${fmt(top.total - ranked[ranked.length - 1].total)} more than the lowest-spending branch.` : ''}`)
+        lines.push(`  **${top.name}** is spending the most at ${fmt(top.total)} (${pct(top.total, grandTotal)} of total). ${ranked.length > 1 ? `That's ${fmt(top.total - ranked[ranked.length - 1].total)} more than the lowest-spending station.` : ''}`)
       }
 
     } else if (intents.includes('profit')) {
@@ -2012,7 +2013,7 @@ export async function POST(req: Request) {
         .map(b => ({ ...b, profit: b.revenue - b.cogs - b.waste, margin: b.revenue > 0 ? ((b.revenue - b.cogs - b.waste) / b.revenue) * 100 : 0 }))
         .sort((a, b) => b.profit - a.profit)
 
-      lines.push(`**Profit by Branch** — ${range.label}`)
+      lines.push(`**Profit by Station** — ${range.label}`)
       if (ranked.length === 0) {
         lines.push(`  No sales data for this period.`)
       } else {
@@ -2032,7 +2033,7 @@ export async function POST(req: Request) {
           lines.push(`  **${top.name}** leads with ${fmt(top.profit)} profit. **${bottom.name}** is at a loss (${fmt(bottom.profit)}) — review its cost structure.`)
         } else if (ranked.length > 1) {
           const marginGap = top.margin - (ranked[ranked.length - 1].margin)
-          lines.push(`  **${top.name}** has the best profit at ${fmt(top.profit)} (${top.margin.toFixed(1)}% margin). Gap to lowest branch is ${marginGap.toFixed(1)} percentage points.`)
+          lines.push(`  **${top.name}** has the best profit at ${fmt(top.profit)} (${top.margin.toFixed(1)}% margin). Gap to lowest station is ${marginGap.toFixed(1)} percentage points.`)
         } else {
           lines.push(`  **${top.name}**: ${fmt(top.profit)} profit at ${top.margin.toFixed(1)}% margin.`)
         }
@@ -2053,11 +2054,11 @@ export async function POST(req: Request) {
       const ranked    = Object.values(byBranch).sort((a, b) => b.revenue - a.revenue)
       const grandTotal = ranked.reduce((s, b) => s + b.revenue, 0)
 
-      lines.push(`**Revenue by Branch** — ${range.label}`)
+      lines.push(`**Revenue by Station** — ${range.label}`)
       if (ranked.length === 0) {
         lines.push(`  No sales data for this period.`)
       } else {
-        lines.push(`  Total: **${fmt(grandTotal)}** across ${ranked.length} branch${ranked.length !== 1 ? 'es' : ''}`)
+        lines.push(`  Total: **${fmt(grandTotal)}** across ${ranked.length} station${ranked.length !== 1 ? 's' : ''}`)
         lines.push(``)
         ranked.forEach((b, i) => {
           const medal = i === 0 ? '::Star::' : i === 1 ? '::Award::' : '  '
@@ -2068,9 +2069,9 @@ export async function POST(req: Request) {
         const top = ranked[0]
         const share = grandTotal > 0 ? (top.revenue / grandTotal) * 100 : 0
         if (share > 60 && ranked.length > 1) {
-          lines.push(`  **${top.name}** generates ${share.toFixed(0)}% of total revenue — heavily concentrated. Consider growing other branches.`)
+          lines.push(`  **${top.name}** generates ${share.toFixed(0)}% of total revenue — heavily concentrated. Consider growing other stations.`)
         } else if (ranked.length > 1) {
-          lines.push(`  **${top.name}** leads at ${fmt(top.revenue)} (${share.toFixed(0)}%). Revenue is ${share < 50 ? 'fairly balanced' : 'somewhat concentrated'} across branches.`)
+          lines.push(`  **${top.name}** leads at ${fmt(top.revenue)} (${share.toFixed(0)}%). Revenue is ${share < 50 ? 'fairly balanced' : 'somewhat concentrated'} across stations.`)
         } else {
           lines.push(`  **${top.name}**: ${fmt(top.revenue)} in revenue.`)
         }
@@ -2099,7 +2100,7 @@ export async function POST(req: Request) {
         lines.push(`  Reorder at: ${i.reorderLevel ?? 0} ${i.unit}`)
         lines.push(`  Status: ${isLow ? '::AlertTriangle:: Low — needs restocking' : '::CheckCircle:: OK'}`)
       } else {
-        lines.push(`**Stock: "${ingredientName}"** — ${items.length} match${items.length !== 1 ? 'es' : ''} across branches`)
+        lines.push(`**Stock: "${ingredientName}"** — ${items.length} match${items.length !== 1 ? 'es' : ''} across stations`)
         for (const i of items) {
           const isLow = i.quantity <= (i.reorderLevel ?? 0)
           lines.push(`  ${isLow ? '::AlertTriangle::' : '::CheckCircle::'} ${i.name} (${i.branch.name}): **${i.quantity} ${i.unit}**`)
@@ -2201,7 +2202,7 @@ export async function POST(req: Request) {
       lines.push(``)
       lines.push(`Ask me anything about your numbers:`)
       lines.push(`  ::Banknote:: "what's today's revenue?" / "this month's profit"`)
-      lines.push(`  ::BarChart2:: "expenses branch by branch" / "profit by branch this week"`)
+      lines.push(`  ::BarChart2:: "expenses station by station" / "profit by station this week"`)
       lines.push(`  ::Target:: "revenue by MoMo today" / "payment breakdown"`)
       lines.push(`  ::Flame:: "what's our best seller?" / "top dishes this month"`)
       lines.push(`  ::Clock:: "how many orders today?" / "pending orders right now"`)
@@ -2221,7 +2222,7 @@ export async function POST(req: Request) {
     lines.push(`  • "how many orders this month?"`)
     lines.push(`  • "what's our best seller?"`)
     lines.push(`  • "do we have any low stock?"`)
-    lines.push(`  • "expenses by branch this month"`)
+    lines.push(`  • "expenses by station this month"`)
     lines.push(`  • "how's business today?" — for a full snapshot`)
   }
 

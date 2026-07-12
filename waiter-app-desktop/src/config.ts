@@ -32,4 +32,6 @@ export const API = {
   push: buildApiUrl('/api/mobile/push'),
   /** POST — cancel a confirmed order with supervisor PIN */
   cancelOrder: buildApiUrl('/api/mobile/cancel-order'),
+  /** POST — MEP list management + "qty prepared" logging */
+  mep: buildApiUrl('/api/mobile/mep'),
 }

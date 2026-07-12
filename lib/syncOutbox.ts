@@ -34,6 +34,8 @@ export const BRANCH_REQUIRED_ENTITY_TYPES = new Set([
   'employeeShift',
   'dishSale',
   'dishIngredient',
+  'mepListItem',
+  'prepLog',
 ])
 
 export type SyncOperation = 'upsert' | 'delete'

@@ -35,7 +35,7 @@ export async function GET(req: Request) {
   const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
   if (!context?.restaurantId || !context.branchId) {
     return NextResponse.json(
-      { error: 'No restaurant branch found for this account. Ask your administrator to check your account configuration.' },
+      { error: 'No restaurant station found for this account. Ask your administrator to check your account configuration.' },
       { status: 400 },
     )
   }

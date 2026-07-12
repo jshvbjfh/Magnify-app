@@ -271,6 +271,9 @@ model Dish {
   sellingPrice Float
   description  String?
   isActive     Boolean          @default(true)
+  // MEP (mise en place): batch-cooked portions ready to serve; sales consume these first
+  preparedPortions    Float     @default(0)
+  preparedPortionCost Float     @default(0)
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
   deletedAt    DateTime?
@@ -332,6 +335,7 @@ model InventoryItem {
   reorderLevel Float     @default(0)
   category     String?
   description  String?
+  type         String    @default("purchased")
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
@@ -343,10 +347,28 @@ model InventoryItem {
   adjustmentLogs    InventoryAdjustmentLog[]
   batchUsageLedgers InventoryBatchUsageLedger[]
   stockTakes        StockTake[]
+  prepIngredients   PrepIngredient[] @relation("PrepItemIngredients")
+  usedInPreps       PrepIngredient[] @relation("IngredientUsedInPreps")
 
   @@unique([restaurantId, branchId, name])
   @@index([branchId])
   @@map("inventory_items")
+}
+
+// Sub-recipe for a prep: raw purchased items consumed to produce one unit of the prep.
+model PrepIngredient {
+  id               String        @id @default(cuid())
+  prepItemId       String
+  prepItem         InventoryItem @relation("PrepItemIngredients", fields: [prepItemId], references: [id], onDelete: Cascade)
+  ingredientItemId String
+  ingredient       InventoryItem @relation("IngredientUsedInPreps", fields: [ingredientItemId], references: [id], onDelete: Cascade)
+  quantityRequired Float
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@unique([prepItemId, ingredientItemId])
+  @@index([prepItemId])
+  @@map("prep_ingredients")
 }
 
 model InventoryPurchase {
@@ -426,6 +448,52 @@ model InventoryBatchUsageLedger {
   @@index([purchaseId])
   @@index([sourceType, sourceId])
   @@map("inventory_batch_usage_ledgers")
+}
+
+// ─── MEP (MISE EN PLACE) ───────────────────────────────────────────────────
+
+// Persistent per-station (branch) MEP list. Staff add prep items or dishes from
+// the catalog; the row stays until removed (soft delete). targetId is a soft
+// reference: InventoryItem.id when targetType='prep', Dish.id when 'dish'.
+model MepListItem {
+  id           String    @id @default(cuid())
+  restaurantId String
+  branchId     String
+  targetType   String // 'prep' | 'dish'
+  targetId     String
+  addedBy      String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  @@unique([branchId, targetType, targetId])
+  @@index([restaurantId, branchId])
+  @@map("mep_list_items")
+}
+
+// One "qty prepared" log. Producing a prep creates a kitchen-made
+// InventoryPurchase layer (producedPurchaseId anchors undo); producing a dish
+// increments Dish.preparedPortions. clientLogId makes offline pushes idempotent.
+model PrepLog {
+  id                 String    @id @default(cuid())
+  restaurantId       String
+  branchId           String
+  targetType         String // 'prep' | 'dish'
+  targetId           String
+  quantity           Float
+  unit               String?
+  totalCost          Float     @default(0)
+  costPerUnit        Float     @default(0)
+  producedPurchaseId String?
+  madeBy             String?
+  madeAt             DateTime  @default(now())
+  clientLogId        String?   @unique
+  reversedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([restaurantId, branchId, madeAt])
+  @@map("prep_logs")
 }
 
 // ─── DISH SALES & COGS ─────────────────────────────────────────────────────

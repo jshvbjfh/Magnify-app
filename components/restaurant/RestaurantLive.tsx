@@ -172,7 +172,7 @@ export default function RestaurantLive() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-bold text-gray-800">Live View</h2>
-          <span className="text-xs font-medium bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-full">All branches</span>
+          <span className="text-xs font-medium bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-full">All stations</span>
           <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
           <span className="text-xs text-gray-400">
             Last updated {lastRefresh.toLocaleTimeString('en-RW', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}

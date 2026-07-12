@@ -5,7 +5,12 @@ import {
   replaceCancellationApprovers, getCancellationApprovers,
   replaceOrderCodeHolders, getOrderCodeHolders,
   reconcileOrderStatuses, upsertIncomingOrders,
+  replaceMepItems, replaceMepCatalog, reconcileMepLogs, adjustMepRemaining, setMepRemaining,
+  getUnsyncedMepLogs, getPendingMepUndos, markMepLogsSynced, markMepLogReversed,
+  markMepLogFailed, clearMepLogPendingUndo, setMepLogSyncError,
+  upsertMepItem, deleteMepItem,
   type Dish, type RestaurantTable, type CancellationApprover, type RemoteOrderStatus, type IncomingOrder,
+  type MepItem, type MepCatalogEntry,
 } from './db'
 import { getToken, invalidateSession, SESSION_INVALID_MESSAGE } from './auth'
 import { API } from '../config'
@@ -27,12 +32,19 @@ export interface BranchInfo {
   type?: string
 }
 
+export interface MepPullSlice {
+  items?: MepItem[]
+  todayLogs?: Array<{ client_log_id: string | null; reversed: number }>
+  preps?: MepCatalogEntry[]
+}
+
 export interface PullPayload {
   dishes: Dish[]
   tables: RestaurantTable[]
   restaurant: { id: string; name: string; billHeader?: string; billPrinterIp?: string | null; billPrinterPort?: number | null }
   branches?: BranchInfo[]
   cancellationApprovers?: CancellationApprover[]
+  mep?: MepPullSlice
 }
 
 export interface PullResult {
@@ -156,7 +168,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
     // Don't wipe the local cache on an empty response — a transient server error
     // or misconfiguration could cause 0 dishes, and clearing would break offline use.
     if (existingDishes.length > 0) {
-      warnings.push('This branch currently has no menu. Showing your cached menu.')
+      warnings.push('This station currently has no menu. Showing your cached menu.')
     }
   } else {
     await replaceDishes(payload.dishes, dishReplaceScope)
@@ -166,7 +178,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   if (payload.tables.length === 0) {
     // Same defensive approach for tables — preserve local cache on empty pull.
     if (existingTables.length > 0) {
-      warnings.push('This branch currently has no tables.')
+      warnings.push('This station currently has no tables.')
     }
   } else {
     await replaceTables(payload.tables, replaceScope)
@@ -180,7 +192,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
       dishes: payload.dishes.length,
       tables: payload.tables.length,
     })
-    throw new Error('No menu is available for your assigned branch. Ask your manager to sync the branch menu and verify your branch assignment.')
+    throw new Error('No menu is available for your assigned station. Ask your manager to sync the station menu and verify your station assignment.')
   }
 
   await setConfig('restaurantName', payload.restaurant.name)
@@ -222,6 +234,23 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   const incomingOrders = (payload as unknown as { incomingOrders?: IncomingOrder[] }).incomingOrders
   if (Array.isArray(incomingOrders) && incomingOrders.length > 0) {
     await upsertIncomingOrders(incomingOrders)
+  }
+
+  // MEP: replace this station's list + prep catalog with the server-authoritative
+  // snapshot, reconcile today's logs, then re-apply the deltas of local logs the
+  // server hasn't seen yet so their optimistic "remaining" isn't wiped by the pull.
+  if (payload.mep && effectiveBranchId) {
+    await replaceMepItems(Array.isArray(payload.mep.items) ? payload.mep.items : [], effectiveBranchId)
+    await replaceMepCatalog(Array.isArray(payload.mep.preps) ? payload.mep.preps : [], effectiveBranchId)
+    if (Array.isArray(payload.mep.todayLogs) && payload.mep.todayLogs.length > 0) {
+      await reconcileMepLogs(payload.mep.todayLogs)
+    }
+    const unsyncedMepLogs = await getUnsyncedMepLogs()
+    for (const log of unsyncedMepLogs) {
+      if (!log.branch_id || log.branch_id === effectiveBranchId) {
+        await adjustMepRemaining(log.target_type, log.target_id, log.quantity)
+      }
+    }
   }
 
   if (warnings.length > 0) {
@@ -359,6 +388,203 @@ export async function pushSync(): Promise<number> {
   return syncedOrderIds.length
 }
 
+// ─── MEP push (SQLite → server) ──────────────────────────────────────────────
+// Pushes queued "qty prepared" logs, then pending undos. The log id doubles as
+// the server-side clientLogId, so replays after a lost response are idempotent.
+
+export async function pushMepSync(): Promise<number> {
+  if (!API.mep) return 0
+
+  const [logs, undos] = await Promise.all([getUnsyncedMepLogs(), getPendingMepUndos()])
+  if (!logs.length && !undos.length) return 0
+
+  const token = await requireValidToken()
+  let pushed = 0
+
+  for (const log of logs) {
+    try {
+      const response = await sendRequest({
+        scope: 'sync',
+        method: 'POST',
+        url: API.mep,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        data: {
+          action: 'log',
+          branchId: log.branch_id,
+          targetType: log.target_type,
+          targetId: log.target_id,
+          quantity: log.quantity,
+          clientLogId: log.id,
+          madeBy: log.made_by,
+          madeAt: log.made_at,
+        },
+      })
+
+      if (response.status === 401) {
+        await invalidateSession('unauthorized')
+        throw new Error(SESSION_INVALID_MESSAGE)
+      }
+
+      const { body } = responseDataToRecord(response.data)
+      if (response.status >= 200 && response.status < 300 && body.ok === true) {
+        await markMepLogsSynced([log.id])
+        if (typeof body.remaining === 'number') {
+          await setMepRemaining(log.target_type, log.target_id, body.remaining)
+        }
+        pushed += 1
+      } else if (response.status >= 400 && response.status < 500) {
+        // Hard rejection (target deleted, bad payload) — never retry, keep the reason.
+        const reason = typeof body.error === 'string' ? body.error : `Rejected (${response.status})`
+        await markMepLogFailed(log.id, reason)
+        await logWarn('sync', 'MEP log rejected by server', { logId: log.id, status: response.status, reason })
+      } else {
+        await setMepLogSyncErrorSafe(log.id, `Server error ${response.status}`)
+      }
+    } catch (err) {
+      const message = (err as Error).message
+      if (message === SESSION_INVALID_MESSAGE) throw err
+      // Network failure — stay queued for the next cycle.
+      await setMepLogSyncErrorSafe(log.id, message)
+    }
+  }
+
+  for (const undo of undos) {
+    try {
+      const response = await sendRequest({
+        scope: 'sync',
+        method: 'POST',
+        url: API.mep,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        data: { action: 'undo', branchId: undo.branch_id, clientLogId: undo.id },
+      })
+
+      if (response.status === 401) {
+        await invalidateSession('unauthorized')
+        throw new Error(SESSION_INVALID_MESSAGE)
+      }
+
+      const { body } = responseDataToRecord(response.data)
+      if (response.status >= 200 && response.status < 300 && body.ok === true) {
+        await markMepLogReversed(undo.id)
+        if (typeof body.remaining === 'number') {
+          await setMepRemaining(undo.target_type, undo.target_id, body.remaining)
+        }
+      } else if (response.status >= 200 && response.status < 300 && body.ok === false) {
+        // Server refused (already consumed) — restore the optimistic subtraction.
+        const reason = typeof body.reason === 'string' ? body.reason : 'Undo refused'
+        await clearMepLogPendingUndo(undo.id, reason)
+        await adjustMepRemaining(undo.target_type, undo.target_id, undo.quantity)
+      } else if (response.status >= 400 && response.status < 500) {
+        const reason = typeof body.error === 'string' ? body.error : `Rejected (${response.status})`
+        await clearMepLogPendingUndo(undo.id, reason)
+        await adjustMepRemaining(undo.target_type, undo.target_id, undo.quantity)
+      }
+      // 5xx / network: leave pending for the next cycle.
+    } catch (err) {
+      if ((err as Error).message === SESSION_INVALID_MESSAGE) throw err
+    }
+  }
+
+  return pushed
+}
+
+async function setMepLogSyncErrorSafe(id: string, error: string) {
+  try {
+    await setMepLogSyncError(id, error)
+  } catch {
+    // Never let bookkeeping kill the sync loop.
+  }
+}
+
+// ─── MEP list management (online-only) ───────────────────────────────────────
+// Adding/removing MEP items is a rare curation action, so it requires the
+// network — this avoids client/server id reconciliation for list rows.
+
+export async function mepAddItemOnServer(params: {
+  branchId: string | null
+  targetType: 'prep' | 'dish'
+  targetId: string
+  addedBy?: string | null
+}): Promise<MepItem> {
+  if (!API.mep) throw new Error('API base URL is not configured.')
+  const token = await requireValidToken()
+
+  const response = await sendRequest({
+    scope: 'sync',
+    method: 'POST',
+    url: API.mep,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    data: {
+      action: 'add-item',
+      branchId: params.branchId,
+      targetType: params.targetType,
+      targetId: params.targetId,
+      addedBy: params.addedBy ?? null,
+    },
+  })
+
+  if (response.status === 401) {
+    await invalidateSession('unauthorized')
+    throw new Error(SESSION_INVALID_MESSAGE)
+  }
+
+  const { body } = responseDataToRecord(response.data)
+  if (response.status < 200 || response.status >= 300 || body.ok !== true) {
+    throw new Error(typeof body.error === 'string' ? body.error : `Add failed: ${response.status}`)
+  }
+
+  const item = body.item as unknown as MepItem
+  await upsertMepItem(item)
+  return item
+}
+
+export async function mepRemoveItemOnServer(params: {
+  branchId: string | null
+  targetType: 'prep' | 'dish'
+  targetId: string
+  itemId: string
+}): Promise<void> {
+  if (!API.mep) throw new Error('API base URL is not configured.')
+  const token = await requireValidToken()
+
+  const response = await sendRequest({
+    scope: 'sync',
+    method: 'POST',
+    url: API.mep,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    data: {
+      action: 'remove-item',
+      branchId: params.branchId,
+      targetType: params.targetType,
+      targetId: params.targetId,
+    },
+  })
+
+  if (response.status === 401) {
+    await invalidateSession('unauthorized')
+    throw new Error(SESSION_INVALID_MESSAGE)
+  }
+
+  const { body } = responseDataToRecord(response.data)
+  if (response.status < 200 || response.status >= 300 || body.ok !== true) {
+    throw new Error(typeof body.error === 'string' ? body.error : `Remove failed: ${response.status}`)
+  }
+
+  await deleteMepItem(params.itemId)
+}
+
 // ─── Full sync cycle ─────────────────────────────────────────────────────────
 
 export async function syncAll(branchId?: string): Promise<{ pushed: number; pulled: boolean; warning?: string; error?: string; authFailed?: boolean }> {
@@ -375,6 +601,18 @@ export async function syncAll(branchId?: string): Promise<{ pushed: number; pull
     if (pushError === SESSION_INVALID_MESSAGE) {
       return { pushed: 0, pulled: false, error: pushError, authFailed: true }
     }
+  }
+
+  // MEP logs push before pull so the pull's server-authoritative "remaining"
+  // already includes what this device just prepared.
+  try {
+    await pushMepSync()
+  } catch (err) {
+    const mepError = (err as Error).message
+    if (mepError === SESSION_INVALID_MESSAGE) {
+      return { pushed, pulled: false, error: mepError, authFailed: true }
+    }
+    pushError = pushError ?? mepError
   }
 
   try {

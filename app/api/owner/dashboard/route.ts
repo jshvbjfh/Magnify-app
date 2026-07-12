@@ -84,11 +84,11 @@ async function resolveRestaurantAccess(
     : (branches.find((b) => b.isMain) ?? branches[0] ?? null)
 
   if (requestedBranchId && !branch) {
-    return { error: NextResponse.json({ error: 'Branch not found' }, { status: 404 }) }
+    return { error: NextResponse.json({ error: 'Station not found' }, { status: 404 }) }
   }
 
   if (!branch) {
-    return { error: NextResponse.json({ error: 'No active branch found for this restaurant' }, { status: 400 }) }
+    return { error: NextResponse.json({ error: 'No active station found for this restaurant' }, { status: 400 }) }
   }
 
   return { restaurant, restaurants, branch, branches }
@@ -255,7 +255,7 @@ export async function GET(req: Request) {
     : null
   let statusLevel: 'live' | 'recent' | 'stale' = 'stale'
   let statusLabel = 'Quiet'
-  let statusDetail = 'No recent branch activity yet.'
+  let statusDetail = 'No recent station activity yet.'
   if (lastActivityAt) {
     const minutesSince = (Date.now() - lastActivityAt.getTime()) / 60000
     if (activeOrderCount > 0 || minutesSince <= 5) {
@@ -267,7 +267,7 @@ export async function GET(req: Request) {
     } else if (minutesSince <= 60) {
       statusLevel = 'recent'
       statusLabel = 'Recently active'
-      statusDetail = 'The branch has recent activity, but nothing is active right now.'
+      statusDetail = 'The station has recent activity, but nothing is active right now.'
     } else {
       statusDetail = 'No recent activity has reached the system for a while.'
     }

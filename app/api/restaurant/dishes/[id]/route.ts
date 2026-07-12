@@ -34,10 +34,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = await getRestaurantContextForUser(session.user.id)
-  if (!context?.restaurantId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+  if (!context?.restaurantId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
   const branchId = await requireBranchId(context.restaurantId, context.branchId, session.user.id)
-  if (!branchId) return NextResponse.json({ error: 'No branch configured for this restaurant' }, { status: 400 })
+  if (!branchId) return NextResponse.json({ error: 'No station configured for this restaurant' }, { status: 400 })
 
   const { id } = await params
   const data = await req.json()
@@ -104,10 +104,10 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const context = await getRestaurantContextForUser(session.user.id)
-  if (!context?.restaurantId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+  if (!context?.restaurantId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
   const branchId = await requireBranchId(context.restaurantId, context.branchId, session.user.id)
-  if (!branchId) return NextResponse.json({ error: 'No branch configured for this restaurant' }, { status: 400 })
+  if (!branchId) return NextResponse.json({ error: 'No station configured for this restaurant' }, { status: 400 })
 
   const { id } = await params
   const existingDish = await prisma.dish.findFirst({ where: { id, restaurantId: context.restaurantId, branchId } })

@@ -203,6 +203,46 @@ CREATE TABLE IF NOT EXISTS order_code_holders (
     version: 5,
     run: (database) => addColumnIfMissing(database, 'order_items', 'notes', 'TEXT'),
   },
+  {
+    // MEP (mise en place): per-station prep list, prep catalog for search, and
+    // the offline "qty prepared" log queue (id doubles as the server clientLogId).
+    version: 6,
+    sql: `
+CREATE TABLE IF NOT EXISTS mep_items (
+  id TEXT PRIMARY KEY,
+  restaurant_id TEXT,
+  branch_id TEXT,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  unit TEXT,
+  remaining REAL DEFAULT 0,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS mep_catalog (
+  target_id TEXT PRIMARY KEY,
+  branch_id TEXT,
+  name TEXT NOT NULL,
+  unit TEXT,
+  remaining REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mep_logs (
+  id TEXT PRIMARY KEY,
+  restaurant_id TEXT,
+  branch_id TEXT,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  name TEXT,
+  quantity REAL NOT NULL,
+  made_by TEXT,
+  made_at TEXT NOT NULL,
+  reversed INTEGER DEFAULT 0,
+  pending_undo INTEGER DEFAULT 0,
+  synced INTEGER DEFAULT 0,
+  sync_error TEXT
+);
+`,
+  },
 ]
 
 function addColumnIfMissing(database, table, column, definition) {
@@ -272,7 +312,10 @@ function printViaRawTcp(host, port, buffer) {
 // data: { topText, bottomText, server, station, orderNo, orderType,
 //         tableName, dt, items[{qty,name,unitPrice,notes}], totalAmount }
 function buildBillEscPos(data) {
-  const LINE = 32
+  // Column count comes from the device's Printers-tab setting (falls back to
+  // 32, the classic 58mm width) so alignment matches the physical printer.
+  const cfgCols = Number(data.columns)
+  const LINE = Number.isFinite(cfgCols) && cfgCols >= 24 && cfgCols <= 64 ? cfgCols : 32
   const ESC = 0x1B, GS = 0x1D
   const parts = []
   const b = bytes => Buffer.from(bytes)
@@ -344,10 +387,25 @@ function buildBillEscPos(data) {
     parts.push(t(center(text || '')))
     if (hasBold) parts.push(b([ESC, 0x45, 0x00]))
   }
+  parts.push(t(center('Powered by Magnify')))
 
-  // Feed + full cut
+  // Footer 2 — prints below "Powered by Magnify"; usually blank lines the
+  // manager adds in the bill editor to push the footer past the cutter.
+  if (data.footer2Text) {
+    for (const line of String(data.footer2Text).split('\n')) {
+      const { text, hasBold } = parse(line)
+      if (hasBold) parts.push(b([ESC, 0x45, 0x01]))
+      parts.push(t(center(text || '')))
+      if (hasBold) parts.push(b([ESC, 0x45, 0x00]))
+    }
+  }
+
+  // Feed + full cut.
+  // 6 line feeds — was 4, but that left the last printed line (this footer) sitting right at the
+  // cutter blade on some printers, so it got cut off and reappeared at the top of the next bill
+  // instead of the bottom of this one. Extra feed gives it clearance to fully pass the blade first.
   parts.push(b([ESC, 0x61, 0x00]))
-  parts.push(b([0x0A, 0x0A, 0x0A, 0x0A]))
+  parts.push(b([0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A]))
   parts.push(b([GS, 0x56, 0x00]))
 
   return Buffer.concat(parts)

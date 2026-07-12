@@ -18,7 +18,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
 
   const context = await getRestaurantContextForUser(session.user.id)
   if (!context?.restaurantId || !context.branchId) {
-    return NextResponse.json({ error: 'No restaurant branch' }, { status: 400 })
+    return NextResponse.json({ error: 'No restaurant station' }, { status: 400 })
   }
 
   const { id } = await params

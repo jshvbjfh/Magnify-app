@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
+  getMepOutDishIds,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
@@ -424,6 +425,22 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
 
   const orderSubmitLockRef = useRef(false)
   const paymentLockRef     = useRef(false)
+
+  // MEP "Out" badges: dishes whose prepared portions hit 0 on this station.
+  // Informational only — ordering is never blocked (kitchen can still cook to order).
+  const [outDishIds, setOutDishIds] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    if (mode === 'history') return
+    let cancelled = false
+    void (async () => {
+      try {
+        const activeBranch = await getConfig('activeBranchId')
+        const ids = await getMepOutDishIds(activeBranch)
+        if (!cancelled) setOutDishIds(new Set(ids))
+      } catch { /* DB not ready yet */ }
+    })()
+    return () => { cancelled = true }
+  }, [mode, syncVersion, activeBranchId])
 
   // ── Data loaders ──
 
@@ -1484,6 +1501,11 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                     {qtyInCart > 0 && (
                       <span className="absolute top-1.5 right-1.5 h-7 min-w-[28px] bg-gray-900 border-2 border-white text-white text-xs font-bold rounded-full flex items-center justify-center px-1 shadow-sm">
                         {qtyInCart}
+                      </span>
+                    )}
+                    {outDishIds.has(dish.id) && (
+                      <span className="absolute top-1.5 left-1.5 bg-red-600 text-white text-[10px] font-bold rounded px-1.5 py-0.5 shadow-sm select-none">
+                        Out
                       </span>
                     )}
                   </button>

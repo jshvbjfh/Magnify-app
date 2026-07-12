@@ -4,6 +4,7 @@ export const INVENTORY_UNITS = [
 	{ value: 'ltr', label: 'Ltr' },
 	{ value: 'ml', label: 'ml' },
 	{ value: 'piece', label: 'Piece' },
+	{ value: 'shot', label: 'Shot' },
 	{ value: 'bottle', label: 'Bottle' },
 	{ value: 'bag', label: 'Bag' },
 	{ value: 'box', label: 'Box' },

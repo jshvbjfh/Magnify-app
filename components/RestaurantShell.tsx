@@ -62,7 +62,7 @@ const navGroups: { section?: string; items: NavItem[] }[] = [
   ]},
   { section: 'Management', items: [
     { id: 'menu', label: 'Menu', icon: <UtensilsCrossed className="h-4 w-4" /> },
-    { id: 'inventory', label: 'Inventory', icon: <Package className="h-4 w-4" /> },
+    { id: 'inventory', label: 'Stock', icon: <Package className="h-4 w-4" /> },
     { id: 'reports', label: 'Reports', icon: <BarChart3 className="h-4 w-4" /> },
     { id: 'analytics', label: 'AI Analytics', icon: <BrainCircuit className="h-4 w-4" /> },
     { id: 'staff', label: 'Staff', icon: <Users className="h-4 w-4" /> },
@@ -153,7 +153,7 @@ useEffect(() => {
           () => { if (!cancelled) setBranchConnecting(true) },
         )
         const data = await res.json().catch(() => null)
-        if (!res.ok) throw new Error(data?.error || 'Failed to load branches')
+        if (!res.ok) throw new Error(data?.error || 'Failed to load stations')
 
         if (cancelled) return
 
@@ -216,7 +216,7 @@ useEffect(() => {
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
-        throw new Error(data?.error || 'Failed to switch branch')
+        throw new Error(data?.error || 'Failed to switch station')
       }
 
       const nextActiveBranchId = typeof data?.activeBranchId === 'string' ? data.activeBranchId : branchId
@@ -225,7 +225,7 @@ useEffect(() => {
       setActiveBranchId(nextActiveBranchId)
       window.dispatchEvent(new Event('refreshWastePending'))
     } catch (error) {
-      setBranchError(error instanceof Error ? error.message : 'Failed to switch branch')
+      setBranchError(error instanceof Error ? error.message : 'Failed to switch station')
     } finally {
       setBranchSwitchingId(null)
     }
@@ -235,7 +235,7 @@ useEffect(() => {
     const name = branchForm.name.trim()
 
     if (!name || branchCreating) {
-      if (!name) setBranchError('Branch name is required')
+      if (!name) setBranchError('Station name is required')
       return
     }
 
@@ -255,7 +255,7 @@ useEffect(() => {
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
-        throw new Error(data?.error || 'Failed to create branch')
+        throw new Error(data?.error || 'Failed to create station')
       }
 
       const nextBranches = Array.isArray(data?.branches) ? data.branches : []
@@ -272,7 +272,7 @@ useEffect(() => {
 
       window.dispatchEvent(new Event('refreshWastePending'))
     } catch (error) {
-      setBranchError(error instanceof Error ? error.message : 'Failed to create branch')
+      setBranchError(error instanceof Error ? error.message : 'Failed to create station')
     } finally {
       setBranchCreating(false)
     }
@@ -294,7 +294,7 @@ useEffect(() => {
         body: JSON.stringify({ name, code: code || undefined }),
       })
       const data = await res.json().catch(() => null)
-      if (!res.ok) throw new Error(data?.error || 'Failed to update branch')
+      if (!res.ok) throw new Error(data?.error || 'Failed to update station')
 
       const nextBranches = Array.isArray(data?.branches) ? data.branches : branches
       setBranches(nextBranches)
@@ -302,7 +302,7 @@ useEffect(() => {
       setBranchNotice(`"${name}" updated.`)
       window.dispatchEvent(new CustomEvent('branchNameChanged', { detail: { branches: nextBranches } }))
     } catch (error) {
-      setBranchError(error instanceof Error ? error.message : 'Failed to update branch')
+      setBranchError(error instanceof Error ? error.message : 'Failed to update station')
     } finally {
       setBranchEditing(false)
     }
@@ -642,7 +642,7 @@ useEffect(() => {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-gray-500">
-                  <span>Branches</span>
+                  <span>Stations</span>
                   {branchesLoaded && branches.length > 0 ? (
                     <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600">
                       {branches.length}
@@ -673,7 +673,7 @@ useEffect(() => {
                         {/* Edit pencil — visible on hover or when active */}
                         <button
                           type="button"
-                          title="Rename branch"
+                          title="Rename station"
                           onClick={(e) => {
                             e.stopPropagation()
                             setBranchEditId(branch.id)
@@ -699,9 +699,9 @@ useEffect(() => {
                     >
                       <div className="flex items-center gap-2 text-sm font-semibold">
                         <Plus className="h-4 w-4 text-orange-500" />
-                        <span>New branch</span>
+                        <span>New station</span>
                       </div>
-                      <p className="mt-1 text-[11px] text-gray-500">Create a clean branch with its own staff, stock, orders, and reports.</p>
+                      <p className="mt-1 text-[11px] text-gray-500">Create a clean station with its own staff, stock, orders, and reports.</p>
                     </button>,
                   ) : (
                     <div className="flex gap-2">
@@ -721,7 +721,7 @@ useEffect(() => {
                 ) : branchNotice ? (
                   <p className="mt-2 text-xs text-emerald-600">{branchNotice}</p>
                 ) : (
-                  <p className="mt-2 text-xs text-gray-500">Switch branch here to update this whole workspace.</p>
+                  <p className="mt-2 text-xs text-gray-500">Switch station here to update this whole workspace.</p>
                 )}
               </div>
               <button
@@ -746,8 +746,8 @@ useEffect(() => {
               <div className="relative w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-2xl">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-lg font-bold text-gray-900">Create branch</p>
-                    <p className="mt-1 text-sm text-gray-500">This starts as a clean branch. Its staff, tables, menu, inventory, orders, and reports stay separate from the others.</p>
+                    <p className="text-lg font-bold text-gray-900">Create station</p>
+                    <p className="mt-1 text-sm text-gray-500">This starts as a clean station. Its staff, tables, menu, inventory, orders, and reports stay separate from the others.</p>
                   </div>
                   <button
                     type="button"
@@ -763,7 +763,7 @@ useEffect(() => {
 
                 <div className="mt-4 space-y-4">
                   <div>
-                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Branch name</label>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Station name</label>
                     <input
                       value={branchForm.name}
                       onChange={(event) => setBranchForm((current) => ({ ...current, name: event.target.value }))}
@@ -774,7 +774,7 @@ useEffect(() => {
                   </div>
 
                   <div>
-                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Branch type</label>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Station type</label>
                     <div className="flex gap-4">
                       {(['kitchen', 'bar'] as const).map((t) => (
                         <label key={t} className="flex cursor-pointer items-center gap-2">
@@ -790,7 +790,7 @@ useEffect(() => {
                         </label>
                       ))}
                     </div>
-                    <p className="mt-1 text-xs text-gray-500">Kitchen branches handle food orders. Bar branches handle drinks.</p>
+                    <p className="mt-1 text-xs text-gray-500">Kitchen stations handle food orders. Bar stations handle drinks.</p>
                   </div>
 
                   {branchError ? <p className="text-sm text-red-600">{branchError}</p> : null}
@@ -811,7 +811,7 @@ useEffect(() => {
                       disabled={branchCreating}
                     >
                       {branchCreating ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                      <span>{branchCreating ? 'Creating…' : 'Create branch'}</span>
+                      <span>{branchCreating ? 'Creating…' : 'Create station'}</span>
                     </button>
                   </div>
                 </div>
@@ -825,12 +825,12 @@ useEffect(() => {
               <div className="absolute inset-0 bg-black/40" onClick={() => { if (!branchEditing) setBranchEditId(null) }} />
               <div className="relative w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-5 shadow-2xl">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-lg font-bold text-gray-900">Rename branch</p>
+                  <p className="text-lg font-bold text-gray-900">Rename station</p>
                   <button type="button" onClick={() => setBranchEditId(null)} className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"><X className="h-4 w-4" /></button>
                 </div>
                 <div className="mt-4 space-y-3">
                   <div>
-                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Branch name</label>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Station name</label>
                     <input
                       value={branchEditForm.name}
                       onChange={(e) => setBranchEditForm(f => ({ ...f, name: e.target.value }))}

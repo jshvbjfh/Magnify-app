@@ -576,6 +576,8 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	if (r.ok && !r.skipped) actions.push('Added inventory_items.description')
 	r = dbExecute(`ALTER TABLE "inventory_items" ADD COLUMN "deletedAt" DATETIME;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added inventory_items.deletedAt')
+	r = dbExecute(`ALTER TABLE "inventory_items" ADD COLUMN "type" TEXT NOT NULL DEFAULT 'purchased';`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_items.type')
 
 	// inventory_purchases
 	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "paymentMethod" TEXT NOT NULL DEFAULT 'Cash';`, SKIP_TABLE)
@@ -1583,6 +1585,28 @@ function printViaNetwork(host, port, buffer) {
 		})
 	})
 }
+
+ipcMain.handle('files:save-and-reveal', async (_, { filename, dataBase64 }) => {
+	try {
+		const downloadsDir = app.getPath('downloads')
+		const ext = path.extname(filename)
+		const base = path.basename(filename, ext)
+
+		let candidate = filename
+		let n = 1
+		while (fs.existsSync(path.join(downloadsDir, candidate))) {
+			candidate = `${base} (${n})${ext}`
+			n += 1
+		}
+
+		const fullPath = path.join(downloadsDir, candidate)
+		fs.writeFileSync(fullPath, Buffer.from(dataBase64, 'base64'))
+		shell.showItemInFolder(fullPath)
+		return { ok: true, path: fullPath }
+	} catch (e) {
+		return { ok: false, reason: e.message }
+	}
+})
 
 ipcMain.handle('printer:list-system', async () => {
 	try {

@@ -126,7 +126,7 @@ export async function PATCH(req: Request) {
   })
 
   if (!branch) {
-    return NextResponse.json({ error: 'Branch not found' }, { status: 404 })
+    return NextResponse.json({ error: 'Station not found' }, { status: 404 })
   }
 
   return withActiveBranchCookie(NextResponse.json({
@@ -148,7 +148,7 @@ export async function POST(req: Request) {
 
   const role = String((result.session.user as { role?: string }).role ?? '')
   if (role !== 'admin') {
-    return NextResponse.json({ error: 'Only the restaurant admin can create branches.' }, { status: 403 })
+    return NextResponse.json({ error: 'Only the restaurant admin can create stations.' }, { status: 403 })
   }
 
   const body = await req.json().catch(() => ({}))
@@ -156,7 +156,7 @@ export async function POST(req: Request) {
   const type = body?.type === 'bar' ? 'bar' : 'kitchen'
 
   if (!name) {
-    return NextResponse.json({ error: 'Branch name is required' }, { status: 400 })
+    return NextResponse.json({ error: 'Station name is required' }, { status: 400 })
   }
 
   try {
@@ -187,7 +187,7 @@ export async function POST(req: Request) {
       branches,
     }, { status: 201 }), restaurantId, result.activeBranchId)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to create branch'
+    const message = error instanceof Error ? error.message : 'Failed to create station'
     const status = message.includes('already exists') ? 409 : message.includes('required') ? 400 : 500
     return NextResponse.json({ error: message }, { status })
   }

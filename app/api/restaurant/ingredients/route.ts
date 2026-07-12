@@ -46,9 +46,9 @@ export async function POST(req: Request) {
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
 
-  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
-  const { name, description, unit, unitCost, quantity, reorderLevel, category } = await req.json()
+  const { name, description, unit, unitCost, quantity, reorderLevel, category, type } = await req.json()
   if (!name || !unit) return NextResponse.json({ error: 'name and unit required' }, { status: 400 })
 
   let usageUnit: string
@@ -70,6 +70,7 @@ export async function POST(req: Request) {
         quantity: parseOptionalNumber(quantity) ?? 0,
         reorderLevel: parseOptionalNumber(reorderLevel) ?? 0,
         category: category ? String(category).trim() : null,
+        type: type === 'prep' ? 'prep' : 'purchased',
       },
     })
 
@@ -97,9 +98,9 @@ export async function PUT(req: Request) {
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
 
-  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
-  const { id, name, description, unit, unitCost, quantity, reorderLevel, category } = await req.json()
+  const { id, name, description, unit, unitCost, quantity, reorderLevel, category, type } = await req.json()
 
   if (!id) return NextResponse.json({ error: 'Ingredient id is required' }, { status: 400 })
   if (!name || !unit) return NextResponse.json({ error: 'name and unit required' }, { status: 400 })
@@ -141,6 +142,7 @@ export async function PUT(req: Request) {
         quantity: parseOptionalNumber(quantity) ?? 0,
         reorderLevel: parseOptionalNumber(reorderLevel) ?? 0,
         category: category ? String(category).trim() : null,
+        ...(type !== undefined && { type: type === 'prep' ? 'prep' : 'purchased' }),
       },
     })
 
@@ -168,7 +170,7 @@ export async function DELETE(req: Request) {
   const restaurantId = context?.restaurantId ?? null
   const branchId = context?.branchId ?? null
 
-  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant branch found' }, { status: 400 })
+  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
   const { searchParams } = new URL(req.url)
   const id = searchParams.get('id')
