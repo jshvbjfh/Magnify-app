@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
 import { enqueueOrderSync } from '@/lib/restaurantOrders'
 import { finalizeRestaurantOrderPayment } from '@/lib/restaurantOrderPayment'
+import { resolveActiveStaffAccess } from '@/lib/mobileStaffAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -98,12 +99,15 @@ export async function POST(req: Request) {
     const claims = await verifyToken(req)
     const mobileSourceDeviceId = `mobile:${claims.sub}`
 
-    const restaurantId = claims.restaurantId
-    const branchId = claims.branchId
-
-    if (!restaurantId || !branchId) {
+    // Use the staff record's CURRENT binding, never the JWT's point-in-time
+    // claims: deactivated or reassigned staff must lose access immediately.
+    const staffAccess = await resolveActiveStaffAccess(claims.sub)
+    if (!staffAccess) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const restaurantId = staffAccess.restaurantId
+    const branchId = staffAccess.branchId
 
     const { orders, orderItems } = (await req.json()) as {
       orders: MobileOrder[]

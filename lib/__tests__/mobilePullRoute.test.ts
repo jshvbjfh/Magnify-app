@@ -22,6 +22,15 @@ const prismaMock = vi.hoisted(() => ({
   restaurantOrder: {
     findMany: vi.fn(),
   },
+  mepListItem: {
+    findMany: vi.fn(),
+  },
+  prepLog: {
+    findMany: vi.fn(),
+  },
+  inventoryItem: {
+    findMany: vi.fn(),
+  },
 }))
 
 vi.mock('jose', () => ({
@@ -81,6 +90,9 @@ describe('GET /api/mobile/pull', () => {
       { id: 'bound-branch', name: 'Main', code: 'MAIN', isMain: true },
     ])
     prismaMock.restaurantOrder.findMany.mockResolvedValue([])
+    prismaMock.mepListItem.findMany.mockResolvedValue([])
+    prismaMock.prepLog.findMany.mockResolvedValue([])
+    prismaMock.inventoryItem.findMany.mockResolvedValue([])
   })
 
   it('uses the current DB staff binding instead of stale JWT restaurant claims', async () => {
@@ -89,10 +101,11 @@ describe('GET /api/mobile/pull', () => {
     }))
 
     expect(response.status).toBe(200)
+    // Dishes and tables are restaurant-wide by design, but the restaurant must
+    // come from the staff's CURRENT DB binding, never the stale JWT claims.
     expect(prismaMock.dish.findMany).toHaveBeenCalledWith({
       where: {
         restaurantId: 'bound-rest',
-        branchId: 'bound-branch',
         isActive: true,
       },
       select: {
@@ -100,16 +113,17 @@ describe('GET /api/mobile/pull', () => {
         name: true,
         sellingPrice: true,
         category: true,
+        menuType: true,
         isActive: true,
         branchId: true,
         restaurantId: true,
+        preparedPortions: true,
       },
       orderBy: { name: 'asc' },
     })
     expect(prismaMock.restaurantTable.findMany).toHaveBeenCalledWith({
       where: {
         restaurantId: 'bound-rest',
-        branchId: 'bound-branch',
       },
       select: {
         id: true,

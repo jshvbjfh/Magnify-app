@@ -57,7 +57,7 @@ describe('backup restore route', () => {
       version: 6,
       exportedAt: '2026-05-14T00:00:00.000Z',
       tables: [{ id: 'table-1' }],
-    }))).rejects.toThrow('Active branch is required to restore branch-scoped restaurant data.')
+    }))).rejects.toThrow('Active station is required to restore station-scoped restaurant data.')
   })
 
   it('allows non-branch-scoped backups when no active branch is available', async () => {

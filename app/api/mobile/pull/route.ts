@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
+import { resolveActiveStaffAccess } from '@/lib/mobileStaffAccess'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,12 +36,16 @@ export async function GET(req: Request) {
   try {
     const claims = await verifyToken(req)
 
-    const restaurantId = claims.restaurantId
-    const userBranchId = claims.branchId ?? null
-
-    if (!restaurantId) {
+    // Use the staff record's CURRENT binding, never the JWT's point-in-time
+    // claims: deactivated or reassigned staff must lose access immediately,
+    // not whenever their token happens to expire.
+    const staffAccess = await resolveActiveStaffAccess(claims.sub)
+    if (!staffAccess) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const restaurantId = staffAccess.restaurantId
+    const userBranchId = staffAccess.branchId
 
     if (!userBranchId) {
       return jsonNoStore(

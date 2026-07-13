@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { jwtVerify } from 'jose'
 
 import { prisma } from '@/lib/prisma'
+import { resolveActiveStaffAccess } from '@/lib/mobileStaffAccess'
 import { producePrepStock, produceDishPortions, undoPrepLog } from '@/lib/mepProduction'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
@@ -78,15 +79,19 @@ function serializeLog(log: {
 export async function POST(req: Request) {
   try {
     const claims = await verifyToken(req)
-    const restaurantId = claims.restaurantId
-    if (!restaurantId) return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
+
+    // Use the staff record's CURRENT binding, never the JWT's point-in-time
+    // claims: deactivated or reassigned staff must lose access immediately.
+    const staffAccess = await resolveActiveStaffAccess(claims.sub)
+    if (!staffAccess) return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
+    const restaurantId = staffAccess.restaurantId
 
     const body = await req.json().catch(() => null) as Record<string, unknown> | null
     if (!body || typeof body.action !== 'string') {
       return jsonNoStore({ error: 'Missing action' }, { status: 400 })
     }
 
-    const branchId = await resolveBranchId(restaurantId, claims.branchId ?? null, body.branchId)
+    const branchId = await resolveBranchId(restaurantId, staffAccess.branchId, body.branchId)
     if (!branchId) {
       return jsonNoStore({ error: 'Station not found or not accessible.' }, { status: 403 })
     }

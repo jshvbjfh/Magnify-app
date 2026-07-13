@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server'
 
 const getServerSessionMock = vi.hoisted(() => vi.fn())
 const getRestaurantContextForUserMock = vi.hoisted(() => vi.fn())
+const getRestaurantContextFromSessionMock = vi.hoisted(() => vi.fn())
 const getRestaurantInventoryIntegrityMock = vi.hoisted(() => vi.fn())
 const buildOwnerSyncSnapshotMock = vi.hoisted(() => vi.fn())
 const prismaMock = vi.hoisted(() => ({
@@ -60,6 +61,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/lib/restaurantAccess', () => ({
   getRestaurantContextForUser: getRestaurantContextForUserMock,
+  getRestaurantContextFromSession: getRestaurantContextFromSessionMock,
 }))
 
 vi.mock('@/lib/inventoryIntegrity', () => ({
@@ -144,10 +146,9 @@ describe('owner-enabled restaurant routes', () => {
 
   it('allows owners to read inventory integrity', async () => {
     setSession('owner')
-    getRestaurantContextForUserMock.mockResolvedValue({
+    getRestaurantContextFromSessionMock.mockReturnValue({
       restaurantId: 'rest-1',
       branchId: 'branch-1',
-      billingUserId: 'bill-1',
     })
     getRestaurantInventoryIntegrityMock.mockResolvedValue({ ok: true, issueCount: 0 })
 
