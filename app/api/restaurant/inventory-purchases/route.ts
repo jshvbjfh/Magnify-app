@@ -54,6 +54,9 @@ async function resolveInventoryIngredient(
     itemName?: string | null
     unit?: string | null
     unitCost?: number | null
+    // POST can skip the interim unitCost write: it always creates an open FIFO
+    // layer, so syncIngredientActiveUnitCost re-derives the cost regardless.
+    skipRedundantCostWrite?: boolean
   }
 ): Promise<ResolvedInventoryIngredient> {
   const select = { id: true, name: true, unit: true, unitCost: true, quantity: true } as const
@@ -89,7 +92,7 @@ async function resolveInventoryIngredient(
         throw new Error('This ingredient has recorded stock consumption from orders. You cannot change the usage unit while that history exists.')
       }
     }
-    if (!unitChanged && params.unitCost === undefined) return matched
+    if (!unitChanged && (params.skipRedundantCostWrite || params.unitCost === undefined)) return matched
 
     return tx.inventoryItem.update({
       where: { id: matched.id },
@@ -133,11 +136,19 @@ async function resolveIngredientActiveUnitCost(
 
 async function syncIngredientActiveUnitCost(
   tx: Prisma.TransactionClient,
-  params: { restaurantId: string; branchId: string; ingredientId: string },
+  params: {
+    restaurantId: string
+    branchId: string
+    ingredientId: string
+    // Freshly-updated full record from the same transaction; skips the re-fetch.
+    preloadedIngredient?: Awaited<ReturnType<Prisma.TransactionClient['inventoryItem']['update']>>
+  },
 ) {
-  const ingredient = await tx.inventoryItem.findFirst({
-    where: { id: params.ingredientId, restaurantId: params.restaurantId, branchId: params.branchId },
-  })
+  const ingredient = params.preloadedIngredient?.id === params.ingredientId
+    ? params.preloadedIngredient
+    : await tx.inventoryItem.findFirst({
+        where: { id: params.ingredientId, restaurantId: params.restaurantId, branchId: params.branchId },
+      })
   if (!ingredient) return null
 
   const activeUnitCost = await resolveIngredientActiveUnitCost(tx, {
@@ -189,19 +200,43 @@ export async function GET(req: Request) {
 
 // POST — record a new purchase
 export async function POST(req: Request) {
+  let clientId: string | null = null
+  let clientScopeRestaurantId: string | null = null
+
   try {
     const session = await getServerSession(authOptions)
     if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
     const restaurantId = context?.restaurantId ?? null
-    const branchId = context?.branchId ?? null
+    const sessionBranchId = context?.branchId ?? null
 
-    if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
+    if (!restaurantId || !sessionBranchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
     const body = await req.json()
     const { ingredientId, itemName, unit, supplier, paymentMethod, purchaseUnit } = body
     const normalizedBatchId = typeof body.batchId === 'string' && body.batchId.trim() ? body.batchId.trim() : null
+
+    // Optional client-generated id makes retries idempotent: replaying a save
+    // that already committed returns the existing entry instead of duplicating it.
+    clientId = typeof body.id === 'string' && body.id.trim() ? body.id.trim() : null
+    if (clientId && !/^[A-Za-z0-9_-]{8,64}$/.test(clientId)) {
+      return NextResponse.json({ error: 'Invalid entry id' }, { status: 400 })
+    }
+    clientScopeRestaurantId = restaurantId
+
+    // Optional branch stamped at entry time wins over the session branch, so
+    // entries queued before a station switch land in the station they were typed in.
+    const requestedBranchId = typeof body.branchId === 'string' && body.branchId.trim() ? body.branchId.trim() : null
+    let branchId = sessionBranchId
+    if (requestedBranchId && requestedBranchId !== sessionBranchId) {
+      const requestedBranch = await prisma.branch.findFirst({
+        where: { id: requestedBranchId, restaurantId, isActive: true },
+        select: { id: true },
+      })
+      if (!requestedBranch) return NextResponse.json({ error: 'Station not found for this entry' }, { status: 400 })
+      branchId = requestedBranch.id
+    }
     // Frontend sends purchaseQuantity (in purchase units) + purchaseUnitCost (per purchase unit).
     // Convert to usage-unit values for storage using the unitsPerPurchaseUnit ratio.
     const purchaseQuantity = Number(body.purchaseQuantity)
@@ -235,6 +270,7 @@ export async function POST(req: Request) {
         itemName,
         unit,
         unitCost,
+        skipRedundantCostWrite: true,
       })
 
       const journalEntry = await recordJournalEntry(tx, {
@@ -251,6 +287,7 @@ export async function POST(req: Request) {
 
       const createdPurchase = await tx.inventoryPurchase.create({
         data: {
+          ...(clientId ? { id: clientId } : {}),
           restaurantId,
           branchId,
           journalEntryId: journalEntry?.id ?? null,
@@ -270,37 +307,50 @@ export async function POST(req: Request) {
         },
       })
 
-      const hydratedPurchase = await tx.inventoryPurchase.findUnique({
-        where: { id: createdPurchase.id },
-        include: {
-          ingredient: {
-            select: {
-              name: true,
-              unit: true,
-            },
-          },
-        },
-      })
-
-      await tx.inventoryItem.update({
+      const stockedIngredient = await tx.inventoryItem.update({
         where: { id: ingredient.id },
         data: { quantity: { increment: quantityPurchased } },
       })
 
-      const updatedIngredient = await syncIngredientActiveUnitCost(tx, { restaurantId, branchId, ingredientId: ingredient.id })
+      const updatedIngredient = await syncIngredientActiveUnitCost(tx, { restaurantId, branchId, ingredientId: ingredient.id, preloadedIngredient: stockedIngredient })
       if (!updatedIngredient) throw new Error('Ingredient not found after stock entry was created.')
 
       await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryPurchase', entityId: createdPurchase.id, operation: 'upsert', payload: createdPurchase })
       await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryItem', entityId: updatedIngredient.id, operation: 'upsert', payload: updatedIngredient })
 
       return {
-        purchase: hydratedPurchase ?? createdPurchase,
+        purchase: { ...createdPurchase, ingredient: { name: updatedIngredient.name, unit: updatedIngredient.unit } },
         ingredient: updatedIngredient,
       }
     }, INVENTORY_TRANSACTION_OPTIONS)
 
     return NextResponse.json({ purchase: result.purchase, ingredient: result.ingredient, totalCost, batchId: normalizedBatchId }, { status: 201 })
   } catch (error: any) {
+    // Replay of an already-committed save: whatever failed just now, if the
+    // entry with this client id already exists, the original attempt succeeded.
+    if (clientId && clientScopeRestaurantId) {
+      try {
+        const existing = await prisma.inventoryPurchase.findFirst({
+          where: { id: clientId, restaurantId: clientScopeRestaurantId },
+          include: { ingredient: { select: { name: true, unit: true } } },
+        })
+        if (existing) {
+          const existingIngredient = await prisma.inventoryItem.findFirst({
+            where: { id: existing.ingredientId, restaurantId: clientScopeRestaurantId },
+          })
+          return NextResponse.json({
+            purchase: existing,
+            ingredient: existingIngredient,
+            totalCost: existing.totalCost,
+            batchId: existing.batchId,
+            alreadySaved: true,
+          }, { status: 200 })
+        }
+      } catch {
+        // Fall through to normal error reporting if the replay check itself fails.
+      }
+    }
+
     console.error('Failed to record inventory purchase:', error)
     const status = ['Ingredient not found', 'itemName is required', 'unit is required when recording a new item'].includes(error?.message)
       || error?.message?.includes('cannot change the usage unit') ? 400 : 500

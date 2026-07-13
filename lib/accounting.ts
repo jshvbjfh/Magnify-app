@@ -35,14 +35,22 @@ export async function ensureCoreCategories(db: PrismaDb, restaurantId: string | 
   const types = ['income', 'expense', 'asset', 'liability', 'equity'] as const
   const byType: CategoryMap = {}
 
+  // One batched read covers the steady state (all five already exist);
+  // writes only happen on first use or if a stored type drifted.
+  const names = types.map((type) => type.charAt(0).toUpperCase() + type.slice(1))
+  const existing = await db.category.findMany({ where: { restaurantId, name: { in: names } } })
+  const existingByName = new Map(existing.map((category) => [category.name, category]))
+
   for (const type of types) {
     const name = type.charAt(0).toUpperCase() + type.slice(1)
-    const category = await db.category.upsert({
-      where: { restaurantId_name: { restaurantId: restaurantId as unknown as string, name } },
-      update: { type },
-      create: { restaurantId, name, type },
-    })
-    byType[type] = category
+    const found = existingByName.get(name)
+    if (found && found.type === type) {
+      byType[type] = found
+    } else if (found) {
+      byType[type] = await db.category.update({ where: { id: found.id }, data: { type } })
+    } else {
+      byType[type] = await db.category.create({ data: { restaurantId, name, type } })
+    }
   }
 
   return byType
@@ -67,6 +75,46 @@ export async function ensureAccount(
   })
 }
 
+type SettlementAccountSpec = {
+  paymentMethod: string
+  name: string
+  type: string
+  categoryId: string
+  code: string
+}
+
+export function resolveSettlementAccountSpec(
+  paymentMethod: string,
+  direction: 'in' | 'out',
+  categories: CategoryMap,
+): SettlementAccountSpec {
+  const normalizedPaymentMethod = normalizePaymentMethod(paymentMethod)
+
+  if (normalizedPaymentMethod === 'Internal') {
+    throw new Error('Internal journal entries require an explicit counter account')
+  }
+
+  if (direction === 'out' && normalizedPaymentMethod === 'Credit') {
+    return { paymentMethod: normalizedPaymentMethod, name: 'Accounts Payable', type: 'liability', categoryId: categories.liability.id, code: '2000' }
+  }
+  if (direction === 'out' && normalizedPaymentMethod === 'Notes Payable') {
+    return { paymentMethod: normalizedPaymentMethod, name: 'Notes Payable', type: 'liability', categoryId: categories.liability.id, code: '2100' }
+  }
+  if (direction === 'in' && normalizedPaymentMethod === 'Credit') {
+    return { paymentMethod: normalizedPaymentMethod, name: 'Accounts Receivable', type: 'asset', categoryId: categories.asset.id, code: '1200' }
+  }
+  if (normalizedPaymentMethod === 'Card' || normalizedPaymentMethod === 'Bank' || normalizedPaymentMethod === 'Cheque') {
+    return { paymentMethod: normalizedPaymentMethod, name: 'Current Account', type: 'asset', categoryId: categories.asset.id, code: '1010' }
+  }
+  if (normalizedPaymentMethod === 'Mobile Money') {
+    return { paymentMethod: normalizedPaymentMethod, name: 'Mobile Money', type: 'asset', categoryId: categories.asset.id, code: '1020' }
+  }
+  if (normalizedPaymentMethod === 'Owner Momo') {
+    return { paymentMethod: normalizedPaymentMethod, name: 'Owner Momo', type: 'asset', categoryId: categories.asset.id, code: '1021' }
+  }
+  return { paymentMethod: 'Cash', name: 'Cash', type: 'asset', categoryId: categories.asset.id, code: '1000' }
+}
+
 export async function resolveSettlementAccount(
   db: PrismaDb,
   paymentMethod: string,
@@ -74,88 +122,12 @@ export async function resolveSettlementAccount(
   categories: CategoryMap,
   restaurantId: string | null = null,
 ) {
-  const normalizedPaymentMethod = normalizePaymentMethod(paymentMethod)
-
-  if (normalizedPaymentMethod === 'Internal') {
-    throw new Error('Internal journal entries require an explicit counter account')
-  }
-
-  if (direction === 'out') {
-    if (normalizedPaymentMethod === 'Credit') {
-      return {
-        paymentMethod: normalizedPaymentMethod,
-        account: await ensureAccount(db, {
-          restaurantId, name: 'Accounts Payable', type: 'liability',
-          categoryId: categories.liability.id, code: '2000',
-        }),
-      }
-    }
-    if (normalizedPaymentMethod === 'Notes Payable') {
-      return {
-        paymentMethod: normalizedPaymentMethod,
-        account: await ensureAccount(db, {
-          restaurantId, name: 'Notes Payable', type: 'liability',
-          categoryId: categories.liability.id, code: '2100',
-        }),
-      }
-    }
-  }
-
-  if (direction === 'in' && normalizedPaymentMethod === 'Credit') {
-    return {
-      paymentMethod: normalizedPaymentMethod,
-      account: await ensureAccount(db, {
-        restaurantId, name: 'Accounts Receivable', type: 'asset',
-        categoryId: categories.asset.id, code: '1200',
-      }),
-    }
-  }
-
-  if (normalizedPaymentMethod === 'Card') {
-    return {
-      paymentMethod: normalizedPaymentMethod,
-      account: await ensureAccount(db, {
-        restaurantId, name: 'Current Account', type: 'asset',
-        categoryId: categories.asset.id, code: '1010',
-      }),
-    }
-  }
-
-  if (normalizedPaymentMethod === 'Bank' || normalizedPaymentMethod === 'Cheque') {
-    return {
-      paymentMethod: normalizedPaymentMethod,
-      account: await ensureAccount(db, {
-        restaurantId, name: 'Current Account', type: 'asset',
-        categoryId: categories.asset.id, code: '1010',
-      }),
-    }
-  }
-
-  if (normalizedPaymentMethod === 'Mobile Money') {
-    return {
-      paymentMethod: normalizedPaymentMethod,
-      account: await ensureAccount(db, {
-        restaurantId, name: 'Mobile Money', type: 'asset',
-        categoryId: categories.asset.id, code: '1020',
-      }),
-    }
-  }
-
-  if (normalizedPaymentMethod === 'Owner Momo') {
-    return {
-      paymentMethod: normalizedPaymentMethod,
-      account: await ensureAccount(db, {
-        restaurantId, name: 'Owner Momo', type: 'asset',
-        categoryId: categories.asset.id, code: '1021',
-      }),
-    }
-  }
-
+  const spec = resolveSettlementAccountSpec(paymentMethod, direction, categories)
   return {
-    paymentMethod: 'Cash',
+    paymentMethod: spec.paymentMethod,
     account: await ensureAccount(db, {
-      restaurantId, name: 'Cash', type: 'asset',
-      categoryId: categories.asset.id, code: '1000',
+      restaurantId, name: spec.name, type: spec.type,
+      categoryId: spec.categoryId, code: spec.code,
     }),
   }
 }
@@ -195,35 +167,51 @@ export async function recordJournalEntry(
   const mainAccountType = resolveAccountType(mainCategory.type)
   const mainAccountName =
     params.accountName || (mainCategory.type === 'income' ? 'Sales' : 'General Expense')
-  const mainAccount = await ensureAccount(db, {
-    restaurantId,
-    name: mainAccountName,
-    type: mainAccountType,
-    categoryId: mainCategory.id,
-  })
 
   const explicitCounterAccountName = params.counterAccountName?.trim()
   const mainPaymentMethod = explicitCounterAccountName
     ? params.paymentMethod?.trim() || 'Internal'
     : params.paymentMethod || 'Cash'
 
-  const settlement = explicitCounterAccountName
-    ? null
-    : await resolveSettlementAccount(db, mainPaymentMethod, direction, categories, restaurantId)
-
-  const counterCategoryType = params.counterCategoryType ||
-    (settlement?.account.type ? settlement.account.type : 'asset')
-  const counterCategory = explicitCounterAccountName
-    ? (categories[counterCategoryType] || categories.asset)
-    : null
-  const counterAccount = explicitCounterAccountName
-    ? await ensureAccount(db, {
-        restaurantId,
+  // Resolve both account specs up front so the pair can be fetched in one query;
+  // creates only run for accounts that don't exist yet.
+  const counterCategory = categories[params.counterCategoryType || 'asset'] || categories.asset
+  const counterSpec = explicitCounterAccountName
+    ? {
         name: explicitCounterAccountName,
-        type: params.counterAccountType || resolveAccountType(counterCategory?.type || 'asset'),
-        categoryId: (counterCategory || categories.asset).id,
-      })
-    : settlement!.account
+        type: params.counterAccountType || resolveAccountType(counterCategory.type),
+        categoryId: counterCategory.id,
+        code: undefined as string | undefined,
+      }
+    : resolveSettlementAccountSpec(mainPaymentMethod, direction, categories)
+
+  const accountNames = counterSpec.name === mainAccountName ? [mainAccountName] : [mainAccountName, counterSpec.name]
+  const foundAccounts = await db.account.findMany({ where: { restaurantId, name: { in: accountNames } } })
+
+  const mainAccount =
+    foundAccounts.find((account) => account.name === mainAccountName) ??
+    (await db.account.create({
+      data: {
+        restaurantId,
+        code: makeAutoCode('AUTO'),
+        name: mainAccountName,
+        type: mainAccountType,
+        categoryId: mainCategory.id,
+      },
+    }))
+
+  const counterAccount = counterSpec.name === mainAccountName
+    ? mainAccount
+    : foundAccounts.find((account) => account.name === counterSpec.name) ??
+      (await db.account.create({
+        data: {
+          restaurantId,
+          code: counterSpec.code || makeAutoCode('AUTO'),
+          name: counterSpec.name,
+          type: counterSpec.type,
+          categoryId: counterSpec.categoryId,
+        },
+      }))
 
   // direction 'out': DR main (expense), CR counter (cash/bank/liability)
   // direction 'in':  DR counter (cash/bank/asset), CR main (revenue)

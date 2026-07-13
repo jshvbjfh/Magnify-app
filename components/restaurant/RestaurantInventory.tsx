@@ -1,8 +1,19 @@
 ﻿'use client'
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { X, Sparkles, ShoppingCart, Search, Trash2 } from 'lucide-react'
 import { createInventoryBatchSuffix, formatInventoryBatchId } from '@/lib/inventoryBatch'
+import {
+  createStockEntryId,
+  discardStockEntryTicket,
+  enqueueStockEntry,
+  loadStockEntryTickets,
+  processStockEntryQueue,
+  retryStockEntryTicket,
+  subscribeStockEntryConfirmations,
+  subscribeStockEntryTickets,
+  type StockEntryTicket,
+} from '@/components/restaurant/stockEntryQueue'
 import {
   derivePurchaseQuantity,
   derivePurchaseUnitCost,
@@ -222,6 +233,33 @@ function groupPurchasesByBatch(purchases: Purchase[]) {
     .sort(compareBatchGroups)
 }
 
+function ticketToPurchaseRow(ticket: StockEntryTicket): Purchase {
+  const quantityPurchased = toUsageQuantity(ticket.payload.purchaseQuantity, ticket.payload.unitsPerPurchaseUnit)
+  const unitCost = toUsageUnitCost(ticket.payload.purchaseUnitCost, ticket.payload.unitsPerPurchaseUnit)
+  return {
+    id: ticket.id,
+    batchId: ticket.payload.batchId,
+    ingredientId: ticket.payload.ingredientId || `pending-${ticket.id}`,
+    supplier: ticket.payload.supplier,
+    purchaseQuantity: ticket.payload.purchaseQuantity,
+    purchaseUnit: ticket.payload.purchaseUnit,
+    unitsPerPurchaseUnit: ticket.payload.unitsPerPurchaseUnit,
+    purchaseUnitCost: ticket.payload.purchaseUnitCost,
+    quantityPurchased,
+    remainingQuantity: quantityPurchased,
+    unitCost,
+    totalCost: quantityPurchased * unitCost,
+    purchasedAt: ticket.payload.purchasedAt,
+    createdAt: ticket.createdAtIso,
+    ingredient: {
+      name: ticket.payload.itemName,
+      unit: ticket.payload.unit,
+      purchaseUnit: ticket.payload.purchaseUnit,
+      unitsPerPurchaseUnit: ticket.payload.unitsPerPurchaseUnit,
+    },
+  }
+}
+
 export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () => void }) {
   const restaurantBranch = useRestaurantBranch()
   const [items, setItems] = useState<Ingredient[]>([])
@@ -237,7 +275,6 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const [purchaseAutofillNotice, setPurchaseAutofillNotice] = useState<string | null>(null)
   const [purchaseAutofillMatchKey, setPurchaseAutofillMatchKey] = useState('')
   const [pForm, setPForm] = useState(createEmptyPurchaseForm())
-  const [pSaving, setPSaving] = useState(false)
   const [inventoryView, setInventoryView] = useState<'stock' | 'preps'>('stock')
   const [showPrepForm, setShowPrepForm] = useState(false)
   const [prepSaving, setPrepSaving] = useState(false)
@@ -253,6 +290,35 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const [editingSubRecipeId, setEditingSubRecipeId] = useState<string | null>(null)
   const [editSubRecipeQty, setEditSubRecipeQty] = useState('')
   const [subRecipeSaving, setSubRecipeSaving] = useState(false)
+
+  // Unsaved stock entries live in the persisted queue; rows for them render
+  // straight from the tickets so the screen and the queue can never disagree.
+  const [queueTickets, setQueueTickets] = useState<StockEntryTicket[]>([])
+  const resumedTicketIdsRef = useRef<Set<string>>(new Set(loadStockEntryTickets().map((ticket) => ticket.id)))
+
+  useEffect(() => {
+    const unsubscribeTickets = subscribeStockEntryTickets(setQueueTickets)
+    const unsubscribeConfirmations = subscribeStockEntryConfirmations(({ purchase, ingredient }) => {
+      const confirmedPurchase = purchase as Purchase | null
+      if (confirmedPurchase?.id) {
+        setPurchases((current) => [confirmedPurchase, ...current.filter((row) => row.id !== confirmedPurchase.id)])
+      }
+      upsertIngredient((ingredient ?? null) as Ingredient | null)
+      window.dispatchEvent(new CustomEvent('refreshTransactions'))
+    })
+    void processStockEntryQueue()
+    return () => {
+      unsubscribeTickets()
+      unsubscribeConfirmations()
+    }
+  }, [])
+
+  const pendingTicketById = new Map(queueTickets.map((ticket) => [ticket.id, ticket]))
+  const pendingPurchaseRows = queueTickets
+    .filter((ticket) => !restaurantBranch?.branchId || !ticket.branchId || ticket.branchId === restaurantBranch.branchId)
+    .map(ticketToPurchaseRow)
+  const resumedTicketCount = queueTickets.filter((ticket) => resumedTicketIdsRef.current.has(ticket.id)).length
+  const needsAttentionCount = queueTickets.filter((ticket) => ticket.status === 'needs_attention').length
 
   async function load() {
     setItemsLoading(true)
@@ -343,7 +409,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     const normalizedItemName = normalizeInventoryItemName(itemName)
     if (!normalizedItemName) return null
 
-    const latestPurchase = purchases
+    const latestPurchase = [...pendingPurchaseRows, ...purchases]
       .filter((purchase) => normalizeInventoryItemName(purchase.ingredient.name) === normalizedItemName)
       .slice()
       .sort(comparePurchaseRows)[0]
@@ -454,7 +520,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   }
 
   function openBatchForNewItem(batchId: string | null, purchasedAt: string) {
-    if (!batchId || pSaving) return
+    if (!batchId) return
 
     const batchSuffix = extractBatchSuffix(batchId)
     if (!batchSuffix) return
@@ -507,43 +573,39 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     const batchId = activeBatchSuffix ? formatInventoryBatchId(parseDateInput(activeBatchDate), activeBatchSuffix) : ''
     if (!batchId) return
 
-    setPSaving(true)
     setPurchaseError(null)
-    try {
-      const res = await fetch('/api/restaurant/inventory-purchases', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          batchId,
-          itemName: pForm.itemName,
-          unit: unitConfig.usageUnit,
-          purchaseUnit: unitConfig.purchaseUnit,
-          unitsPerPurchaseUnit: unitConfig.sameUnit ? 1 : unitConfig.unitsPerPurchaseUnit,
-          supplier: pForm.supplier || null,
-          paymentMethod: pForm.paymentMethod || 'Cash',
-          purchaseQuantity: Number(pForm.purchaseQuantity),
-          purchaseUnitCost: Number(pForm.purchaseUnitCost),
-          purchasedAt: activeBatchDate,
-        })
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => null)
-        setPurchaseError(err?.error || 'Save failed')
-        return
-      }
-      const payload = await res.json().catch(() => null)
-      if (payload?.purchase) {
-        setPurchases((current) => [payload.purchase as Purchase, ...current])
-      }
-      upsertIngredient((payload?.ingredient ?? null) as Ingredient | null)
-      window.dispatchEvent(new CustomEvent('refreshTransactions'))
-      setShowPurchaseRecorder(false)
-      setPurchaseAutofillNotice(null)
-      setPurchaseAutofillMatchKey('')
-      setPForm(createEmptyPurchaseForm(activeBatchDate))
-    } finally {
-      setPSaving(false)
-    }
+
+    // When the typed name is an existing item with the same usage unit, send its id
+    // so the server can look it up directly instead of scanning every item by name.
+    // A unit change must still go through the name path for server-side validation.
+    const knownItem = items.find((item) => normalizeInventoryItemName(item.name) === normalizeInventoryItemName(pForm.itemName))
+    const knownItemId = knownItem && knownItem.unit.toLowerCase() === unitConfig.usageUnit.toLowerCase() ? knownItem.id : null
+
+    // Instant save: the entry is persisted to the local queue before this
+    // function returns; the queue uploads it in the background, in order.
+    enqueueStockEntry({
+      id: createStockEntryId(),
+      restaurantId: restaurantBranch?.restaurantId ?? '',
+      branchId: restaurantBranch?.branchId ?? null,
+      payload: {
+        batchId,
+        ...(knownItemId ? { ingredientId: knownItemId } : {}),
+        itemName: pForm.itemName,
+        unit: unitConfig.usageUnit,
+        purchaseUnit: unitConfig.purchaseUnit,
+        unitsPerPurchaseUnit: unitConfig.sameUnit ? 1 : unitConfig.unitsPerPurchaseUnit,
+        supplier: pForm.supplier || null,
+        paymentMethod: pForm.paymentMethod || 'Cash',
+        purchaseQuantity: Number(pForm.purchaseQuantity),
+        purchaseUnitCost: Number(pForm.purchaseUnitCost),
+        purchasedAt: activeBatchDate,
+      },
+    })
+
+    setShowPurchaseRecorder(false)
+    setPurchaseAutofillNotice(null)
+    setPurchaseAutofillMatchKey('')
+    setPForm(createEmptyPurchaseForm(activeBatchDate))
   }
 
   async function updatePurchase(e?: React.FormEvent) {
@@ -843,9 +905,15 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const canMutatePurchase = (purchase: Purchase) => {
     return !ingredientsWithLayerDrift.has(purchase.ingredientId)
   }
+  // Pending queue rows render alongside saved rows; a saved row with the same
+  // id wins (the confirmation may land before the ticket listener fires).
+  const displayPurchases = [
+    ...pendingPurchaseRows.filter(pending => !purchases.some(saved => saved.id === pending.id)),
+    ...purchases,
+  ]
   const activeBatchId = showPurchaseForm && activeBatchSuffix ? formatInventoryBatchId(parseDateInput(activeBatchDate), activeBatchSuffix) : ''
   const activeBatchPurchases = activeBatchId
-    ? purchases
+    ? displayPurchases
         .filter(purchase => purchase.batchId === activeBatchId)
         .slice()
         .sort(comparePurchaseRows)
@@ -872,19 +940,19 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
 
     return formatStockOnHand(Number(item.quantity || 0), firstMeta.usageUnit, firstMeta.purchaseUnit, firstMeta.unitsPerPurchaseUnit)
   }
-  const filteredPurchaseCount = purchases.filter(matchesPurchaseSearch).length
+  const filteredPurchaseCount = displayPurchases.filter(matchesPurchaseSearch).length
   const purchaseGroups = groupPurchasesByBatch(
-    purchases.filter(purchase => purchase.batchId !== activeBatchId && matchesPurchaseSearch(purchase))
+    displayPurchases.filter(purchase => purchase.batchId !== activeBatchId && matchesPurchaseSearch(purchase))
   )
-  const batchCount = new Set(purchases.map(purchase => purchase.batchId || purchase.id)).size + (showPurchaseForm && activeBatchPurchases.length === 0 ? 1 : 0)
+  const batchCount = new Set(displayPurchases.map(purchase => purchase.batchId || purchase.id)).size + (showPurchaseForm && activeBatchPurchases.length === 0 ? 1 : 0)
   const estimatedTotal = pForm.purchaseQuantity && pForm.purchaseUnitCost
     ? Number(pForm.purchaseQuantity) * Number(pForm.purchaseUnitCost) : null
   const knownItemNames = Array.from(new Set([
     ...items.map(item => item.name.trim()).filter(Boolean),
-    ...purchases.map(purchase => purchase.ingredient.name.trim()).filter(Boolean),
+    ...displayPurchases.map(purchase => purchase.ingredient.name.trim()).filter(Boolean),
   ])).sort((left, right) => left.localeCompare(right))
   const knownSupplierNames = Array.from(new Set(
-    purchases.map(p => (p.supplier ?? '').trim()).filter(Boolean)
+    displayPurchases.map(p => (p.supplier ?? '').trim()).filter(Boolean)
   )).sort((a, b) => a.localeCompare(b))
   const purchaseUnitOptions = pForm.purchaseUnit && !INVENTORY_UNITS.some(option => option.value === pForm.purchaseUnit)
     ? [{ value: pForm.purchaseUnit, label: pForm.purchaseUnit }, ...INVENTORY_UNITS]
@@ -894,6 +962,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     : INVENTORY_UNITS
 
   function renderPurchaseRow(purchase: Purchase) {
+    const pendingTicket = pendingTicketById.get(purchase.id) ?? null
     const purchaseLocked = !canMutatePurchase(purchase)
     const hasLayerDrift = ingredientsWithLayerDrift.has(purchase.ingredientId)
     const ingredient = items.find(item => item.id === purchase.ingredientId) ?? null
@@ -1006,6 +1075,39 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         </td>
         <td className="px-4 py-3 font-semibold text-gray-900">{fmt(displayedStockValue)} RWF</td>
         <td className="px-4 py-3">
+          {pendingTicket ? (
+            <div className="flex items-center gap-2">
+              {pendingTicket.status === 'needs_attention' ? (
+                <>
+                  <span title={pendingTicket.lastError ?? undefined} className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">
+                    Not saved{pendingTicket.lastError ? ` - ${pendingTicket.lastError}` : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => retryStockEntryTicket(pendingTicket.id)}
+                    className="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-50"
+                  >
+                    Retry
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { if (window.confirm('Discard this unsaved entry?')) discardStockEntryTicket(pendingTicket.id) }}
+                    className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600 transition-colors hover:bg-red-100"
+                  >
+                    Discard
+                  </button>
+                </>
+              ) : pendingTicket.status === 'retrying' ? (
+                <span title={pendingTicket.lastError ?? undefined} className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-800">
+                  Retrying…
+                </span>
+              ) : (
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700">
+                  Saving…
+                </span>
+              )}
+            </div>
+          ) : (
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -1030,6 +1132,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
               Delete
             </button>
           </div>
+          )}
         </td>
       </tr>
     )
@@ -1041,6 +1144,16 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-bold text-gray-800">Inventory</h2>
           <BranchBadge />
+          {queueTickets.length - needsAttentionCount > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700">
+              {queueTickets.length - needsAttentionCount} saving…
+            </span>
+          )}
+          {needsAttentionCount > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">
+              {needsAttentionCount} not saved
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
@@ -1070,6 +1183,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       </div>
 
       {inventoryView === 'stock' && (<>
+      {resumedTicketCount > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          Resuming {resumedTicketCount} unsaved stock {resumedTicketCount === 1 ? 'entry' : 'entries'} from your last session — review the rows marked below.
+        </div>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
         <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
           <p className="text-xs text-gray-500">Total Items</p>
@@ -1151,20 +1269,20 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                                 setActiveBatchDate(e.target.value)
                                 setPForm(f=>({...f,purchasedAt:e.target.value}))
                               }}
-                              disabled={activeBatchPurchases.length>0 || pSaving}
+                              disabled={activeBatchPurchases.length>0}
                               className="rounded border border-orange-700 bg-white px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-orange-200 disabled:bg-orange-100 disabled:text-gray-500"
                             />
                           </label>
                           <span>|</span>
                           <span>{activeBatchPurchases.length} row{activeBatchPurchases.length===1?'':'s'}</span>
-                          <button type="button" onClick={closePurchaseForm} disabled={pSaving} className="font-semibold text-gray-900 underline-offset-2 hover:underline disabled:opacity-50">
+                          <button type="button" onClick={closePurchaseForm} className="font-semibold text-gray-900 underline-offset-2 hover:underline disabled:opacity-50">
                             Close batch
                           </button>
                         </div>
                         <button
                           type="button"
                           onClick={() => openBatchForNewItem(activeBatchId || null, activeBatchDate)}
-                          disabled={showPurchaseRecorder || pSaving}
+                          disabled={showPurchaseRecorder}
                           className="rounded-md border border-orange-200 bg-white px-3 py-1 text-xs font-semibold text-orange-600 transition-colors hover:bg-orange-50 disabled:opacity-50"
                         >
                           {showPurchaseRecorder ? 'Recording…' : '+ Add item'}
@@ -1231,8 +1349,8 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                     <td className="px-4 py-2 text-sm font-semibold text-gray-800">{estimatedTotal!=null?`${fmt(estimatedTotal)} RWF`:'auto'}</td>
                     <td className="px-4 py-2">
                       <div className="flex items-center gap-2">
-                        <button type="button" onClick={()=>void savePurchase()} disabled={pSaving} className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50">Done</button>
-                        <button type="button" onClick={closePurchaseRecorder} disabled={pSaving} className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-50">Cancel</button>
+                        <button type="button" onClick={()=>void savePurchase()} className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50">Done</button>
+                        <button type="button" onClick={closePurchaseRecorder} className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-50">Cancel</button>
                       </div>
                     </td>
                   </tr>
@@ -1265,7 +1383,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                         <button
                           type="button"
                           onClick={() => openBatchForNewItem(group.batchId, group.purchasedAt)}
-                          disabled={!group.batchId || pSaving}
+                          disabled={!group.batchId}
                           className="rounded-md border border-orange-200 bg-white px-3 py-1 text-xs font-semibold text-orange-600 transition-colors hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           + Add item
