@@ -131,6 +131,22 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   }, [snapshotStorageScope])
   useEffect(()=>{load()},[restaurantBranch?.branchId])
 
+  // Refresh when the Inventory tab creates or changes ingredients, so new
+  // items show up in the recipe picker without a full app reload (Ctrl+R).
+  // Debounced: a burst of stock entries triggers one reload, not one each.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const scheduleRefresh = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => { timer = null; void load() }, 1200)
+    }
+    window.addEventListener('refreshMenu', scheduleRefresh)
+    return () => {
+      if (timer) clearTimeout(timer)
+      window.removeEventListener('refreshMenu', scheduleRefresh)
+    }
+  }, [restaurantBranch?.branchId])
+
   function resetDishForm() {
     setShowForm(false)
     setEditDish(null)

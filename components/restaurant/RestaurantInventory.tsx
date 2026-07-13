@@ -305,6 +305,8 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       }
       upsertIngredient((ingredient ?? null) as Ingredient | null)
       window.dispatchEvent(new CustomEvent('refreshTransactions'))
+      // Let the Menu tab pick up new/changed ingredients without a full reload.
+      window.dispatchEvent(new CustomEvent('refreshMenu'))
     })
     void processStockEntryQueue()
     return () => {
@@ -775,6 +777,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       const data = await res.json()
       if (!res.ok) { setPrepError(data.error || 'Failed to save'); return }
       upsertIngredient(data as Ingredient)
+      window.dispatchEvent(new CustomEvent('refreshMenu'))
       setPrepForm({ name: '', unit: '', category: '' })
       setShowPrepForm(false)
     } catch (e: any) {
@@ -797,6 +800,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       const data = await res.json()
       if (!res.ok) { setPrepError(data.error || 'Failed to update'); return }
       upsertIngredient(data as Ingredient)
+      window.dispatchEvent(new CustomEvent('refreshMenu'))
       setEditingPrepId(null)
     } catch (e: any) {
       setPrepError(e?.message || 'Failed to update')
@@ -813,6 +817,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       const res = await fetch(`/api/restaurant/ingredients?id=${id}`, { method: 'DELETE' })
       if (!res.ok) { setPrepError('Failed to delete'); return }
       setItems(cur => cur.filter(i => i.id !== id))
+      window.dispatchEvent(new CustomEvent('refreshMenu'))
     } catch (e: any) {
       setPrepError(e?.message || 'Failed to delete')
     } finally {
@@ -880,7 +885,27 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
 
   const prepItems = items.filter(i => i.type === 'prep')
 
-  const lowStock = items.filter(i=>i.quantity<=i.reorderLevel)
+  // Low stock: below 15% of the typical batch size (average of the last 3
+  // purchases). A manager-set reorderLevel on the item overrides the default.
+  const LOW_STOCK_RATIO = 0.15
+  const getLowStockThreshold = (item: Ingredient) => {
+    if (item.reorderLevel > 0) return item.reorderLevel
+    const recentBatches = purchases
+      .filter(p => p.ingredientId === item.id)
+      .slice()
+      .sort(comparePurchaseRows)
+      .slice(0, 3)
+    if (recentBatches.length === 0) return 0
+    const typicalBatchQuantity = recentBatches.reduce((sum, p) => sum + p.quantityPurchased, 0) / recentBatches.length
+    return typicalBatchQuantity * LOW_STOCK_RATIO
+  }
+  const isItemLowStock = (item: Ingredient) => {
+    if (item.type === 'prep') return false
+    const threshold = getLowStockThreshold(item)
+    return threshold > 0 && item.quantity <= threshold
+  }
+
+  const lowStock = items.filter(isItemLowStock)
   const totalValue = items.reduce((s,i)=>s+i.quantity*(i.unitCost??0),0)
   const totalPurchaseCost = purchases.reduce((s,p)=>s+p.totalCost,0)
   const ingredientLayerTotals = purchases.reduce((map, purchase) => {
@@ -970,6 +995,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     const displayedStockQuantity = purchase.remainingQuantity
     const displayedStockValue = displayedStockQuantity * purchase.unitCost
     const trackedStockDisplay = ingredient ? getIngredientStockDisplay(ingredient) : null
+    const itemIsLow = ingredient ? isItemLowStock(ingredient) : false
     const purchaseLockReason = 'This stock row is locked because stock has already moved on this ingredient.'
 
     if (editingPurchaseId === purchase.id) {
@@ -1072,6 +1098,9 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
               ? `Current: ${trackedStockDisplay}`
               : formatStockOnHand(displayedStockQuantity, purchaseMeta.usageUnit, purchaseMeta.purchaseUnit, purchaseMeta.unitsPerPurchaseUnit)}
           </span>
+          {itemIsLow && (
+            <span title="Item stock is at or below 15% of its typical batch" className="ml-1.5 text-xs font-bold text-red-600">Low</span>
+          )}
         </td>
         <td className="px-4 py-3 font-semibold text-gray-900">{fmt(displayedStockValue)} RWF</td>
         <td className="px-4 py-3">
