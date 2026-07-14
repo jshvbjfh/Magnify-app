@@ -6,7 +6,7 @@ import { recordJournalEntry } from '@/lib/accounting'
 import { getActiveFifoUnitCost } from '@/lib/fifoCosting'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
-import { toUsageQuantity, toUsageUnitCost, normalizeUnitsPerPurchaseUnit } from '@/lib/inventoryUnits'
+import { toUsageQuantity, toUsageUnitCost, normalizeUnitsPerPurchaseUnit, isSameInventoryUnit } from '@/lib/inventoryUnits'
 import type { Prisma } from '@prisma/client'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
@@ -82,14 +82,16 @@ async function resolveInventoryIngredient(
 
   if (matched) {
     const usageUnit = params.unit?.trim() || matched.unit
-    const unitChanged = matched.unit.toLowerCase() !== usageUnit.toLowerCase()
+    // Alias-aware: "pcs" vs "piece" is the same physical unit, not a unit
+    // change. Only a genuinely different usage unit re-denominates history.
+    const unitChanged = !isSameInventoryUnit(matched.unit, usageUnit)
     if (unitChanged) {
       const ingredientPurchases = await tx.inventoryPurchase.findMany({
         where: { restaurantId: params.restaurantId, branchId: params.branchId, ingredientId: matched.id },
         select: { quantityPurchased: true, remainingQuantity: true },
       })
       if (ingredientPurchases.some(hasConsumedPurchaseQuantity)) {
-        throw new Error('This ingredient has recorded stock consumption from orders. You cannot change the usage unit while that history exists.')
+        throw new Error(`Stock was already used in ${matched.unit} — keep "use in ${matched.unit}" and change only the buy-in packaging (e.g. 1 bottle = 10 ${matched.unit}).`)
       }
     }
     if (!unitChanged && (params.skipRedundantCostWrite || params.unitCost === undefined)) return matched
@@ -97,7 +99,8 @@ async function resolveInventoryIngredient(
     return tx.inventoryItem.update({
       where: { id: matched.id },
       data: {
-        unit: usageUnit,
+        // Alias spellings keep the stored unit — recipes and history reference it.
+        unit: unitChanged ? usageUnit : matched.unit,
         ...(params.unitCost !== undefined ? { unitCost: params.unitCost ?? 0 } : {}),
       },
       select,
@@ -353,7 +356,7 @@ export async function POST(req: Request) {
 
     console.error('Failed to record inventory purchase:', error)
     const status = ['Ingredient not found', 'itemName is required', 'unit is required when recording a new item'].includes(error?.message)
-      || error?.message?.includes('cannot change the usage unit') ? 400 : 500
+      || error?.message?.includes('change only the buy-in packaging') ? 400 : 500
     return NextResponse.json({ error: error?.message || 'Failed to record inventory purchase', code: error?.code || null }, { status })
   }
 }
@@ -480,7 +483,7 @@ export async function PUT(req: Request) {
   } catch (error: any) {
     console.error('Failed to update inventory purchase:', error)
     const status = ['Ingredient not found', 'itemName is required', 'unit is required when recording a new item'].includes(error?.message)
-      || error?.message?.includes('cannot change the usage unit') ? 400 : 500
+      || error?.message?.includes('change only the buy-in packaging') ? 400 : 500
     return NextResponse.json({ error: error?.message || 'Failed to update inventory purchase', code: error?.code || null }, { status })
   }
 }

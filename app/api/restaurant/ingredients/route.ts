@@ -1,7 +1,7 @@
 ﻿import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { normalizeInventoryUnit } from '@/lib/inventoryUnits'
+import { normalizeInventoryUnit, isSameInventoryUnit } from '@/lib/inventoryUnits'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
@@ -118,14 +118,15 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: error?.message || 'Invalid unit' }, { status: 400 })
   }
 
-  const usageUnitChanged = existing.unit.toLowerCase() !== usageUnit.toLowerCase()
+  // Alias-aware: "pcs" vs "piece" is the same physical unit, not a change.
+  const usageUnitChanged = !isSameInventoryUnit(existing.unit, usageUnit)
   if (usageUnitChanged) {
     const openPurchaseCount = await prisma.inventoryPurchase.count({
       where: { restaurantId, branchId, ingredientId: existing.id, remainingQuantity: { gt: PURCHASE_USAGE_EPSILON } },
     })
     if (Number(existing.quantity || 0) > PURCHASE_USAGE_EPSILON || openPurchaseCount > 0) {
       return NextResponse.json(
-        { error: 'This ingredient already has stock history. You cannot change the usage unit until existing stock is cleared.' },
+        { error: `Stock still on hand is counted in ${existing.unit} — use up or zero the stock before switching the usage unit.` },
         { status: 400 }
       )
     }
@@ -137,7 +138,8 @@ export async function PUT(req: Request) {
       data: {
         name: String(name).trim(),
         description: description ? String(description).trim() : null,
-        unit: usageUnit,
+        // Alias spellings keep the stored unit — recipes and history reference it.
+        unit: usageUnitChanged ? usageUnit : existing.unit,
         unitCost: parseOptionalNumber(unitCost) ?? 0,
         quantity: parseOptionalNumber(quantity) ?? 0,
         reorderLevel: parseOptionalNumber(reorderLevel) ?? 0,

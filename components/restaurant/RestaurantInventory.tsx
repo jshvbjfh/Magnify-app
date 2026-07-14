@@ -23,6 +23,7 @@ import {
   INVENTORY_UNITS,
   isDualUnitPurchaseUnit,
   getKnownUnitConversion,
+  isSameInventoryUnit,
   splitUsageQuantity,
   toUsageQuantity,
   toUsageUnitCost,
@@ -369,17 +370,20 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   function resolvePurchaseFormUnits() {
     const purchaseUnit = pForm.purchaseUnit.trim()
     const usageUnit = (pForm.usageUnit.trim() || purchaseUnit).trim()
-    const sameUnit = purchaseUnit.toLowerCase() === usageUnit.toLowerCase()
+    const sameUnit = isSameInventoryUnit(purchaseUnit, usageUnit)
     const unitsPerPurchaseUnit = sameUnit ? 1 : Number(pForm.unitsPerPurchaseUnit)
     return { purchaseUnit, usageUnit, unitsPerPurchaseUnit, sameUnit }
   }
 
   function updatePurchaseUnit(nextPurchaseUnit: string) {
     setPForm((current) => {
+      // A usage unit that's already set (e.g. an existing item counted in pcs)
+      // is never clobbered by the new buy-in unit's default — history and
+      // recipes are denominated in it. Defaults only fill an empty selection.
       const defaultUsage = DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT[nextPurchaseUnit.toLowerCase()] || ''
-      const shouldFollowPurchaseUnit = !current.usageUnit || current.usageUnit.toLowerCase() === current.purchaseUnit.toLowerCase()
-      const nextUsageUnit = shouldFollowPurchaseUnit && defaultUsage ? defaultUsage : current.usageUnit
-      const sameUnit = nextPurchaseUnit.toLowerCase() === nextUsageUnit.toLowerCase()
+      const keepUsage = current.usageUnit && !isSameInventoryUnit(current.usageUnit, nextPurchaseUnit)
+      const nextUsageUnit = keepUsage ? current.usageUnit : defaultUsage
+      const sameUnit = isSameInventoryUnit(nextPurchaseUnit, nextUsageUnit)
       // Fixed metric pairs (kg→g, ltr→ml) override any stale factor; otherwise
       // keep what the user typed.
       const known = getKnownUnitConversion(nextPurchaseUnit, nextUsageUnit)
@@ -394,7 +398,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
 
   function updateUsageUnit(nextUsageUnit: string) {
     setPForm((current) => {
-      const sameUnit = nextUsageUnit.toLowerCase() === current.purchaseUnit.toLowerCase()
+      const sameUnit = isSameInventoryUnit(nextUsageUnit, current.purchaseUnit)
       const known = getKnownUnitConversion(current.purchaseUnit, nextUsageUnit)
       return {
         ...current,
@@ -1028,7 +1032,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                   <option value="">Use in…</option>
                   {usageUnitOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
-                {pForm.purchaseUnit && pForm.usageUnit && pForm.purchaseUnit.toLowerCase() !== pForm.usageUnit.toLowerCase() && (
+                {pForm.purchaseUnit && pForm.usageUnit && !isSameInventoryUnit(pForm.purchaseUnit, pForm.usageUnit) && (
                   <div className="flex items-center gap-2 text-xs text-gray-500">
                     <span>1 {pForm.purchaseUnit} =</span>
                     <input required type="number" min="0.001" step="any" value={pForm.unitsPerPurchaseUnit} onChange={e=>setPForm(f=>({...f,unitsPerPurchaseUnit:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
@@ -1349,7 +1353,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                           <option value="">Use in…</option>
                           {usageUnitOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
                         </select>
-                        {pForm.purchaseUnit && pForm.usageUnit && pForm.purchaseUnit.toLowerCase() !== pForm.usageUnit.toLowerCase() && (
+                        {pForm.purchaseUnit && pForm.usageUnit && !isSameInventoryUnit(pForm.purchaseUnit, pForm.usageUnit) && (
                           <div className="flex items-center gap-2 text-xs text-gray-500">
                             <span>1 {pForm.purchaseUnit} =</span>
                             <input required type="number" min="0.001" step="any" value={pForm.unitsPerPurchaseUnit} onChange={e=>setPForm(f=>({...f,unitsPerPurchaseUnit:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}

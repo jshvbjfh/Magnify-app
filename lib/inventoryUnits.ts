@@ -32,7 +32,7 @@ const KNOWN_UNIT_CONVERSIONS: Record<string, number> = {
 }
 
 export function getKnownUnitConversion(purchaseUnit: string | null | undefined, usageUnit: string | null | undefined): number | null {
-	const key = `${normalizeInventoryUnit(purchaseUnit).toLowerCase()}->${normalizeInventoryUnit(usageUnit).toLowerCase()}`
+	const key = `${canonicalInventoryUnit(purchaseUnit)}->${canonicalInventoryUnit(usageUnit)}`
 	return KNOWN_UNIT_CONVERSIONS[key] ?? null
 }
 
@@ -57,6 +57,28 @@ export function normalizeInventoryUnit(unit: string | null | undefined) {
 	return String(unit ?? '').trim()
 }
 
+// Spelling variants of the same physical unit. Items created before the unit
+// dropdown existed hold free-typed values like "pcs" — treating those as a
+// different unit from "piece" wrongly triggered the usage-unit-change guard.
+const UNIT_ALIASES: Record<string, string> = {
+	pc: 'piece', pcs: 'piece', pieces: 'piece',
+	l: 'ltr', litre: 'ltr', liter: 'ltr', litres: 'ltr', liters: 'ltr',
+	gram: 'g', grams: 'g', gr: 'g',
+	kgs: 'kg', kilo: 'kg', kilos: 'kg', kilogram: 'kg', kilograms: 'kg',
+	mls: 'ml',
+	bottles: 'bottle', bags: 'bag', boxes: 'box', cans: 'can',
+	sachets: 'sachet', bunches: 'bunch', shots: 'shot',
+}
+
+export function canonicalInventoryUnit(unit: string | null | undefined) {
+	const normalized = normalizeInventoryUnit(unit).toLowerCase()
+	return UNIT_ALIASES[normalized] ?? normalized
+}
+
+export function isSameInventoryUnit(a: string | null | undefined, b: string | null | undefined) {
+	return canonicalInventoryUnit(a) === canonicalInventoryUnit(b)
+}
+
 // Every purchase unit may track usage in a different unit (buy in kg, use in
 // g; buy in bottle, use in ml) — so the dual-unit form shows for any unit.
 export function isDualUnitPurchaseUnit(unit: string | null | undefined) {
@@ -79,14 +101,13 @@ export function getPurchaseUnit(config: DualUnitLike | null | undefined) {
 }
 
 export function getUnitsPerPurchaseUnit(config: DualUnitLike | null | undefined) {
-	const usageUnit = getUsageUnit(config).toLowerCase()
-	const purchaseUnit = getPurchaseUnit(config).toLowerCase()
-	if (!usageUnit || usageUnit === purchaseUnit) return 1
+	const usageUnit = getUsageUnit(config)
+	if (!usageUnit || isSameInventoryUnit(usageUnit, getPurchaseUnit(config))) return 1
 	return normalizeUnitsPerPurchaseUnit(config?.unitsPerPurchaseUnit, 1)
 }
 
 export function usesSeparatePurchaseUnit(config: DualUnitLike | null | undefined) {
-	return getPurchaseUnit(config).toLowerCase() !== getUsageUnit(config).toLowerCase()
+	return !isSameInventoryUnit(getPurchaseUnit(config), getUsageUnit(config))
 		|| Math.abs(getUnitsPerPurchaseUnit(config) - 1) > UNIT_EPSILON
 }
 
