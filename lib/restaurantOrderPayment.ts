@@ -80,15 +80,6 @@ export async function finalizeRestaurantOrderPayment(
 
   const paidAt = params.paidAt ?? new Date()
   const normalizedPaymentMethod = params.paymentMethod || currentOrder.paymentMethod || 'Cash'
-  const transactionDescription = buildDishSaleTransactionDescription({
-    items: currentOrder.items.map((item) => ({
-      dishId: item.dishId,
-      dishName: item.dishName,
-      qty: item.qty,
-    })),
-    tableId: currentOrder.tableId,
-    tableName: currentOrder.tableName,
-  })
 
   const paymentUpdate = await db.restaurantOrder.updateMany({
     where: {
@@ -141,21 +132,43 @@ export async function finalizeRestaurantOrderPayment(
     })),
   })
 
-  const journalAmount = calculateRestaurantOrderTotals(
-    currentOrder.items.map((item) => ({ dishPrice: Number(item.dishPrice), qty: Number(item.qty) }))
-  ).totalAmount
-
-  await recordJournalEntry(db, {
-    restaurantId: params.restaurantId,
-    branchId: params.branchId,
-    date: paidOrder.paidAt ?? paidAt,
-    description: transactionDescription,
-    amount: journalAmount,
-    direction: 'in',
-    accountName: 'DishSale',
-    categoryType: 'income',
-    paymentMethod: normalizedPaymentMethod,
+  // Revenue is booked per station that OWNS each dish, not the till's station:
+  // an Amstel (Parking Bar) sold from a Little Taipei terminal must land in
+  // Parking Bar's transactions. One journal entry per involved station.
+  const orderDishBranches = await db.dish.findMany({
+    where: { id: { in: Array.from(new Set(currentOrder.items.map((item) => item.dishId))) }, restaurantId: params.restaurantId },
+    select: { id: true, branchId: true },
   })
+  const branchByDishId = new Map(orderDishBranches.map((dish) => [dish.id, dish.branchId]))
+  const itemsByBranch = new Map<string, typeof currentOrder.items>()
+  for (const item of currentOrder.items) {
+    const itemBranchId = branchByDishId.get(item.dishId) ?? params.branchId
+    const group = itemsByBranch.get(itemBranchId)
+    if (group) group.push(item)
+    else itemsByBranch.set(itemBranchId, [item])
+  }
+
+  for (const [itemsBranchId, branchItems] of itemsByBranch) {
+    const branchAmount = calculateRestaurantOrderTotals(
+      branchItems.map((item) => ({ dishPrice: Number(item.dishPrice), qty: Number(item.qty) }))
+    ).totalAmount
+
+    await recordJournalEntry(db, {
+      restaurantId: params.restaurantId,
+      branchId: itemsBranchId,
+      date: paidOrder.paidAt ?? paidAt,
+      description: buildDishSaleTransactionDescription({
+        items: branchItems.map((item) => ({ dishId: item.dishId, dishName: item.dishName, qty: item.qty })),
+        tableId: currentOrder.tableId,
+        tableName: currentOrder.tableName,
+      }),
+      amount: branchAmount,
+      direction: 'in',
+      accountName: 'DishSale',
+      categoryType: 'income',
+      paymentMethod: normalizedPaymentMethod,
+    })
+  }
 
   if (currentOrder.tableId) {
     await db.restaurantTable.updateMany({
