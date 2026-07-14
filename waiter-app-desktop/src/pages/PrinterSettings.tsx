@@ -3,6 +3,7 @@ import { Printer, RefreshCw, CheckCircle2 } from 'lucide-react'
 import { getConfig, setConfig } from '../services/db'
 import {
   listPrinters, getPrinterMap, setPrinterMap, getBillPrinter, setBillPrinter, testPrint,
+  getBillEscposMode, setBillEscposMode, printBillRaw, isVirtualPrinter,
   type PrinterInfo, type PrinterMap,
 } from '../services/printing'
 import type { BranchInfo } from '../services/sync'
@@ -13,15 +14,17 @@ export default function PrinterSettings() {
   const [map,        setMap]        = useState<PrinterMap>({})
   const [bill,       setBill]       = useState<string>('')
   const [billCols,   setBillCols]   = useState<string>('42')
+  const [escposOn,   setEscposOn]   = useState<boolean>(false)
   const [loading,    setLoading]    = useState(true)
   const [savedFlash, setSavedFlash] = useState(false)
   const [testMsg,    setTestMsg]    = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [p, branchesJson, m, b, cols] = await Promise.all([
-      listPrinters(), getConfig('branches'), getPrinterMap(), getBillPrinter(), getConfig('billColumns'),
+    const [p, branchesJson, m, b, cols, escpos] = await Promise.all([
+      listPrinters(), getConfig('branches'), getPrinterMap(), getBillPrinter(), getConfig('billColumns'), getBillEscposMode(),
     ])
+    setEscposOn(escpos)
     setPrinters(p)
     try { setBranches(branchesJson ? (JSON.parse(branchesJson) as BranchInfo[]) : []) }
     catch { setBranches([]) }
@@ -53,6 +56,36 @@ export default function PrinterSettings() {
     setBillCols(cols)
     await setConfig('billColumns', cols)
     flashSaved()
+  }
+
+  const toggleEscpos = async (on: boolean) => {
+    setEscposOn(on)
+    await setBillEscposMode(on)
+    flashSaved()
+  }
+
+  // Sends a sample bill through the raw ESC/POS path so staff can confirm the
+  // styled layout (big header, bold total, barcode) on the actual paper.
+  const runStyledTest = async () => {
+    setTestMsg(null)
+    const target = bill || printers.find(p => p.isDefault && !isVirtualPrinter(p.name))?.name
+    if (!target) { setTestMsg('Select a main printer first.'); return }
+    try {
+      const result = await printBillRaw({
+        printerName: target,
+        topText: 'MAGNIFY\nStyled bill test',
+        server: 'Test', station: 'Front',
+        orderNo: 'TEST-1234', orderType: 'Dine In', tableName: 'T1',
+        dt: new Date().toLocaleString(),
+        items: [{ qty: 2, name: 'Sample Dish', unitPrice: 4500, notes: null }],
+        totalAmount: 9000,
+        columns: parseInt(billCols) || 42,
+      })
+      setTestMsg(result.ok ? 'Styled test bill sent.' : `Styled test failed: ${result.error ?? 'unknown error'}`)
+    } catch (err) {
+      setTestMsg(`Styled test failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+    }
+    setTimeout(() => setTestMsg(null), 6000)
   }
 
   const runTest = async (deviceName: string, label: string) => {
@@ -120,6 +153,25 @@ export default function PrinterSettings() {
           <PrinterSelect value={bill} onChange={assignBill} emptyLabel="Use Windows default" />
           <button onClick={() => runTest(bill, 'Main printer')}
             className="text-xs font-semibold border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50">Test</button>
+        </div>
+      </div>
+
+      {/* Thermal bill styling — raw ESC/POS to the local queue: big header,
+          bold total, barcode. Off = plain-text bills (works on any printer). */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-900">Thermal bill styling</p>
+          <p className="text-xs text-gray-500">Big header, bold total and a barcode on bills. Needs a thermal receipt printer (e.g. Generic / Text Only). Turn off if bills print strange symbols.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {escposOn && (
+            <button onClick={() => void runStyledTest()}
+              className="text-xs font-semibold border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50">Print styled test</button>
+          )}
+          <button onClick={() => void toggleEscpos(!escposOn)} role="switch" aria-checked={escposOn}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${escposOn ? 'bg-orange-500' : 'bg-gray-300'}`}>
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${escposOn ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
         </div>
       </div>
 

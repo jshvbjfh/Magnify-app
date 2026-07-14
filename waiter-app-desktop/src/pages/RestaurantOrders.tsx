@@ -11,7 +11,7 @@ import {
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline, validateOrderCode, type BranchInfo } from '../services/sync'
-import { getPrinterMap, getBillPrinter, resolveStationPrinter, listPrinters, isVirtualPrinter, parseBillTemplate, getBillNetworkPrinter, printBillRaw, type PrinterMap, type PrinterInfo, type NetworkPrinterConfig } from '../services/printing'
+import { getPrinterMap, getBillPrinter, resolveStationPrinter, listPrinters, isVirtualPrinter, parseBillTemplate, getBillNetworkPrinter, getBillEscposMode, printBillRaw, type PrinterMap, type PrinterInfo, type NetworkPrinterConfig } from '../services/printing'
 import { useOnline } from '../hooks/useOnline'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -418,6 +418,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [printerMap,        setPrinterMap]        = useState<PrinterMap>({})
   const [billPrinter,       setBillPrinter]       = useState<string>('')
   const [billNetworkPrinter, setBillNetworkPrinter] = useState<NetworkPrinterConfig | null>(null)
+  const [billEscposMode,    setBillEscposModeOn]   = useState<boolean>(false)
   const [billColumns,       setBillColumns]       = useState<number>(42)
   const [printers,          setPrinters]          = useState<PrinterInfo[]>([])
   // Manager-editable receipt template (raw billHeader; parsed into top/bottom at print time).
@@ -555,12 +556,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   useEffect(() => {
     if (mode === 'history') return
     void (async () => {
-      const [map, bill, list, tpl, net, colsRaw] = await Promise.all([getPrinterMap(), getBillPrinter(), listPrinters(), getConfig('billHeader'), getBillNetworkPrinter(), getConfig('billColumns')])
+      const [map, bill, list, tpl, net, colsRaw, escpos] = await Promise.all([getPrinterMap(), getBillPrinter(), listPrinters(), getConfig('billHeader'), getBillNetworkPrinter(), getConfig('billColumns'), getBillEscposMode()])
       setPrinterMap(map)
       setBillPrinter(bill)
       setPrinters(list)
       setBillHeaderTpl(tpl ?? '')
       setBillNetworkPrinter(net)
+      setBillEscposModeOn(escpos)
       const parsedCols = parseInt(colsRaw ?? '', 10)
       setBillColumns(Number.isFinite(parsedCols) && parsedCols >= 24 && parsedCols <= 64 ? parsedCols : 42)
     })()
@@ -699,8 +701,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     const station    = (order.branch_id ? branches.find(b => b.id === order.branch_id)?.name : null) ?? restaurantName ?? ''
     const orderNo    = order.order_number ?? ''
 
-    // ESC/POS path: if a network printer IP is configured, send raw thermal bytes.
-    if (billNetworkPrinter?.ip) {
+    // ESC/POS path: raw thermal bytes over TCP (network printer IP) or into
+    // the local Windows queue (thermal styling enabled in the Printers tab).
+    // Falls back to the OS default printer when no bill printer is selected.
+    const escposPrinterName = billEscposMode
+      ? (billPrinter || printers.find(p => p.isDefault && !isVirtualPrinter(p.name))?.name || '')
+      : ''
+    if (billNetworkPrinter?.ip || escposPrinterName) {
       printBillRaw({
         topText, bottomText, footer2Text, server, station, orderNo, orderType,
         tableName: isTakeaway ? null : (order.table_name ?? 'Table'),
@@ -708,8 +715,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         items: items.map(i => ({ qty: i.qty, name: i.dish_name, unitPrice: i.dish_price, notes: i.notes ?? null })),
         totalAmount,
         columns: LINE,
-        ip: billNetworkPrinter.ip,
-        port: billNetworkPrinter.port,
+        ...(billNetworkPrinter?.ip
+          ? { ip: billNetworkPrinter.ip, port: billNetworkPrinter.port }
+          : { printerName: escposPrinterName }),
       }).then(result => {
         if (!result.ok) setSubmitError(`Bill print failed: ${result.error ?? 'unknown error'}`)
       }).catch((err: Error) => setSubmitError(`Bill print failed: ${err.message}`))

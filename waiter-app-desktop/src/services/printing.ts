@@ -106,6 +106,19 @@ export async function setBillPrinter(deviceName: string): Promise<void> {
   await setConfig(BILL_KEY, deviceName)
 }
 
+// Styled thermal bills (ESC/POS) on the local Windows bill printer — big
+// header, bold total, barcode. Opt-in per device: a non-thermal printer would
+// print the ESC/POS control bytes as garbage characters.
+const ESCPOS_KEY = 'billEscposMode'
+
+export async function getBillEscposMode(): Promise<boolean> {
+  return (await getConfig(ESCPOS_KEY)) === '1'
+}
+
+export async function setBillEscposMode(on: boolean): Promise<void> {
+  await setConfig(ESCPOS_KEY, on ? '1' : '')
+}
+
 export async function getBillNetworkPrinter(): Promise<NetworkPrinterConfig | null> {
   try {
     const ip = await getConfig('billPrinterIp')
