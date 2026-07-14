@@ -73,7 +73,9 @@ export async function GET(req: Request) {
 
     // Dishes are shared across all branches on the unified waiter menu.
     // Each dish retains its branchId for sale attribution — do not filter here.
-    const dishWhere = { restaurantId, isActive: true }
+    // deletedAt matters: soft-deleted dishes keep isActive=true, and without
+    // this filter every deleted dish kept re-appearing on waiter terminals.
+    const dishWhere = { restaurantId, isActive: true, deletedAt: null }
 
     // Tables are restaurant-wide: all branch tables appear on the floor plan.
     const tableWhere = { restaurantId }
@@ -122,6 +124,7 @@ export async function GET(req: Request) {
         where: {
           restaurantId,
           isActive: true,
+          deletedAt: null,
           OR: [{ pin: { not: null } }, { cancellationPin: { not: null } }],
         },
         select: { id: true, name: true, pin: true, cancellationPin: true },
