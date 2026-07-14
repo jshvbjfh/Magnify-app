@@ -22,8 +22,19 @@ export const DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT: Record<string, string> = {
 	bunch: 'g',
 }
 
-const DUAL_UNIT_PURCHASE_UNITS = new Set(Object.keys(DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT))
 const UNIT_EPSILON = 0.000001
+
+// Fixed metric conversions — prefilled in the purchase form so users don't
+// type 1000 by hand (and can't typo it).
+const KNOWN_UNIT_CONVERSIONS: Record<string, number> = {
+	'kg->g': 1000,
+	'ltr->ml': 1000,
+}
+
+export function getKnownUnitConversion(purchaseUnit: string | null | undefined, usageUnit: string | null | undefined): number | null {
+	const key = `${normalizeInventoryUnit(purchaseUnit).toLowerCase()}->${normalizeInventoryUnit(usageUnit).toLowerCase()}`
+	return KNOWN_UNIT_CONVERSIONS[key] ?? null
+}
 
 type DualUnitLike = {
 	unit?: string | null
@@ -46,8 +57,10 @@ export function normalizeInventoryUnit(unit: string | null | undefined) {
 	return String(unit ?? '').trim()
 }
 
+// Every purchase unit may track usage in a different unit (buy in kg, use in
+// g; buy in bottle, use in ml) — so the dual-unit form shows for any unit.
 export function isDualUnitPurchaseUnit(unit: string | null | undefined) {
-	return DUAL_UNIT_PURCHASE_UNITS.has(normalizeInventoryUnit(unit).toLowerCase())
+	return normalizeInventoryUnit(unit) !== ''
 }
 
 export function normalizeUnitsPerPurchaseUnit(value: unknown, fallback = 1) {

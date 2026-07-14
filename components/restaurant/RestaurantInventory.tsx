@@ -22,6 +22,7 @@ import {
   getUnitsPerPurchaseUnit,
   INVENTORY_UNITS,
   isDualUnitPurchaseUnit,
+  getKnownUnitConversion,
   splitUsageQuantity,
   toUsageQuantity,
   toUsageUnitCost,
@@ -375,23 +376,18 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
 
   function updatePurchaseUnit(nextPurchaseUnit: string) {
     setPForm((current) => {
-      if (isDualUnitPurchaseUnit(nextPurchaseUnit)) {
-        const defaultUsage = DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT[nextPurchaseUnit.toLowerCase()] || ''
-        const shouldFollowPurchaseUnit = !current.usageUnit || current.usageUnit.toLowerCase() === current.purchaseUnit.toLowerCase()
-        const nextUsageUnit = shouldFollowPurchaseUnit ? defaultUsage : current.usageUnit
-        const sameUnit = nextPurchaseUnit.toLowerCase() === nextUsageUnit.toLowerCase()
-        return {
-          ...current,
-          purchaseUnit: nextPurchaseUnit,
-          usageUnit: nextUsageUnit,
-          unitsPerPurchaseUnit: sameUnit ? '' : current.unitsPerPurchaseUnit,
-        }
-      }
+      const defaultUsage = DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT[nextPurchaseUnit.toLowerCase()] || ''
+      const shouldFollowPurchaseUnit = !current.usageUnit || current.usageUnit.toLowerCase() === current.purchaseUnit.toLowerCase()
+      const nextUsageUnit = shouldFollowPurchaseUnit && defaultUsage ? defaultUsage : current.usageUnit
+      const sameUnit = nextPurchaseUnit.toLowerCase() === nextUsageUnit.toLowerCase()
+      // Fixed metric pairs (kg→g, ltr→ml) override any stale factor; otherwise
+      // keep what the user typed.
+      const known = getKnownUnitConversion(nextPurchaseUnit, nextUsageUnit)
       return {
         ...current,
         purchaseUnit: nextPurchaseUnit,
-        usageUnit: '',
-        unitsPerPurchaseUnit: '',
+        usageUnit: nextUsageUnit,
+        unitsPerPurchaseUnit: sameUnit ? '' : (known ? String(known) : current.unitsPerPurchaseUnit),
       }
     })
   }
@@ -399,10 +395,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   function updateUsageUnit(nextUsageUnit: string) {
     setPForm((current) => {
       const sameUnit = nextUsageUnit.toLowerCase() === current.purchaseUnit.toLowerCase()
+      const known = getKnownUnitConversion(current.purchaseUnit, nextUsageUnit)
       return {
         ...current,
         usageUnit: nextUsageUnit,
-        unitsPerPurchaseUnit: sameUnit ? '' : current.unitsPerPurchaseUnit,
+        unitsPerPurchaseUnit: sameUnit ? '' : (known ? String(known) : current.unitsPerPurchaseUnit),
       }
     })
   }
