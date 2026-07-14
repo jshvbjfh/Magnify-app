@@ -372,7 +372,7 @@ interface Props {
   onSelectTableKey?: (key: string) => void
 }
 
-export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId = null, onPendingCountChange, syncVersion, selectedTableKey: controlledTableKey, onSelectTableKey }: Props) {
+export default function RestaurantOrders({ mode = 'pos', waiterName = '', activeBranchId = null, onPendingCountChange, syncVersion, selectedTableKey: controlledTableKey, onSelectTableKey }: Props) {
   const { isOnline } = useOnline()
   // ── Shared state ──
   const [dishes,        setDishes]        = useState<Dish[]>([])
@@ -1337,7 +1337,13 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                     <div className="flex justify-between text-sm font-bold text-gray-900"><span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span></div>
                     {ord.status === 'UNCONFIRMED' ? (
                       <button
-                        onClick={() => { setSubmitError(null); setIncomingConfirmId(ord.id); setShowCodeModal(true) }}
+                        onClick={() => {
+                          setSubmitError(null)
+                          // Waiter identity already established on the opening
+                          // page — no need to ask for the code again.
+                          if (waiterName) { void confirmIncomingOrder(ord.id, waiterName); return }
+                          setIncomingConfirmId(ord.id); setShowCodeModal(true)
+                        }}
                         className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
                         <CheckCircle2 className="h-3.5 w-3.5" /> Confirm & send to kitchen
                       </button>
@@ -1656,7 +1662,14 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
             <div className="flex justify-between text-base font-bold text-gray-900">
               <span>Total</span><span>{fmtRWF(totalAmount)} RWF</span>
             </div>
-            <button onClick={() => { setSubmitError(null); setShowCodeModal(true) }} disabled={confirmingOrder}
+            <button
+              onClick={() => {
+                setSubmitError(null)
+                // Waiter identity already established on the opening page.
+                if (waiterName) { void confirmOrder(waiterName); return }
+                setShowCodeModal(true)
+              }}
+              disabled={confirmingOrder}
               className="w-full bg-orange-500 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-3 rounded-2xl text-base transition-colors shadow-sm">
               {confirmingOrder ? 'Confirming…' : 'Confirm Order'}
             </button>

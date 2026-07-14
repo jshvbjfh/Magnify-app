@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { UtensilsCrossed, ClipboardList, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Printer, ChefHat } from 'lucide-react'
+import { UtensilsCrossed, ClipboardList, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Printer, ChefHat, Lock } from 'lucide-react'
 import { useOnline } from '../hooks/useOnline'
 import { isOfflineLikeErrorMessage } from '../services/http'
 import { getConfig, setConfig, getOrders } from '../services/db'
@@ -11,6 +11,7 @@ import RestaurantTables from './RestaurantTables'
 import MepPage from './MepPage'
 import PrinterSettings from './PrinterSettings'
 import StartupLogPage from './StartupLogPage'
+import WaiterGatePage from './WaiterGatePage'
 
 type TabId = 'menu' | 'pending' | 'tables' | 'mep' | 'printers' | 'logs'
 
@@ -43,8 +44,11 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   const [lastSyncWarning, setLastSyncWarning] = useState<string | null>(null)
   const [syncVersion, setSyncVersion] = useState(0)
   const syncingRef = useRef(false)
+  // Opening-page identity: the waiter who entered their code. Null = locked,
+  // shows the gate page. Deliberately not persisted — every app start asks.
+  const [activeWaiter, setActiveWaiter] = useState<string | null>(null)
 
-  const waiterName = user?.name ?? ''
+  const waiterName = activeWaiter ?? user?.name ?? ''
   const initials = waiterName
     ? waiterName.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
     : 'W'
@@ -172,6 +176,19 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
     }
   }
 
+  // Opening page: waiter must enter their code before taking orders. Rendered
+  // in place of the shell UI, but the component stays mounted so sync keeps
+  // running behind it (a fresh install pulls the codes while the gate shows).
+  if (!activeWaiter) {
+    return (
+      <WaiterGatePage
+        accountName={user?.name ?? ''}
+        syncVersion={syncVersion}
+        onUnlock={(name) => setActiveWaiter(name)}
+      />
+    )
+  }
+
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
 
@@ -252,6 +269,14 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
               <WifiOff className="h-3.5 w-3.5 text-amber-400 mx-2" />
             )}
             {isOnline && <Wifi className="h-3 w-3 text-green-400 mr-1" />}
+            <button
+              onClick={() => setActiveWaiter(null)}
+              title="Lock — next waiter enters their code"
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors flex-shrink-0"
+            >
+              <Lock className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Switch Waiter</span>
+            </button>
             <button
               onClick={onLogout}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors flex-shrink-0"
