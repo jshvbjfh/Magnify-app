@@ -53,6 +53,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   const [selectedDish, setSelectedDish] = useState<Dish | null>(null)
   const [form, setForm] = useState<DishFormState>(createEmptyDishForm())
   const [recipeForm, setRecipeForm] = useState({ ingredientId:'', quantityRequired:'' })
+  const [recipeError, setRecipeError] = useState<string | null>(null)
   const [ingSearch, setIngSearch] = useState('')
   const [ingDropOpen, setIngDropOpen] = useState(false)
   const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
@@ -238,35 +239,79 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
 
   async function deleteDish(id: string) {
     if (!confirm('Delete this dish?')) return
-    await fetch(`/api/restaurant/dishes/${id}`,{method:'DELETE'})
+    const previousDishes = dishes
+    const previousSelected = selectedDish
     removeDishFromState(id)
+    const response = await fetch(`/api/restaurant/dishes/${id}`,{method:'DELETE'}).catch(() => null)
+    if (!response?.ok) {
+      setDishes(previousDishes)
+      setSelectedDish(previousSelected)
+      setRecipeError('Dish not deleted — check connection and retry.')
+    }
   }
 
   async function toggleActive(dish: Dish) {
-    const response = await fetch(`/api/restaurant/dishes/${dish.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({isActive:!dish.isActive})})
-    const updatedDish = await response.json().catch(() => null)
-    if (!response.ok) return
+    upsertDish({ ...dish, isActive: !dish.isActive })
+    const response = await fetch(`/api/restaurant/dishes/${dish.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({isActive:!dish.isActive})}).catch(() => null)
+    const updatedDish = response ? await response.json().catch(() => null) : null
+    if (!response?.ok) {
+      upsertDish(dish)
+      setRecipeError('Change not saved — check connection and retry.')
+      return
+    }
     upsertDish(updatedDish as Dish | null)
   }
 
+  // Recipe edits update the UI immediately (optimistic) — the server response
+  // reconciles, and a failure rolls back with a one-line error. Waiting for
+  // the round-trip with no feedback made staff think the click didn't work.
   async function addIngredient(e: React.FormEvent) {
     e.preventDefault()
     if (!selectedDish||!recipeForm.ingredientId||!recipeForm.quantityRequired) return
-    const response = await fetch(`/api/restaurant/dishes/${selectedDish.id}/ingredients`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({inventoryItemId:recipeForm.ingredientId,quantityRequired:Number(recipeForm.quantityRequired)})})
-    const payload = await response.json().catch(() => null)
-    if (!response.ok) return
+    const previousDish = selectedDish
+    const inventoryItem = ingredients.find(i => i.id === recipeForm.ingredientId)
+    if (!inventoryItem) return
+    const quantityRequired = Number(recipeForm.quantityRequired)
 
+    upsertDish({
+      ...previousDish,
+      ingredients: [
+        ...previousDish.ingredients.filter(r => r.inventoryItemId !== inventoryItem.id),
+        { id: `pending-${inventoryItem.id}`, inventoryItemId: inventoryItem.id, quantityRequired, inventoryItem },
+      ],
+    })
     setRecipeForm({ingredientId:'',quantityRequired:''})
     setIngSearch('')
     setIngDropOpen(false)
-    upsertDish((payload?.dish ?? null) as Dish | null)
+    setRecipeError(null)
+
+    try {
+      const response = await fetch(`/api/restaurant/dishes/${previousDish.id}/ingredients`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({inventoryItemId:inventoryItem.id,quantityRequired})})
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(payload?.error || 'save failed')
+      upsertDish((payload?.dish ?? null) as Dish | null)
+    } catch {
+      upsertDish(previousDish)
+      setRecipeError('Ingredient not saved — check connection and retry.')
+    }
   }
 
   async function removeIngredient(dishId: string, ingredientId: string) {
-    const response = await fetch(`/api/restaurant/dishes/${dishId}/ingredients`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({inventoryItemId:ingredientId})})
-    const payload = await response.json().catch(() => null)
-    if (!response.ok) return
-    upsertDish((payload?.dish ?? null) as Dish | null)
+    const previousDish = selectedDish?.id === dishId ? selectedDish : dishes.find(d => d.id === dishId) ?? null
+    if (previousDish) {
+      upsertDish({ ...previousDish, ingredients: previousDish.ingredients.filter(r => r.inventoryItemId !== ingredientId) })
+    }
+    setRecipeError(null)
+
+    try {
+      const response = await fetch(`/api/restaurant/dishes/${dishId}/ingredients`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({inventoryItemId:ingredientId})})
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(payload?.error || 'delete failed')
+      upsertDish((payload?.dish ?? null) as Dish | null)
+    } catch {
+      if (previousDish) upsertDish(previousDish)
+      setRecipeError('Ingredient not removed — check connection and retry.')
+    }
   }
 
   function openEdit(dish: Dish) {
@@ -646,6 +691,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                     <Plus className="h-4 w-4"/>
                   </button>
                 </form>
+                {recipeError&&<p className="text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg">{recipeError}</p>}
                 {ingredients.length===0&&<p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">No ingredients yet. Add them in the Inventory tab first.</p>}
                 {selectedDish.ingredients.length===0 ? (
                   <p className="text-sm text-gray-400 text-center py-4">No ingredients in recipe yet.</p>

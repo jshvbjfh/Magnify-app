@@ -203,15 +203,27 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
     }
   }
 
+  // Toggle/delete update the list immediately (optimistic) and roll back with
+  // a one-line error if the server rejects — waiting on the round-trip made
+  // the buttons feel dead on slow connections.
   async function toggleEmployee(emp:Employee) {
-    await fetch('/api/restaurant/employees/'+emp.id,{method:'PATCH',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({isActive:!emp.isActive})})
-    load()
+    setEmployees(prev => prev.map(x => x.id === emp.id ? { ...x, isActive: !emp.isActive } : x))
+    const res = await fetch('/api/restaurant/employees/'+emp.id,{method:'PATCH',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({isActive:!emp.isActive})}).catch(() => null)
+    if (!res?.ok) {
+      setEmployees(prev => prev.map(x => x.id === emp.id ? { ...x, isActive: emp.isActive } : x))
+      setActionError('Change not saved — check connection and retry.')
+    }
   }
 
   async function deleteEmployee(emp:Employee) {
     if(!confirm(`Remove ${emp.name}?`)) return
-    await fetch('/api/restaurant/employees/'+emp.id,{method:'DELETE',credentials:'include'})
-    load()
+    const previous = employees
+    setEmployees(prev => prev.filter(x => x.id !== emp.id))
+    const res = await fetch('/api/restaurant/employees/'+emp.id,{method:'DELETE',credentials:'include'}).catch(() => null)
+    if (!res?.ok) {
+      setEmployees(previous)
+      setActionError('Employee not removed — check connection and retry.')
+    }
   }
 
   async function logShift(e:React.FormEvent) {
@@ -284,8 +296,13 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
 
   async function deleteKitchenAccount(id:string) {
     if(!confirm('Remove this kitchen account?')) return
-    await fetch('/api/restaurant/kitchen/'+id,{method:'DELETE',credentials:'include'})
-    loadKitchenAccounts()
+    const previous = kitchenAccounts
+    setKitchenAccounts(prev => prev.filter(x => x.id !== id))
+    const res = await fetch('/api/restaurant/kitchen/'+id,{method:'DELETE',credentials:'include'}).catch(() => null)
+    if (!res?.ok) {
+      setKitchenAccounts(previous)
+      setActionError('Account not removed — check connection and retry.')
+    }
   }
 
   async function saveOwnerAccount(e:React.FormEvent) {
@@ -333,8 +350,13 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
 
   async function deleteOwnerAccount(id:string) {
     if(!confirm('Remove this owner account?')) return
-    await fetch('/api/restaurant/waiters/'+id,{method:'DELETE',credentials:'include'})
-    loadOwnerAccounts()
+    const previous = ownerAccounts
+    setOwnerAccounts(prev => prev.filter(x => x.id !== id))
+    const res = await fetch('/api/restaurant/waiters/'+id,{method:'DELETE',credentials:'include'}).catch(() => null)
+    if (!res?.ok) {
+      setOwnerAccounts(previous)
+      setActionError('Account not removed — check connection and retry.')
+    }
   }
 
   function copyOwnerCredential(type: 'email'|'password', value: string) {
@@ -357,8 +379,13 @@ export default function RestaurantStaff({ onAskJesse }: { onAskJesse?: () => voi
 
   async function deleteWaiter(id:string) {
     if(!confirm('Remove this waiter account?')) return
-    await fetch('/api/restaurant/waiters/'+id,{method:'DELETE',credentials:'include'})
-    loadWaiters()
+    const previous = waiters
+    setWaiters(prev => prev.filter(x => x.id !== id))
+    const res = await fetch('/api/restaurant/waiters/'+id,{method:'DELETE',credentials:'include'}).catch(() => null)
+    if (!res?.ok) {
+      setWaiters(previous)
+      setActionError('Account not removed — check connection and retry.')
+    }
   }
 
   function copyJoinCode() {

@@ -814,13 +814,23 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
 
     const actionKey = createActionId(`serve-${orderId}`)
 
+    // Optimistic: show "served" immediately; loadPending reconciles after.
+    const previousPending = pending
+    setPending(prev => prev.map(p => p.orderId === orderId ? { ...p, status: 'served' } : p))
+
     try {
-      await fetch(`/api/restaurant/orders/${orderId}`, {
+      const res = await fetch(`/api/restaurant/orders/${orderId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ action: 'serve', actionKey }),
       })
+      if (!res.ok) {
+        setPending(previousPending)
+        const payload = await res.json().catch(() => null)
+        window.alert(payload?.error || 'Could not mark served — retry.')
+        return
+      }
       await loadPending()
     } catch (error) {
       if ((typeof navigator !== 'undefined' && navigator.onLine === false) || isLikelyOfflineError(error)) {
