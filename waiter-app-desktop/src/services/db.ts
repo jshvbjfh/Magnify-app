@@ -362,6 +362,25 @@ export async function createOrder(order: Order, items: OrderItem[]): Promise<voi
   await db.executeSet(statements)
 }
 
+// Append items to an existing (already confirmed) order — the edit-pending
+// flow. The caller updates order totals afterwards, which marks the order
+// unsynced so the next push re-sends it with the new items.
+export async function addOrderItems(items: OrderItem[]): Promise<void> {
+  if (!items.length) return
+  const db = getDB()
+  await db.executeSet(items.map((item) => ({
+    statement:
+      'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.created_at, item.updated_at],
+  })))
+}
+
+export async function getOrderById(orderId: string): Promise<Order | null> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM orders WHERE id = ?', [orderId])
+  return ((rows ?? [])[0] as unknown as Order) ?? null
+}
+
 export async function updateOrder(
   orderId: string,
   fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount' | 'created_by_name'>>,
@@ -408,6 +427,25 @@ export async function getOrderItems(orderId: string): Promise<OrderItem[]> {
   const db = getDB()
   const rows = await db.query('SELECT * FROM order_items WHERE order_id = ?', [orderId])
   return (rows ?? []) as unknown as OrderItem[]
+}
+
+// Purge local copies of active orders the server no longer has (hard-deleted
+// upstream, e.g. an owner removing a mistake order). Only touches orders the
+// server has already acknowledged (synced = 1) — unpushed local orders are
+// never destroyed. Returns how many orders were removed.
+export async function deleteServerRemovedOrders(restaurantId: string, serverOrderIds: string[]): Promise<number> {
+  const db = getDB()
+  const rows = (await db.query(
+    `SELECT id FROM orders WHERE restaurant_id = ? AND synced = 1 AND status IN ('PENDING', 'OPEN', 'UNCONFIRMED')`,
+    [restaurantId],
+  )) as unknown as Array<{ id: string }>
+  const keep = new Set(serverOrderIds)
+  const removedIds = rows.map(r => r.id).filter(id => !keep.has(id))
+  for (const id of removedIds) {
+    await db.run('DELETE FROM order_items WHERE order_id = ?', [id])
+    await db.run('DELETE FROM orders WHERE id = ?', [id])
+  }
+  return removedIds.length
 }
 
 export async function getUnsyncedOrders(): Promise<{ orders: Order[]; items: OrderItem[] }> {

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
-  getMepOutDishIds,
+  getMepOutDishIds, addOrderItems, getOrderById,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
@@ -370,9 +370,14 @@ interface Props {
   // Selected table is owned by the shell so the Tables tab can drive it.
   selectedTableKey?: string
   onSelectTableKey?: (key: string) => void
+  // Edit-pending-order flow: the pending tab requests an edit via onEditOrder;
+  // the shell switches to the POS tab and passes the order id down here.
+  editingOrderId?: string | null
+  onEditOrder?: (orderId: string) => void
+  onEditDone?: () => void
 }
 
-export default function RestaurantOrders({ mode = 'pos', waiterName = '', activeBranchId = null, onPendingCountChange, syncVersion, selectedTableKey: controlledTableKey, onSelectTableKey }: Props) {
+export default function RestaurantOrders({ mode = 'pos', waiterName = '', activeBranchId = null, onPendingCountChange, syncVersion, selectedTableKey: controlledTableKey, onSelectTableKey, editingOrderId = null, onEditOrder, onEditDone }: Props) {
   const { isOnline } = useOnline()
   // ── Shared state ──
   const [dishes,        setDishes]        = useState<Dish[]>([])
@@ -398,6 +403,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
   const tablePickerInputRef = useRef<HTMLInputElement>(null)
   const [localCart,        setLocalCart]        = useState<Record<string, CartItem[]>>({})
   const [showPanel,        setShowPanel]        = useState<'dishes' | 'order'>('dishes')
+  // Edit-pending flow: the order being extended + its already-sent items
+  // (shown locked in the cart panel; only NEW items get kitchen tickets).
+  const [editingOrder,     setEditingOrder]     = useState<Order | null>(null)
+  const [editingItems,     setEditingItems]     = useState<OrderItem[]>([])
   const [addedFlash,       setAddedFlash]       = useState(false)
   const [searchQuery,      setSearchQuery]      = useState('')
   const [pendingSearch,    setPendingSearch]    = useState('')
@@ -892,6 +901,111 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
 
   // ── Order lifecycle ──
 
+  // Load the order being edited (requested from the Pending tab) into the POS:
+  // jump to its table, show its sent items locked, and take new items in the cart.
+  useEffect(() => {
+    if (mode !== 'pos') return
+    if (!editingOrderId) {
+      setEditingOrder(null)
+      setEditingItems([])
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const [order, items] = await Promise.all([getOrderById(editingOrderId), getOrderItems(editingOrderId)])
+      if (cancelled) return
+      if (!order || order.status !== 'PENDING') {
+        setSubmitError('This order can no longer be edited.')
+        onEditDone?.()
+        return
+      }
+      setEditingOrder(order)
+      setEditingItems(items.filter(i => i.status === 'ACTIVE'))
+      setSelectedTableKey(order.table_id ?? 'takeaway')
+      setShowPanel('dishes')
+      setSubmitError(null)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingOrderId, mode])
+
+  function cancelEditOrder() {
+    setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+    setSubmitError(null)
+    onEditDone?.()
+  }
+
+  // Append the cart to the order being edited. Existing items are untouched;
+  // ONLY the new items print kitchen tickets. Totals are recomputed and the
+  // order re-queues for push (updateOrder marks it unsynced).
+  async function appendToOrder() {
+    const cart = localCart[selectedTableKey] ?? []
+    if (!editingOrder) return
+    if (!cart.length) {
+      setSubmitError('No new items yet. Tap a dish to add it first.')
+      return
+    }
+    if (orderSubmitLockRef.current) {
+      setSubmitError('Order is already being updated — please wait.')
+      return
+    }
+
+    setSubmitError(null)
+    setConfirmSuccess(null)
+    orderSubmitLockRef.current = true
+    setConfirmingOrder(true)
+    try {
+      const now = new Date().toISOString()
+      const newItems: OrderItem[] = cart.map((item) => ({
+        id:         createId(),
+        order_id:   editingOrder.id,
+        dish_id:    item.dishId,
+        dish_name:  item.dishName,
+        dish_price: item.dishPrice,
+        qty:        item.qty,
+        status:     'ACTIVE',
+        notes:      item.note ?? null,
+        created_at: now,
+        updated_at: now,
+      }))
+      await addOrderItems(newItems)
+
+      const combined = [
+        ...editingItems.map(i => ({ dishPrice: i.dish_price, qty: i.qty })),
+        ...cart.map(i => ({ dishPrice: i.dishPrice, qty: i.qty })),
+      ]
+      const { subtotal, vatAmount, totalAmount } = calcTotals(combined)
+      await updateOrder(editingOrder.id, { subtotal_amount: subtotal, vat_amount: vatAmount, total_amount: totalAmount })
+
+      await logInfo('order', 'Order edited: items appended', {
+        orderId: editingOrder.id,
+        orderNumber: editingOrder.order_number,
+        addedItems: newItems.length,
+        newTotal: totalAmount,
+      })
+
+      // Tickets for the NEW items only — the kitchen already has the rest.
+      printKitchenTickets(editingOrder, cart, restaurantName ?? '')
+
+      await loadPOS()
+      setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+      setConfirmSuccess(`${editingOrder.order_number} updated — ${newItems.length} new item${newItems.length === 1 ? '' : 's'} sent to kitchen`)
+      setTimeout(() => setConfirmSuccess(null), 4000)
+      onEditDone?.()
+
+      pushSync().catch(() => {})
+    } catch (err) {
+      void logError('order', 'Append to order failed', {
+        orderId: editingOrder.id,
+        error: normalizeErrorForLog(err),
+      })
+      setSubmitError('Could not update the order — try again.')
+    } finally {
+      orderSubmitLockRef.current = false
+      setConfirmingOrder(false)
+    }
+  }
+
   async function confirmOrder(waiterName: string) {
     const cart = localCart[selectedTableKey] ?? []
 
@@ -1325,11 +1439,17 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                   </div>
                   <div className="px-3 py-2 space-y-1.5">
                     {oi.map(item => (
-                      <div key={item.id} className="flex items-start justify-between">
-                        <span className="text-sm text-gray-800 font-medium flex-1 min-w-0 leading-snug">
-                          {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
-                        </span>
-                        <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)} RWF</span>
+                      <div key={item.id}>
+                        <div className="flex items-start justify-between">
+                          <span className="text-sm text-gray-800 font-medium flex-1 min-w-0 leading-snug">
+                            {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                          </span>
+                          <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)} RWF</span>
+                        </div>
+                        {/* Modifiers ("no sauce", "extra pickles") — same style as the cart */}
+                        {item.notes && (
+                          <p className="text-xs text-orange-600 italic leading-snug">&gt; {item.notes}</p>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1361,6 +1481,10 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                             <CreditCard className="h-3.5 w-3.5" /> Pay
                           </button>
                         </div>
+                        <button onClick={() => onEditOrder?.(ord.id)}
+                          className="w-full flex items-center justify-center gap-1 border border-blue-300 hover:bg-blue-50 text-blue-700 text-xs font-semibold py-2 rounded-xl transition-colors">
+                          <StickyNote className="h-3.5 w-3.5" /> Edit / Add items
+                        </button>
                         <button onClick={() => printBill(ord, oi)}
                           className="w-full flex items-center justify-center gap-1 border border-gray-300 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 rounded-xl transition-colors">
                           <Printer className="h-3.5 w-3.5" /> Print Bill
@@ -1599,15 +1723,41 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
           </div>
         </div>
 
-        {/* Mode label strip */}
-        <div className={`flex-shrink-0 px-4 py-1 text-[11px] font-semibold uppercase tracking-widest ${
-          isBuilding ? 'bg-orange-50 text-orange-600' : 'bg-gray-50 text-gray-400'
-        }`}>
-          {isBuilding ? 'Building order — not sent yet' : 'No items'}
-        </div>
+        {/* Mode label strip / editing banner */}
+        {editingOrder ? (
+          <div className="flex-shrink-0 px-4 py-1.5 bg-blue-50 border-b border-blue-100 flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-blue-700">
+              Editing {editingOrder.order_number} — new items only
+            </span>
+            <button onClick={cancelEditOrder} title="Stop editing" className="p-0.5 rounded hover:bg-blue-100">
+              <X className="h-3.5 w-3.5 text-blue-500" />
+            </button>
+          </div>
+        ) : (
+          <div className={`flex-shrink-0 px-4 py-1 text-[11px] font-semibold uppercase tracking-widest ${
+            isBuilding ? 'bg-orange-50 text-orange-600' : 'bg-gray-50 text-gray-400'
+          }`}>
+            {isBuilding ? 'Building order — not sent yet' : 'No items'}
+          </div>
+        )}
 
         {/* Items list — cart only (confirmed orders live in the Pending Orders tab) */}
         <div className="flex-1 overflow-y-auto px-4 py-2">
+          {/* Already-sent items of the order being edited — locked, no re-tickets */}
+          {editingOrder && editingItems.length > 0 && (
+            <div className="mb-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Already sent to kitchen</p>
+              {editingItems.map(item => (
+                <div key={item.id} className="flex items-start justify-between">
+                  <span className="text-xs text-gray-500 leading-snug flex-1 min-w-0">
+                    {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                    {item.notes ? <span className="italic text-orange-400"> &gt; {item.notes}</span> : null}
+                  </span>
+                  <span className="text-xs text-gray-500 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)}</span>
+                </div>
+              ))}
+            </div>
+          )}
           {cartItems.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full py-12 text-gray-400">
               <ShoppingBag className="h-8 w-8 mb-3 text-gray-300" />
@@ -1660,18 +1810,27 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
               </div>
             )}
             <div className="flex justify-between text-base font-bold text-gray-900">
-              <span>Total</span><span>{fmtRWF(totalAmount)} RWF</span>
+              <span>{editingOrder ? 'New items' : 'Total'}</span><span>{fmtRWF(totalAmount)} RWF</span>
             </div>
+            {editingOrder && (
+              <div className="flex justify-between text-xs font-semibold text-gray-500">
+                <span>Order total after update</span>
+                <span>{fmtRWF(editingItems.reduce((s, i) => s + i.dish_price * i.qty, 0) + totalAmount)} RWF</span>
+              </div>
+            )}
             <button
               onClick={() => {
                 setSubmitError(null)
+                if (editingOrder) { void appendToOrder(); return }
                 // Waiter identity already established on the opening page.
                 if (waiterName) { void confirmOrder(waiterName); return }
                 setShowCodeModal(true)
               }}
               disabled={confirmingOrder}
-              className="w-full bg-orange-500 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-3 rounded-2xl text-base transition-colors shadow-sm">
-              {confirmingOrder ? 'Confirming…' : 'Confirm Order'}
+              className={`w-full disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-3 rounded-2xl text-base transition-colors shadow-sm ${
+                editingOrder ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-500 hover:bg-orange-600'
+              }`}>
+              {confirmingOrder ? (editingOrder ? 'Updating…' : 'Confirming…') : (editingOrder ? 'Add to Order' : 'Confirm Order')}
             </button>
             <button
               onClick={() => { setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] })); setSubmitError(null) }}

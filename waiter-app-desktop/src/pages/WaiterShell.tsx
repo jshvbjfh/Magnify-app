@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { UtensilsCrossed, ClipboardList, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Printer, ChefHat, Lock } from 'lucide-react'
+import { UtensilsCrossed, ClipboardList, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Printer, ChefHat, Power } from 'lucide-react'
 import { useOnline } from '../hooks/useOnline'
 import { isOfflineLikeErrorMessage } from '../services/http'
 import { getConfig, setConfig, getOrders } from '../services/db'
@@ -47,6 +47,8 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   // Opening-page identity: the waiter who entered their code. Null = locked,
   // shows the gate page. Deliberately not persisted — every app start asks.
   const [activeWaiter, setActiveWaiter] = useState<string | null>(null)
+  // Edit-pending flow: set from the Pending tab, consumed by the POS tab.
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
 
   const waiterName = activeWaiter ?? user?.name ?? ''
   const initials = waiterName
@@ -254,8 +256,16 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             ))}
           </nav>
 
-          {/* Right side: sync indicator + sign out */}
+          {/* Right side: exit-to-gate + sync indicator + sign out */}
           <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={() => setActiveWaiter(null)}
+              title="Exit to the waiter code page"
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors flex-shrink-0"
+            >
+              <Power className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Exit</span>
+            </button>
             {isOnline ? (
               <button
                 onClick={() => { void runSync() }}
@@ -269,14 +279,6 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
               <WifiOff className="h-3.5 w-3.5 text-amber-400 mx-2" />
             )}
             {isOnline && <Wifi className="h-3 w-3 text-green-400 mr-1" />}
-            <button
-              onClick={() => setActiveWaiter(null)}
-              title="Lock — next waiter enters their code"
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors flex-shrink-0"
-            >
-              <Lock className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Switch Waiter</span>
-            </button>
             <button
               onClick={onLogout}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors flex-shrink-0"
@@ -322,11 +324,19 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             syncVersion={syncVersion}
             selectedTableKey={selectedTableKey}
             onSelectTableKey={setSelectedTableKey}
+            editingOrderId={editingOrderId}
+            onEditDone={() => setEditingOrderId(null)}
           />
         )}
         {activeTab === 'pending' && (
           <div className="max-w-5xl mx-auto px-4 py-6">
-            <RestaurantOrders mode="pending" waiterName={waiterName} activeBranchId={activeBranchId} syncVersion={syncVersion} />
+            <RestaurantOrders
+              mode="pending"
+              waiterName={waiterName}
+              activeBranchId={activeBranchId}
+              syncVersion={syncVersion}
+              onEditOrder={(orderId) => { setEditingOrderId(orderId); setActiveTab('menu') }}
+            />
           </div>
         )}
         {activeTab === 'tables' && (

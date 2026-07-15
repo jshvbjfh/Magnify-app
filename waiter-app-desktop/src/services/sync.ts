@@ -4,7 +4,7 @@ import {
   getDishes, getTables, getUnsyncedOrders, markOrdersSynced, updateOrderSyncError,
   replaceCancellationApprovers, getCancellationApprovers,
   replaceOrderCodeHolders, getOrderCodeHolders,
-  reconcileOrderStatuses, upsertIncomingOrders,
+  reconcileOrderStatuses, upsertIncomingOrders, deleteServerRemovedOrders,
   replaceMepItems, replaceMepCatalog, reconcileMepLogs, adjustMepRemaining, setMepRemaining,
   getUnsyncedMepLogs, getPendingMepUndos, markMepLogsSynced, markMepLogReversed,
   markMepLogFailed, clearMepLogPendingUndo, setMepLogSyncError,
@@ -234,6 +234,17 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   const incomingOrders = (payload as unknown as { incomingOrders?: IncomingOrder[] }).incomingOrders
   if (Array.isArray(incomingOrders) && incomingOrders.length > 0) {
     await upsertIncomingOrders(incomingOrders)
+  }
+
+  // incomingOrders is the server's COMPLETE active set — so any synced local
+  // active order missing from it was hard-deleted upstream and must go here
+  // too, or it lingers on the till forever. Skipped when the list may be
+  // truncated (server caps it at 300) so truncation can't mass-delete.
+  if (Array.isArray(incomingOrders) && incomingOrders.length < 300) {
+    const removed = await deleteServerRemovedOrders(payload.restaurant.id, incomingOrders.map(o => o.id))
+    if (removed > 0) {
+      await logInfo('sync', 'Removed orders deleted on the server', { removed })
+    }
   }
 
   // MEP: replace this station's list + prep catalog with the server-authoritative

@@ -1,4 +1,7 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron')
+
+// No native File/Edit/View menu — the POS UI is the whole app.
+Menu.setApplicationMenu(null)
 const http = require('http')
 const net = require('net')
 const path = require('path')
@@ -747,6 +750,12 @@ function registerIpcHandlers() {
   // get:config — preload reads this synchronously to inject window.electronConfig
   ipcMain.on('get:config', (event) => {
     event.returnValue = { apiBaseUrl, appVersion: app.getVersion() }
+  })
+
+  // app:quit — in-app Exit button. Goes through app.quit() so the
+  // unsynced-orders before-quit guard still gets its say.
+  ipcMain.on('app:quit', () => {
+    app.quit()
   })
 }
 
