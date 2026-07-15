@@ -12,6 +12,20 @@ import type { Prisma } from '@prisma/client'
 const PURCHASE_USAGE_EPSILON = 0.000001
 const INVENTORY_TRANSACTION_OPTIONS = { maxWait: 15000, timeout: 60000 } as const
 
+// Under real contention the interactive transaction below can outlive its own
+// timeout; Prisma's raw error for that ("Transaction already closed: A query
+// cannot be executed on an expired transaction...") is a multi-clause internal
+// message that shouldn't reach the UI verbatim.
+function isExpiredTransactionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return message.includes('Transaction already closed') || message.includes('expired transaction')
+}
+
+function toUserFacingError(error: unknown, fallback: string) {
+  if (isExpiredTransactionError(error)) return 'That took too long to save — please try again.'
+  return (error as { message?: string })?.message || fallback
+}
+
 type ResolvedInventoryIngredient = {
   id: string
   name: string
@@ -357,7 +371,7 @@ export async function POST(req: Request) {
     console.error('Failed to record inventory purchase:', error)
     const status = ['Ingredient not found', 'itemName is required', 'unit is required when recording a new item'].includes(error?.message)
       || error?.message?.includes('change only the buy-in packaging') ? 400 : 500
-    return NextResponse.json({ error: error?.message || 'Failed to record inventory purchase', code: error?.code || null }, { status })
+    return NextResponse.json({ error: toUserFacingError(error, 'Failed to record inventory purchase'), code: error?.code || null }, { status: isExpiredTransactionError(error) ? 503 : status })
   }
 }
 
@@ -484,7 +498,7 @@ export async function PUT(req: Request) {
     console.error('Failed to update inventory purchase:', error)
     const status = ['Ingredient not found', 'itemName is required', 'unit is required when recording a new item'].includes(error?.message)
       || error?.message?.includes('change only the buy-in packaging') ? 400 : 500
-    return NextResponse.json({ error: error?.message || 'Failed to update inventory purchase', code: error?.code || null }, { status })
+    return NextResponse.json({ error: toUserFacingError(error, 'Failed to update inventory purchase'), code: error?.code || null }, { status: isExpiredTransactionError(error) ? 503 : status })
   }
 }
 
@@ -539,6 +553,9 @@ export async function DELETE(req: Request) {
     return NextResponse.json({ success: true, ingredient: updatedIngredient })
   } catch (error: any) {
     console.error('Failed to delete inventory purchase:', error)
-    return NextResponse.json({ error: error?.message || 'Failed to delete inventory purchase', code: error?.code || null }, { status: 500 })
+    return NextResponse.json(
+      { error: toUserFacingError(error, 'Failed to delete inventory purchase'), code: error?.code || null },
+      { status: isExpiredTransactionError(error) ? 503 : 500 },
+    )
   }
 }

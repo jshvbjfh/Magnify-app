@@ -32,10 +32,14 @@ export async function GET(req: Request) {
   const fromDate = parseDateParam(from)
   const toDate = parseDateParam(to, true)
 
+  // One order/table/bill can carry dishes prepared by several stations (a
+  // burger + a soda + a dessert is one guest visit, three kitchens). Which
+  // station a dish's revenue and cost belong to is decided by the dish's own
+  // branch, never by the order's till branch — so orders are fetched restaurant-
+  // wide here and then filtered down to just this station's line items below.
   const orders = await prisma.restaurantOrder.findMany({
     where: {
       restaurantId,
-      branchId,
       status: 'PAID',
       ...(fromDate || toDate
         ? {
@@ -66,10 +70,11 @@ export async function GET(req: Request) {
             orderId: { in: orderIds },
             restaurantId,
             branchId,
+            deletedAt: null,
           },
           select: {
             orderId: true,
-            quantitySold: true,
+            orderItemId: true,
             calculatedFoodCost: true,
           },
         })
@@ -79,7 +84,6 @@ export async function GET(req: Request) {
           where: {
             id: { in: dishIds },
             restaurantId,
-            branchId,
           },
           include: {
             ingredients: {
@@ -94,12 +98,17 @@ export async function GET(req: Request) {
       : Promise.resolve([]),
   ])
 
-  const actualCostByOrderId = new Map<string, number>()
+  const dishById = new Map(dishes.map((dish) => [dish.id, dish]))
+
+  // Actual costs are keyed by orderItemId so a partially-recorded order (some
+  // items have a DishSale, some don't) still gets an estimate for the gap
+  // instead of the whole order falling back to estimates.
+  const actualCostByOrderItemId = new Map<string, number>()
   for (const sale of sales) {
-    if (!sale.orderId) continue
-    actualCostByOrderId.set(
-      sale.orderId,
-      (actualCostByOrderId.get(sale.orderId) ?? 0) + Number(sale.calculatedFoodCost ?? 0)
+    if (!sale.orderItemId) continue
+    actualCostByOrderItemId.set(
+      sale.orderItemId,
+      (actualCostByOrderItemId.get(sale.orderItemId) ?? 0) + Number(sale.calculatedFoodCost ?? 0)
     )
   }
 
@@ -112,27 +121,35 @@ export async function GET(req: Request) {
     ])
   )
 
-  const rows = orders.map((order) => {
-    const qtySold = order.items.reduce((sum, item) => sum + Number(item.qty ?? 0), 0)
-    const estimatedCost = order.items.reduce((sum, item) => (
-      sum + (Number(item.qty ?? 0) * Number(estimatedUnitCostByDishId.get(item.dishId) ?? 0))
-    ), 0)
-    const totalCost = actualCostByOrderId.has(order.id)
-      ? Number(actualCostByOrderId.get(order.id) ?? 0)
-      : estimatedCost
-    const totalPrice = Number(order.totalAmount ?? 0)
+  const rows = orders.flatMap((order) => {
+    // This station's slice of the order — dishes belonging to other stations
+    // in the same order are reported by those stations, not here.
+    const stationItems = order.items.filter((item) => dishById.get(item.dishId)?.branchId === branchId)
+    if (stationItems.length === 0) return []
+
+    const qtySold = stationItems.reduce((sum, item) => sum + Number(item.qty ?? 0), 0)
+    // OrderItem.totalPrice is only populated by the QR-order submit path and
+    // is 0 for items created elsewhere (desktop/waiter order-taking) — qty *
+    // dishPrice is the reliably-populated line-item revenue.
+    const totalPrice = stationItems.reduce((sum, item) => sum + Number(item.qty ?? 0) * Number(item.dishPrice ?? 0), 0)
+    const totalCost = stationItems.reduce((sum, item) => {
+      const actual = actualCostByOrderItemId.get(item.id)
+      if (actual !== undefined) return sum + actual
+      const estimatedUnitCost = Number(estimatedUnitCostByDishId.get(item.dishId) ?? 0)
+      return sum + Number(item.qty ?? 0) * estimatedUnitCost
+    }, 0)
     const unitPrice = qtySold > 0 ? totalPrice / qtySold : 0
     const unitCost = qtySold > 0 ? totalCost / qtySold : 0
     const totalProfit = totalPrice - totalCost
     const status = getRestaurantOrderDisplayStatus(order)
 
-    return {
+    return [{
       id: order.id,
       orderId: order.id,
       orderLabel: order.orderNumber,
       tableName: order.table?.name ?? order.tableName ?? 'Takeaway',
       waiterName: order.createdByName ?? null,
-      dishNames: order.items.map((item) => item.dishName),
+      dishNames: stationItems.map((item) => item.dishName),
       status,
       qtySold,
       unitCost,
@@ -143,7 +160,7 @@ export async function GET(req: Request) {
       totalProfit,
       profitMargin: totalPrice > 0 ? Math.round((totalProfit / totalPrice) * 100) : 0,
       saleDate: order.paidAt ?? order.createdAt,
-    }
+    }]
   })
 
   const totals = rows.reduce((acc, r) => ({

@@ -254,7 +254,10 @@ export async function consumeIngredientStock(
       where: { id: params.ingredientId },
       data: consumesFromBatches
         ? {
-            quantity: roundQuantity(Math.max(0, availableBatchQuantity - quantityToConsume)),
+            // Relative decrement, not an absolute set from a stale snapshot —
+            // avoids a lost-update race when concurrent consumptions hit the
+            // same ingredient (each write only applies its own delta).
+            quantity: { decrement: quantityToConsume },
             unitCost: nextActiveUnitCost ?? 0,
           }
         : { quantity: { decrement: quantityToConsume } },
