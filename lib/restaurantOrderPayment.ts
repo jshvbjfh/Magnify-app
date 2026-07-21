@@ -132,42 +132,70 @@ export async function finalizeRestaurantOrderPayment(
     })),
   })
 
-  // Revenue is booked per station that OWNS each dish, not the till's station:
+  // Revenue is booked per station that SOLD each dish, not the till's station:
   // an Amstel (Parking Bar) sold from a Little Taipei terminal must land in
   // Parking Bar's transactions. One journal entry per involved station.
-  const orderDishBranches = await db.dish.findMany({
-    where: { id: { in: Array.from(new Set(currentOrder.items.map((item) => item.dishId))) }, restaurantId: params.restaurantId },
-    select: { id: true, branchId: true },
+  //
+  // The per-station split is taken from the DishSale rows just recorded above —
+  // the single source of truth for attribution — NOT a fresh dish lookup.
+  // Re-deriving it separately is exactly how the ledger drifted away from the
+  // sales: a dish that couldn't be resolved fell back to the till and lumped the
+  // whole order under one station. Grouping off DishSale keeps the Transactions
+  // page and the sales identical by construction.
+  //
+  // `reference` ties every entry to its order and makes the booking idempotent —
+  // a retried or racing finalize is a no-op once the order has been booked.
+  const orderRef = `order:${params.orderId}`
+  const alreadyBooked = await db.journalEntry.count({
+    where: { restaurantId: params.restaurantId, reference: orderRef, deletedAt: null },
   })
-  const branchByDishId = new Map(orderDishBranches.map((dish) => [dish.id, dish.branchId]))
-  const itemsByBranch = new Map<string, typeof currentOrder.items>()
-  for (const item of currentOrder.items) {
-    const itemBranchId = branchByDishId.get(item.dishId) ?? params.branchId
-    const group = itemsByBranch.get(itemBranchId)
-    if (group) group.push(item)
-    else itemsByBranch.set(itemBranchId, [item])
-  }
-
-  for (const [itemsBranchId, branchItems] of itemsByBranch) {
-    const branchAmount = calculateRestaurantOrderTotals(
-      branchItems.map((item) => ({ dishPrice: Number(item.dishPrice), qty: Number(item.qty) }))
-    ).totalAmount
-
-    await recordJournalEntry(db, {
-      restaurantId: params.restaurantId,
-      branchId: itemsBranchId,
-      date: paidOrder.paidAt ?? paidAt,
-      description: buildDishSaleTransactionDescription({
-        items: branchItems.map((item) => ({ dishId: item.dishId, dishName: item.dishName, qty: item.qty })),
-        tableId: currentOrder.tableId,
-        tableName: currentOrder.tableName,
-      }),
-      amount: branchAmount,
-      direction: 'in',
-      accountName: 'DishSale',
-      categoryType: 'income',
-      paymentMethod: normalizedPaymentMethod,
+  if (alreadyBooked === 0) {
+    const orderDishSales = await db.dishSale.findMany({
+      where: { orderId: params.orderId, deletedAt: null },
+      select: { dishId: true, orderItemId: true, branchId: true },
     })
+    const branchByItemId = new Map(
+      orderDishSales.filter((sale) => sale.orderItemId).map((sale) => [sale.orderItemId, sale.branchId]),
+    )
+    const branchByDishId = new Map(orderDishSales.map((sale) => [sale.dishId, sale.branchId]))
+
+    const itemsByBranch = new Map<string, typeof currentOrder.items>()
+    for (const item of currentOrder.items) {
+      // Prefer the exact order-item match; fall back to dish-level. An item with
+      // no DishSale (its dish couldn't be resolved, so no sale was recorded) is
+      // skipped here too — the journal never books revenue the sales don't carry.
+      const itemBranchId = branchByItemId.get(item.id) ?? branchByDishId.get(item.dishId)
+      if (!itemBranchId) {
+        console.warn(`[finalize] no DishSale for item ${item.id} (dish ${item.dishId}) — skipping revenue booking (order: ${params.orderId})`)
+        continue
+      }
+      const group = itemsByBranch.get(itemBranchId)
+      if (group) group.push(item)
+      else itemsByBranch.set(itemBranchId, [item])
+    }
+
+    for (const [itemsBranchId, branchItems] of itemsByBranch) {
+      const branchAmount = calculateRestaurantOrderTotals(
+        branchItems.map((item) => ({ dishPrice: Number(item.dishPrice), qty: Number(item.qty) }))
+      ).totalAmount
+
+      await recordJournalEntry(db, {
+        restaurantId: params.restaurantId,
+        branchId: itemsBranchId,
+        date: paidOrder.paidAt ?? paidAt,
+        description: buildDishSaleTransactionDescription({
+          items: branchItems.map((item) => ({ dishId: item.dishId, dishName: item.dishName, qty: item.qty })),
+          tableId: currentOrder.tableId,
+          tableName: currentOrder.tableName,
+        }),
+        reference: orderRef,
+        amount: branchAmount,
+        direction: 'in',
+        accountName: 'DishSale',
+        categoryType: 'income',
+        paymentMethod: normalizedPaymentMethod,
+      })
+    }
   }
 
   if (currentOrder.tableId) {
