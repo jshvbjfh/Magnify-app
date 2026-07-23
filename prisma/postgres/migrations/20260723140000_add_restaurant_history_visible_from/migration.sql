@@ -1,1 +1,1 @@
-ALTER TABLE "restaurants" ADD COLUMN "historyVisibleFrom" TIMESTAMP(3);
+ALTER TABLE "restaurants" ADD COLUMN IF NOT EXISTS "historyVisibleFrom" TIMESTAMP(3);
