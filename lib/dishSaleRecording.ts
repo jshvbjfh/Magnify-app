@@ -15,6 +15,10 @@ type SaleLineInput = {
   dishVariantName?: string | null
   dishPrice: number
   qty: number
+  // Station the item was rung up under, snapshotted at order-creation time.
+  // Preferred over the dish's live branchId so a mid-order station reassignment
+  // can't retroactively misattribute an already-open order's sale.
+  branchId?: string | null
 }
 
 type WasteLineInput = {
@@ -97,9 +101,12 @@ export async function recordDishSalesForPaidOrder(
       if (existingSale) continue
     }
 
-    // Use the dish's own branchId so sales are always attributed to the owning branch,
-    // even when the order was created under a different branch (cross-branch ordering).
-    const dishBranchId = dish.branchId ?? params.branchId
+    // Prefer the item's own station snapshot (taken when it was added to the order)
+    // over the dish's live branchId — a dish reassigned to a different station while
+    // this order sat open/unpaid must not retroactively change where it was rung up.
+    // Falls back to the dish's current branchId, then the till's, for legacy rows with
+    // no snapshot.
+    const dishBranchId = item.branchId ?? dish.branchId ?? params.branchId
 
     const totalSaleAmount = Number(item.dishPrice) * quantitySold
     const dishSale = await db.dishSale.create({
@@ -186,6 +193,9 @@ export async function recordDishSalesForPaidOrder(
             quantityUsed: line.quantityUsed,
             actualCost: line.actualCost,
           })))
+          for (const warning of prepConsumption.warnings) {
+            console.warn(`[dishSale] ${warning} — ${dish.name} (order: ${params.orderId ?? 'unknown'})`)
+          }
         } else {
           const consumption = await consumeIngredientStock(db, {
             restaurantId: params.restaurantId,
@@ -209,6 +219,9 @@ export async function recordDishSalesForPaidOrder(
               quantityUsed: consumption.quantityConsumed,
               actualCost: consumption.totalCost,
             })
+          }
+          if (consumption.shortfall > 0) {
+            console.warn(`[dishSale] low stock: ${row.inventoryItem.name} — used ${consumption.quantityConsumed} of ${totalNeeded} ${row.inventoryItem.unit} needed for ${dish.name} (order: ${params.orderId ?? 'unknown'})`)
           }
         }
       } catch (stockError) {

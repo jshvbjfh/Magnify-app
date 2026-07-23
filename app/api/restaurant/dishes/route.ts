@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { ensureMainBranchForRestaurant, getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { normalizeDishVariantPayload } from '@/lib/dishVariants'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
+import { isAddonCategory } from '@/lib/menuMetadata'
 
 const dishInclude = {
   ingredients: {
@@ -76,49 +77,79 @@ export async function POST(req: Request) {
 
   const normalizedVariants = normalizeDishVariantPayload(variants)
 
-  const dish = await prisma.$transaction(async (tx) => {
-    const createdDish = await tx.dish.create({
-      data: {
-        restaurantId: context.restaurantId,
-        branchId: resolvedBranchId,
-        name,
-        sellingPrice: Number(sellingPrice),
-        category: category || null,
-        menuType: menuType || null,
-      },
-    })
+  // Add-ons are meant to be orderable from every station, not just the branch
+  // the manager happened to be viewing — so this category fans out to every
+  // branch instead of creating a single branch-scoped row.
+  const branchIds = isAddonCategory(category)
+    ? Array.from(new Set([
+        resolvedBranchId,
+        ...(await prisma.branch.findMany({
+          where: { restaurantId: context.restaurantId },
+          select: { id: true },
+        })).map((b) => b.id),
+      ]))
+    : [resolvedBranchId]
 
-    if (normalizedVariants.length > 0) {
-      await tx.dishVariant.createMany({
-        data: normalizedVariants.map((variant) => ({
-          ...(variant.id ? { id: variant.id } : {}),
-          dishId: createdDish.id,
-          name: variant.name,
-          sellingPrice: variant.sellingPrice,
-          sortOrder: variant.sortOrder,
-          isActive: variant.isActive,
-        })),
+  const createdDishes: Array<NonNullable<Awaited<ReturnType<typeof prisma.dish.findUnique>>>> = []
+
+  for (const branchId of branchIds) {
+    try {
+      const dish = await prisma.$transaction(async (tx) => {
+        const createdDish = await tx.dish.create({
+          data: {
+            restaurantId: context.restaurantId,
+            branchId,
+            name,
+            sellingPrice: Number(sellingPrice),
+            category: category || null,
+            menuType: menuType || null,
+          },
+        })
+
+        if (normalizedVariants.length > 0) {
+          await tx.dishVariant.createMany({
+            data: normalizedVariants.map((variant) => ({
+              ...(variant.id && branchId === resolvedBranchId ? { id: variant.id } : {}),
+              dishId: createdDish.id,
+              name: variant.name,
+              sellingPrice: variant.sellingPrice,
+              sortOrder: variant.sortOrder,
+              isActive: variant.isActive,
+            })),
+          })
+        }
+
+        return tx.dish.findUnique({
+          where: { id: createdDish.id },
+          include: dishInclude,
+        })
       })
+
+      if (dish) createdDishes.push(dish)
+    } catch (error) {
+      // A dish with this name may already exist on another branch (unrelated
+      // coincidence) — skip that branch rather than failing the whole request.
+      const isUniqueConstraintError = Boolean(error && typeof error === 'object' && (error as { code?: string }).code === 'P2002')
+      if (!isUniqueConstraintError) throw error
+      console.warn('[dishes/POST] skipped branch %s — dish name already exists there', branchId)
     }
+  }
 
-    return tx.dish.findUnique({
-      where: { id: createdDish.id },
-      include: dishInclude,
-    })
-  })
-
-  if (!dish) {
+  const primaryDish = createdDishes.find((d) => d.branchId === resolvedBranchId) ?? createdDishes[0]
+  if (!primaryDish) {
     return NextResponse.json({ error: 'Failed to create dish' }, { status: 500 })
   }
 
-  await enqueueSyncChange(prisma, {
-    restaurantId: context.restaurantId,
-    branchId: resolvedBranchId,
-    entityType: 'dish',
-    entityId: dish.id,
-    operation: 'upsert',
-    payload: dish,
-  })
+  for (const dish of createdDishes) {
+    await enqueueSyncChange(prisma, {
+      restaurantId: context.restaurantId,
+      branchId: dish.branchId,
+      entityType: 'dish',
+      entityId: dish.id,
+      operation: 'upsert',
+      payload: dish,
+    })
+  }
 
-  return NextResponse.json(dish, { status: 201 })
+  return NextResponse.json(primaryDish, { status: 201 })
 }

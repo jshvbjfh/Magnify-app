@@ -70,6 +70,7 @@ export async function finalizeRestaurantOrderPayment(
           dishVariantName: item.dishVariantName,
           dishPrice: item.dishPrice,
           qty: item.qty,
+          branchId: item.branchId,
         })),
       })
     }
@@ -129,6 +130,7 @@ export async function finalizeRestaurantOrderPayment(
       dishVariantName: item.dishVariantName,
       dishPrice: item.dishPrice,
       qty: item.qty,
+      branchId: item.branchId,
     })),
   })
 

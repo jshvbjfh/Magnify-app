@@ -238,6 +238,11 @@ model OrderItem {
   order         RestaurantOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
   dishId        String
   dish          Dish            @relation(fields: [dishId], references: [id])
+  // Station snapshot at order-creation time, no FK — attribution hint only.
+  // Null on legacy rows; server falls back to the dish's live branchId, then
+  // params.branchId. Guards against a dish being reassigned to a different
+  // station while an order containing it is still open/unpaid.
+  branchId      String?
   dishVariantId String?
   dishVariantName String?
   dishName      String

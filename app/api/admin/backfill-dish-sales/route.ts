@@ -65,6 +65,7 @@ export async function POST(req: Request) {
           dishId: item.dishId,
           dishPrice: Number(item.dishPrice),
           qty: Number(item.qty),
+          branchId: item.branchId,
         })),
       })
       results.push({ orderId: order.id, status: 'ok' })

@@ -142,6 +142,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ restaur
                 dishPrice: item.dishPrice,
                 qty: item.qty,
                 totalPrice: item.dishPrice * item.qty,
+                branchId: item.dishBranchId,
               })),
             })
 

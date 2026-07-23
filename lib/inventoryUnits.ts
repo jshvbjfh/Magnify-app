@@ -11,6 +11,7 @@ export const INVENTORY_UNITS = [
 	{ value: 'bunch', label: 'Bunch' },
 	{ value: 'can', label: 'Can' },
 	{ value: 'sachet', label: 'Sachet' },
+	{ value: 'tray', label: 'Tray' },
 ] as const
 
 export const DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT: Record<string, string> = {
@@ -20,6 +21,7 @@ export const DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT: Record<string, string> = {
 	bag: 'g',
 	box: 'piece',
 	bunch: 'g',
+	tray: 'piece',
 }
 
 const UNIT_EPSILON = 0.000001
@@ -68,6 +70,7 @@ const UNIT_ALIASES: Record<string, string> = {
 	mls: 'ml',
 	bottles: 'bottle', bags: 'bag', boxes: 'box', cans: 'can',
 	sachets: 'sachet', bunches: 'bunch', shots: 'shot',
+	trays: 'tray', trey: 'tray', treys: 'tray',
 }
 
 export function canonicalInventoryUnit(unit: string | null | undefined) {

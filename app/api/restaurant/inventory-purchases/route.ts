@@ -71,6 +71,11 @@ async function resolveInventoryIngredient(
     // POST can skip the interim unitCost write: it always creates an open FIFO
     // layer, so syncIngredientActiveUnitCost re-derives the cost regardless.
     skipRedundantCostWrite?: boolean
+    // Set only by PUT after it has verified this is the ingredient's sole
+    // purchase batch, its buy-in unit isn't also changing, and it has already
+    // computed a conversion factor — lets a usage-unit change through even
+    // when stock has been consumed, instead of refusing it outright.
+    allowUsageUnitReDenomination?: boolean
   }
 ): Promise<ResolvedInventoryIngredient> {
   const select = { id: true, name: true, unit: true, unitCost: true, quantity: true } as const
@@ -99,7 +104,7 @@ async function resolveInventoryIngredient(
     // Alias-aware: "pcs" vs "piece" is the same physical unit, not a unit
     // change. Only a genuinely different usage unit re-denominates history.
     const unitChanged = !isSameInventoryUnit(matched.unit, usageUnit)
-    if (unitChanged) {
+    if (unitChanged && !params.allowUsageUnitReDenomination) {
       const ingredientPurchases = await tx.inventoryPurchase.findMany({
         where: { restaurantId: params.restaurantId, branchId: params.branchId, ingredientId: matched.id },
         select: { quantityPurchased: true, remainingQuantity: true },
@@ -416,12 +421,53 @@ export async function PUT(req: Request) {
 
     if (!existingPurchase) return NextResponse.json({ error: 'Stock entry not found' }, { status: 404 })
 
+    const existingIngredient = await prisma.inventoryItem.findFirst({
+      where: { id: existingPurchase.ingredientId, restaurantId, branchId },
+    })
+    if (!existingIngredient) return NextResponse.json({ error: 'Ingredient not found' }, { status: 404 })
+
+    // Same ingredient identity as before this edit (not being switched to a
+    // different existing item by id or by typing a different item's name)?
+    const isSameIngredient = ingredientId
+      ? ingredientId === existingIngredient.id
+      : normalizeInventoryItemName(itemName || '') === normalizeInventoryItemName(existingIngredient.name)
+
+    const requestedUsageUnit = (unit || '').trim() || existingIngredient.unit
+    const usageUnitIsChanging = !isSameInventoryUnit(existingIngredient.unit, requestedUsageUnit)
+    const purchaseUnitIsChanging = !!existingPurchase.purchaseUnit
+      && typeof purchaseUnit === 'string' && purchaseUnit.trim()
+      && !isSameInventoryUnit(existingPurchase.purchaseUnit, purchaseUnit)
+
+    const consumedSoFar = existingPurchase.quantityPurchased - existingPurchase.remainingQuantity
+    const hasConsumed = consumedSoFar > PURCHASE_USAGE_EPSILON
+
+    // Re-denomination: the user is deliberately re-tracking this ingredient in
+    // a finer/different usage unit (the "Use in" field) with an exact buy-in
+    // ratio they just entered — e.g. "1 bottle = 1000 ml". Consumption already
+    // recorded in the old unit isn't a reason to block that; it's the exact
+    // signal needed to re-express it in the new one instead of losing it.
+    // Restricted to the ingredient's sole batch (so there's one unambiguous
+    // old ratio to convert from) and to cases where the buy-in unit itself
+    // isn't also changing in the same edit.
+    let reDenominationFactor: number | null = null
+    if (isSameIngredient && usageUnitIsChanging && hasConsumed && !purchaseUnitIsChanging) {
+      const otherBatchCount = await prisma.inventoryPurchase.count({
+        where: { restaurantId, branchId, ingredientId: existingIngredient.id, deletedAt: null, NOT: { id } },
+      })
+      if (otherBatchCount === 0) {
+        const oldUnitsPerPurchaseUnit = normalizeUnitsPerPurchaseUnit(existingPurchase.unitsPerPurchaseUnit, 1)
+        const factor = unitsPerPurchaseUnit / oldUnitsPerPurchaseUnit
+        if (Number.isFinite(factor) && factor > 0) reDenominationFactor = factor
+      }
+    }
+
     // Editing is allowed even after partial consumption. remainingQuantity is
     // re-derived below to preserve whatever has already been consumed from
     // this batch, instead of resetting it to the newly-entered total - that
     // would otherwise silently hand back stock that was already sold.
-    const consumedSoFar = existingPurchase.quantityPurchased - existingPurchase.remainingQuantity
-    const newRemainingQuantity = Math.max(0, quantityPurchased - consumedSoFar)
+    const newRemainingQuantity = reDenominationFactor
+      ? Math.max(0, existingPurchase.remainingQuantity * reDenominationFactor)
+      : Math.max(0, quantityPurchased - consumedSoFar)
 
     const normalizedPaymentMethod = typeof paymentMethod === 'string' && paymentMethod.trim() ? paymentMethod.trim() : 'Cash'
 
@@ -433,9 +479,28 @@ export async function PUT(req: Request) {
         itemName,
         unit,
         unitCost,
+        allowUsageUnitReDenomination: !!reDenominationFactor,
       })
 
-      if (existingPurchase.ingredientId === nextIngredient.id) {
+      if (reDenominationFactor) {
+        // Full re-scale, not a delta increment: every quantity denominated in
+        // the old usage unit means something different now, so it's replaced
+        // outright rather than adjusted by how much this one edit changed.
+        await tx.inventoryItem.update({
+          where: { id: nextIngredient.id },
+          data: { quantity: existingIngredient.quantity * reDenominationFactor },
+        })
+        const affectedRecipes = await tx.dishIngredient.findMany({
+          where: { inventoryItemId: nextIngredient.id },
+          select: { id: true, quantityRequired: true },
+        })
+        for (const recipe of affectedRecipes) {
+          await tx.dishIngredient.update({
+            where: { id: recipe.id },
+            data: { quantityRequired: recipe.quantityRequired * reDenominationFactor },
+          })
+        }
+      } else if (existingPurchase.ingredientId === nextIngredient.id) {
         await tx.inventoryItem.update({
           where: { id: nextIngredient.id },
           data: { quantity: { increment: newRemainingQuantity - existingPurchase.remainingQuantity } },

@@ -89,6 +89,7 @@ interface MobileOrderItem {
   qty: number
   status: string
   notes?: string | null
+  branch_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -225,6 +226,11 @@ export async function POST(req: Request) {
             const normalizedItemCreatedAt = parseRequiredDate(item.created_at, normalizedCreatedAt)
             const normalizedItemUpdatedAt = parseRequiredDate(item.updated_at, normalizedItemCreatedAt)
 
+            // No FK on OrderItem.branchId — it's an attribution hint only, so it's the
+            // one place client input needs an explicit guard before trusting it.
+            const resolvedItemBranchId =
+              item.branch_id && validBranchIds.has(item.branch_id) ? item.branch_id : null
+
             await tx.orderItem.upsert({
               where: { id: item.id },
               create: {
@@ -236,6 +242,10 @@ export async function POST(req: Request) {
                 qty: Math.max(1, normalizeInteger(item.qty, 1)),
                 status: normalizeRequiredText(item.status, 'ACTIVE'),
                 notes: item.notes ?? null,
+                // Immutable once stamped — the station snapshot from when the item
+                // was rung up must never drift on update (matches how nothing else
+                // touches it either).
+                branchId: resolvedItemBranchId,
                 createdAt: normalizedItemCreatedAt,
                 updatedAt: normalizedItemUpdatedAt,
               },

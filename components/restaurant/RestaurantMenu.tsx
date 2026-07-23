@@ -9,7 +9,7 @@ import { DEFAULT_MENU_CATEGORY_SUGGESTIONS, MENU_TYPE_OPTIONS, getDishMenuTypeLa
 import RestaurantQrMenuStudio from '@/components/restaurant/RestaurantQrMenuStudio'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
-type Ingredient = { id: string; name: string; unit: string; unitCost: number | null; quantity: number }
+type Ingredient = { id: string; name: string; unit: string; unitCost: number | null; quantity: number; type?: string | null }
 type DishIngredient = { id: string; inventoryItemId: string; quantityRequired: number; inventoryItem: Ingredient }
 type DishVariant = { id: string; name: string; sellingPrice: number; sortOrder?: number | null; isActive?: boolean | null }
 type Dish = { id: string; name: string; sellingPrice: number; category: string | null; menuType?: string | null; description?: string | null; isActive: boolean; ingredients: DishIngredient[]; variants?: DishVariant[] }
@@ -92,6 +92,15 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
     const q = ingSearch.trim().toLowerCase()
     return !q || i.name.toLowerCase().includes(q) || i.unit.toLowerCase().includes(q)
   })
+
+  const selectedRecipeIngredient = ingredients.find(i => i.id === recipeForm.ingredientId) ?? null
+  const recipeQtyEntered = Number(recipeForm.quantityRequired)
+  // Flags obvious unit-entry mistakes (e.g. typing 100 against a kg-tracked item that
+  // only has a few kg on hand — the classic gram/kilogram mixup) without blocking save,
+  // since a recipe is allowed to legitimately exceed stock ahead of a restock.
+  const recipeQtyExceedsStock = !!selectedRecipeIngredient
+    && Number.isFinite(recipeQtyEntered) && recipeQtyEntered > 0
+    && (selectedRecipeIngredient.quantity <= 0 || recipeQtyEntered > selectedRecipeIngredient.quantity * 10)
 
   async function load() {
     setLoading(dishes.length === 0 && ingredients.length === 0 && purchases.length === 0)
@@ -684,13 +693,27 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                       </ul>
                     )}
                   </div>
-                  <input required type="number" min="0" step="any" placeholder="Qty" value={recipeForm.quantityRequired}
-                    onChange={e=>setRecipeForm(f=>({...f,quantityRequired:e.target.value}))}
-                    className="w-20 border border-gray-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none"/>
+                  <div className="relative w-24">
+                    <input required type="number" min="0" step="any" placeholder="Qty" value={recipeForm.quantityRequired}
+                      onChange={e=>setRecipeForm(f=>({...f,quantityRequired:e.target.value}))}
+                      className={`w-full border rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-orange-400 outline-none ${selectedRecipeIngredient ? 'pr-8' : ''} border-gray-300`}/>
+                    {selectedRecipeIngredient && (
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">
+                        {selectedRecipeIngredient.unit}
+                      </span>
+                    )}
+                  </div>
                   <button type="submit" className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-2 rounded-lg transition-colors">
                     <Plus className="h-4 w-4"/>
                   </button>
                 </form>
+                {recipeQtyExceedsStock && selectedRecipeIngredient && (
+                  <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">
+                    {selectedRecipeIngredient.quantity <= 0
+                      ? `No ${selectedRecipeIngredient.name} in stock right now — double check the quantity and unit (${selectedRecipeIngredient.unit}) before saving.`
+                      : `This is ${(recipeQtyEntered / selectedRecipeIngredient.quantity).toFixed(0)}x the ${selectedRecipeIngredient.quantity} ${selectedRecipeIngredient.unit} currently on hand — double check the quantity and unit.`}
+                  </p>
+                )}
                 {recipeError&&<p className="text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg">{recipeError}</p>}
                 {ingredients.length===0&&<p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">No ingredients yet. Add them in the Inventory tab first.</p>}
                 {selectedDish.ingredients.length===0 ? (
@@ -706,7 +729,16 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
                           <p className="text-sm font-medium text-gray-800">{r.inventoryItem.name}</p>
                           <p className="text-xs text-gray-500">
                             {r.quantityRequired} {r.inventoryItem.unit} x {effectiveUnitCost.toLocaleString()} RWF = <span className="font-semibold text-gray-700">{lineEstimate.totalCost.toFixed(0)} RWF</span>
-                            {lineEstimate.allocations.length > 1 && <span className="ml-1 font-medium text-amber-600">FIFO blend</span>}
+                            {/* Preps only ever hold FIFO layers from logged MEP production, and a
+                                shortfall there cascades to the sub-recipe's raw ingredients at sale
+                                time (consumePrepAwareIngredient) instead of failing — this estimate
+                                doesn't model that cascade, so the fallback/blend tags would be
+                                misleading noise on a prep line rather than a real signal. */}
+                            {r.inventoryItem.type === 'prep' ? null : lineEstimate.usedFallback ? (
+                              <span className="ml-1 font-medium text-red-600">Stock insufficient — est. price</span>
+                            ) : lineEstimate.allocations.length > 1 ? (
+                              <span className="ml-1 font-medium text-amber-600">FIFO blend</span>
+                            ) : null}
                           </p>
                         </div>
                         <button onClick={()=>removeIngredient(selectedDish.id,r.inventoryItemId)} className="p-1 rounded hover:bg-red-50">

@@ -20,6 +20,10 @@ export type FifoCostEstimate = {
 	quantityCovered: number
 	quantityRemaining: number
 	allocations: FifoCostAllocation[]
+	// True when part of quantityCovered had no real purchase batch to draw from and was
+	// priced using the fallback unit cost instead — the cost figure isn't fully backed by
+	// stock actually on hand.
+	usedFallback: boolean
 }
 
 const FIFO_COST_EPSILON = 0.000001
@@ -65,6 +69,7 @@ export function estimateFifoCostForQuantity(
 			quantityCovered: 0,
 			quantityRemaining: 0,
 			allocations: [],
+			usedFallback: false,
 		}
 	}
 
@@ -125,5 +130,6 @@ export function estimateFifoCostForQuantity(
 		quantityCovered,
 		quantityRemaining: remainingQuantity,
 		allocations,
+		usedFallback: allocations.some((allocation) => allocation.layerId === 'fallback'),
 	}
 }
