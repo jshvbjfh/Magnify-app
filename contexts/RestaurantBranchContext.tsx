@@ -7,6 +7,9 @@ type RestaurantBranchContextValue = {
   branchId: string | null
   branchName: string | null
   branchType: 'kitchen' | 'bar' | null
+  // Main is the whole-restaurant lens: pages scoped per station show every
+  // station's data instead of just its own when this is set.
+  branchIsMain: boolean
 }
 
 const RestaurantBranchContext = createContext<RestaurantBranchContextValue | null>(null)

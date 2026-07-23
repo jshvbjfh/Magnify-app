@@ -82,7 +82,18 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
   const to = searchParams.get('to')
-  const allBranches = searchParams.get('allBranches') === '1'
+
+  // Station comes from the caller when supplied (validated against this
+  // restaurant) so a request fired right after a station switch isn't scoped to
+  // the station just left, while the session's copy catches up in the background.
+  // Main reports the whole restaurant, same as an explicit allBranches request.
+  const requestedBranchId = searchParams.get('branchId')?.trim() || null
+  const activeBranch = await prisma.branch.findFirst({
+    where: { id: requestedBranchId ?? branchId, restaurantId },
+    select: { id: true, isMain: true },
+  })
+  const scopedBranchId = activeBranch?.id ?? branchId
+  const allBranches = searchParams.get('allBranches') === '1' || Boolean(activeBranch?.isMain)
 
   // F2-1: Removed redundant `userId: billingUserId` filter.
   // restaurantId + branchId is the correct scope. The userId filter could
@@ -90,7 +101,7 @@ export async function GET(req: Request) {
   const sales = await prisma.dishSale.findMany({
     where: {
       restaurantId,
-      ...(allBranches ? {} : { branchId }),
+      ...(allBranches ? {} : { branchId: scopedBranchId }),
       ...(from && to && { saleDate: { gte: new Date(from), lte: new Date(to) } }),
     },
     include: { dish: true },
@@ -105,10 +116,14 @@ export async function GET(req: Request) {
 
   const orders = orderIds.length > 0
     ? await prisma.restaurantOrder.findMany({
+        // Only for labels (waiter / order number / table) on the sales above.
+        // Deliberately NOT branch-filtered: these ids already come from sales
+        // scoped to this station, and an order can be rung up at another
+        // station's till — re-filtering by the till would blank out the labels
+        // on exactly those cross-station sales.
         where: {
           id: { in: orderIds },
           restaurantId,
-          ...(allBranches ? {} : { branchId }),
         },
         select: {
           id: true,

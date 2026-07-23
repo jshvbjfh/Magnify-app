@@ -48,20 +48,57 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url)
     const startDate = searchParams.get('startDate')
     const endDate = searchParams.get('endDate')
-    const dateFilter = startDate && endDate
-      ? {
-          entryDate: {
-            gte: new Date(`${startDate}T00:00:00+02:00`),
-            lte: new Date(`${endDate}T23:59:59.999+02:00`),
-          },
-        }
-      : {}
+    const rangeStart = startDate && endDate ? new Date(`${startDate}T00:00:00+02:00`) : null
+    const rangeEnd = startDate && endDate ? new Date(`${endDate}T23:59:59.999+02:00`) : null
+
+    // The station to report on comes from the caller when supplied, not the session.
+    // Switching stations updates the session JWT asynchronously, so a fetch fired
+    // right after a switch could otherwise still be scoped to the previous station
+    // (and stay wrong indefinitely if that background session update ever fails).
+    // Always validated against this user's own restaurant before it is trusted.
+    const requestedBranchId = searchParams.get('branchId')?.trim() || null
+    const activeBranch = await prisma.branch.findFirst({
+      where: {
+        id: requestedBranchId ?? context.branchId,
+        restaurantId: context.restaurantId,
+      },
+      select: { id: true, isMain: true },
+    })
+
+    if (!activeBranch) {
+      return new NextResponse('Station not found for this account.', { status: 400 })
+    }
+
+    // Main is the whole-restaurant view — every station's entries, unseparated —
+    // rather than a station scoped to its own transactions like the rest.
+    const branchFilter = activeBranch.isMain ? {} : { branchId: activeBranch.id }
+
+    // Older history can be hidden from this page without deleting it: the rows
+    // stay in the database (keeping stock, purchase records and audits intact)
+    // and clearing the restaurant's historyVisibleFrom brings them straight back.
+    const restaurant = await prisma.restaurant.findUnique({
+      where: { id: context.restaurantId },
+      select: { historyVisibleFrom: true },
+    })
+    // Both bounds live on entryDate, so they are merged into one condition —
+    // spreading them separately would let a date range silently override the
+    // hidden-history cutoff and expose the entries it is meant to hide. The
+    // later of the two start bounds always wins.
+    const historyStart = restaurant?.historyVisibleFrom ?? null
+    const effectiveStart = historyStart && rangeStart
+      ? (historyStart > rangeStart ? historyStart : rangeStart)
+      : (historyStart ?? rangeStart)
+
+    const entryDateFilter = {
+      ...(effectiveStart ? { gte: effectiveStart } : {}),
+      ...(rangeEnd ? { lte: rangeEnd } : {}),
+    }
 
     const entries = await prisma.journalEntry.findMany({
       where: {
         restaurantId: context.restaurantId,
-        branchId: context.branchId,
-        ...dateFilter,
+        ...branchFilter,
+        ...(Object.keys(entryDateFilter).length > 0 ? { entryDate: entryDateFilter } : {}),
       },
       include: {
         lines: {
@@ -127,6 +164,25 @@ export async function POST(req: Request) {
 
     const body = await req.json()
 
+    // Same reasoning as GET: trust the caller's station when supplied (validated
+    // against this restaurant) so an entry recorded right after a station switch
+    // can't be filed under the station the user just left. Main records its own
+    // entries normally — the whole-restaurant view is a read-side concern only.
+    const requestedBranchId = typeof body.branchId === 'string' ? body.branchId.trim() : ''
+    const writeBranch = await prisma.branch.findFirst({
+      where: {
+        id: requestedBranchId || context.branchId,
+        restaurantId: context.restaurantId,
+      },
+      select: { id: true },
+    })
+
+    if (!writeBranch) {
+      return new NextResponse('Station not found for this account.', { status: 400 })
+    }
+
+    const writeBranchId = writeBranch.id
+
     const amount = parseAmount(body.amount)
     if (!Number.isFinite(amount) || amount <= 0) {
       return new NextResponse('Invalid amount', { status: 400 })
@@ -159,7 +215,7 @@ export async function POST(req: Request) {
     if (direction === 'opening') {
       await recordJournalEntry(prisma, {
         restaurantId: context.restaurantId,
-        branchId: context.branchId,
+        branchId: writeBranchId,
         date,
         description: description || 'Opening Balance',
         reference: 'manual',
@@ -176,7 +232,7 @@ export async function POST(req: Request) {
     if (vatEnabled && direction === 'in') {
       await recordVatJournalEntry(prisma, {
         restaurantId: context.restaurantId,
-        branchId: context.branchId,
+        branchId: writeBranchId,
         date,
         description,
         reference: 'manual',
@@ -190,7 +246,7 @@ export async function POST(req: Request) {
     // Standard 2-line entry
     await recordJournalEntry(prisma, {
       restaurantId: context.restaurantId,
-      branchId: context.branchId,
+      branchId: writeBranchId,
       date,
       description,
       reference: 'manual',

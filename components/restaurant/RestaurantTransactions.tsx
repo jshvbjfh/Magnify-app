@@ -166,9 +166,14 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   const initializedSelectedDateRef = useRef(false)
   const descriptionRef = useRef<HTMLInputElement>(null)
 
+  // Sent explicitly on every read/write so the server scopes to the station shown
+  // on screen right now, rather than to the session's copy — which updates in the
+  // background after a station switch and can lag behind (or fail silently).
+  const activeBranchId = restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null
+
   const snapshotScopeId = buildRestaurantSnapshotScope({
     restaurantId: restaurantBranch?.restaurantId ?? (session?.user as any)?.restaurantId ?? null,
-    branchId: restaurantBranch?.branchId ?? (session?.user as any)?.branchId ?? null,
+    branchId: activeBranchId,
     fallbackUserId: session?.user?.id ?? null,
   })
   const snapshotStorageScope = snapshotScopeId ? `restaurant-transactions:${snapshotScopeId}` : null
@@ -206,7 +211,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
 
     try {
       const res = await fetchWithWakeup(
-        '/api/transactions',
+        activeBranchId ? `/api/transactions?branchId=${encodeURIComponent(activeBranchId)}` : '/api/transactions',
         { credentials: 'include' },
         () => setConnecting(true),
       )
@@ -223,11 +228,12 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     } finally {
       setLoading(false)
     }
-  }, [persistSnapshot])
+  }, [persistSnapshot, activeBranchId])
 
   const fetchSalesTotals = useCallback(async (dateKey: string) => {
     try {
-      const res = await fetch(`/api/restaurant/reports/dish-profitability?from=${dateKey}&to=${dateKey}`, { credentials: 'include' })
+      const branchParam = activeBranchId ? `&branchId=${encodeURIComponent(activeBranchId)}` : ''
+      const res = await fetch(`/api/restaurant/reports/dish-profitability?from=${dateKey}&to=${dateKey}${branchParam}`, { credentials: 'include' })
       if (!res.ok) throw new Error('Failed to load sales totals')
       const data = await res.json()
       setSalesTotals({
@@ -238,7 +244,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     } catch {
       setSalesTotals(null)
     }
-  }, [])
+  }, [activeBranchId])
 
   useEffect(() => {
     void fetchSalesTotals(selectedDate)
@@ -259,14 +265,15 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
 
   const fetchDishSales = useCallback(async (dateKey: string) => {
     try {
-      const res = await fetch(`/api/restaurant/dish-sales?from=${dateKey}&to=${dateKey}`, { credentials: 'include' })
+      const branchParam = activeBranchId ? `&branchId=${encodeURIComponent(activeBranchId)}` : ''
+      const res = await fetch(`/api/restaurant/dish-sales?from=${dateKey}&to=${dateKey}${branchParam}`, { credentials: 'include' })
       if (!res.ok) throw new Error('Failed to load dish sales')
       const data = await res.json()
       setDishSales(Array.isArray(data) ? data : [])
     } catch {
       setDishSales([])
     }
-  }, [])
+  }, [activeBranchId])
 
   useEffect(() => {
     void fetchDishSales(selectedDate)
@@ -464,6 +471,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
           date: newTxRow.date,
           vatEnabled: false,
           discount: 0,
+          branchId: activeBranchId,
         }),
       })
       if (!res.ok) {

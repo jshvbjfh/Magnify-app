@@ -48,6 +48,10 @@ model Restaurant {
   licenseActive    Boolean   @default(true)
   fifoEnabled      Boolean   @default(true)
   fifoConfiguredAt DateTime?
+  // Hides financial history before this date from the Transactions page without
+  // deleting anything — the entries stay in the database (so stock, purchase
+  // records and audits remain intact) and clearing this field restores them.
+  historyVisibleFrom DateTime?
   syncRestaurantId String?   @unique
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt

@@ -32,6 +32,20 @@ export async function GET(req: Request) {
   const fromDate = parseDateParam(from)
   const toDate = parseDateParam(to, true)
 
+  // Station comes from the caller when supplied (validated against this
+  // restaurant) so a request fired right after a station switch isn't scoped to
+  // the station just left, while the session's copy catches up in the background.
+  const requestedBranchId = searchParams.get('branchId')?.trim() || null
+  const activeBranch = await prisma.branch.findFirst({
+    where: { id: requestedBranchId ?? branchId, restaurantId },
+    select: { id: true, isMain: true },
+  })
+  if (!activeBranch) {
+    return NextResponse.json({ rows: [], dishes: [], orders: [], totals: { qtySold: 0, totalQtySold: 0, totalRevenue: 0, totalCost: 0, totalPrice: 0, totalProfit: 0, avgMargin: 0 } })
+  }
+  // Main reports the whole restaurant rather than a single station's slice.
+  const scopedBranchId = activeBranch.isMain ? null : activeBranch.id
+
   // One order/table/bill can carry dishes prepared by several stations (a
   // burger + a soda + a dessert is one guest visit, three kitchens). Which
   // station a dish's revenue and cost belong to is decided by the dish's own
@@ -69,7 +83,7 @@ export async function GET(req: Request) {
           where: {
             orderId: { in: orderIds },
             restaurantId,
-            branchId,
+            ...(scopedBranchId ? { branchId: scopedBranchId } : {}),
             deletedAt: null,
           },
           select: {
@@ -123,8 +137,11 @@ export async function GET(req: Request) {
 
   const rows = orders.flatMap((order) => {
     // This station's slice of the order — dishes belonging to other stations
-    // in the same order are reported by those stations, not here.
-    const stationItems = order.items.filter((item) => dishById.get(item.dishId)?.branchId === branchId)
+    // in the same order are reported by those stations, not here. Main takes
+    // every item, since it reports the restaurant as a whole.
+    const stationItems = scopedBranchId
+      ? order.items.filter((item) => dishById.get(item.dishId)?.branchId === scopedBranchId)
+      : order.items
     if (stationItems.length === 0) return []
 
     const qtySold = stationItems.reduce((sum, item) => sum + Number(item.qty ?? 0), 0)

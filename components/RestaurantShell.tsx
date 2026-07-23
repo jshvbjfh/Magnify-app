@@ -466,6 +466,7 @@ useEffect(() => {
     branchId: activeBranchId,
     branchName: activeBranch?.name ?? null,
     branchType: (activeBranch?.type === 'bar' ? 'bar' : 'kitchen') as 'kitchen' | 'bar',
+    branchIsMain: Boolean(activeBranch?.isMain),
   }
 
   const sessionRestaurantId = typeof (session?.user as any)?.restaurantId === 'string'

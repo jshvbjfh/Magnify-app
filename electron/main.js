@@ -1241,7 +1241,7 @@ function createLoadingWindow() {
 	`))
 }
 
-function createWindow(localIP, serverPort) {
+function createWindow(loadUrl) {
 	mainWindow = new BrowserWindow({
 		width: 1400,
 		height: 900,
@@ -1256,12 +1256,17 @@ function createWindow(localIP, serverPort) {
 		autoHideMenuBar: true
 	})
 
-	mainWindow.loadURL(`http://localhost:${serverPort}`)
+	mainWindow.loadURL(loadUrl)
 	mainWindow.maximize()
 
-	// Open external links (target="_blank") in the system browser, not a child Electron window
+	// Open external links (target="_blank") in the system browser, not a child Electron window —
+	// but allow same-origin popups (localhost in local-server mode, the real app domain in
+	// cloud remote-load mode) to open inside Electron.
+	const allowedOrigin = (() => {
+		try { return new URL(loadUrl).origin } catch { return null }
+	})()
 	mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-		if (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1')) {
+		if (allowedOrigin && url.startsWith(allowedOrigin)) {
 			return { action: 'allow' }
 		}
 		shell.openExternal(url)
@@ -1911,6 +1916,16 @@ app.whenReady().then(async () => {
 			const reachable = await probeTcpConnectivity(neonHostPort.host, neonHostPort.port, 4000)
 			if (reachable) {
 				appendStartupLog('Cloud database reachable — using cloud mode')
+
+				// Cloud mode already requires live internet to reach Neon directly — it has
+				// no offline capability to preserve. Loading the real deployed app instead of
+				// spawning a local copy of the server means every business-logic fix (payments,
+				// accounting, inventory) reaches this install the moment it ships, instead of
+				// waiting on someone to notice, rebuild, and reinstall the desktop app.
+				const remoteAppUrl = String(process.env.NEXT_PUBLIC_APP_URL || '').trim() || 'https://magnify-app-tau.vercel.app'
+				appendStartupLog(`Loading remote app directly (cloud mode): ${remoteAppUrl}`)
+				createWindow(remoteAppUrl)
+				return
 			} else {
 				isOfflineFallback = true
 				appendStartupLog('Cloud database unreachable — showing offline window without starting server')
@@ -2047,6 +2062,13 @@ app.whenReady().then(async () => {
 				const primaryDesktopSchemaCommand = 'db push --skip-generate --accept-data-loss'
 
 				try {
+					try {
+						const backupPath = createDesktopDatabaseBackup(desktopRuntimeDbPath, userDataDir, 'pre-startup-schema-sync')
+						appendStartupLog(`Backed up local database before schema sync: ${backupPath}`)
+					} catch (backupErr) {
+						appendStartupLog(`Warning: pre-schema-sync backup failed (continuing anyway): ${backupErr?.message || backupErr}`)
+					}
+
 					appendStartupLog(`Running desktop SQLite schema sync via ${primaryDesktopSchemaCommand}`)
 					const migrationOutput = runPrismaCommand(primaryDesktopSchemaCommand)
 
@@ -2457,7 +2479,7 @@ app.whenReady().then(async () => {
 			try {
 				const bootstrapResult = await runInternalBootstrap(serverPort, internalBootstrapSecret, branchDeviceId)
 				appendStartupLog(`Internal bootstrap completed: ${JSON.stringify(bootstrapResult)}`)
-				createWindow(localIP, serverPort)
+				createWindow(`http://localhost:${serverPort}`)
 			} catch (error) {
 				const message = error?.message || String(error)
 				appendStartupLog(`Internal bootstrap failed: ${message}`)
@@ -2479,7 +2501,7 @@ app.whenReady().then(async () => {
 						try {
 							const bootstrapRetryResult = await runInternalBootstrap(serverPort, internalBootstrapSecret, branchDeviceId)
 							appendStartupLog(`Internal bootstrap completed after schema repair: ${JSON.stringify(bootstrapRetryResult)}`)
-							createWindow(localIP, serverPort)
+							createWindow(`http://localhost:${serverPort}`)
 							return
 						} catch (retryError) {
 							const retryMessage = retryError?.message || String(retryError)
@@ -2513,7 +2535,7 @@ app.whenReady().then(async () => {
 							const retryResult = await runInternalBootstrap(serverPort, internalBootstrapSecret, branchDeviceId)
 							appendStartupLog(`Offline retry bootstrap completed: ${JSON.stringify(retryResult)}`)
 							if (loadingWindow) { loadingWindow.close(); loadingWindow = null }
-							createWindow(localIP, serverPort)
+							createWindow(`http://localhost:${serverPort}`)
 						} catch (retryErr) {
 							const retryMsg = retryErr?.message || String(retryErr)
 							appendStartupLog(`Offline retry bootstrap failed: ${retryMsg}`)
