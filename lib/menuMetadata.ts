@@ -16,10 +16,19 @@ export const DEFAULT_MENU_CATEGORY_SUGGESTIONS = [
   'Liquors',
   'Desserts',
   'Breakfast',
+  'Add-ons',
 ] as const
 
 function normalizeText(value?: string | null) {
   return String(value ?? '').trim().toLowerCase()
+}
+
+// Add-ons (extra sauce, extra topping, etc.) are meant to be orderable at
+// every station, not just the branch a manager happened to be viewing when
+// they created the dish — so dish creation fans this category out to all
+// branches instead of the usual single-branch row.
+export function isAddonCategory(category?: string | null) {
+  return /add[\s-]?ons?/i.test(String(category ?? ''))
 }
 
 export function normalizeDishMenuType(value?: string | null): MenuTypeValue | null {
