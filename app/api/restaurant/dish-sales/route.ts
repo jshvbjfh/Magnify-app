@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
+import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
 
 function normalizePaymentMethod(paymentMethod?: string): string {
   const raw = String(paymentMethod || 'Cash').trim().toLowerCase()
@@ -82,6 +83,8 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const from = searchParams.get('from')
   const to = searchParams.get('to')
+  const fromDate = startOfRestaurantDay(from)
+  const toDate = endOfRestaurantDay(to)
 
   // Station comes from the caller when supplied (validated against this
   // restaurant) so a request fired right after a station switch isn't scoped to
@@ -102,7 +105,11 @@ export async function GET(req: Request) {
     where: {
       restaurantId,
       ...(allBranches ? {} : { branchId: scopedBranchId }),
-      ...(from && to && { saleDate: { gte: new Date(from), lte: new Date(to) } }),
+      // Both ends must span the restaurant day. Passing the raw YYYY-MM-DD to
+      // new Date() twice put the same UTC-midnight instant on gte and lte, so a
+      // single-day request (from === to, which is what this page always sends)
+      // asked for a zero-width window and returned nothing.
+      ...(fromDate && toDate ? { saleDate: { gte: fromDate, lte: toDate } } : {}),
     },
     include: { dish: true },
     orderBy: { saleDate: 'desc' }

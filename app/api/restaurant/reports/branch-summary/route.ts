@@ -3,13 +3,11 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
+import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
 
 function parseDateParam(value: string | null, endOfDay = false) {
-  if (!value) return null
-  const parsed = new Date(`${value}T00:00:00`)
-  if (Number.isNaN(parsed.getTime())) return null
-  if (endOfDay) parsed.setHours(23, 59, 59, 999)
-  return parsed
+  // Days are restaurant days, not server days — see lib/restaurantDay.
+  return endOfDay ? endOfRestaurantDay(value) : startOfRestaurantDay(value)
 }
 
 // GET — sales, cost of goods sold and profit/loss rolled up per station for the whole restaurant account.

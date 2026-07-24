@@ -5,6 +5,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { recordJournalEntry, recordVatJournalEntry } from '@/lib/accounting'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
+import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
 
 class UnauthorizedError extends Error {
   constructor() {
@@ -48,8 +49,8 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url)
     const startDate = searchParams.get('startDate')
     const endDate = searchParams.get('endDate')
-    const rangeStart = startDate && endDate ? new Date(`${startDate}T00:00:00+02:00`) : null
-    const rangeEnd = startDate && endDate ? new Date(`${endDate}T23:59:59.999+02:00`) : null
+    const rangeStart = startDate && endDate ? startOfRestaurantDay(startDate) : null
+    const rangeEnd = startDate && endDate ? endOfRestaurantDay(endDate) : null
 
     // The station to report on comes from the caller when supplied, not the session.
     // Switching stations updates the session JWT asynchronously, so a fetch fired
