@@ -7,6 +7,11 @@ import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { getDishSaleUsageBreakdown } from '@/lib/restaurantReportUsage'
 
+// Money must never be served from a cache. Without this, Next can cache the
+// GET response and keep returning figures from before a correction landed —
+// the page looks fine, refreshes cleanly, and still shows yesterday's numbers.
+export const dynamic = 'force-dynamic'
+
 function roundQty(value: number) {
   return Math.round((value + Number.EPSILON) * 1000) / 1000
 }

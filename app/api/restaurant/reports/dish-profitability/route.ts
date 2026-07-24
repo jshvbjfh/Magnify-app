@@ -6,6 +6,11 @@ import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
 import { getRestaurantOrderDisplayStatus } from '@/lib/restaurantOrders'
 
+// Money must never be served from a cache. Without this, Next can cache the
+// GET response and keep returning figures from before a correction landed —
+// the page looks fine, refreshes cleanly, and still shows yesterday's numbers.
+export const dynamic = 'force-dynamic'
+
 function parseDateParam(value: string | null, endOfDay = false) {
   // Days are restaurant days, not server days — see lib/restaurantDay.
   return endOfDay ? endOfRestaurantDay(value) : startOfRestaurantDay(value)

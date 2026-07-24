@@ -5,6 +5,11 @@ import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
 
+// Money must never be served from a cache. Without this, Next can cache the
+// GET response and keep returning figures from before a correction landed —
+// the page looks fine, refreshes cleanly, and still shows yesterday's numbers.
+export const dynamic = 'force-dynamic'
+
 function normalizePaymentMethod(paymentMethod?: string): string {
   const raw = String(paymentMethod || 'Cash').trim().toLowerCase()
   if (raw.includes('mobile') || raw.includes('momo')) return 'Mobile Money'
