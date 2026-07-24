@@ -53,6 +53,15 @@ function getLocalSqliteUrl() {
 const provider = resolveProvider()
 const env = { ...process.env }
 
+// Neon sits behind a connection pooler, and a pooled connection can be returned
+// to the pool without releasing Prisma's session-level advisory lock. The lock
+// then outlives the process that took it, and every later `migrate deploy` fails
+// with P1002 waiting on a lock nobody will ever release — so one deploy poisons
+// the next, and because the build is `migrate deploy && build:web`, the whole
+// site stops shipping. Deploys are effectively serialised per project anyway, so
+// the lock buys us nothing here and costs us every subsequent deploy.
+env.PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK = 'true'
+
 const prepareResult = spawnSync(process.execPath, [resolve(process.cwd(), 'scripts', 'prepare-prisma-schema.mjs')], {
 	stdio: 'inherit',
 	env,
