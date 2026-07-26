@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 import { cached } from '@/lib/apiCache'
+import { recalculatePrepUnitCost } from '@/lib/prepCosting'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
 
@@ -133,20 +134,32 @@ export async function PUT(req: Request) {
   }
 
   try {
-    const item = await prisma.inventoryItem.update({
+    const resultingType = type !== undefined ? (type === 'prep' ? 'prep' : 'purchased') : existing.type
+
+    let item = await prisma.inventoryItem.update({
       where: { id },
       data: {
         name: String(name).trim(),
         description: description ? String(description).trim() : null,
         // Alias spellings keep the stored unit — recipes and history reference it.
         unit: usageUnitChanged ? usageUnit : existing.unit,
-        unitCost: parseOptionalNumber(unitCost) ?? 0,
+        // A prep's cost only ever comes from its sub-recipe (see recalculatePrepUnitCost
+        // below) — any unitCost the caller passes is ignored for a prep. This form never
+        // sends one (a plain rename/unit/category edit has no cost field at all), so
+        // trusting it here silently reset an already-correct sub-recipe-derived cost back
+        // to 0 on every edit, regardless of whether the sub-recipe itself was touched.
+        unitCost: resultingType === 'prep' ? existing.unitCost : (parseOptionalNumber(unitCost) ?? 0),
         quantity: parseOptionalNumber(quantity) ?? 0,
         reorderLevel: parseOptionalNumber(reorderLevel) ?? 0,
         category: category ? String(category).trim() : null,
-        ...(type !== undefined && { type: type === 'prep' ? 'prep' : 'purchased' }),
+        ...(type !== undefined && { type: resultingType }),
       },
     })
+
+    if (resultingType === 'prep') {
+      const recalculated = await recalculatePrepUnitCost(prisma, item.id)
+      item = { ...item, unitCost: recalculated }
+    }
 
     await enqueueSyncChange(prisma, {
       restaurantId,
