@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
+import { recalculatePrepUnitCost } from '@/lib/prepCosting'
 
 async function getContext() {
   const session = await getServerSession(authOptions)
@@ -71,7 +72,8 @@ export async function POST(req: Request) {
       data: { prepItemId, ingredientItemId, quantityRequired: qty },
       include: { ingredient: { select: { id: true, name: true, unit: true } } },
     })
-    return NextResponse.json(row, { status: 201 })
+    const unitCost = await recalculatePrepUnitCost(prisma, prepItemId)
+    return NextResponse.json({ ...row, prepUnitCost: unitCost }, { status: 201 })
   } catch (e: any) {
     if (e?.code === 'P2002') return NextResponse.json({ error: 'This ingredient is already in the sub-recipe' }, { status: 409 })
     return NextResponse.json({ error: e?.message || 'Failed to add ingredient' }, { status: 500 })
@@ -105,7 +107,8 @@ export async function PUT(req: Request) {
     data: { quantityRequired: qty },
     include: { ingredient: { select: { id: true, name: true, unit: true } } },
   })
-  return NextResponse.json(row)
+  const unitCost = await recalculatePrepUnitCost(prisma, existing.prepItemId)
+  return NextResponse.json({ ...row, prepUnitCost: unitCost })
 }
 
 // DELETE — remove a sub-recipe row
@@ -126,5 +129,6 @@ export async function DELETE(req: Request) {
   }
 
   await prisma.prepIngredient.delete({ where: { id } })
-  return NextResponse.json({ success: true })
+  const unitCost = await recalculatePrepUnitCost(prisma, existing.prepItemId)
+  return NextResponse.json({ success: true, prepUnitCost: unitCost })
 }
