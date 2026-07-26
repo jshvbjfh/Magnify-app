@@ -154,6 +154,65 @@ inventory_adjustment_logs
 inventory_batch_usage_ledgers
 ```
 
+### Preps are a menu/recipe item, not stock
+
+A prep (`inventory_items.type = 'prep'`, e.g. Chili oil, Caramelized onions, Burger
+sauce, tomato slice) is **not held as shelf stock**. It's a recipe: a sub-list of
+raw ingredients (`prep_ingredients`) that gets consumed live, at the moment a
+dish using it is sold — the same way a dish itself is a recipe over raw
+ingredients, just one layer deeper.
+
+```
+prep_ingredients            (a prep's own sub-recipe — one level of nesting)
+ ├─ prepItemId ────────────────────────► inventory_items.id  (the prep, type='prep')
+ ├─ ingredientItemId ──────────────────► inventory_items.id  (a raw ingredient)
+ └─ quantityRequired                     (per 1 unit of the prep's own unit)
+```
+
+Consequences this shapes across the codebase — **do not re-derive these from
+first principles, they're deliberate**:
+
+- **`quantity` on a prep is always 0 and is not a bug.** A prep never carries its
+  own on-hand stock; there is nothing to reorder or run low on. The Preps tab
+  intentionally shows no quantity column ([[feedback_preps_no_quantity_display]]).
+  MEP production (`producePrepStock` in `lib/mepProduction.ts`) is the one
+  exception — if a batch was made ahead of time via "qty prepared," the prep
+  gets a real FIFO layer priced from what the raws cost, and that stock is
+  drained first before falling back to raw ingredients.
+- **Real consumption cascades to the raw ingredients.** `consumePrepAwareIngredient`
+  (`lib/mepProduction.ts`) tries the prep's own stock first (usually nothing),
+  then consumes each `prepIngredient` row's raw ingredient via real FIFO —
+  `quantityRequired × dish quantity sold`. This is where the real, actual cost
+  comes from; it never reads the prep's stored `unitCost`.
+- **The stored `unitCost` field is display/estimate-only, and must be kept live.**
+  Nothing computes it automatically on its own — `recalculatePrepUnitCost`
+  (`lib/prepCosting.ts`) recalculates and persists it as
+  `Σ(quantityRequired × that raw ingredient's current unitCost)` every time a
+  prep's sub-recipe is created, edited, or a row removed (all three mutations
+  in `app/api/restaurant/ingredients/prep-recipe/route.ts`). Before this existed,
+  a prep's cost was just whatever number was typed in when it was created —
+  normally never, so it silently priced at 0 forever regardless of what its
+  sub-recipe actually cost. The recipe editor's ingredient picker and the
+  reports' cost-estimate fallback both read this field directly, so keeping it
+  live is what keeps them correct — they need no logic of their own.
+- **Stock-insufficient / entry-time guardrails skip preps entirely.** Both the
+  "Stock insufficient" / "FIFO blend" cost tags (`components/restaurant/RestaurantMenu.tsx`,
+  the `r.inventoryItem.type === 'prep'` check) and the entry-time "no stock on
+  hand" warning when adding an ingredient to a recipe (`recipeQtyExceedsStock`,
+  same file) are gated on `type !== 'prep'`. A prep reading 0 stock is normal,
+  not a shortage to flag — MEP already handles real shortfalls correctly via the
+  cascade above, with its own warnings surfaced separately.
+- **A recipe quantity that's a whole-batch amount instead of a per-unit ratio is
+  a live danger, not just a display bug.** Every `prepIngredient.quantityRequired`
+  is "per 1 unit of the prep's own unit" — e.g. tomato slice's sub-recipe reads
+  "20g Tomatoes per 1 piece." Entering a whole batch's ingredients directly
+  (e.g. "500g Flour" meant as "this batch makes ~500g of noodles") instead of
+  dividing down to the per-unit ratio means every dish sale multiplies that
+  number by the quantity sold — a single dish needing 170g of such a prep would
+  try to consume 500 × 170 = 85kg of flour in one sale. This is a real,
+  immediate stock-consumption bug at the moment anyone sells the dish, not a
+  cosmetic cost display issue.
+
 ### Accounting
 
 ```

@@ -98,7 +98,11 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   // Flags obvious unit-entry mistakes (e.g. typing 100 against a kg-tracked item that
   // only has a few kg on hand — the classic gram/kilogram mixup) without blocking save,
   // since a recipe is allowed to legitimately exceed stock ahead of a restock.
+  // Preps are exempt: they always show 0 stock by design (see the same exemption on the
+  // FIFO-blend/stock-insufficient tags below) — they cascade to raw ingredients at sale
+  // time rather than holding their own shelf stock, so 0 is normal, not a red flag.
   const recipeQtyExceedsStock = !!selectedRecipeIngredient
+    && selectedRecipeIngredient.type !== 'prep'
     && Number.isFinite(recipeQtyEntered) && recipeQtyEntered > 0
     && (selectedRecipeIngredient.quantity <= 0 || recipeQtyEntered > selectedRecipeIngredient.quantity * 10)
 
