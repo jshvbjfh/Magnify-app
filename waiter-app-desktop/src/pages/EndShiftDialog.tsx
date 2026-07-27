@@ -30,7 +30,7 @@ export default function EndShiftDialog({ onClose, onEnded }: EndShiftDialogProps
   }, [])
 
   async function submit(nextCode: string) {
-    if (nextCode.length !== 4 || saving) return
+    if (nextCode.length !== 5 || saving) return
     setSaving(true)
     setError(null)
     try {
@@ -53,8 +53,9 @@ export default function EndShiftDialog({ onClose, onEnded }: EndShiftDialogProps
     if (saving || blockedCount) return
     setError(null)
     setCode(current => {
-      const next = (current + digit).slice(0, 4)
-      if (next.length === 4) void submit(next)
+      // Supervisor/approver PIN is 5 digits (same code that cancels orders).
+      const next = (current + digit).slice(0, 5)
+      if (next.length === 5) void submit(next)
       return next
     })
   }
@@ -87,12 +88,12 @@ export default function EndShiftDialog({ onClose, onEnded }: EndShiftDialogProps
           <>
             <p className="text-sm text-gray-500 font-medium text-center">Enter the supervisor PIN to close today's shift.</p>
 
-            <div className="flex justify-center gap-3">
-              {[0, 1, 2, 3].map(i => {
+            <div className="flex justify-center gap-2">
+              {[0, 1, 2, 3, 4].map(i => {
                 const filled = i < code.length
                 return (
                   <div key={i}
-                    className={`w-11 h-13 rounded-xl border-2 flex items-center justify-center text-xl py-2.5 transition-all ${
+                    className={`w-10 h-13 rounded-xl border-2 flex items-center justify-center text-xl py-2.5 transition-all ${
                       filled ? 'border-orange-500 bg-orange-50 text-orange-500' : 'border-orange-200 bg-gray-50'
                     }`}>
                     {filled ? '●' : ''}

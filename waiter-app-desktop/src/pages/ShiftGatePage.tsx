@@ -44,7 +44,7 @@ export default function ShiftGatePage({ restaurantName, onShiftStarted }: ShiftG
   }, [stage, onShiftStarted])
 
   async function submit(nextCode: string) {
-    if (nextCode.length !== 4 || saving) return
+    if (nextCode.length !== 5 || saving) return
     setSaving(true)
     setError(null)
     try {
@@ -63,8 +63,9 @@ export default function ShiftGatePage({ restaurantName, onShiftStarted }: ShiftG
     if (saving) return
     setError(null)
     setCode(current => {
-      const next = (current + digit).slice(0, 4)
-      if (next.length === 4) void submit(next)
+      // Supervisor/approver PIN is 5 digits (same code that cancels orders).
+      const next = (current + digit).slice(0, 5)
+      if (next.length === 5) void submit(next)
       return next
     })
   }
@@ -128,13 +129,13 @@ export default function ShiftGatePage({ restaurantName, onShiftStarted }: ShiftG
                 <p className="text-sm text-gray-500 font-medium">Enter the supervisor code to start the shift.</p>
               </div>
 
-              <div className="flex justify-center gap-3">
-                {[0, 1, 2, 3].map(i => {
+              <div className="flex justify-center gap-2">
+                {[0, 1, 2, 3, 4].map(i => {
                   const filled = i < code.length
                   const isNext = i === code.length && !saving
                   return (
                     <div key={i}
-                      className={`w-12 h-14 rounded-xl border-2 flex items-center justify-center text-2xl transition-all duration-150 ${
+                      className={`w-11 h-14 rounded-xl border-2 flex items-center justify-center text-2xl transition-all duration-150 ${
                         filled
                           ? 'border-orange-500 bg-orange-50 text-orange-500 scale-105'
                           : isNext
