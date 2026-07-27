@@ -54,16 +54,19 @@ export async function GET(req: Request) {
   // station a dish's revenue and cost belong to is decided by the dish's own
   // branch, never by the order's till branch — so orders are fetched restaurant-
   // wide here and then filtered down to just this station's line items below.
+  // Group by the shift's business day when the order has one, else fall back to
+  // paidAt — a table opened at 11pm and paid at 1am counts on the shift's day.
+  const paidRange = { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) }
   const orders = await prisma.restaurantOrder.findMany({
     where: {
       restaurantId,
       status: 'PAID',
       ...(fromDate || toDate
         ? {
-            paidAt: {
-              ...(fromDate ? { gte: fromDate } : {}),
-              ...(toDate ? { lte: toDate } : {}),
-            },
+            OR: [
+              { businessDate: paidRange },
+              { businessDate: null, paidAt: paidRange },
+            ],
           }
         : {}),
     },

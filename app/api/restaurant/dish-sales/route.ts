@@ -110,11 +110,18 @@ export async function GET(req: Request) {
     where: {
       restaurantId,
       ...(allBranches ? {} : { branchId: scopedBranchId }),
-      // Both ends must span the restaurant day. Passing the raw YYYY-MM-DD to
-      // new Date() twice put the same UTC-midnight instant on gte and lte, so a
-      // single-day request (from === to, which is what this page always sends)
-      // asked for a zero-width window and returned nothing.
-      ...(fromDate && toDate ? { saleDate: { gte: fromDate, lte: toDate } } : {}),
+      // Group by the shift's business day when the sale has one, else fall back
+      // to saleDate — so a sale rung up at 1am under a 6am shift lands on the
+      // shift's day, while legacy/shift-less sales keep their wall-clock day.
+      // (Both ends span the restaurant day; a single-day request is from === to.)
+      ...(fromDate && toDate
+        ? {
+            OR: [
+              { businessDate: { gte: fromDate, lte: toDate } },
+              { businessDate: null, saleDate: { gte: fromDate, lte: toDate } },
+            ],
+          }
+        : {}),
     },
     include: { dish: true },
     orderBy: { saleDate: 'desc' }

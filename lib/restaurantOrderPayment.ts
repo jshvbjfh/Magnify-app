@@ -62,6 +62,7 @@ export async function finalizeRestaurantOrderPayment(
         orderId: params.orderId,
         paymentMethod: params.paymentMethod || currentOrder.paymentMethod || 'Cash',
         saleDate: currentOrder.paidAt ?? params.paidAt ?? new Date(),
+        businessDate: currentOrder.businessDate ?? null,
         items: currentOrder.items.map((item) => ({
           orderItemId: item.id,
           dishId: item.dishId,
@@ -122,6 +123,7 @@ export async function finalizeRestaurantOrderPayment(
     orderId: params.orderId,
     paymentMethod: normalizedPaymentMethod,
     saleDate: paidAt,
+    businessDate: currentOrder.businessDate ?? null,
     items: currentOrder.items.map((item) => ({
       orderItemId: item.id,
       dishId: item.dishId,
@@ -185,6 +187,7 @@ export async function finalizeRestaurantOrderPayment(
         restaurantId: params.restaurantId,
         branchId: itemsBranchId,
         date: paidOrder.paidAt ?? paidAt,
+        businessDate: currentOrder.businessDate ?? null,
         description: buildDishSaleTransactionDescription({
           items: branchItems.map((item) => ({ dishId: item.dishId, dishName: item.dishName, qty: item.qty })),
           tableId: currentOrder.tableId,

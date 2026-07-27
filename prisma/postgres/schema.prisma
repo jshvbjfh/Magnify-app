@@ -10,19 +10,19 @@ datasource db {
 // ─── AUTH ──────────────────────────────────────────────────────────────────
 
 model User {
-  id           String       @id @default(cuid())
-  email        String       @unique
+  id           String   @id @default(cuid())
+  email        String   @unique
   name         String?
   password     String
-  role         String       @default("owner")
+  role         String   @default("owner")
   businessType String?
   logoUrl      String?
-  trackingMode String       @default("simple")
-  fifoEnabled  Boolean      @default(false)
-  isActive     Boolean      @default(true)
-  isSuperAdmin Boolean      @default(false)
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  trackingMode String   @default("simple")
+  fifoEnabled  Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  isSuperAdmin Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   restaurants        Restaurant[] @relation("RestaurantOwner")
   managedRestaurants Restaurant[] @relation("RestaurantManager")
@@ -33,29 +33,29 @@ model User {
 // ─── RESTAURANT / BRANCH ───────────────────────────────────────────────────
 
 model Restaurant {
-  id               String    @id @default(cuid())
-  name             String
-  ownerId          String
-  owner            User      @relation("RestaurantOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  managerId        String?
-  manager          User?     @relation("RestaurantManager", fields: [managerId], references: [id], onDelete: SetNull)
-  joinCode         String    @unique
-  billHeader       String?
-  billPrinterIp    String?
-  billPrinterPort  Int?
-  qrOrderingMode   String    @default("order")
-  licenseExpiry    DateTime?
-  licenseActive    Boolean   @default(true)
-  fifoEnabled      Boolean   @default(true)
-  fifoConfiguredAt DateTime?
+  id                 String    @id @default(cuid())
+  name               String
+  ownerId            String
+  owner              User      @relation("RestaurantOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  managerId          String?
+  manager            User?     @relation("RestaurantManager", fields: [managerId], references: [id], onDelete: SetNull)
+  joinCode           String    @unique
+  billHeader         String?
+  billPrinterIp      String?
+  billPrinterPort    Int?
+  qrOrderingMode     String    @default("order")
+  licenseExpiry      DateTime?
+  licenseActive      Boolean   @default(true)
+  fifoEnabled        Boolean   @default(true)
+  fifoConfiguredAt   DateTime?
   // Hides financial history before this date from the Transactions page without
   // deleting anything — the entries stay in the database (so stock, purchase
   // records and audits remain intact) and clearing this field restores them.
   historyVisibleFrom DateTime?
-  syncRestaurantId String?   @unique
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  deletedAt        DateTime?
+  syncRestaurantId   String?   @unique
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
 
   branches       Branch[]
   staff          Staff[]
@@ -65,27 +65,60 @@ model Restaurant {
   devices        BranchDevice[]
   creditSales    CreditSale[]
   supplierDebts  SupplierDebt[]
+  shifts         Shift[]
 
   @@index([ownerId])
   @@index([managerId])
   @@map("restaurants")
 }
 
+// A service session (a "shift"), opened and closed by a supervisor. This is the
+// venue-level "we are open now" — NOT a staff wage clock-in (that is
+// EmployeeShift). Every order created while a shift is open is stamped with it,
+// and the shift's businessDate is the day those sales belong to for reporting —
+// so a table opened at 11pm and paid at 1am still counts on the day the shift
+// opened, not the calendar day it was settled. Whole-venue: at most one OPEN
+// shift per restaurant at a time.
+model Shift {
+  id              String     @id @default(cuid())
+  restaurantId    String
+  restaurant      Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  // The calendar day (restaurant timezone) this shift's sales are attributed to.
+  businessDate    DateTime
+  status          String     @default("OPEN") // OPEN | CLOSED
+  openedAt        DateTime   @default(now())
+  openedByName    String?
+  openedByStaffId String?
+  closedAt        DateTime?
+  closedByName    String?
+  closedByStaffId String?
+  sourceDeviceId  String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
+
+  orders RestaurantOrder[]
+
+  @@index([restaurantId, status])
+  @@index([restaurantId, businessDate])
+  @@map("shifts")
+}
+
 model Branch {
-  id           String     @id @default(cuid())
-  restaurantId String
-  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  name         String
-  code         String
-  type         String     @default("kitchen")
-  isMain       Boolean    @default(false)
-  isActive     Boolean    @default(true)
-  address      String?
-  billHeader   String?
+  id                 String     @id @default(cuid())
+  restaurantId       String
+  restaurant         Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  name               String
+  code               String
+  type               String     @default("kitchen")
+  isMain             Boolean    @default(false)
+  isActive           Boolean    @default(true)
+  address            String?
+  billHeader         String?
   qrMenuHeroImageUrl String?
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  deletedAt    DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  deletedAt          DateTime?
 
   tables         RestaurantTable[]
   orders         RestaurantOrder[]
@@ -113,25 +146,25 @@ model Branch {
 // password: bcrypt hash, used for username+password auth (personal login).
 // A staff member may have one or both auth methods.
 model Staff {
-  id           String        @id @default(cuid())
-  restaurantId String
-  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  name         String
-  role         String        @default("waiter")
-  username     String?
-  password     String?
-  pin          String?
+  id              String     @id @default(cuid())
+  restaurantId    String
+  restaurant      Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  name            String
+  role            String     @default("waiter")
+  username        String?
+  password        String?
+  pin             String?
   cancellationPin String?
-  hourlyRate   Float?
-  isActive     Boolean       @default(true)
-  phone        String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  deletedAt    DateTime?
+  hourlyRate      Float?
+  isActive        Boolean    @default(true)
+  phone           String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
 
-  branches     StaffBranch[]
-  orders       RestaurantOrder[]
-  shifts       EmployeeShift[]
+  branches StaffBranch[]
+  orders   RestaurantOrder[]
+  shifts   EmployeeShift[]
 
   @@unique([restaurantId, username])
   @@index([restaurantId])
@@ -152,20 +185,20 @@ model StaffBranch {
 }
 
 model EmployeeShift {
-  id           String    @id @default(cuid())
-  restaurantId String
-  branchId     String
-  branch       Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  staffId      String
-  staff        Staff     @relation(fields: [staffId], references: [id], onDelete: Cascade)
-  clockInAt    DateTime
-  clockOutAt   DateTime?
-  durationMins Int?
+  id             String    @id @default(cuid())
+  restaurantId   String
+  branchId       String
+  branch         Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  staffId        String
+  staff          Staff     @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  clockInAt      DateTime
+  clockOutAt     DateTime?
+  durationMins   Int?
   calculatedWage Float?
-  notes        String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
 
   @@index([branchId, staffId, clockInAt])
   @@map("employee_shifts")
@@ -185,7 +218,7 @@ model RestaurantTable {
   updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
 
-  orders       RestaurantOrder[]
+  orders RestaurantOrder[]
 
   // Tables belong to the restaurant, not a single branch — every branch shares
   // the same floor plan. branchId is retained only as origin metadata.
@@ -226,10 +259,17 @@ model RestaurantOrder {
 
   // Linked to the accounting entry created when this order is paid
   journalEntryId String?
-  journalEntry   JournalEntry?    @relation(fields: [journalEntryId], references: [id])
+  journalEntry   JournalEntry? @relation(fields: [journalEntryId], references: [id])
 
-  items          OrderItem[]
-  dishSales      DishSale[]
+  // Service session this order belongs to, and the business day (from the
+  // shift) its sales are attributed to. Nullable: orders created without an
+  // open shift, and legacy/imported orders, fall back to paidAt in reports.
+  shiftId      String?
+  shift        Shift?    @relation(fields: [shiftId], references: [id])
+  businessDate DateTime?
+
+  items     OrderItem[]
+  dishSales DishSale[]
 
   @@unique([restaurantId, orderNumber])
   @@index([branchId, status, createdAt])
@@ -237,31 +277,31 @@ model RestaurantOrder {
 }
 
 model OrderItem {
-  id            String          @id @default(cuid())
-  orderId       String
-  order         RestaurantOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  dishId        String
-  dish          Dish            @relation(fields: [dishId], references: [id])
+  id              String          @id @default(cuid())
+  orderId         String
+  order           RestaurantOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  dishId          String
+  dish            Dish            @relation(fields: [dishId], references: [id])
   // Station snapshot at order-creation time, no FK — attribution hint only.
   // Null on legacy rows; server falls back to the dish's live branchId, then
   // params.branchId. Guards against a dish being reassigned to a different
   // station while an order containing it is still open/unpaid.
-  branchId      String?
-  dishVariantId String?
+  branchId        String?
+  dishVariantId   String?
   dishVariantName String?
-  dishName      String
-  dishPrice     Float
-  qty           Int             @default(1)
-  totalPrice    Float           @default(0)
-  kitchenStatus String          @default("new")
-  status        String          @default("ACTIVE")
-  cancelReason  String?
-  notes         String?
-  readyAt       DateTime?
-  canceledAt    DateTime?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  deletedAt     DateTime?
+  dishName        String
+  dishPrice       Float
+  qty             Int             @default(1)
+  totalPrice      Float           @default(0)
+  kitchenStatus   String          @default("new")
+  status          String          @default("ACTIVE")
+  cancelReason    String?
+  notes           String?
+  readyAt         DateTime?
+  canceledAt      DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  deletedAt       DateTime?
 
   @@index([orderId, status, kitchenStatus])
   @@map("order_items")
@@ -270,27 +310,27 @@ model OrderItem {
 // ─── MENU ──────────────────────────────────────────────────────────────────
 
 model Dish {
-  id           String           @id @default(cuid())
-  restaurantId String
-  branchId     String
-  branch       Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  name         String
-  category     String?
-  menuType     String?
-  sellingPrice Float
-  description  String?
-  isActive     Boolean          @default(true)
+  id                  String    @id @default(cuid())
+  restaurantId        String
+  branchId            String
+  branch              Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  name                String
+  category            String?
+  menuType            String?
+  sellingPrice        Float
+  description         String?
+  isActive            Boolean   @default(true)
   // MEP (mise en place): batch-cooked portions ready to serve; sales consume these first
   preparedPortions    Float     @default(0)
   preparedPortionCost Float     @default(0)
-  createdAt    DateTime         @default(now())
-  updatedAt    DateTime         @updatedAt
-  deletedAt    DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
 
-  ingredients  DishIngredient[]
-  variants     DishVariant[]
-  orderItems   OrderItem[]
-  dishSales    DishSale[]
+  ingredients DishIngredient[]
+  variants    DishVariant[]
+  orderItems  OrderItem[]
+  dishSales   DishSale[]
 
   @@unique([restaurantId, branchId, name])
   @@index([branchId, isActive])
@@ -298,15 +338,15 @@ model Dish {
 }
 
 model DishVariant {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   dishId       String
-  dish         Dish     @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  dish         Dish      @relation(fields: [dishId], references: [id], onDelete: Cascade)
   name         String
   sellingPrice Float
-  sortOrder    Int      @default(0)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  sortOrder    Int       @default(0)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
   deletedAt    DateTime?
 
   @@unique([dishId, name])
@@ -356,8 +396,8 @@ model InventoryItem {
   adjustmentLogs    InventoryAdjustmentLog[]
   batchUsageLedgers InventoryBatchUsageLedger[]
   stockTakes        StockTake[]
-  prepIngredients   PrepIngredient[] @relation("PrepItemIngredients")
-  usedInPreps       PrepIngredient[] @relation("IngredientUsedInPreps")
+  prepIngredients   PrepIngredient[]            @relation("PrepItemIngredients")
+  usedInPreps       PrepIngredient[]            @relation("IngredientUsedInPreps")
 
   @@unique([restaurantId, branchId, name])
   @@index([branchId])
@@ -381,13 +421,13 @@ model PrepIngredient {
 }
 
 model InventoryPurchase {
-  id                String        @id @default(cuid())
-  restaurantId      String
-  branchId          String
-  branch            Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  ingredientId      String
-  ingredient        InventoryItem @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
-  batchId           String?
+  id                   String        @id @default(cuid())
+  restaurantId         String
+  branchId             String
+  branch               Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  ingredientId         String
+  ingredient           InventoryItem @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  batchId              String?
   supplier             String?
   purchaseQuantity     Float?
   purchaseUnit         String?
@@ -404,8 +444,8 @@ model InventoryPurchase {
   updatedAt            DateTime      @updatedAt
   deletedAt            DateTime?
 
-  journalEntryId    String?
-  journalEntry      JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  journalEntryId String?
+  journalEntry   JournalEntry? @relation(fields: [journalEntryId], references: [id])
 
   batchUsageLedgers InventoryBatchUsageLedger[]
 
@@ -510,28 +550,31 @@ model PrepLog {
 // Created automatically when an order is marked PAID.
 // One DishSale per dish in the order, capturing COGS for that dish.
 model DishSale {
-  id                 String               @id @default(cuid())
+  id                 String           @id @default(cuid())
   restaurantId       String
   branchId           String
-  branch             Branch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  branch             Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
   orderId            String?
-  order              RestaurantOrder?     @relation(fields: [orderId], references: [id])
+  order              RestaurantOrder? @relation(fields: [orderId], references: [id])
   orderItemId        String?
   dishId             String
-  dish               Dish                 @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  dish               Dish             @relation(fields: [dishId], references: [id], onDelete: Cascade)
   dishVariantId      String?
   dishVariantName    String?
   dishName           String
   quantitySold       Float
   totalSaleAmount    Float
-  calculatedFoodCost Float                @default(0)
-  paymentMethod      String               @default("Cash")
-  saleDate           DateTime             @default(now())
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
+  calculatedFoodCost Float            @default(0)
+  paymentMethod      String           @default("Cash")
+  saleDate           DateTime         @default(now())
+  // Business day (from the order's shift) this sale is attributed to; null for
+  // sales with no shift, which fall back to saleDate in reports.
+  businessDate       DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
   deletedAt          DateTime?
 
-  saleIngredients    DishSaleIngredient[]
+  saleIngredients DishSaleIngredient[]
 
   @@index([restaurantId, branchId])
   @@index([orderId])
@@ -605,7 +648,7 @@ model Category {
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
-  accounts     Account[]
+  accounts Account[]
 
   @@unique([restaurantId, name])
   @@map("categories")
@@ -633,20 +676,23 @@ model Account {
 
 // Double-entry header: one entry per transaction event (order paid, purchase, etc.)
 model JournalEntry {
-  id           String    @id @default(cuid())
+  id           String     @id @default(cuid())
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   branchId     String?
   description  String?
   reference    String?
-  entryDate    DateTime  @default(now())
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  entryDate    DateTime   @default(now())
+  // Business day (from the paying order's shift) this entry is attributed to;
+  // null for manual/non-order entries, which fall back to entryDate in reports.
+  businessDate DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
   deletedAt    DateTime?
 
-  lines        JournalLine[]
-  orders       RestaurantOrder[]
-  purchases    InventoryPurchase[]
+  lines     JournalLine[]
+  orders    RestaurantOrder[]
+  purchases InventoryPurchase[]
 
   @@index([restaurantId, entryDate])
   @@index([branchId])

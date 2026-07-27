@@ -95,16 +95,27 @@ export async function GET(req: Request) {
       ? (historyStart > rangeStart ? historyStart : rangeStart)
       : (historyStart ?? rangeStart)
 
-    const entryDateFilter = {
+    const dateBounds = {
       ...(effectiveStart ? { gte: effectiveStart } : {}),
       ...(rangeEnd ? { lte: rangeEnd } : {}),
     }
 
+    // An entry's day is its shift's businessDate when it has one, else its
+    // entryDate. The cutoff and any range both apply to that effective day, so
+    // an order paid at 1am under a 6am shift is filtered on the shift's day —
+    // while manual/legacy entries (no businessDate) keep their entryDate.
     const entries = await prisma.journalEntry.findMany({
       where: {
         restaurantId: context.restaurantId,
         ...branchFilter,
-        ...(Object.keys(entryDateFilter).length > 0 ? { entryDate: entryDateFilter } : {}),
+        ...(Object.keys(dateBounds).length > 0
+          ? {
+              OR: [
+                { businessDate: dateBounds },
+                { businessDate: null, entryDate: dateBounds },
+              ],
+            }
+          : {}),
       },
       include: {
         lines: {

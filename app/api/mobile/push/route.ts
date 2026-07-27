@@ -76,6 +76,27 @@ interface MobileOrder {
   paid_at: string | null
   canceled_at: string | null
   cancel_reason: string | null
+  // Service session this order was rung up in, and the business day it belongs
+  // to (from that shift). Both optional — orders taken with no open shift, and
+  // orders from app versions before shifts existed, simply carry neither.
+  shift_id?: string | null
+  business_date?: string | null
+  created_at: string
+  updated_at: string
+}
+
+interface MobileShift {
+  id: string
+  restaurant_id: string
+  business_date: string
+  status: string
+  opened_at: string
+  opened_by_name?: string | null
+  opened_by_staff_id?: string | null
+  closed_at?: string | null
+  closed_by_name?: string | null
+  closed_by_staff_id?: string | null
+  source_device_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -110,13 +131,60 @@ export async function POST(req: Request) {
     const restaurantId = staffAccess.restaurantId
     const branchId = staffAccess.branchId
 
-    const { orders, orderItems } = (await req.json()) as {
+    const { orders, orderItems, shifts } = (await req.json()) as {
       orders: MobileOrder[]
       orderItems: MobileOrderItem[]
+      shifts?: MobileShift[]
+    }
+
+    // Shifts must be upserted BEFORE orders: an order carries a shiftId FK, so
+    // the shift row has to exist before the order that references it in the same
+    // batch. Failing a single shift must never block orders, so each is guarded.
+    const syncedShiftIds: string[] = []
+    if (Array.isArray(shifts) && shifts.length > 0) {
+      for (const shift of shifts) {
+        if (shift.restaurant_id !== restaurantId) continue
+        try {
+          const businessDate = parseOptionalDate(shift.business_date)
+          if (!businessDate) continue
+          const openedAt = parseRequiredDate(shift.opened_at, new Date())
+          const status = shift.status === 'CLOSED' ? 'CLOSED' : 'OPEN'
+          await prisma.shift.upsert({
+            where: { id: shift.id },
+            create: {
+              id: shift.id,
+              restaurantId,
+              businessDate,
+              status,
+              openedAt,
+              openedByName: shift.opened_by_name ?? null,
+              openedByStaffId: shift.opened_by_staff_id ?? null,
+              closedAt: parseOptionalDate(shift.closed_at),
+              closedByName: shift.closed_by_name ?? null,
+              closedByStaffId: shift.closed_by_staff_id ?? null,
+              sourceDeviceId: shift.source_device_id ?? mobileSourceDeviceId,
+              createdAt: parseRequiredDate(shift.created_at, openedAt),
+              updatedAt: parseRequiredDate(shift.updated_at, openedAt),
+            },
+            update: {
+              // A shift only ever moves OPEN → CLOSED; never reopen a closed one
+              // from a stale device that still thinks it's open.
+              status,
+              closedAt: parseOptionalDate(shift.closed_at),
+              closedByName: shift.closed_by_name ?? null,
+              closedByStaffId: shift.closed_by_staff_id ?? null,
+              updatedAt: parseRequiredDate(shift.updated_at, openedAt),
+            },
+          })
+          syncedShiftIds.push(shift.id)
+        } catch (shiftErr) {
+          console.error('[mobile/push] failed to upsert shift', { shiftId: shift.id, error: shiftErr instanceof Error ? shiftErr.message : String(shiftErr) })
+        }
+      }
     }
 
     if (!Array.isArray(orders) || !orders.length) {
-      return jsonNoStore({ ok: true, syncedOrderIds: [] })
+      return jsonNoStore({ ok: true, syncedOrderIds: [], syncedShiftIds })
     }
 
     const syncedOrderIds: string[] = []
@@ -130,6 +198,16 @@ export async function POST(req: Request) {
       })).map((b) => b.id),
     )
 
+    // Valid shift IDs for this restaurant — an order's shiftId is nulled if the
+    // shift isn't on the server (e.g. its push failed), so a missing shift never
+    // trips the FK and traps the order in a retry loop.
+    const validShiftIds = new Set(
+      (await prisma.shift.findMany({
+        where: { restaurantId },
+        select: { id: true },
+      })).map((s) => s.id),
+    )
+
     for (const order of orders) {
       if (order.restaurant_id !== restaurantId) continue
 
@@ -140,6 +218,13 @@ export async function POST(req: Request) {
         order.branch_id && validBranchIds.has(order.branch_id)
           ? order.branch_id
           : branchId
+
+      // Only trust the order's shiftId if that shift exists for this restaurant.
+      // businessDate carries regardless (no FK) — it's the denormalized day the
+      // device stamped at order-creation time.
+      const resolvedShiftId =
+        order.shift_id && validShiftIds.has(order.shift_id) ? order.shift_id : null
+      const normalizedBusinessDate = parseOptionalDate(order.business_date)
 
       const items = orderItems.filter((i) => i.order_id === order.id)
       const normalizedOrderNumber = normalizeRequiredText(order.order_number, buildFallbackOrderNumber(order.id))
@@ -196,6 +281,8 @@ export async function POST(req: Request) {
               totalAmount: normalizedTotalAmount,
               staffId: claims.sub,
               createdByName: normalizedCreatedByName,
+              shiftId: resolvedShiftId,
+              businessDate: normalizedBusinessDate,
               paidAt: shouldFinalizePaidOrder ? null : normalizedPaidAt,
               canceledAt: shouldFinalizePaidOrder ? null : normalizedCanceledAt,
               cancelReason: shouldFinalizePaidOrder ? null : order.cancel_reason,
@@ -215,6 +302,11 @@ export async function POST(req: Request) {
               subtotalAmount: normalizedSubtotalAmount,
               vatAmount: normalizedVatAmount,
               totalAmount: normalizedTotalAmount,
+              // Stamp the shift/day if the order didn't already carry one — but
+              // never clear a value the server already has (a re-sync from an old
+              // client that omits these must not wipe attribution).
+              ...(resolvedShiftId ? { shiftId: resolvedShiftId } : {}),
+              ...(normalizedBusinessDate ? { businessDate: normalizedBusinessDate } : {}),
               paidAt: shouldFinalizePaidOrder ? null : normalizedPaidAt,
               canceledAt: shouldFinalizePaidOrder ? null : normalizedCanceledAt,
               cancelReason: shouldFinalizePaidOrder ? null : order.cancel_reason,
@@ -294,6 +386,7 @@ export async function POST(req: Request) {
     return jsonNoStore({
       ok: failedOrders.length === 0,
       syncedOrderIds,
+      syncedShiftIds,
       failedOrderIds: failedOrders.map((entry) => entry.orderId),
       failedOrders,
     })

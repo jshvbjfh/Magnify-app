@@ -31,6 +31,9 @@ const prismaMock = vi.hoisted(() => ({
   inventoryItem: {
     findMany: vi.fn(),
   },
+  shift: {
+    findFirst: vi.fn(),
+  },
 }))
 
 vi.mock('jose', () => ({
@@ -93,6 +96,7 @@ describe('GET /api/mobile/pull', () => {
     prismaMock.mepListItem.findMany.mockResolvedValue([])
     prismaMock.prepLog.findMany.mockResolvedValue([])
     prismaMock.inventoryItem.findMany.mockResolvedValue([])
+    prismaMock.shift.findFirst.mockResolvedValue(null)
   })
 
   it('uses the current DB staff binding instead of stale JWT restaurant claims', async () => {

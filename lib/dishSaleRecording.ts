@@ -42,6 +42,9 @@ export async function recordDishSalesForPaidOrder(
     orderId?: string | null
     paymentMethod?: string | null
     saleDate: Date
+    // The shift's business day this sale is attributed to (null = no shift; the
+    // sale falls back to saleDate in reports).
+    businessDate?: Date | null
     items: SaleLineInput[]
   }
 ) {
@@ -121,6 +124,7 @@ export async function recordDishSalesForPaidOrder(
         dishName: item.dishName?.trim() || dish.name,
         quantitySold,
         saleDate: params.saleDate,
+        businessDate: params.businessDate ?? null,
         paymentMethod: params.paymentMethod || 'Cash',
         totalSaleAmount,
         calculatedFoodCost: 0,

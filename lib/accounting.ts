@@ -144,6 +144,9 @@ export async function recordJournalEntry(
     restaurantId?: string | null
     branchId?: string | null
     date: Date
+    // The shift's business day this entry is attributed to (null = manual/no
+    // shift; the entry falls back to entryDate in reports).
+    businessDate?: Date | null
     description: string
     reference?: string | null
     amount: number
@@ -227,6 +230,7 @@ export async function recordJournalEntry(
       description: params.description,
       reference: params.reference ?? null,
       entryDate: params.date,
+      businessDate: params.businessDate ?? null,
       lines: {
         create: [
           {

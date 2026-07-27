@@ -41,12 +41,20 @@ export async function GET(req: Request) {
     orderBy: [{ isMain: 'desc' }, { name: 'asc' }],
   })
 
+  // Group by the shift's business day when the order has one, else fall back to
+  // paidAt — a table opened at 11pm and paid at 1am counts on the shift's day.
+  const paidRange = { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) }
   const orders = await prisma.restaurantOrder.findMany({
     where: {
       restaurantId,
       status: 'PAID',
       ...(fromDate || toDate
-        ? { paidAt: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lte: toDate } : {}) } }
+        ? {
+            OR: [
+              { businessDate: paidRange },
+              { businessDate: null, paidAt: paidRange },
+            ],
+          }
         : {}),
     },
     select: { id: true, branchId: true },

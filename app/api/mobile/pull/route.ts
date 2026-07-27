@@ -89,7 +89,7 @@ export async function GET(req: Request) {
     const startOfToday = new Date()
     startOfToday.setHours(0, 0, 0, 0)
 
-    const [dishes, tables, restaurant, approverEmployees, allBranches, recentOrders, incomingOrders, mepItems, mepTodayLogs, prepCatalog] = await Promise.all([
+    const [dishes, tables, restaurant, approverEmployees, allBranches, recentOrders, incomingOrders, mepItems, mepTodayLogs, prepCatalog, openShift] = await Promise.all([
       prisma.dish.findMany({
         where: dishWhere,
         select: {
@@ -223,6 +223,20 @@ export async function GET(req: Request) {
         where: { restaurantId, branchId: effectiveBranchId, type: 'prep', deletedAt: null },
         select: { id: true, name: true, unit: true, quantity: true },
         orderBy: { name: 'asc' },
+      }),
+
+      // Current open service session (whole-venue). Earliest-opened wins if two
+      // ever exist (concurrent offline opens), so every terminal converges on the
+      // same shift for its start/end gating.
+      prisma.shift.findFirst({
+        where: { restaurantId, status: 'OPEN', deletedAt: null },
+        orderBy: { openedAt: 'asc' },
+        select: {
+          id: true, restaurantId: true, businessDate: true, status: true,
+          openedAt: true, openedByName: true, openedByStaffId: true,
+          closedAt: true, closedByName: true, closedByStaffId: true,
+          sourceDeviceId: true, createdAt: true, updatedAt: true,
+        },
       }),
     ])
 
@@ -361,6 +375,27 @@ export async function GET(req: Request) {
           updated_at: item.updatedAt.toISOString(),
         })),
       })),
+
+      // Current open shift (null when the venue is closed). The waiter app uses
+      // this to decide: shift open → straight to the waiter-code screen; none →
+      // prompt a supervisor to start one. snake_case to match the local schema.
+      openShift: openShift
+        ? {
+            id: openShift.id,
+            restaurant_id: openShift.restaurantId,
+            business_date: openShift.businessDate.toISOString(),
+            status: openShift.status,
+            opened_at: openShift.openedAt.toISOString(),
+            opened_by_name: openShift.openedByName ?? null,
+            opened_by_staff_id: openShift.openedByStaffId ?? null,
+            closed_at: openShift.closedAt?.toISOString() ?? null,
+            closed_by_name: openShift.closedByName ?? null,
+            closed_by_staff_id: openShift.closedByStaffId ?? null,
+            source_device_id: openShift.sourceDeviceId ?? null,
+            created_at: openShift.createdAt.toISOString(),
+            updated_at: openShift.updatedAt.toISOString(),
+          }
+        : null,
 
       // MEP: per-station prep list + today's logs + prep catalog for the search box.
       mep: {
