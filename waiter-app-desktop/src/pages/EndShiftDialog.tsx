@@ -93,7 +93,7 @@ export default function EndShiftDialog({ onClose, onEnded }: EndShiftDialogProps
                 const filled = i < code.length
                 return (
                   <div key={i}
-                    className={`w-10 h-13 rounded-xl border-2 flex items-center justify-center text-xl py-2.5 transition-all ${
+                    className={`w-11 h-14 rounded-xl border-2 flex items-center justify-center text-2xl transition-all ${
                       filled ? 'border-orange-500 bg-orange-50 text-orange-500' : 'border-orange-200 bg-gray-50'
                     }`}>
                     {filled ? '●' : ''}
@@ -102,27 +102,27 @@ export default function EndShiftDialog({ onClose, onEnded }: EndShiftDialogProps
               })}
             </div>
 
-            <div className="grid grid-cols-3 gap-2 max-w-[240px] mx-auto">
+            <div className="grid grid-cols-3 gap-2 max-w-[250px] mx-auto">
               {['1','2','3','4','5','6','7','8','9'].map(d => (
                 <button key={d} type="button" disabled={saving}
                   onClick={() => press(d)}
-                  className="py-3 rounded-2xl border border-gray-200 bg-gray-50 text-xl font-bold text-gray-800 hover:bg-orange-50 hover:border-orange-200 hover:text-orange-600 active:scale-95 transition-all disabled:opacity-50">
+                  className="py-3.5 rounded-2xl border border-gray-200 bg-gray-50 text-xl font-bold text-gray-800 hover:bg-orange-50 hover:border-orange-200 hover:text-orange-600 active:scale-95 transition-all disabled:opacity-50">
                   {d}
                 </button>
               ))}
               <button type="button" disabled={saving}
                 onClick={() => { setCode(''); setError(null) }}
-                className="py-3 rounded-2xl border border-gray-200 bg-gray-50 text-xs font-bold text-gray-400 hover:bg-gray-100 active:scale-95 transition-all disabled:opacity-50">
+                className="py-3.5 rounded-2xl border border-gray-200 bg-gray-50 text-xs font-bold text-gray-400 hover:bg-gray-100 active:scale-95 transition-all disabled:opacity-50">
                 Clear
               </button>
               <button type="button" disabled={saving}
                 onClick={() => press('0')}
-                className="py-3 rounded-2xl border border-gray-200 bg-gray-50 text-xl font-bold text-gray-800 hover:bg-orange-50 hover:border-orange-200 hover:text-orange-600 active:scale-95 transition-all disabled:opacity-50">
+                className="py-3.5 rounded-2xl border border-gray-200 bg-gray-50 text-xl font-bold text-gray-800 hover:bg-orange-50 hover:border-orange-200 hover:text-orange-600 active:scale-95 transition-all disabled:opacity-50">
                 0
               </button>
               <button type="button" disabled={saving}
                 onClick={() => setCode(c => c.slice(0, -1))}
-                className="py-3 rounded-2xl border border-gray-200 bg-gray-50 text-xl font-bold text-gray-400 hover:bg-gray-100 active:scale-95 transition-all disabled:opacity-50">
+                className="py-3.5 rounded-2xl border border-gray-200 bg-gray-50 text-xl font-bold text-gray-400 hover:bg-gray-100 active:scale-95 transition-all disabled:opacity-50">
                 ⌫
               </button>
             </div>
