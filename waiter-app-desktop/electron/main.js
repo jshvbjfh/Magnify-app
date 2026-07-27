@@ -1,4 +1,9 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu, nativeTheme } = require('electron')
+
+// Forces Windows to draw the native title bar (icon/text/min/max/close) in its
+// dark-mode colors regardless of the user's system theme, so it stays black
+// instead of following a light Windows theme.
+nativeTheme.themeSource = 'dark'
 
 // No native File/Edit/View menu — the POS UI is the whole app.
 Menu.setApplicationMenu(null)
@@ -154,6 +159,7 @@ CREATE TABLE IF NOT EXISTS order_items (
   qty INTEGER NOT NULL,
   status TEXT DEFAULT 'ACTIVE',
   notes TEXT,
+  branch_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -245,6 +251,43 @@ CREATE TABLE IF NOT EXISTS mep_logs (
   sync_error TEXT
 );
 `,
+  },
+  {
+    // Station snapshot at order-creation time, so a dish reassigned to a
+    // different station while an order sits open/unpaid can't retroactively
+    // misattribute the sale. Migration 1's CREATE bakes it in on fresh
+    // installs, so guard the ALTER for existing databases.
+    version: 7,
+    run: (database) => addColumnIfMissing(database, 'order_items', 'branch_id', 'TEXT'),
+  },
+  {
+    // Shifts (service sessions) — a supervisor opens/closes the venue for the
+    // day. Every order rung up while a shift is open is stamped with its id and
+    // business_date, so a table paid after midnight still counts on the shift's
+    // day. Kept local + synced to the server like orders.
+    version: 8,
+    sql: `
+CREATE TABLE IF NOT EXISTS shifts (
+  id TEXT PRIMARY KEY,
+  restaurant_id TEXT NOT NULL,
+  business_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  opened_at TEXT NOT NULL,
+  opened_by_name TEXT,
+  opened_by_staff_id TEXT,
+  closed_at TEXT,
+  closed_by_name TEXT,
+  closed_by_staff_id TEXT,
+  source_device_id TEXT,
+  synced INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`,
+    run: (database) => {
+      addColumnIfMissing(database, 'orders', 'shift_id', 'TEXT')
+      addColumnIfMissing(database, 'orders', 'business_date', 'TEXT')
+    },
   },
 ]
 
@@ -816,6 +859,16 @@ async function createWindow() {
     minHeight: 600,
     title: 'Magnify POS',
     icon: path.join(__dirname, '..', 'public', 'icon.ico'),
+    backgroundColor: '#000000',
+    // Strips the caption down to just the min/max/close buttons — no icon, no
+    // title text. The app supplies its own draggable strip + branding in the
+    // page itself (index.html drag div + header top-padding on each page).
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#000000',
+      symbolColor: '#ffffff',
+      height: 32,
+    },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

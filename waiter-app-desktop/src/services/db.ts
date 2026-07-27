@@ -317,6 +317,8 @@ export interface Order {
   paid_at: string | null
   canceled_at: string | null
   cancel_reason: string | null
+  shift_id: string | null
+  business_date: string | null
   synced: number
   sync_error: string | null
   created_at: string
@@ -332,6 +334,7 @@ export interface OrderItem {
   qty: number
   status: string
   notes: string | null
+  branch_id: string | null
   created_at: string
   updated_at: string
 }
@@ -343,20 +346,21 @@ export async function createOrder(order: Order, items: OrderItem[]): Promise<voi
       statement: `INSERT INTO orders
         (id, restaurant_id, branch_id, table_id, table_name, order_number, status,
          payment_method, subtotal_amount, vat_amount, total_amount, created_by_name,
-         served_at, paid_at, canceled_at, cancel_reason, synced, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+         served_at, paid_at, canceled_at, cancel_reason, shift_id, business_date, synced, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       values: [
         order.id, order.restaurant_id, order.branch_id, order.table_id, order.table_name,
         order.order_number, order.status, order.payment_method, order.subtotal_amount,
         order.vat_amount, order.total_amount, order.created_by_name,
         order.served_at, order.paid_at, order.canceled_at, order.cancel_reason,
+        order.shift_id ?? null, order.business_date ?? null,
         order.created_at, order.updated_at,
       ],
     },
     ...items.map((item) => ({
       statement:
-        'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.created_at, item.updated_at],
+        'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.branch_id ?? null, item.created_at, item.updated_at],
     })),
   ]
   await db.executeSet(statements)
@@ -370,8 +374,8 @@ export async function addOrderItems(items: OrderItem[]): Promise<void> {
   const db = getDB()
   await db.executeSet(items.map((item) => ({
     statement:
-      'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.created_at, item.updated_at],
+      'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.branch_id ?? null, item.created_at, item.updated_at],
   })))
 }
 
@@ -602,6 +606,102 @@ export async function getOrderCodeHolders(): Promise<CancellationApprover[]> {
   const db = getDB()
   const rows = await db.query('SELECT * FROM order_code_holders ORDER BY name', [])
   return (rows ?? []) as unknown as CancellationApprover[]
+}
+
+// ---- shifts (service sessions) ---------------------------------------------
+// A shift is opened/closed by a supervisor and stamped onto every order taken
+// while it's open. Created locally (synced=0), pushed to the server, and the
+// server's current open shift is mirrored back on pull so every terminal agrees
+// on whether the venue is open.
+
+export interface Shift {
+  id: string
+  restaurant_id: string
+  business_date: string
+  status: string
+  opened_at: string
+  opened_by_name: string | null
+  opened_by_staff_id: string | null
+  closed_at: string | null
+  closed_by_name: string | null
+  closed_by_staff_id: string | null
+  source_device_id: string | null
+  synced: number
+  created_at: string
+  updated_at: string
+}
+
+// The one OPEN shift for this restaurant, if any. Prefers the earliest-opened
+// so it matches the server's tie-break when two ever exist.
+export async function getOpenShift(restaurantId?: string | null): Promise<Shift | null> {
+  const db = getDB()
+  const rid = normalizeScopeId(restaurantId ?? null)
+  const rows = rid
+    ? await db.query("SELECT * FROM shifts WHERE status = 'OPEN' AND restaurant_id = ? ORDER BY opened_at ASC LIMIT 1", [rid])
+    : await db.query("SELECT * FROM shifts WHERE status = 'OPEN' ORDER BY opened_at ASC LIMIT 1", [])
+  return rows && rows.length ? (rows[0] as unknown as Shift) : null
+}
+
+// Persist a locally-created or locally-closed shift (marks it unsynced).
+export async function saveShiftLocal(shift: Shift): Promise<void> {
+  const db = getDB()
+  await db.run(
+    `INSERT OR REPLACE INTO shifts
+      (id, restaurant_id, business_date, status, opened_at, opened_by_name, opened_by_staff_id,
+       closed_at, closed_by_name, closed_by_staff_id, source_device_id, synced, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+    [
+      shift.id, shift.restaurant_id, shift.business_date, shift.status, shift.opened_at,
+      shift.opened_by_name ?? null, shift.opened_by_staff_id ?? null,
+      shift.closed_at ?? null, shift.closed_by_name ?? null, shift.closed_by_staff_id ?? null,
+      shift.source_device_id ?? null, shift.created_at, shift.updated_at,
+    ],
+  )
+}
+
+export async function getUnsyncedShifts(): Promise<Shift[]> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM shifts WHERE synced = 0', [])
+  return (rows ?? []) as unknown as Shift[]
+}
+
+export async function markShiftsSynced(ids: string[]): Promise<void> {
+  if (!ids.length) return
+  const db = getDB()
+  for (const id of ids) {
+    await db.run('UPDATE shifts SET synced = 1 WHERE id = ?', [id])
+  }
+}
+
+// Mirror the server's open shift into the local table. Never clobbers a shift
+// that still has unsynced local changes (synced=0) — the push will reconcile it.
+export async function upsertShiftFromServer(shift: Shift): Promise<void> {
+  const db = getDB()
+  const existing = await db.query('SELECT synced FROM shifts WHERE id = ?', [shift.id])
+  if (existing && existing.length && Number((existing[0] as DBRow).synced) === 0) return
+  await db.run(
+    `INSERT OR REPLACE INTO shifts
+      (id, restaurant_id, business_date, status, opened_at, opened_by_name, opened_by_staff_id,
+       closed_at, closed_by_name, closed_by_staff_id, source_device_id, synced, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    [
+      shift.id, shift.restaurant_id, shift.business_date, shift.status, shift.opened_at,
+      shift.opened_by_name ?? null, shift.opened_by_staff_id ?? null,
+      shift.closed_at ?? null, shift.closed_by_name ?? null, shift.closed_by_staff_id ?? null,
+      shift.source_device_id ?? null, shift.created_at, shift.updated_at,
+    ],
+  )
+}
+
+// When the server reports NO open shift, close any local shift still marked OPEN
+// but already synced — another terminal closed it. Unsynced local opens are left
+// alone so this device's own just-opened shift isn't wiped before it pushes.
+export async function reconcileNoOpenShift(restaurantId: string): Promise<void> {
+  const db = getDB()
+  await db.run(
+    "UPDATE shifts SET status = 'CLOSED' WHERE restaurant_id = ? AND status = 'OPEN' AND synced = 1",
+    [restaurantId],
+  )
 }
 
 // ---- MEP (mise en place) ----------------------------------------------------

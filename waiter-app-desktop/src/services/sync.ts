@@ -9,8 +9,9 @@ import {
   getUnsyncedMepLogs, getPendingMepUndos, markMepLogsSynced, markMepLogReversed,
   markMepLogFailed, clearMepLogPendingUndo, setMepLogSyncError,
   upsertMepItem, deleteMepItem,
+  getUnsyncedShifts, markShiftsSynced, upsertShiftFromServer, reconcileNoOpenShift,
   type Dish, type RestaurantTable, type CancellationApprover, type RemoteOrderStatus, type IncomingOrder,
-  type MepItem, type MepCatalogEntry,
+  type MepItem, type MepCatalogEntry, type Shift,
 } from './db'
 import { getToken, invalidateSession, SESSION_INVALID_MESSAGE } from './auth'
 import { API } from '../config'
@@ -44,6 +45,7 @@ export interface PullPayload {
   restaurant: { id: string; name: string; billHeader?: string; billPrinterIp?: string | null; billPrinterPort?: number | null }
   branches?: BranchInfo[]
   cancellationApprovers?: CancellationApprover[]
+  openShift?: Shift | null
   mep?: MepPullSlice
 }
 
@@ -222,6 +224,17 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
     await replaceOrderCodeHolders(orderCodeHolders)
   }
 
+  // Mirror the server's open shift so this terminal agrees on whether the venue
+  // is open. If the server has one, upsert it (unless we hold unsynced local
+  // changes for it). If it has none, close any synced-OPEN local shift — another
+  // terminal ended it — while leaving our own just-opened, not-yet-pushed shift.
+  const openShift = (payload as unknown as { openShift?: Shift | null }).openShift
+  if (openShift && openShift.id) {
+    await upsertShiftFromServer(openShift)
+  } else if (payload.restaurant?.id) {
+    await reconcileNoOpenShift(payload.restaurant.id)
+  }
+
   // Reconcile local order statuses with server-authoritative values (last 3 days).
   // Only updates rows where server updated_at is newer — never sets synced = 0.
   const recentOrders = (payload as unknown as { recentOrders?: RemoteOrderStatus[] }).recentOrders
@@ -286,16 +299,22 @@ export async function pushSync(): Promise<number> {
   const method = 'POST'
 
   const { orders: allUnsynced, items: allItems } = await getUnsyncedOrders()
-  if (!allUnsynced.length) return 0
+  const allUnsyncedShifts = await getUnsyncedShifts()
 
-  // Only push orders that belong to the current session's restaurant.
-  // Orders from a previous login (different restaurant) are silently skipped
-  // by the server and would loop forever as unsynced without this guard.
+  // Only push rows that belong to the current session's restaurant. Rows from a
+  // previous login (different restaurant) are silently skipped by the server and
+  // would loop forever as unsynced without this guard.
   const sessionRestaurantId = (await getConfig('restaurantId'))?.trim() ?? ''
   const orders = sessionRestaurantId
     ? allUnsynced.filter(o => o.restaurant_id === sessionRestaurantId)
     : allUnsynced
-  if (!orders.length) return 0
+  const shifts = sessionRestaurantId
+    ? allUnsyncedShifts.filter(s => s.restaurant_id === sessionRestaurantId)
+    : allUnsyncedShifts
+
+  // Nothing to push (neither orders nor shifts) — done.
+  if (!orders.length && !shifts.length) return 0
+
   const orderIds = new Set(orders.map(o => o.id))
   const items = allItems.filter(i => orderIds.has(i.order_id))
 
@@ -307,7 +326,7 @@ export async function pushSync(): Promise<number> {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    data: { orders, orderItems: items },
+    data: { orders, orderItems: items, shifts },
   })
 
   if (response.status === 401) {
@@ -370,13 +389,18 @@ export async function pushSync(): Promise<number> {
     throw new Error('Push response was not JSON. Open startup.log for details.')
   }
 
-  const { syncedOrderIds, failedOrderIds, failedOrders } = body as {
+  const { syncedOrderIds, syncedShiftIds, failedOrderIds, failedOrders } = body as {
     syncedOrderIds: string[]
+    syncedShiftIds?: string[]
     failedOrderIds?: string[]
     failedOrders?: Array<{ orderId: string; error: string }>
   }
   const syncedOrders = orders.filter(o => syncedOrderIds.includes(o.id))
   await markOrdersSynced(syncedOrders)
+
+  if (Array.isArray(syncedShiftIds) && syncedShiftIds.length > 0) {
+    await markShiftsSynced(syncedShiftIds)
+  }
 
   if (Array.isArray(failedOrders) && failedOrders.length > 0) {
     await Promise.all(

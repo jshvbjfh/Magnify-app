@@ -5,6 +5,7 @@ import { isOfflineLikeErrorMessage } from '../services/http'
 import { getConfig, setConfig, getOrders } from '../services/db'
 import { logInfo } from '../services/logger'
 import { syncAll, type BranchInfo } from '../services/sync'
+import { getActiveShift } from '../services/shifts'
 import type { WaiterUser } from '../services/auth'
 import RestaurantOrders from './RestaurantOrders'
 import RestaurantTables from './RestaurantTables'
@@ -12,6 +13,7 @@ import MepPage from './MepPage'
 import PrinterSettings from './PrinterSettings'
 import StartupLogPage from './StartupLogPage'
 import WaiterGatePage from './WaiterGatePage'
+import ShiftGatePage from './ShiftGatePage'
 
 type TabId = 'menu' | 'pending' | 'tables' | 'mep' | 'printers' | 'logs'
 
@@ -47,6 +49,10 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   // Opening-page identity: the waiter who entered their code. Null = locked,
   // shows the gate page. Deliberately not persisted — every app start asks.
   const [activeWaiter, setActiveWaiter] = useState<string | null>(null)
+  // Whether a shift is currently open (null = still checking). No open shift →
+  // the start-shift screen gates everything; opening one reveals the waiter gate.
+  const [shiftOpen, setShiftOpen] = useState<boolean | null>(null)
+  const [restaurantName, setRestaurantName] = useState<string>('')
   // Edit-pending flow: set from the Pending tab, consumed by the POS tab.
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
 
@@ -133,6 +139,22 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
     return () => { cancelled = true }
   }, [syncVersion, activeTab])
 
+  // Track whether a shift is open — re-checked on every sync so a shift opened
+  // or closed on another terminal reflects here too.
+  const refreshShift = useCallback(async () => {
+    try {
+      const [shift, name] = await Promise.all([getActiveShift(), getConfig('restaurantName')])
+      setShiftOpen(Boolean(shift))
+      setRestaurantName(name?.trim() || '')
+    } catch {
+      setShiftOpen(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshShift()
+  }, [refreshShift, syncVersion])
+
   // Auto-sync when app comes online
   useEffect(() => {
     if (isOnline) void runSync()
@@ -178,15 +200,31 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
     }
   }
 
-  // Opening page: waiter must enter their code before taking orders. Rendered
-  // in place of the shell UI, but the component stays mounted so sync keeps
-  // running behind it (a fresh install pulls the codes while the gate shows).
+  // Gate order: a shift must be open before any orders can be taken, then a
+  // waiter must identify themselves. Both are rendered in place of the shell but
+  // sync keeps running behind them (a fresh install pulls codes + the open shift
+  // while the gate shows). While the first shift check is still pending, show
+  // nothing rather than flashing the start-shift screen over an open shift.
+  if (shiftOpen === null) {
+    return <div className="h-screen bg-gray-900" />
+  }
+
+  if (!shiftOpen) {
+    return (
+      <ShiftGatePage
+        restaurantName={restaurantName}
+        onShiftStarted={() => { setShiftOpen(true); void runSync() }}
+      />
+    )
+  }
+
   if (!activeWaiter) {
     return (
       <WaiterGatePage
         accountName={user?.name ?? ''}
         syncVersion={syncVersion}
         onUnlock={(name) => setActiveWaiter(name)}
+        onShiftEnded={() => { setActiveWaiter(null); setShiftOpen(false); void runSync() }}
       />
     )
   }
@@ -216,7 +254,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
       )}
 
       {/* ── Top navigation bar ── */}
-      <header className="bg-gray-900 text-white shadow-md flex-shrink-0 z-30">
+      <header className="bg-gray-900 text-white shadow-md flex-shrink-0 z-30 pt-12">
         <div className="px-4 flex items-center justify-between h-14">
 
           {/* Brand / waiter name */}

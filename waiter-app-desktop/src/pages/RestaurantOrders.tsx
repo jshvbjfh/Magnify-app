@@ -11,6 +11,7 @@ import {
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline, validateOrderCode, type BranchInfo } from '../services/sync'
+import { getActiveShift } from '../services/shifts'
 import { getPrinterMap, getBillPrinter, resolveStationPrinter, listPrinters, isVirtualPrinter, parseBillTemplate, getBillNetworkPrinter, getBillEscposMode, printBillRaw, type PrinterMap, type PrinterInfo, type NetworkPrinterConfig } from '../services/printing'
 import { useOnline } from '../hooks/useOnline'
 
@@ -965,6 +966,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         qty:        item.qty,
         status:     'ACTIVE',
         notes:      item.note ?? null,
+        branch_id:  dishes.find(d => d.id === item.dishId)?.branch_id ?? null,
         created_at: now,
         updated_at: now,
       }))
@@ -1058,6 +1060,11 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
 
       const orderNumber = `WA-${orderId.replace(/-/g, '').slice(-8).toUpperCase()}`
 
+      // Stamp the order with the open shift so its sale lands on the shift's
+      // business day, whatever time it's eventually paid. The gate guarantees a
+      // shift is open before orders can be taken; null is a safe fallback.
+      const activeShift = await getActiveShift()
+
       const order: Order = {
         id:                 orderId,
         restaurant_id:      restaurantId,
@@ -1075,6 +1082,8 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         paid_at:            null,
         canceled_at:        null,
         cancel_reason:      null,
+        shift_id:           activeShift?.id ?? null,
+        business_date:      activeShift?.business_date ?? null,
         synced:             0,
         sync_error:         null,
         created_at:         now,
@@ -1090,6 +1099,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         qty:        item.qty,
         status:     'ACTIVE',
         notes:      item.note ?? null,
+        branch_id:  dishes.find(d => d.id === item.dishId)?.branch_id ?? null,
         created_at: now,
         updated_at: now,
       }))
@@ -1163,7 +1173,6 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
   async function collectPayment(orderId: string) {
     const order = pendingOrders.find(o => o.id === orderId)
     if (!order || paymentLockRef.current) return
-    const billItems = orderItemsMap[order.id] ?? []
     paymentLockRef.current = true
     setPayingSaving(true)
     try {
@@ -1172,7 +1181,9 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         payment_method: payMethod,
         paid_at:        new Date().toISOString(),
       })
-      printBill(order, billItems)
+      // The bill is printed on demand via the "Print Bill" button when the
+      // guest asks for it. Confirming payment must NOT re-print it — that
+      // wasted a second slip of paper on every settled order.
       await logInfo('order', 'Payment collected — queuing push', {
         orderId: order.id,
         orderNumber: order.order_number,

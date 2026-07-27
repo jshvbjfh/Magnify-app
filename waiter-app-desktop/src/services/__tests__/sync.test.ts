@@ -43,6 +43,10 @@ vi.mock('../db', () => ({
   replaceCancellationApprovers: replaceCancellationApproversMock,
   getCancellationApprovers: vi.fn(),
   reconcileOrderStatuses: reconcileOrderStatusesMock,
+  getUnsyncedShifts: vi.fn(() => Promise.resolve([])),
+  markShiftsSynced: vi.fn(),
+  upsertShiftFromServer: vi.fn(),
+  reconcileNoOpenShift: vi.fn(),
 }))
 
 vi.mock('../http', () => ({
