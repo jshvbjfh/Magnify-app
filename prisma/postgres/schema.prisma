@@ -101,7 +101,7 @@ model Shift {
 
   @@index([restaurantId, status])
   @@index([restaurantId, businessDate])
-  @@map("shifts")
+  @@map("service_shifts")
 }
 
 model Branch {
