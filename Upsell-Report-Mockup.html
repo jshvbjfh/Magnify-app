@@ -1,0 +1,378 @@
+<title>Upsell Report — proposed redesign</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #fffaf5;
+    --line: #e6e4e1;
+    --line-soft: #f0eeeb;
+    --ink: #1c1b1a;
+    --ink-2: #57534e;
+    --ink-3: #8b8580;
+    --accent: #ea580c;
+    --accent-soft: #fff2e8;
+    --accent-line: #fbd5b5;
+    --good: #047857;
+    --good-soft: #ecfdf5;
+    --warn: #b45309;
+    --warn-soft: #fffbeb;
+    --warn-line: #fcd9a3;
+    --bad: #be123c;
+    --foot: #1c1b1a;
+    --foot-ink: #ffffff;
+    --shadow: 0 1px 2px rgba(28,27,26,.06), 0 1px 3px rgba(28,27,26,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17161a; --surface: #1f1e23; --surface-2: #26232a; --line: #35323a; --line-soft: #2b282f;
+      --ink: #f2efec; --ink-2: #b6b0aa; --ink-3: #837d78;
+      --accent: #fb923c; --accent-soft: #2e2018; --accent-line: #4d3421;
+      --good: #34d399; --good-soft: #172a24;
+      --warn: #fbbf24; --warn-soft: #2b2415; --warn-line: #4a3a1a; --bad: #fb7185;
+      --foot: #100f13; --foot-ink: #f2efec; --shadow: 0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17161a; --surface: #1f1e23; --surface-2: #26232a; --line: #35323a; --line-soft: #2b282f;
+    --ink: #f2efec; --ink-2: #b6b0aa; --ink-3: #837d78;
+    --accent: #fb923c; --accent-soft: #2e2018; --accent-line: #4d3421;
+    --good: #34d399; --good-soft: #172a24; --warn: #fbbf24; --warn-soft: #2b2415; --warn-line: #4a3a1a; --bad: #fb7185;
+    --foot: #100f13; --foot-ink: #f2efec; --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fffaf5; --line: #e6e4e1; --line-soft: #f0eeeb;
+    --ink: #1c1b1a; --ink-2: #57534e; --ink-3: #8b8580;
+    --accent: #ea580c; --accent-soft: #fff2e8; --accent-line: #fbd5b5;
+    --good: #047857; --good-soft: #ecfdf5; --warn: #b45309; --warn-soft: #fffbeb; --warn-line: #fcd9a3; --bad: #be123c;
+    --foot: #1c1b1a; --foot-ink: #ffffff; --shadow: 0 1px 2px rgba(28,27,26,.06), 0 1px 3px rgba(28,27,26,.04);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1140px; margin: 0 auto; padding: 26px 20px 72px; display: flex; flex-direction: column; gap: 22px; }
+
+  .mock {
+    border: 1px dashed var(--accent-line); background: var(--accent-soft); color: var(--ink-2);
+    border-radius: 12px; padding: 11px 15px; font-size: 12.5px;
+  }
+  .mock strong { color: var(--ink); }
+
+  /* header */
+  .title-row { display: flex; align-items: center; gap: 10px; }
+  h1 { font-size: 19px; font-weight: 700; margin: 0; letter-spacing: -.012em; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 10px;
+    font-size: 11.5px; font-weight: 600; background: var(--line-soft); border: 1px solid var(--line); color: var(--ink-2);
+  }
+  .pill .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--ink-3); }
+  .scope { margin: 6px 0 0; font-size: 13px; color: var(--ink-2); font-weight: 600; }
+  .scope span { color: var(--ink-3); font-weight: 400; }
+
+  .tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+  .tab {
+    flex: 0 0 auto; border-radius: 9px; padding: 7px 12px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+    background: var(--surface); border: 1px solid var(--line); color: var(--ink-2);
+  }
+  .tab[aria-current="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* KPI */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .kpi .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); font-weight: 600; }
+  .kpi .v { font-size: 26px; font-weight: 700; letter-spacing: -.022em; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .kpi .m { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+  .kpi.lead { background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 26%, var(--line)); }
+  .kpi.lead .v { color: var(--good); }
+  .kpi.gap { background: var(--warn-soft); border-color: var(--warn-line); }
+  .kpi.gap .v { color: var(--warn); }
+
+  /* executive summary */
+  .take {
+    background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 12px; padding: 15px 18px; box-shadow: var(--shadow);
+  }
+  .take .who { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
+  .take p { margin: 5px 0 0; font-size: 14.5px; line-height: 1.55; max-width: 74ch; }
+  .take b { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  section > .hd { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
+  section h2 { font-size: 12px; font-weight: 700; margin: 0; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); }
+  .more { font-size: 12px; font-weight: 650; color: var(--accent); text-decoration: none; white-space: nowrap; }
+  .more:hover { text-decoration: underline; }
+  .more:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+  /* opportunities */
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 4px 18px; }
+  .opp { display: grid; grid-template-columns: 1fr auto; gap: 6px 20px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line-soft); }
+  .opp:first-child { border-top: 0; }
+  .opp .what { font-size: 14.5px; font-weight: 650; letter-spacing: -.008em; }
+  .opp .plus { color: var(--ink-3); font-weight: 400; }
+  .opp .why { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
+  .opp .why b { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
+  .opp .amt { text-align: right; font-variant-numeric: tabular-nums; }
+  .opp .amt .n { font-size: 19px; font-weight: 700; color: var(--warn); letter-spacing: -.02em; }
+  .opp .amt .u { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; }
+  .bar { height: 6px; border-radius: 999px; background: var(--line-soft); overflow: hidden; display: flex; margin-top: 8px; max-width: 320px; }
+  .bar i { display: block; height: 100%; }
+  .bar .now { background: var(--accent); }
+  .bar .add { background: color-mix(in srgb, var(--warn) 55%, transparent); }
+
+  /* tables */
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    background: var(--accent); color: #fff; font-size: 10.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em; padding: 10px 12px; text-align: right; white-space: nowrap;
+  }
+  thead th:first-child, thead th.l { text-align: left; }
+  tbody td { padding: 10px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line-soft); font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  tbody td:first-child, tbody td.l { text-align: left; color: var(--ink); }
+  tbody tr:nth-child(even) { background: var(--surface-2); }
+  tbody tr.dim td { color: var(--ink-3); }
+  tfoot td { background: var(--foot); color: var(--foot-ink); font-weight: 700; padding: 11px 12px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  tfoot td:first-child { text-align: left; }
+  .pair .b { font-weight: 600; }
+  .pair .arrow { color: var(--ink-3); font-size: 11px; margin: 0 5px; }
+  .pair .a { color: var(--accent); font-weight: 600; }
+  .money { font-weight: 650; color: var(--ink); }
+  .profit { font-weight: 700; color: var(--good); }
+  .delta { font-size: 11.5px; font-weight: 650; }
+  .up { color: var(--good); }
+  .down { color: var(--bad); }
+  .flat { color: var(--ink-3); }
+
+  .conf { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 650; }
+  .conf .d { width: 7px; height: 7px; border-radius: 999px; flex: none; }
+  .conf.med { color: var(--ink-2); }
+  .conf.med .d { background: var(--warn); }
+  .conf.low { color: var(--ink-3); }
+  .conf.low .d { background: var(--line); border: 1px solid var(--ink-3); }
+
+  .tag {
+    display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+    padding: 2px 7px; border-radius: 999px; background: var(--line-soft); color: var(--ink-3); border: 1px solid var(--line);
+  }
+  caption { caption-side: bottom; text-align: left; font-size: 11.5px; color: var(--ink-3); padding: 9px 12px 10px; }
+
+  /* about */
+  details.about { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+  details.about > summary {
+    cursor: pointer; list-style: none; padding: 12px 16px;
+    font-size: 12.5px; font-weight: 650; color: var(--ink-2); display: flex; align-items: center; gap: 8px;
+  }
+  details.about > summary::-webkit-details-marker { display: none; }
+  details.about > summary::before {
+    content: "i"; width: 16px; height: 16px; border-radius: 999px; flex: none;
+    border: 1px solid var(--ink-3); color: var(--ink-3);
+    font-size: 10px; font-weight: 700; font-style: italic; display: grid; place-items: center;
+  }
+  details.about > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 12px; }
+  details.about .body { padding: 0 16px 15px 40px; display: flex; flex-direction: column; gap: 9px; font-size: 12.5px; color: var(--ink-2); max-width: 78ch; }
+  details.about .body p { margin: 0; }
+  details.about .body b { color: var(--ink); }
+  code { background: var(--line-soft); padding: 1px 5px; border-radius: 5px; font-size: 11.5px; }
+</style>
+
+<div class="wrap">
+
+  <div class="mock">
+    <strong>Design mockup — not the live app.</strong> Every figure is computed from the real High 5ive restaurant only
+    (<code>@management.com</code>); test accounts excluded. Profit is real FIFO food cost from
+    <code>DishSale.calculatedFoodCost</code> — every attached line was costed.
+  </div>
+
+  <div>
+    <div class="title-row">
+      <h1>Financial Reports</h1>
+      <span class="pill"><span class="dot"></span>All stations</span>
+    </div>
+    <p class="scope">All time <span>· all stations · 126 eligible bills</span></p>
+  </div>
+
+  <div class="tabs">
+    <span class="tab">General</span>
+    <span class="tab">Journal</span>
+    <span class="tab">A/R</span>
+    <span class="tab">A/P</span>
+    <span class="tab">Cash Flow</span>
+    <span class="tab">Balance</span>
+    <span class="tab">P&amp;L</span>
+    <span class="tab">Payments</span>
+    <span class="tab">Orders</span>
+    <span class="tab">Inventory</span>
+    <span class="tab">Theory Inv</span>
+    <span class="tab" aria-current="true">Upselling</span>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi lead">
+      <div class="k">Upsell gross profit</div>
+      <div class="v">1,523,836</div>
+      <div class="m">RWF · 83% margin on 1,829,500 revenue</div>
+    </div>
+    <div class="kpi">
+      <div class="k">Profit per bill</div>
+      <div class="v">12,094</div>
+      <div class="m">RWF across 126 bills</div>
+    </div>
+    <div class="kpi gap">
+      <div class="k">Profit opportunity</div>
+      <div class="v">56,260</div>
+      <div class="m">RWF at your own demonstrated best</div>
+    </div>
+  </div>
+
+  <div class="take">
+    <div class="who">Jesse's take</div>
+    <p>
+      Upselling generated <b>1,523,836 RWF</b> of gross profit at an <b>83%</b> margin.
+      <b>Mimi</b> leads the floor at <b>46%</b> attachment and earns <b>16,063 RWF</b> per bill against a house average of
+      12,094. The largest single gap is <b>Signature Dumplings + SODA</b>, worth about <b>22,770 RWF</b>.
+    </p>
+  </div>
+
+  <section>
+    <div class="hd">
+      <h2>Top opportunities</h2>
+      <a class="more" href="#">View all pairings →</a>
+    </div>
+    <div class="card">
+      <div class="opp">
+        <div>
+          <div class="what">Signature Dumplings <span class="plus">+</span> SODA</div>
+          <div class="why">Sold together on <b>4 of 22</b> bills — <b>18%</b>. Mimi manages <b>33%</b> on hers.</div>
+          <div class="bar" role="presentation"><i class="now" style="width:18.2%"></i><i class="add" style="width:15.1%"></i></div>
+        </div>
+        <div class="amt"><div class="n">22,770</div><div class="u">RWF</div></div>
+      </div>
+      <div class="opp">
+        <div>
+          <div class="what">BAO House Fried Rice <span class="plus">+</span> SODA</div>
+          <div class="why">Sold together on <b>8 of 19</b> bills — <b>42%</b>. Mimi reaches <b>60%</b>.</div>
+          <div class="bar" role="presentation"><i class="now" style="width:42.1%"></i><i class="add" style="width:17.9%"></i></div>
+        </div>
+        <div class="amt"><div class="n">17,483</div><div class="u">RWF</div></div>
+      </div>
+      <div class="opp">
+        <div>
+          <div class="what">Signature Dumplings <span class="plus">+</span> Fries</div>
+          <div class="why">Sold together on <b>5 of 22</b> bills — <b>23%</b>. Mimi reaches <b>50%</b>.</div>
+          <div class="bar" role="presentation"><i class="now" style="width:22.7%"></i><i class="add" style="width:27.3%"></i></div>
+        </div>
+        <div class="amt"><div class="n">16,007</div><div class="u">RWF</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="hd">
+      <h2>What sells together</h2>
+      <a class="more" href="#">View all pairings →</a>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption>Ranked by gross profit. Confidence reflects how many bills the rate is based on — 100+ reads as high, 15–99 medium, under 15 low.</caption>
+        <thead>
+          <tr>
+            <th class="l">Pairing</th>
+            <th>Sold together</th>
+            <th>Gross profit</th>
+            <th>Margin</th>
+            <th class="l">Confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="l"><span class="pair"><span class="b">BAO House Fried Rice</span><span class="arrow">+</span><span class="a">SODA</span></span></td>
+            <td>8 of 19 · 42%</td><td class="profit">41,125</td><td>78%</td>
+            <td class="l"><span class="conf med"><span class="d"></span>Medium</span></td>
+          </tr>
+          <tr>
+            <td class="l"><span class="pair"><span class="b">What A Burger</span><span class="arrow">+</span><span class="a">Water</span></span></td>
+            <td>11 of 23 · 48%</td><td class="profit">36,417</td><td>83%</td>
+            <td class="l"><span class="conf med"><span class="d"></span>Medium</span></td>
+          </tr>
+          <tr>
+            <td class="l"><span class="pair"><span class="b">What A Burger</span><span class="arrow">+</span><span class="a">SODA</span></span></td>
+            <td>10 of 23 · 43%</td><td class="profit">29,375</td><td>78%</td>
+            <td class="l"><span class="conf med"><span class="d"></span>Medium</span></td>
+          </tr>
+          <tr>
+            <td class="l"><span class="pair"><span class="b">Signature Dumplings</span><span class="arrow">+</span><span class="a">SODA</span></span></td>
+            <td>4 of 22 · 18%</td><td class="profit">27,417</td><td>78%</td>
+            <td class="l"><span class="conf med"><span class="d"></span>Medium</span></td>
+          </tr>
+          <tr class="dim">
+            <td class="l"><span class="pair"><span class="b">Macaroni</span><span class="arrow">+</span><span class="a">Grilled Chicken</span></span></td>
+            <td>4 of 8 · 50%</td><td class="profit">23,620</td><td>94%</td>
+            <td class="l"><span class="conf low"><span class="d"></span>Low</span></td>
+          </tr>
+          <tr>
+            <td class="l"><span class="pair"><span class="b">BAO House Fried Rice</span><span class="arrow">+</span><span class="a">Fries</span></span></td>
+            <td>6 of 19 · 32%</td><td class="profit">18,865</td><td>90%</td>
+            <td class="l"><span class="conf med"><span class="d"></span>Medium</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="hd">
+      <h2>Who sells it</h2>
+    </div>
+    <div class="scroll">
+      <table>
+        <caption>Ranked by profit per bill, so a waiter working more tables doesn't automatically look better.</caption>
+        <thead>
+          <tr>
+            <th class="l">Waiter</th>
+            <th>Bills</th>
+            <th>Attach rate</th>
+            <th>Profit / bill</th>
+            <th>vs house</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="l">Mimi</td><td>26</td><td>46%</td><td class="money">16,063</td><td><span class="delta up">▲ 3,969</span></td></tr>
+          <tr><td class="l">Kenny</td><td>97</td><td>42%</td><td class="money">11,221</td><td><span class="delta down">▼ 873</span></td></tr>
+          <tr class="dim"><td class="l">Valentine <span class="tag">3 bills</span></td><td>3</td><td>33%</td><td class="money">5,921</td><td><span class="delta flat">Insufficient volume</span></td></tr>
+        </tbody>
+        <tfoot>
+          <tr><td>House</td><td>126</td><td>43%</td><td>12,094</td><td></td></tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+
+  <details class="about">
+    <summary>About this report</summary>
+    <div class="body">
+      <p>
+        <b>Attachment, not conversion.</b> Attachment rate measures how often two items appear on the same bill. It does
+        not prove a waiter offered the second item. Nothing in the database records an offer that was declined, so a 0%
+        rate may mean a waiter never asks — or that their tables never want one.
+      </p>
+      <p>
+        <b>What counts as an upsell.</b> Add-ons, sides and desserts, plus drinks. Drinks are measured only against bills
+        that had food on them: a guest who came in for two beers was not upsold a drink, that was the visit.
+      </p>
+      <p>
+        <b>Benchmarks come from your own floor.</b> Profit opportunity compares each pairing against the waiter who
+        already achieves the best rate on it here, over at least 5 bills. No industry targets are assumed.
+      </p>
+      <p>
+        <b>Comparisons need volume.</b> Waiters under 20 bills and pairings under 15 are shown but not ranked.
+      </p>
+      <p>
+        <b>Scope.</b> Whole restaurant account, every station. One bill routinely spans stations and it is the bill that
+        gets upsold. Guest QR orders are excluded — nobody was at the table to suggest anything.
+      </p>
+    </div>
+  </details>
+
+</div>
