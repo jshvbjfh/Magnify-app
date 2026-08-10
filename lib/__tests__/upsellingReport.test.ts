@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildUpsellingReport, classifyCategory, normalizeCategory, type UpsellCheck } from '@/lib/upsellingReport'
+import { buildUpsellingReport, classifyCategory, confidenceFor, normalizeCategory, type UpsellCheck } from '@/lib/upsellingReport'
 
 let seq = 0
 function check(partial: Partial<UpsellCheck> & { items: UpsellCheck['items'] }): UpsellCheck {
@@ -16,7 +16,12 @@ function check(partial: Partial<UpsellCheck> & { items: UpsellCheck['items'] }):
 }
 
 function line(category: string | null, dishPrice = 1000, qty = 1, dishName = category ?? 'Unknown') {
-  return { dishId: `dish-${category ?? 'none'}`, dishName, category, qty, dishPrice }
+  return { dishId: `dish-${category ?? 'none'}`, dishName, category, qty, dishPrice, foodCost: null }
+}
+
+/** A named dish, so pairings can be asserted on identity rather than category. */
+function dish(id: string, category: string, dishPrice = 1000, foodCost: number | null = null, qty = 1) {
+  return { dishId: id, dishName: id, category, qty, dishPrice, foodCost }
 }
 
 describe('normalizeCategory', () => {
@@ -120,7 +125,7 @@ describe('buildUpsellingReport', () => {
     expect(report.rows[0].serverName).toBe('High 5ive waiter')
   })
 
-  it('ranks servers by attachment rate and still reports a house average', () => {
+  it('ranks servers by upsell profit per bill and still reports a house average', () => {
     const report = buildUpsellingReport([
       check({ createdByName: 'Weak', totalAmount: 1000, items: [line('Burgers')] }),
       check({ createdByName: 'Weak', totalAmount: 1000, items: [line('Burgers')] }),
@@ -233,6 +238,35 @@ describe('buildUpsellingReport', () => {
     expect(report.rows[0].addonRate).toBeNull()
   })
 
+  it('ranks a waiter with volume above one without, whatever their rate', () => {
+    // 25 bills of a steady seller vs 2 bills of someone who attached on both.
+    const many = Array.from({ length: 25 }, () =>
+      check({ createdByName: 'Steady', totalAmount: 5000, items: [line('Burgers'), line('Add-ons')] }))
+    const few = Array.from({ length: 2 }, () =>
+      check({ createdByName: 'Newbie', totalAmount: 9000, items: [line('Burgers'), line('Add-ons', 5000)] }))
+
+    const report = buildUpsellingReport([...many, ...few])
+    expect(report.rows[0].serverName).toBe('Steady')
+    expect(report.rows[0].ranked).toBe(true)
+    expect(report.rows[1].serverName).toBe('Newbie')
+    expect(report.rows[1].ranked).toBe(false)
+    expect(report.rows[1].vsHouse).toBeNull()
+  })
+
+  // Live data carries a waiter with 22 bills that have no line items at all.
+  // Counting those toward the volume floor ranked a data artifact against the
+  // house and printed a confident deficit next to it.
+  it('does not rank a waiter whose bills carry no line items', () => {
+    const report = buildUpsellingReport(
+      Array.from({ length: 25 }, () => check({ createdByName: 'Empty', totalAmount: 4000, items: [] }))
+    )
+
+    expect(report.rows[0].checks).toBe(25)
+    expect(report.rows[0].checksWithItems).toBe(0)
+    expect(report.rows[0].ranked).toBe(false)
+    expect(report.rows[0].vsHouse).toBeNull()
+  })
+
   it('flags checks with no server and items with no category', () => {
     const report = buildUpsellingReport([
       check({ createdByName: null, totalAmount: 1000, items: [line(null)] }),
@@ -241,5 +275,153 @@ describe('buildUpsellingReport', () => {
     expect(report.meta.checksWithoutServer).toBe(1)
     expect(report.meta.uncategorizedItems).toBe(1)
     expect(report.rows[0].serverName).toBe('Unattributed')
+  })
+})
+
+/** n bills of Burger, the first `withSoda` of which also carry a Soda. */
+function burgerBills(n: number, withSoda: number, waiter = 'Alice', sodaCost: number | null = null) {
+  return Array.from({ length: n }, (_, i) =>
+    check({
+      createdByName: waiter,
+      totalAmount: 5000,
+      items: i < withSoda
+        ? [dish('Burger', 'Burgers', 4000), dish('Soda', 'Soft Drinks', 1000, sodaCost)]
+        : [dish('Burger', 'Burgers', 4000)],
+    }))
+}
+
+describe('buildUpsellingReport — pairings', () => {
+  it('counts attachment per bill and prices the pairing on FIFO food cost', () => {
+    const report = buildUpsellingReport(burgerBills(10, 5, 'Alice', 200))
+
+    expect(report.pairings).toHaveLength(1)
+    const pair = report.pairings[0]
+    expect(pair.baseName).toBe('Burger')
+    expect(pair.attachName).toBe('Soda')
+    expect(pair.baseBills).toBe(10)
+    expect(pair.together).toBe(5)
+    expect(pair.attachRate).toBe(50)
+    expect(pair.revenue).toBe(5000)
+    expect(pair.cost).toBe(1000)
+    expect(pair.profit).toBe(4000)
+    expect(pair.margin).toBe(80)
+  })
+
+  // Ordering two burgers is still one chance to attach a soda, not two.
+  it('counts a dish ordered twice on one bill as a single opportunity', () => {
+    const report = buildUpsellingReport([
+      ...burgerBills(9, 4),
+      check({
+        createdByName: 'Alice',
+        totalAmount: 9000,
+        items: [dish('Burger', 'Burgers', 4000, null, 2), dish('Soda', 'Soft Drinks', 1000)],
+      }),
+    ])
+
+    const pair = report.pairings.find((p) => p.attachName === 'Soda')
+    expect(pair?.baseBills).toBe(10)
+    expect(pair?.together).toBe(5)
+  })
+
+  it('hides pairings that are too rare to mean anything', () => {
+    // Base seen 10 times but attached only twice — below the floor of 4.
+    const report = buildUpsellingReport(burgerBills(10, 2))
+    expect(report.pairings).toHaveLength(0)
+    // Still counted so the UI can say how many exist.
+    expect(report.meta.pairingsTotal).toBe(0)
+  })
+
+  it('grades confidence by how many bills the rate rests on', () => {
+    expect(confidenceFor(250)).toBe('high')
+    expect(confidenceFor(100)).toBe('high')
+    expect(confidenceFor(99)).toBe('medium')
+    expect(confidenceFor(15)).toBe('medium')
+    expect(confidenceFor(8)).toBe('low')
+  })
+
+  it('marks a thin pairing as low confidence even when its rate looks strong', () => {
+    const report = buildUpsellingReport(burgerBills(8, 4))
+    expect(report.pairings[0].attachRate).toBe(50)
+    expect(report.pairings[0].confidence).toBe('low')
+  })
+})
+
+describe('buildUpsellingReport — opportunity', () => {
+  it('benchmarks against the best waiter on that pairing and prices the gap in profit', () => {
+    // Alice attaches on 2 of 10; Bob on 5 of 5. House is 7 of 15.
+    const report = buildUpsellingReport([
+      ...burgerBills(10, 2, 'Alice', 200),
+      ...burgerBills(5, 5, 'Bob', 200),
+    ])
+
+    const pair = report.pairings[0]
+    expect(pair.baseBills).toBe(15)
+    expect(pair.together).toBe(7)
+
+    const opp = report.opportunities[0]
+    expect(opp.bestServerName).toBe('Bob')
+    expect(opp.bestServerRate).toBe(100)
+    expect(opp.houseRate).toBe(46.7)
+    expect(opp.gapPoints).toBe(53.3)
+    // 53.3% of 15 bills at 800 profit each.
+    expect(opp.missedProfit).toBe(Math.round((53.3 / 100) * 15 * 800))
+  })
+
+  it('ignores a waiter who has not served the base dish often enough to benchmark', () => {
+    // Bob attaches on both his bills, but 2 is under the 5-bill floor.
+    const report = buildUpsellingReport([
+      ...burgerBills(10, 4, 'Alice'),
+      ...burgerBills(2, 2, 'Bob'),
+    ])
+
+    // Alice is the only eligible benchmark and she is the house, so no gap.
+    expect(report.opportunities).toHaveLength(0)
+  })
+
+  // Summing every overlapping pairing would promise a prize nobody could collect.
+  it('limits the headline opportunity to the pairings actually shown', () => {
+    const report = buildUpsellingReport([
+      ...burgerBills(10, 2, 'Alice', 200),
+      ...burgerBills(5, 5, 'Bob', 200),
+    ])
+
+    const shown = report.opportunities.slice(0, 3).reduce((s, o) => s + o.missedProfit, 0)
+    expect(report.summary.opportunity).toBe(shown)
+  })
+
+  it('summarises profit, margin and profit per bill for the house', () => {
+    const report = buildUpsellingReport(burgerBills(10, 5, 'Alice', 200))
+
+    expect(report.summary.bills).toBe(10)
+    expect(report.summary.upsellRevenue).toBe(5000)
+    expect(report.summary.upsellProfit).toBe(4000)
+    expect(report.summary.upsellMargin).toBe(80)
+    expect(report.summary.profitPerBill).toBe(400)
+  })
+
+  // The headline sentence names a leader only when someone has earned the
+  // label; on ten bills nobody has, and it says nothing rather than guessing.
+  it('names no leader until a waiter clears the volume floor', () => {
+    const thin = buildUpsellingReport(burgerBills(10, 5, 'Alice', 200))
+    expect(thin.summary.topServerName).toBeNull()
+
+    // The headline rate is the add-on rate, so the bills must carry add-ons —
+    // a soda would leave it at 0 however often it was attached.
+    const solid = buildUpsellingReport(
+      Array.from({ length: 22 }, (_, i) => check({
+        createdByName: 'Alice',
+        totalAmount: 5000,
+        items: i < 11
+          ? [dish('Burger', 'Burgers', 4000), dish('Fries', 'Sides', 1000, 200)]
+          : [dish('Burger', 'Burgers', 4000)],
+      }))
+    )
+    expect(solid.summary.topServerName).toBe('Alice')
+    expect(solid.summary.topServerRate).toBe(50)
+  })
+
+  it('counts attached lines that were never costed instead of calling them pure profit', () => {
+    const report = buildUpsellingReport(burgerBills(10, 5, 'Alice', null))
+    expect(report.meta.uncostedAttachLines).toBe(5)
   })
 })

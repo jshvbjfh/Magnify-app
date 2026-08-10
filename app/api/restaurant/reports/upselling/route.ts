@@ -17,10 +17,19 @@ function parseDateParam(value: string | null, endOfDay = false) {
 }
 
 const EMPTY = {
+  summary: {
+    bills: 0, upsellRevenue: 0, upsellCost: 0, upsellProfit: 0, upsellMargin: 0,
+    profitPerBill: 0, opportunity: 0, topServerName: null, topServerRate: null,
+  },
   rows: [],
   house: null,
+  pairings: [],
+  opportunities: [],
   attachedItems: [],
-  meta: { totalChecks: 0, checksWithoutServer: 0, coveredChecks: 0, uncategorizedItems: 0 },
+  meta: {
+    totalChecks: 0, serverChecks: 0, selfOrderChecks: 0, checksWithoutServer: 0,
+    coveredChecks: 0, uncategorizedItems: 0, uncostedAttachLines: 0, pairingsTotal: 0,
+  },
 }
 
 // GET — upselling performance per server: how often they attach an add-on or a
@@ -70,23 +79,44 @@ export async function GET(req: Request) {
       staff: { select: { name: true } },
       items: {
         where: { status: 'ACTIVE', deletedAt: null },
-        select: { dishId: true, dishName: true, qty: true, dishPrice: true },
+        select: { id: true, dishId: true, dishName: true, qty: true, dishPrice: true },
       },
     },
   })
 
   if (orders.length === 0) return NextResponse.json(EMPTY)
 
-  // Category lives on the Dish, not on the denormalised order line, so the
-  // menu has to be joined in to classify what was sold.
+  const orderIds = orders.map((order) => order.id)
   const dishIds = Array.from(new Set(orders.flatMap((order) => order.items.map((item) => item.dishId))))
-  const dishes = dishIds.length > 0
-    ? await prisma.dish.findMany({
-        where: { id: { in: dishIds }, restaurantId },
-        select: { id: true, category: true },
-      })
-    : []
+
+  const [dishes, sales] = await Promise.all([
+    // Category lives on the Dish, not on the denormalised order line, so the
+    // menu has to be joined in to classify what was sold.
+    dishIds.length > 0
+      ? prisma.dish.findMany({
+          where: { id: { in: dishIds }, restaurantId },
+          select: { id: true, category: true },
+        })
+      : Promise.resolve([]),
+    // Real food cost per line, FIFO-costed when the sale was recorded. This is
+    // what lets the report rank by gross profit rather than revenue — a cheap
+    // side can out-earn a premium main once cost is taken off.
+    prisma.dishSale.findMany({
+      where: { orderId: { in: orderIds }, restaurantId, deletedAt: null },
+      select: { orderItemId: true, calculatedFoodCost: true },
+    }),
+  ])
+
   const categoryByDishId = new Map(dishes.map((dish) => [dish.id, dish.category]))
+
+  const costByOrderItemId = new Map<string, number>()
+  for (const sale of sales) {
+    if (!sale.orderItemId) continue
+    costByOrderItemId.set(
+      sale.orderItemId,
+      (costByOrderItemId.get(sale.orderItemId) ?? 0) + Number(sale.calculatedFoodCost ?? 0)
+    )
+  }
 
   const checks: UpsellCheck[] = orders.map((order) => ({
     orderId: order.id,
@@ -101,6 +131,9 @@ export async function GET(req: Request) {
       category: categoryByDishId.get(item.dishId) ?? null,
       qty: Number(item.qty ?? 0),
       dishPrice: Number(item.dishPrice ?? 0),
+      // Null, not 0, when a line was never costed — the report counts those
+      // separately instead of silently reporting them as pure profit.
+      foodCost: costByOrderItemId.has(item.id) ? (costByOrderItemId.get(item.id) as number) : null,
     })),
   }))
 

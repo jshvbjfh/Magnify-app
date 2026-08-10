@@ -13,28 +13,62 @@ type UpsellServerRow = {
   serverName: string
   terminalAccount: string | null
   checks: number
-  checksWithItems: number
-  revenue: number
-  avgCheck: number
-  items: number
-  itemsPerCheck: number
-  addonChecks: number
   addonRate: number | null
-  foodChecks: number
-  drinkAttachChecks: number
   drinkAttachRate: number | null
   upsellRevenue: number
-  upsellRevenueShare: number
-  covers: number
-  coveredChecks: number
+  upsellProfit: number
+  upsellMargin: number
+  profitPerCheck: number
+  vsHouse: number | null
+  ranked: boolean
   apc: number | null
 }
 
+type UpsellPairing = {
+  key: string
+  baseName: string
+  attachName: string
+  baseBills: number
+  together: number
+  attachRate: number
+  profit: number
+  margin: number
+  confidence: 'high' | 'medium' | 'low'
+}
+
+type UpsellOpportunity = {
+  key: string
+  baseName: string
+  attachName: string
+  baseBills: number
+  together: number
+  houseRate: number
+  bestServerName: string
+  bestServerRate: number
+  gapPoints: number
+  missedProfit: number
+}
+
 type UpsellingData = {
+  summary: {
+    bills: number
+    upsellRevenue: number
+    upsellProfit: number
+    upsellMargin: number
+    profitPerBill: number
+    opportunity: number
+    topServerName: string | null
+    topServerRate: number | null
+  }
   rows: UpsellServerRow[]
   house: UpsellServerRow | null
-  attachedItems: { dishId: string; dishName: string; category: string | null; group: string; qty: number; checks: number; revenue: number }[]
-  meta: { totalChecks: number; serverChecks: number; selfOrderChecks: number; checksWithoutServer: number; coveredChecks: number; uncategorizedItems: number }
+  pairings: UpsellPairing[]
+  opportunities: UpsellOpportunity[]
+  meta: {
+    totalChecks: number; serverChecks: number; selfOrderChecks: number
+    checksWithoutServer: number; coveredChecks: number
+    uncategorizedItems: number; uncostedAttachLines: number; pairingsTotal: number
+  }
 }
 
 type BranchSummaryRow = {
@@ -86,7 +120,7 @@ const TABS: { id: ReportTab; label: string; short: string; icon: React.ElementTy
   { id:'dish_profit',       label:'Orders Report',          short:'Orders',      icon:Utensils,   desc:'Orders, waiter, status, quantity sold, cost, price, total price, revenue and profit' },
   { id:'inventory_movement', label:'Inventory Movement',    short:'Inventory',   icon:Package,    desc:'Opening stock, in-period purchases, usage, remaining quantity and stock value' },
   { id:'theoretical_inventory', label:'Theoretical Inventory', short:'Theory Inv', icon:Package, desc:'Opening stock, expected usage, waste, theoretical closing and variance versus actual stock' },
-  { id:'upselling',         label:'Upselling Report',       short:'Upselling', icon:ArrowUpRight, desc:'How often each waiter attaches an add-on or a drink, their average bill and how they compare to the house, across your whole restaurant account' },
+  { id:'upselling',         label:'Upsell & Attachments',   short:'Upsell',    icon:ArrowUpRight, desc:'Which product pairings make the most gross profit, where you are leaving money on the table, and which waiters reproduce it — across your whole restaurant account' },
 ]
 
 // Tabs that report the whole restaurant account rather than the station the
@@ -814,88 +848,187 @@ function BranchSummaryTable({ data, onExportPdf, onSharePdf, exporting }: {
   )
 }
 
+const CONFIDENCE_STYLES: Record<'high'|'medium'|'low', { dot: string; label: string; text: string }> = {
+  high:   { dot: 'bg-green-500',  label: 'High',   text: 'text-gray-700' },
+  medium: { dot: 'bg-amber-500',  label: 'Medium', text: 'text-gray-600' },
+  low:    { dot: 'bg-gray-300 border border-gray-400', label: 'Low', text: 'text-gray-400' },
+}
+
+function ConfidenceChip({ level }: { level: 'high'|'medium'|'low' }) {
+  const s = CONFIDENCE_STYLES[level]
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-[11px] font-semibold ${s.text}`}>
+      <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${s.dot}`} />
+      {s.label}
+    </span>
+  )
+}
+
 function UpsellingTable({ data }: { data: UpsellingData | null }) {
-  if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading upselling report…</div>
+  if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading upsell report…</div>
   const rows = data.rows ?? []
   const house = data.house
-  const attached = data.attachedItems ?? []
-  const meta = data.meta ?? { totalChecks: 0, serverChecks: 0, selfOrderChecks: 0, checksWithoutServer: 0, coveredChecks: 0, uncategorizedItems: 0 }
+  const pairings = data.pairings ?? []
+  const opportunities = data.opportunities ?? []
+  const summary = data.summary
+  const meta = data.meta
   const pct = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`)
+
+  if (!house || house.checks === 0) {
+    return <div className="py-8 text-center text-gray-400 text-sm">No paid orders found for this period.</div>
+  }
 
   return (
     <>
-      <div className="grid grid-cols-4 gap-3 mb-4">
-        <StatCard label="Add-on Attach Rate" value={pct(house?.addonRate ?? null)} color="bg-orange-50 border-orange-200" />
-        <StatCard label="Drink Attach Rate" value={pct(house?.drinkAttachRate ?? null)} color="bg-blue-50 border-blue-200" />
-        <StatCard label="Average Bill" value={`${fmt(house?.avgCheck ?? 0)} RWF`} color="bg-green-50 border-green-200" />
-        <StatCard label="Upsell Revenue" value={`${fmt(house?.upsellRevenue ?? 0)} RWF`} color="bg-purple-50 border-purple-200" />
+      {/* Scope — without it the numbers have no context */}
+      <p className="text-xs text-gray-500 mb-3">
+        All stations · <span className="font-semibold text-gray-700">{fmt(meta.serverChecks)} eligible bills</span>
+        {meta.selfOrderChecks > 0 && <> · {fmt(meta.selfOrderChecks)} guest QR bills excluded</>}
+      </p>
+
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <StatCard label="Upsell Gross Profit" value={`${fmt(summary.upsellProfit)} RWF`} color="bg-green-50 border-green-200" />
+        <StatCard label="Profit per Bill" value={`${fmt(summary.profitPerBill)} RWF`} />
+        <StatCard label="Profit Opportunity" value={`${fmt(summary.opportunity)} RWF`} color="bg-amber-50 border-amber-200" />
       </div>
 
-      <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-800 mb-4">
-        Covers every station, not just the one you&apos;re switched to — one bill often spans stations, and it is the bill that gets upsold. Waiters are identified by the name they ring up under, not by the terminal screen&apos;s account, since several waiters share one screen. Add-on rate is the share of a waiter&apos;s bills carrying an add-on, side or dessert. Drink attach rate counts only bills that had food on them — a drinks-only visit was never a drink upsell.
+      {/* One sentence so an owner can stop reading here */}
+      <div className="rounded-xl border border-gray-200 border-l-[3px] border-l-orange-500 bg-white px-4 py-3 mb-5">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-orange-600 mb-1">Jesse&apos;s take</p>
+        <p className="text-sm text-gray-700 leading-relaxed">
+          Upselling generated <span className="font-bold text-gray-900">{fmt(summary.upsellProfit)} RWF</span> of gross profit
+          at a <span className="font-bold text-gray-900">{summary.upsellMargin.toFixed(0)}%</span> margin.
+          {summary.topServerName && (
+            <> <span className="font-bold text-gray-900">{summary.topServerName}</span> leads the floor at{' '}
+              <span className="font-bold text-gray-900">{pct(summary.topServerRate)}</span> attachment.</>
+          )}
+          {opportunities.length > 0 && (
+            <> The largest single gap is <span className="font-bold text-gray-900">{opportunities[0].baseName} + {opportunities[0].attachName}</span>,
+              worth about <span className="font-bold text-gray-900">{fmt(opportunities[0].missedProfit)} RWF</span>.</>
+          )}
+        </p>
       </div>
 
-      {rows.length === 0 ? (
-        <div className="py-8 text-center text-gray-400 text-sm">No paid orders found for this period.</div>
-      ) : (
-        <DataTable
-          head={['Waiter', 'Terminal', 'Bills', 'Add-on Rate', 'Drink Attach', 'Avg Bill (RWF)', 'Items / Bill', 'Upsell Revenue (RWF)', 'Upsell Share', 'APC (RWF)']}
-          rows={rows.map((r) => [
-            r.serverName,
-            r.terminalAccount ?? '—',
-            r.checks,
-            pct(r.addonRate),
-            pct(r.drinkAttachRate),
-            fmt(r.avgCheck),
-            r.itemsPerCheck.toFixed(1),
-            fmt(r.upsellRevenue),
-            pct(r.upsellRevenueShare),
-            r.apc === null ? '—' : fmt(r.apc),
-          ])}
-          foot={house ? [
-            'HOUSE AVERAGE',
-            '',
-            house.checks,
-            pct(house.addonRate),
-            pct(house.drinkAttachRate),
-            fmt(house.avgCheck),
-            house.itemsPerCheck.toFixed(1),
-            fmt(house.upsellRevenue),
-            pct(house.upsellRevenueShare),
-            house.apc === null ? '—' : fmt(house.apc),
-          ] : undefined}
-        />
-      )}
-
-      {attached.length > 0 && (
-        <div className="mt-6">
-          <h4 className="text-sm font-bold text-gray-900 mb-2">Most attached items</h4>
-          <DataTable
-            head={['Item', 'Category', 'Type', 'Qty Sold', 'Bills', 'Revenue (RWF)']}
-            rows={attached.slice(0, 15).map((i) => [
-              i.dishName,
-              i.category ?? '—',
-              i.group === 'addon' ? 'Add-on' : 'Drink',
-              i.qty,
-              i.checks,
-              fmt(i.revenue),
-            ])}
-          />
+      {opportunities.length > 0 && (
+        <div className="mb-5">
+          <h4 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Top opportunities</h4>
+          <div className="rounded-xl border border-gray-200 bg-white px-4">
+            {opportunities.slice(0, 3).map((o, i) => (
+              <div key={o.key} className={`flex items-center justify-between gap-5 py-3.5 ${i > 0 ? 'border-t border-gray-100' : ''}`}>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate">
+                    {o.baseName} <span className="font-normal text-gray-400">+</span> {o.attachName}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Sold together on <span className="font-semibold text-gray-700">{o.together} of {o.baseBills}</span> bills — <span className="font-semibold text-gray-700">{o.houseRate.toFixed(0)}%</span>.
+                    {' '}{o.bestServerName} reaches <span className="font-semibold text-gray-700">{o.bestServerRate.toFixed(0)}%</span>.
+                  </p>
+                  <div className="mt-2 h-1.5 max-w-[320px] rounded-full bg-gray-100 overflow-hidden flex">
+                    <span className="h-full bg-orange-500" style={{ width: `${Math.min(100, o.houseRate)}%` }} />
+                    <span className="h-full bg-amber-300" style={{ width: `${Math.min(100 - Math.min(100, o.houseRate), o.gapPoints)}%` }} />
+                  </div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-lg font-bold text-amber-600 leading-tight">{fmt(o.missedProfit)}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-gray-400">RWF</p>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
-      {meta.coveredChecks === 0 && (
-        <p className="mt-3 text-xs text-amber-600">APC is blank until waiters start entering guest counts.</p>
+      {pairings.length > 0 && (
+        <div className="mb-5">
+          <h4 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">What sells together</h4>
+          <div className="overflow-x-auto rounded-xl border border-gray-200">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-orange-500 text-white">
+                  {['Pairing', 'Sold together', 'Gross profit (RWF)', 'Margin', 'Confidence'].map((h, i) => (
+                    <th key={h} className={`px-3 py-2.5 text-xs font-bold uppercase tracking-wide whitespace-nowrap ${i === 0 || i === 4 ? 'text-left' : 'text-right'}`}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pairings.slice(0, 8).map((p, i) => (
+                  <tr key={p.key} className={`${i % 2 === 0 ? 'bg-white' : 'bg-orange-50/40'} ${p.confidence === 'low' ? 'text-gray-400' : ''}`}>
+                    <td className="px-3 py-2 text-xs border-b border-gray-100 text-gray-700 whitespace-nowrap">
+                      <span className="font-semibold">{p.baseName}</span>
+                      <span className="text-gray-400 mx-1.5">+</span>
+                      <span className="font-semibold text-orange-600">{p.attachName}</span>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-right border-b border-gray-100 tabular-nums">{p.together} of {p.baseBills} · {p.attachRate.toFixed(0)}%</td>
+                    <td className="px-3 py-2 text-xs text-right border-b border-gray-100 font-bold text-green-700 tabular-nums">{fmt(p.profit)}</td>
+                    <td className="px-3 py-2 text-xs text-right border-b border-gray-100 tabular-nums">{p.margin.toFixed(0)}%</td>
+                    <td className="px-3 py-2 text-xs text-left border-b border-gray-100"><ConfidenceChip level={p.confidence} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-xs text-gray-400">
+            Ranked by gross profit, not revenue — a cheap side often out-earns a premium main once food cost is taken off.
+            {meta.pairingsTotal > pairings.slice(0, 8).length && <> Showing 8 of {meta.pairingsTotal} pairings.</>}
+          </p>
+        </div>
       )}
-      {meta.selfOrderChecks > 0 && (
-        <p className="mt-1 text-xs text-gray-400">{meta.selfOrderChecks} guest QR bills are excluded — no server took them.</p>
-      )}
-      {meta.checksWithoutServer > 0 && (
-        <p className="mt-1 text-xs text-gray-400">{meta.checksWithoutServer} of {meta.serverChecks} bills have no server recorded.</p>
-      )}
-      {meta.uncategorizedItems > 0 && (
-        <p className="mt-1 text-xs text-gray-400">{meta.uncategorizedItems} sold items have no menu category and are excluded from attach rates.</p>
-      )}
+
+      <div className="mb-5">
+        <h4 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Who sells it</h4>
+        <DataTable
+          head={['Waiter', 'Bills', 'Attach rate', 'Profit / bill (RWF)', 'vs house']}
+          rows={rows.slice(0, 10).map((r) => [
+            r.ranked ? r.serverName : `${r.serverName} · ${r.checks} bills`,
+            r.checks,
+            pct(r.addonRate),
+            fmt(r.profitPerCheck),
+            r.vsHouse === null
+              ? 'Insufficient volume'
+              : `${r.vsHouse >= 0 ? '▲ ' : '▼ '}${fmt(Math.abs(r.vsHouse))}`,
+          ])}
+          foot={['HOUSE', house.checks, pct(house.addonRate), fmt(house.profitPerCheck), '']}
+        />
+        <p className="mt-2 text-xs text-gray-400">
+          Ranked by profit per bill, so a waiter working more tables doesn&apos;t automatically look better.
+          Under 20 bills shows no comparison.
+        </p>
+      </div>
+
+      <details className="rounded-xl border border-gray-200 bg-white">
+        <summary className="cursor-pointer px-4 py-3 text-xs font-semibold text-gray-600 select-none">
+          About this report
+        </summary>
+        <div className="px-4 pb-4 space-y-2 text-xs text-gray-500 leading-relaxed">
+          <p>
+            <span className="font-semibold text-gray-700">Attachment, not conversion.</span> Attachment rate measures how
+            often two items appear on the same bill. It does not prove a waiter offered the second item — nothing records
+            an offer that was declined, so a 0% rate may mean a waiter never asks, or that their tables never want one.
+          </p>
+          <p>
+            <span className="font-semibold text-gray-700">What counts.</span> Add-ons, sides and desserts, plus drinks.
+            Drinks are measured only against bills that had food on them: a guest who came in for two beers was not
+            upsold a drink, that was the visit.
+          </p>
+          <p>
+            <span className="font-semibold text-gray-700">Benchmarks come from your own floor.</span> Profit opportunity
+            compares each pairing against the waiter who already achieves the best rate on it here, over at least 5 bills.
+            No industry targets are assumed. The headline covers the top 3 shown, not every pairing.
+          </p>
+          <p>
+            <span className="font-semibold text-gray-700">Scope.</span> Whole restaurant account, every station — one bill
+            routinely spans stations and it is the bill that gets upsold. Waiters are identified by the name they ring up
+            under, not the terminal screen&apos;s shared account. Guest QR orders are excluded.
+          </p>
+          {meta.uncostedAttachLines > 0 && (
+            <p className="text-amber-600">{fmt(meta.uncostedAttachLines)} attached lines have no recorded food cost, so their profit is overstated.</p>
+          )}
+          {meta.uncategorizedItems > 0 && (
+            <p>{fmt(meta.uncategorizedItems)} sold items have no menu category and are excluded from attach rates.</p>
+          )}
+          {meta.coveredChecks === 0 && <p>Guest counts are not being recorded yet, so per-cover figures are unavailable.</p>}
+        </div>
+      </details>
     </>
   )
 }
