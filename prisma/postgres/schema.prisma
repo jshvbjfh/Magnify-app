@@ -278,6 +278,13 @@ model RestaurantOrder {
 
   @@unique([restaurantId, orderNumber])
   @@index([branchId, status, createdAt])
+  // Restaurant-wide reports (upselling, branch-summary, dish-profitability) all
+  // filter on restaurantId + status + the business day, falling back to paidAt
+  // when an order carries no shift. The branch index above cannot serve them
+  // because those reports deliberately span every station, so without these two
+  // Postgres scans every order the restaurant has ever taken.
+  @@index([restaurantId, status, businessDate])
+  @@index([restaurantId, status, paidAt])
   @@map("restaurant_orders")
 }
 
