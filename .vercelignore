@@ -23,3 +23,11 @@ electron/runtime.env
 .tmp-*
 .vscode
 release
+# Ad-hoc audit scripts and the data dumps they produce. Never imported by the
+# app, and the dumps carry real restaurant data — no reason to upload either.
+scripts/_*.json
+scripts/_*.mjs
+scripts/_*.mts
+waiter-app-desktop/check_local_db_temp.cjs
+# Root-level only — public/ and the sub-apps' index.html must still ship.
+/*.html
