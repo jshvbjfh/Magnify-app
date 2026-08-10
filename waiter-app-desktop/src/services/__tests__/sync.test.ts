@@ -86,7 +86,12 @@ describe('pullSync', () => {
     logInfoMock.mockResolvedValue(undefined)
   })
 
-  it('clears branch-scoped cached menu and tables on an authoritative empty pull', async () => {
+  // An empty pull is treated as suspect, not authoritative: a transient server
+  // error or a misconfigured station both return 0 dishes, and wiping the cache
+  // on that would leave a waiter with no menu and no way back offline. The
+  // cache is kept and the waiter is told what they're looking at instead.
+  // See the sync-safety change in 56c2584.
+  it('keeps the cached menu and tables on an empty pull and warns instead', async () => {
     getDishesMock.mockResolvedValue([
       {
         id: 'dish-1',
@@ -120,21 +125,19 @@ describe('pullSync', () => {
 
     const result = await pullSync()
 
-    expect(replaceDishesMock).toHaveBeenCalledWith([], {
-      branchId: 'branch-1',
-      restaurantId: 'rest-1',
-    })
-    expect(replaceTablesMock).toHaveBeenCalledWith([], {
-      branchId: 'branch-1',
-      restaurantId: 'rest-1',
-    })
+    expect(replaceDishesMock).not.toHaveBeenCalled()
+    expect(replaceTablesMock).not.toHaveBeenCalled()
     expect(result).toEqual({
-      warning: 'This station currently has no menu. This station currently has no tables.',
+      warning: 'This station currently has no menu. Showing your cached menu. This station currently has no tables.',
     })
-    expect(setConfigMock).toHaveBeenCalledWith('lastPulledAt', expect.any(String))
+    // Nothing was taken from the server, so the pull clock must not advance —
+    // otherwise a run of empty pulls would look like a series of good syncs.
+    expect(setConfigMock).not.toHaveBeenCalledWith('lastPulledAt', expect.any(String))
   })
 
-  it('clears the active branch snapshot before surfacing a no-menu error', async () => {
+  // Nothing cached and nothing pulled is the one case with no menu to fall back
+  // on, so it fails loudly rather than leaving the waiter on an empty screen.
+  it('raises a no-menu error when there is no cached menu to fall back on', async () => {
     getDishesMock.mockResolvedValue([])
     getTablesMock.mockResolvedValue([
       {
@@ -160,14 +163,10 @@ describe('pullSync', () => {
       'No menu is available for your assigned station. Ask your manager to sync the station menu and verify your station assignment.',
     )
 
-    expect(replaceDishesMock).toHaveBeenCalledWith([], {
-      branchId: 'branch-1',
-      restaurantId: 'rest-1',
-    })
-    expect(replaceTablesMock).toHaveBeenCalledWith([], {
-      branchId: 'branch-1',
-      restaurantId: 'rest-1',
-    })
+    // Even on the error path the cache is left alone — the waiter's existing
+    // tables survive a bad pull.
+    expect(replaceDishesMock).not.toHaveBeenCalled()
+    expect(replaceTablesMock).not.toHaveBeenCalled()
     expect(logErrorMock).toHaveBeenCalledWith('sync', 'Pull returned no menu for assigned branch', {
       restaurantId: 'rest-1',
       branchId: 'branch-1',

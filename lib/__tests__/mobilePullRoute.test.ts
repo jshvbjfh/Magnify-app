@@ -111,6 +111,7 @@ describe('GET /api/mobile/pull', () => {
       where: {
         restaurantId: 'bound-rest',
         isActive: true,
+        deletedAt: null,
       },
       select: {
         id: true,
