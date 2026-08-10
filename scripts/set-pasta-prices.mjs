@@ -1,0 +1,15 @@
+import { createRequire } from 'module'; import { resolve } from 'path'; import { readFileSync } from 'fs'
+for (const f of ['.env.local','.env']) { try { for (const l of readFileSync(resolve(process.cwd(),f),'utf8').split('\n')) { const t=l.trim(); if(!t||t.startsWith('#'))continue; const e=t.indexOf('='); if(e<0)continue; const k=t.slice(0,e).trim(), v=t.slice(e+1).trim().replace(/^['"]|['"]$/g,''); if(!process.env[k])process.env[k]=v } } catch{} }
+const require = createRequire(import.meta.url); const { PrismaClient } = require('@prisma/client')
+const prisma = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } })
+const user = await prisma.user.findUnique({ where:{ email:'high5ive@management.com' }, select:{ id:true } })
+const rest = await prisma.restaurant.findFirst({ where:{ ownerId:user.id }, select:{ id:true } })
+const branch = await prisma.branch.findFirst({ where:{ restaurantId:rest.id, name:'Tiamo Pasta' }, select:{ id:true } })
+const p = await prisma.dish.updateMany({ where:{ branchId:branch.id, deletedAt:null, category:'Pasta' }, data:{ sellingPrice:10000 } })
+const s = await prisma.dish.updateMany({ where:{ branchId:branch.id, deletedAt:null, category:'Sauces' }, data:{ sellingPrice:5000 } })
+console.log(`Pasta items set to 10,000: ${p.count}`)
+console.log(`Sauce items set to 5,000: ${s.count}`)
+const dishes = await prisma.dish.findMany({ where:{ branchId:branch.id, deletedAt:null, category:{ in:['Pasta','Sauces','Add-ons'] } }, select:{ name:true, category:true, sellingPrice:true }, orderBy:[{category:'asc'},{name:'asc'}] })
+console.log('\nTiamo menu now:')
+for (const d of dishes) console.log(`  [${d.category}] ${d.name} = ${d.sellingPrice}`)
+await prisma.$disconnect()

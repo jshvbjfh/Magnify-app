@@ -73,6 +73,9 @@ interface MobileOrder {
   vat_amount: number
   total_amount: number
   created_by_name: string | null
+  // Covers seated at the table. Optional — waiters may skip it, and clients
+  // older than this field omit it entirely. Null means "not recorded".
+  guest_count?: number | null
   paid_at: string | null
   canceled_at: string | null
   cancel_reason: string | null
@@ -237,6 +240,12 @@ export async function POST(req: Request) {
       const normalizedSubtotalAmount = normalizeNumber(order.subtotal_amount)
       const normalizedVatAmount = normalizeNumber(order.vat_amount)
       const normalizedTotalAmount = normalizeNumber(order.total_amount)
+      // Covers: keep null when absent or nonsensical rather than coercing to 0,
+      // so a table with no recorded count is excluded from average-per-cover
+      // instead of dragging it down as a zero-guest sale.
+      const rawGuestCount = Number(order.guest_count)
+      const normalizedGuestCount =
+        Number.isInteger(rawGuestCount) && rawGuestCount > 0 ? rawGuestCount : null
 
       let needsPostTxEnqueue = false
 
@@ -281,6 +290,7 @@ export async function POST(req: Request) {
               totalAmount: normalizedTotalAmount,
               staffId: claims.sub,
               createdByName: normalizedCreatedByName,
+              guestCount: normalizedGuestCount,
               shiftId: resolvedShiftId,
               businessDate: normalizedBusinessDate,
               paidAt: shouldFinalizePaidOrder ? null : normalizedPaidAt,
@@ -297,6 +307,10 @@ export async function POST(req: Request) {
               // Keep createdByName in sync so attribution changes (e.g. a waiter
               // confirming a guest QR order) propagate to the cloud and kitchen.
               createdByName: normalizedCreatedByName,
+              // Same rule as shift/day below — only ever set a count, never
+              // clear one the server already holds. An older client that omits
+              // the field must not wipe a number a waiter already entered.
+              ...(normalizedGuestCount !== null ? { guestCount: normalizedGuestCount } : {}),
               status: persistedStatus,
               paymentMethod: shouldFinalizePaidOrder ? null : order.payment_method,
               subtotalAmount: normalizedSubtotalAmount,

@@ -6,6 +6,11 @@
     <title>Magnify POS</title>
   </head>
   <body>
+    <!-- Draggable strip under the hidden title bar's button overlay so the
+         window can still be moved by mouse. 48px here renders as ~32px on
+         screen after the app's 0.67 zoom (see UI_ZOOM in electron/main.js),
+         matching the native titleBarOverlay height. -->
+    <div style="position:fixed;top:0;left:0;right:0;height:48px;-webkit-app-region:drag;z-index:1;"></div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

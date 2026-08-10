@@ -313,6 +313,8 @@ export interface Order {
   vat_amount: number
   total_amount: number
   created_by_name: string | null
+  // How many people sat at the table. Optional — null means the waiter skipped it.
+  guest_count: number | null
   served_at: string | null
   paid_at: string | null
   canceled_at: string | null
@@ -346,12 +348,13 @@ export async function createOrder(order: Order, items: OrderItem[]): Promise<voi
       statement: `INSERT INTO orders
         (id, restaurant_id, branch_id, table_id, table_name, order_number, status,
          payment_method, subtotal_amount, vat_amount, total_amount, created_by_name,
-         served_at, paid_at, canceled_at, cancel_reason, shift_id, business_date, synced, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+         guest_count, served_at, paid_at, canceled_at, cancel_reason, shift_id, business_date, synced, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       values: [
         order.id, order.restaurant_id, order.branch_id, order.table_id, order.table_name,
         order.order_number, order.status, order.payment_method, order.subtotal_amount,
         order.vat_amount, order.total_amount, order.created_by_name,
+        order.guest_count ?? null,
         order.served_at, order.paid_at, order.canceled_at, order.cancel_reason,
         order.shift_id ?? null, order.business_date ?? null,
         order.created_at, order.updated_at,

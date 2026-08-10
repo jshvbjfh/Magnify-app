@@ -403,6 +403,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
   const tablePickerRef = useRef<HTMLDivElement>(null)
   const tablePickerInputRef = useRef<HTMLInputElement>(null)
   const [localCart,        setLocalCart]        = useState<Record<string, CartItem[]>>({})
+  // Covers per table, kept as the raw typed string so an empty box stays empty
+  // rather than snapping to 0. Optional — a blank box records no guest count at
+  // all, which reports read as "unknown" and leave out of the average.
+  const [guestsByTable,    setGuestsByTable]    = useState<Record<string, string>>({})
   const [showPanel,        setShowPanel]        = useState<'dishes' | 'order'>('dishes')
   // Edit-pending flow: the order being extended + its already-sent items
   // (shown locked in the cart panel; only NEW items get kitchen tickets).
@@ -1048,6 +1052,11 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
       const { subtotal, vatAmount, totalAmount } = calcTotals(cart)
 
+      // Covers are optional: a blank or nonsense box stores null, not 0, so the
+      // manager's average is built only from tables where a real count was given.
+      const rawGuests = Number(guestsByTable[selectedTableKey] ?? '')
+      const parsedGuestCount = Number.isInteger(rawGuests) && rawGuests > 0 ? rawGuests : null
+
       await logInfo('order', 'Confirm order requested', {
         selectedTableKey,
         tableName,
@@ -1078,6 +1087,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         vat_amount:         vatAmount,
         total_amount:       totalAmount,
         created_by_name:    name,
+        guest_count:        parsedGuestCount,
         served_at:          null,
         paid_at:            null,
         canceled_at:        null,
@@ -1118,6 +1128,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       // ── Reload BEFORE clearing cart so the panel never flashes empty ──────
       await loadPOS()
       setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+      setGuestsByTable(prev => ({ ...prev, [selectedTableKey]: '' }))
       setShowPanel('order')
       setConfirmSuccess(`${orderNumber} confirmed for ${tableName}`)
       setTimeout(() => setConfirmSuccess(null), 4000)
@@ -1820,6 +1831,29 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                 {submitError}
               </div>
             )}
+            {/* Covers — optional. Blank is fine; it just leaves this table out
+                of the manager's average spend per guest. */}
+            {!editingOrder && (
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="guest-count" className="text-xs font-medium text-gray-500">
+                  Guests at table <span className="text-gray-400">(optional)</span>
+                </label>
+                <input
+                  id="guest-count"
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  value={guestsByTable[selectedTableKey] ?? ''}
+                  onChange={e => {
+                    const next = e.target.value
+                    setGuestsByTable(prev => ({ ...prev, [selectedTableKey]: next }))
+                  }}
+                  placeholder="—"
+                  className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-sm text-center outline-none focus:ring-2 focus:ring-orange-400"
+                />
+              </div>
+            )}
             <div className="flex justify-between text-base font-bold text-gray-900">
               <span>{editingOrder ? 'New items' : 'Total'}</span><span>{fmtRWF(totalAmount)} RWF</span>
             </div>
@@ -1844,7 +1878,11 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
               {confirmingOrder ? (editingOrder ? 'Updating…' : 'Confirming…') : (editingOrder ? 'Add to Order' : 'Confirm Order')}
             </button>
             <button
-              onClick={() => { setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] })); setSubmitError(null) }}
+              onClick={() => {
+                setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+                setGuestsByTable(prev => ({ ...prev, [selectedTableKey]: '' }))
+                setSubmitError(null)
+              }}
               disabled={confirmingOrder}
               className="w-full text-xs text-gray-400 hover:text-red-500 py-0.5 transition-colors">
               Clear cart

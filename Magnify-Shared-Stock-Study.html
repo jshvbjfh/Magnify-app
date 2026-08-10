@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One Stock, Many Stations — a Magnify design study</title>
+<style>
+  /* ── reset ────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body, h1, h2, h3, h4, p, figure, blockquote, ul, ol, pre { margin: 0; }
+  ul, ol { padding: 0; }
+  img, svg { max-width: 100%; }
+  table { border-collapse: collapse; }
+
+  :root {
+    --paper:      #F6F8F4;
+    --paper-2:    #EDF1EA;
+    --ink:        #16211C;
+    --muted:      #5C6B63;
+    --rule:       #D2DCD3;
+    --rule-soft:  #E2E9E1;
+    --accent:     #1D6B57;
+    --accent-dim: #1D6B5714;
+    --flag:       #A85219;
+    --bad:        #9B2C2C;
+    --ok:         #2E7D5B;
+
+    --f-head: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    --f-body: Georgia, "Iowan Old Style", "Times New Roman", serif;
+    --f-data: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", monospace;
+
+    --measure: 70ch;
+    --pad: clamp(1.1rem, 4vw, 2.75rem);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:      #0F1512;
+      --paper-2:    #161E19;
+      --ink:        #E3ECE6;
+      --muted:      #93A69B;
+      --rule:       #27332C;
+      --rule-soft:  #1D2721;
+      --accent:     #5CC7A6;
+      --accent-dim: #5CC7A61A;
+      --flag:       #E08A4E;
+      --bad:        #E0736B;
+      --ok:         #6FCB9F;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:#0F1512; --paper-2:#161E19; --ink:#E3ECE6; --muted:#93A69B;
+    --rule:#27332C; --rule-soft:#1D2721; --accent:#5CC7A6; --accent-dim:#5CC7A61A;
+    --flag:#E08A4E; --bad:#E0736B; --ok:#6FCB9F;
+  }
+  :root[data-theme="light"] {
+    --paper:#F6F8F4; --paper-2:#EDF1EA; --ink:#16211C; --muted:#5C6B63;
+    --rule:#D2DCD3; --rule-soft:#E2E9E1; --accent:#1D6B57; --accent-dim:#1D6B5714;
+    --flag:#A85219; --bad:#9B2C2C; --ok:#2E7D5B;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 62rem;
+    margin: 0 auto;
+    padding: var(--pad);
+    display: flex;
+    flex-direction: column;
+    gap: 2.6rem;
+  }
+
+  .col { max-width: var(--measure); }
+
+  /* ── masthead ─────────────────────────────────────── */
+  .mast { display: flex; flex-direction: column; gap: .85rem; padding-top: 1rem; }
+  .eyebrow {
+    font-family: var(--f-head);
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    font-family: var(--f-head);
+    font-size: clamp(1.9rem, 5.2vw, 3rem);
+    font-weight: 650;
+    letter-spacing: -.022em;
+    line-height: 1.06;
+    text-wrap: balance;
+    max-width: 22ch;
+  }
+  .standfirst { font-size: 1.08rem; color: var(--muted); max-width: 60ch; }
+  .mast-rule { border: 0; border-top: 3px double var(--rule); margin: .5rem 0 0; }
+
+  /* ── sections ─────────────────────────────────────── */
+  section { display: flex; flex-direction: column; gap: 1.1rem; }
+  .sec-head { display: flex; flex-direction: column; gap: .3rem; }
+  .sec-num {
+    font-family: var(--f-data);
+    font-size: .72rem;
+    color: var(--accent);
+    letter-spacing: .1em;
+  }
+  h2 {
+    font-family: var(--f-head);
+    font-size: clamp(1.28rem, 3.1vw, 1.7rem);
+    font-weight: 640;
+    letter-spacing: -.015em;
+    line-height: 1.18;
+    text-wrap: balance;
+    padding-bottom: .5rem;
+    border-bottom: 3px double var(--rule);
+  }
+  h3 {
+    font-family: var(--f-head);
+    font-size: 1.02rem;
+    font-weight: 640;
+    letter-spacing: -.006em;
+    margin: .7rem 0 -.35rem;
+  }
+  .col p + p { margin-top: .85rem; }
+  a { color: var(--accent); }
+  strong { font-weight: 700; }
+
+  code, .m {
+    font-family: var(--f-data);
+    font-size: .855em;
+    background: var(--accent-dim);
+    padding: .08em .34em;
+    border-radius: 2px;
+    word-break: break-word;
+  }
+
+  ul, ol { padding-left: 1.25rem; display: flex; flex-direction: column; gap: .45rem; }
+  li::marker { color: var(--accent); }
+
+  /* ── verdict cards ────────────────────────────────── */
+  .verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); gap: 1rem; }
+  .verdict {
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--accent);
+    padding: 1.1rem 1.15rem;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+  }
+  .verdict.warn { border-top-color: var(--flag); }
+  .verdict h4 {
+    font-family: var(--f-head); font-size: .95rem; font-weight: 650;
+    letter-spacing: -.005em;
+  }
+  .verdict p { font-size: .92rem; color: var(--muted); }
+  .vstat {
+    font-family: var(--f-data); font-size: .74rem; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ink); display: flex; gap: .5rem; flex-wrap: wrap;
+  }
+  .vstat b { font-weight: 600; color: var(--muted); }
+
+  /* ── chips ────────────────────────────────────────── */
+  .chip {
+    display: inline-block;
+    font-family: var(--f-head);
+    font-size: .68rem;
+    font-weight: 650;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    padding: .16em .5em;
+    border-radius: 2px;
+    white-space: nowrap;
+    border: 1px solid currentColor;
+  }
+  .chip.ok   { color: var(--ok); }
+  .chip.part { color: var(--flag); }
+  .chip.no   { color: var(--bad); }
+
+  /* ── tables ───────────────────────────────────────── */
+  .rail { overflow-x: auto; border: 1px solid var(--rule); background: var(--paper-2); }
+  table { width: 100%; font-size: .875rem; font-family: var(--f-head); }
+  th, td { text-align: left; padding: .58rem .8rem; vertical-align: top; border-bottom: 1px solid var(--rule-soft); }
+  thead th {
+    font-size: .68rem; letter-spacing: .09em; text-transform: uppercase;
+    font-weight: 650; color: var(--muted); background: var(--paper);
+    border-bottom: 2px solid var(--rule); position: sticky; top: 0;
+  }
+  tbody tr:nth-child(even) { background: var(--accent-dim); }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--f-data); }
+  td .m, th .m { background: none; padding: 0; }
+  caption {
+    caption-side: bottom; text-align: left; font-family: var(--f-head);
+    font-size: .78rem; color: var(--muted); padding: .6rem .8rem; border-top: 1px solid var(--rule-soft);
+  }
+
+  /* ── step rail ────────────────────────────────────── */
+  .steps { display: flex; flex-direction: column; gap: 0; border-left: 2px solid var(--rule); padding-left: 1.15rem; }
+  .step { position: relative; padding: .62rem 0; }
+  .step::before {
+    content: ""; position: absolute; left: calc(-1.15rem - 5px); top: 1.05rem;
+    width: 8px; height: 8px; background: var(--accent); border-radius: 50%;
+  }
+  .step.gate::before { background: var(--flag); width: 10px; height: 10px; left: calc(-1.15rem - 6px); }
+  .step-t { font-family: var(--f-head); font-size: .93rem; font-weight: 640; }
+  .step-d { font-size: .9rem; color: var(--muted); margin-top: .12rem; }
+  .step.gate .step-t { color: var(--flag); }
+
+  /* ── callout ──────────────────────────────────────── */
+  .call {
+    border-left: 3px solid var(--flag);
+    background: var(--paper-2);
+    padding: .9rem 1.1rem;
+    display: flex; flex-direction: column; gap: .5rem;
+  }
+  .call.key { border-left-color: var(--accent); }
+  .call h4 {
+    font-family: var(--f-head); font-size: .8rem; font-weight: 650;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--flag);
+  }
+  .call.key h4 { color: var(--accent); }
+  .call p, .call ul { font-size: .95rem; }
+
+  /* ── diagram ──────────────────────────────────────── */
+  figure { display: flex; flex-direction: column; gap: .6rem; }
+  figcaption { font-family: var(--f-head); font-size: .78rem; color: var(--muted); }
+  .diagram { width: 100%; height: auto; display: block; }
+  .diagram text { font-family: var(--f-head); }
+
+  /* ── code block ───────────────────────────────────── */
+  pre {
+    overflow-x: auto; background: var(--paper-2);
+    border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+    padding: .85rem 1rem; font-family: var(--f-data); font-size: .8rem;
+    line-height: 1.55; color: var(--ink);
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .cmt { color: var(--muted); }
+
+  /* ── phases ───────────────────────────────────────── */
+  .phase { border: 1px solid var(--rule); background: var(--paper-2); padding: 1rem 1.15rem; display: flex; flex-direction: column; gap: .55rem; }
+  .phase-h { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; }
+  .phase-n { font-family: var(--f-data); font-size: .74rem; color: var(--accent); letter-spacing: .08em; }
+  .phase-t { font-family: var(--f-head); font-weight: 650; font-size: 1rem; }
+  .phase-e { font-family: var(--f-data); font-size: .74rem; color: var(--muted); margin-left: auto; }
+  .phase ul { font-size: .92rem; }
+  .phases { display: flex; flex-direction: column; gap: .8rem; }
+
+  hr.end { border: 0; border-top: 3px double var(--rule); }
+  .foot { font-family: var(--f-head); font-size: .8rem; color: var(--muted); padding-bottom: 2rem; }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+  @media print {
+    body { background: #fff; color: #000; font-size: 11pt; }
+    .rail, pre, .phase, .verdict, .call { break-inside: avoid; }
+    section { break-inside: auto; }
+    thead th { position: static; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">Magnify · Inventory architecture</div>
+    <h1>One stock, many stations</h1>
+    <p class="standfirst">A study of how Magnify moves stock and records sales today, what the live data says about the seven-station problem, and what it would actually take to make the Main station the single stock source — plus the APC report.</p>
+    <hr class="mast-rule">
+  </header>
+
+  <div class="verdicts">
+    <div class="verdict">
+      <h4>Shared stock from Main</h4>
+      <p>Smaller than it looks. Every gram consumed in the entire system passes through <em>one</em> function, and that function's station filter is three lines long. The engineering is contained; the data merge is the risky part.</p>
+      <div class="vstat"><span><b>Code</b> ~6 files</span><span><b>Migration</b> 21 items</span><span><b>Risk</b> medium</span></div>
+    </div>
+    <div class="verdict">
+      <h4>Main as the sales roll-up</h4>
+      <p>Roughly half-built already. Reports keyed on <span class="m">isMain</span> already aggregate across all stations, and one report is restaurant-wide unconditionally. The gap is inventory and the day-to-day screens, not sales.</p>
+      <div class="vstat"><span><b>Exists</b> 3 reports</span><span><b>Missing</b> dashboard, inventory</span></div>
+    </div>
+    <div class="verdict warn">
+      <h4>APC report</h4>
+      <p>Average per <em>check</em> is computable today from data you already hold. Average per <em>cover</em> is not — nothing in the schema or either waiter app records how many guests sat down.</p>
+      <div class="vstat"><span><b>Per check</b> ready</span><span><b>Per cover</b> needs a field</span></div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">§ 1</span>
+      <h2>The machinery as it stands</h2>
+    </div>
+    <div class="col">
+      <p>Five tables carry the whole stock-and-sales story. Understanding which one is the <em>key</em> matters more than the field list, because the redesign turns on exactly one of them.</p>
+    </div>
+
+    <div class="rail">
+      <table>
+        <thead>
+          <tr><th>Table</th><th>What it really is</th><th>Identity</th><th>Station lock</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="m">inventory_items</span></td>
+            <td>The ingredient card — name, unit, running <span class="m">quantity</span>, current <span class="m">unitCost</span>. Also holds preps (<span class="m">type='prep'</span>), which carry no stock of their own.</td>
+            <td><span class="m">cuid</span>, unique on <span class="m">(restaurantId, branchId, name)</span></td>
+            <td><span class="chip no">hard</span> <span class="m">branchId</span> required</td>
+          </tr>
+          <tr>
+            <td><span class="m">inventory_purchases</span></td>
+            <td><strong>This is the batch.</strong> One row per stock entry, with <span class="m">remainingQuantity</span> as its live balance. FIFO consumption walks these rows oldest-first and decrements them.</td>
+            <td><span class="m">cuid</span> is the real key; <span class="m">batchId</span> is a printable label like <span class="m">B-07202026-A3F9K2</span> and is <em>nullable</em></td>
+            <td><span class="chip no">hard</span> <span class="m">branchId</span> required</td>
+          </tr>
+          <tr>
+            <td><span class="m">dish_ingredients</span></td>
+            <td>The recipe. <span class="m">quantityRequired</span> of one specific ingredient card per one serving.</td>
+            <td><span class="m">(dishId, inventoryItemId)</span></td>
+            <td><span class="chip part">implicit</span> — inherited from the item it points at</td>
+          </tr>
+          <tr>
+            <td><span class="m">inventory_batch_usage_ledgers</span></td>
+            <td>The audit trail. One immutable row per batch touched, tagged <span class="m">sourceType</span> = dishSale / waste / adjustment / prepProduction.</td>
+            <td><span class="m">cuid</span> + <span class="m">(sourceType, sourceId)</span> index</td>
+            <td><span class="chip part">stamped</span> — copied from the consumption</td>
+          </tr>
+          <tr>
+            <td><span class="m">dish_sales</span> + <span class="m">dish_sale_ingredients</span></td>
+            <td>The COGS record written at payment. The sale row carries the station that <em>owns the dish</em>; the ingredient rows carry what it actually cost.</td>
+            <td><span class="m">cuid</span>, deduped on <span class="m">orderItemId</span></td>
+            <td><span class="chip ok">already flexible</span></td>
+          </tr>
+        </tbody>
+        <caption>The batch is a purchase row. There is no separate batch table — <span class="m">batchId</span> is a human label, and consumption falls back to the row id when it's null.</caption>
+      </table>
+    </div>
+
+    <h3>What happens when a waiter takes payment</h3>
+    <div class="col">
+      <p>This is the path every gram travels. It starts in <span class="m">lib/restaurantOrderPayment.ts</span> and ends inside <span class="m">lib/inventoryConsumption.ts</span>.</p>
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-t">Order marked PAID — pushed from the waiter device or paid in the portal</div>
+        <div class="step-d"><span class="m">finalizeRestaurantOrderPayment()</span> loads the order's ACTIVE items.</div>
+      </div>
+      <div class="step">
+        <div class="step-t">Each line resolves its own station</div>
+        <div class="step-d"><span class="m">item.branchId</span> (snapshotted when it was rung up) → else the dish's live <span class="m">branchId</span> → else the till's. One order can legitimately span stations, and already does.</div>
+      </div>
+      <div class="step">
+        <div class="step-t">A DishSale row is created per line, stamped with that station</div>
+        <div class="step-d">Idempotent on <span class="m">orderItemId</span>, so a replayed push can't double-consume.</div>
+      </div>
+      <div class="step">
+        <div class="step-t">MEP first, at dish level</div>
+        <div class="step-d">Batch-cooked <span class="m">preparedPortions</span> cover the sale before the recipe runs at all; only the uncovered remainder reaches the recipe.</div>
+      </div>
+      <div class="step">
+        <div class="step-t">For each recipe row: prep-aware or straight consumption</div>
+        <div class="step-d">A prep drains its own kitchen-made layer first, then cascades the shortfall to its raw sub-recipe. Everything else goes straight to FIFO.</div>
+      </div>
+      <div class="step gate">
+        <div class="step-t">▸ The station gate — <span class="m">consumeIngredientStock()</span></div>
+        <div class="step-d">The ingredient card is looked up by <span class="m">(id, restaurantId, branchId)</span> and the FIFO layers by <span class="m">(ingredientId, restaurantId, branchId)</span>. <strong>This is the entire per-station stock model.</strong></div>
+      </div>
+      <div class="step">
+        <div class="step-t">Layers decrement oldest-first; a ledger row is written per layer</div>
+        <div class="step-d">Then <span class="m">inventory_items.quantity</span> takes a relative decrement and <span class="m">unitCost</span> is repointed at the new front layer.</div>
+      </div>
+      <div class="step">
+        <div class="step-t">Journal entry, then everything is queued to the sync outbox</div>
+        <div class="step-d">Revenue and COGS post double-entry; the changed rows fan out to devices.</div>
+      </div>
+    </div>
+
+    <div class="call">
+      <h4>The failure mode you're living with</h4>
+      <p>When the selling station's ingredient card doesn't exist, <span class="m">consumeIngredientStock</span> throws <span class="m">Ingredient … was not found</span>, and <span class="m">dishSaleRecording.ts</span> catches it and <em>silently skips COGS for that line</em>. Revenue still posts. The sale just records a food cost of zero. That's deliberate — throwing would trap the order in a retry loop — but it means missing stock shows up as fake profit, not as an error.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">§ 2</span>
+      <h2>Where the lock actually lives</h2>
+    </div>
+    <div class="col">
+      <p>The per-station stock model isn't spread across the codebase the way the table count suggests. Thirty-four non-test files reference the inventory tables, but only three places <em>enforce</em> that a dish can only eat from its own station's shelf.</p>
+    </div>
+
+    <div class="rail">
+      <table>
+        <thead><tr><th>Location</th><th>What it enforces</th><th>Effect if changed</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="m">lib/inventoryConsumption.ts</span> — item lookup, ~L86&ndash;99</td>
+            <td>The ingredient card must belong to the consuming station.</td>
+            <td>Sales stop failing to find shared ingredients.</td>
+          </tr>
+          <tr>
+            <td><span class="m">lib/inventoryConsumption.ts</span> — layer query, ~L115&ndash;123</td>
+            <td>FIFO batches must belong to the consuming station.</td>
+            <td>Consumption draws from the shared pool.</td>
+          </tr>
+          <tr>
+            <td><span class="m">app/api/restaurant/dishes/[id]/ingredients/route.ts</span> — L44</td>
+            <td>A recipe may only reference an ingredient in the manager's currently-selected station.</td>
+            <td>Recipes at any station can point at Main's items.</td>
+          </tr>
+        </tbody>
+        <caption>Verified against the current tree. Everything else — reports, the integrity checker, MEP, waste, stock-take — reads the same shape and follows once these agree.</caption>
+      </table>
+    </div>
+
+    <div class="call key">
+      <h4>Why this matters for scoping</h4>
+      <p>You don't need to rip <span class="m">branchId</span> out of the inventory tables, and you shouldn't. Keep the column, keep every existing row where it is, and introduce one resolver that answers <em>"which station's shelf does this consumption read from?"</em> Per-station mode returns the station; shared mode returns Main. The schema doesn't move; the question changes.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">§ 3</span>
+      <h2>What your own data says</h2>
+    </div>
+    <div class="col">
+      <p>Measured against the full restaurant dump in <span class="m">scripts/_full_restaurant_dump.json</span> — seven stations, 198 live ingredient cards, 127 dishes, 425 recipe rows. Your instinct about seven stations is correct, and the damage is already visible.</p>
+    </div>
+
+    <div class="rail">
+      <table>
+        <thead><tr><th>Station</th><th class="num">Ingredient cards</th><th class="num">Preps</th><th class="num">Dishes</th><th class="num">Batches</th></tr></thead>
+        <tbody>
+          <tr><td>Station 1</td><td class="num">20</td><td class="num">1</td><td class="num">9</td><td class="num">18</td></tr>
+          <tr><td>Station 2</td><td class="num">46</td><td class="num">0</td><td class="num">44</td><td class="num">43</td></tr>
+          <tr><td>Station 3</td><td class="num">22</td><td class="num">3</td><td class="num">18</td><td class="num">17</td></tr>
+          <tr><td>Station 4</td><td class="num">44</td><td class="num">7</td><td class="num">19</td><td class="num">29</td></tr>
+          <tr><td>Station 5</td><td class="num">19</td><td class="num">0</td><td class="num">7</td><td class="num">19</td></tr>
+          <tr><td>Station 6</td><td class="num">47</td><td class="num">0</td><td class="num">18</td><td class="num">41</td></tr>
+          <tr><td>Station 7</td><td class="num">0</td><td class="num">0</td><td class="num">1</td><td class="num">0</td></tr>
+        </tbody>
+        <caption>Seven stations, each maintaining a separate shelf. That's seven stock entries every time a shared staple is delivered.</caption>
+      </table>
+    </div>
+
+    <h3>The cost of duplication, measured</h3>
+
+    <div class="rail">
+      <table>
+        <thead><tr><th>Finding</th><th class="num">Count</th><th>What it means in practice</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Ingredient names existing in more than one station</td>
+            <td class="num">21</td>
+            <td>26 redundant cards — 13% of the whole inventory is the same thing, entered repeatedly.</td>
+          </tr>
+          <tr>
+            <td>Duplicates with <strong>conflicting units</strong></td>
+            <td class="num">11</td>
+            <td>Potato is <span class="m">g</span> in one station and <span class="m">kg</span> in another. Egg is <span class="m">pcs</span> vs <span class="m">piece</span>. Jack Daniel is <span class="m">shot</span> vs <span class="m">ml</span>.</td>
+          </tr>
+          <tr>
+            <td>Duplicates with <strong>conflicting unit costs</strong></td>
+            <td class="num">16</td>
+            <td>The same onions priced at 1.5 and 1000. The same Jack Daniel at 80 and 3,364. Every dish costed from the wrong card reports the wrong margin.</td>
+          </tr>
+          <tr>
+            <td>Split stock — one station holds it, another reads zero</td>
+            <td class="num">5</td>
+            <td>Stock is physically present but invisible to the station trying to sell it.</td>
+          </tr>
+          <tr>
+            <td>Dish sales recorded with <strong>zero food cost</strong></td>
+            <td class="num">36 of 126</td>
+            <td><strong>29% of sales carry no COGS at all.</strong> Profit on those lines is reported as 100%.</td>
+          </tr>
+          <tr>
+            <td>Recipe rows already crossing stations</td>
+            <td class="num">0 of 425</td>
+            <td>Clean. Nothing to untangle — the guard has held, so the migration starts from a consistent state.</td>
+          </tr>
+        </tbody>
+        <caption>Source: the Jul 20 dump committed in the repo. Directionally current; re-run before migrating.</caption>
+      </table>
+    </div>
+
+    <div class="call">
+      <h4>Read the 29% carefully before blaming the model</h4>
+      <p>Zero-cost sales have several possible causes — a dish with no recipe at all, an ingredient not yet synced from a device, genuinely empty stock. Splitting that 36 into causes is a half-hour query, and it's worth doing first: it tells you how much of the pain shared stock actually removes versus how much is missing recipes, which shared stock will not fix.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">§ 4</span>
+      <h2>What already exists</h2>
+    </div>
+    <div class="col">
+      <p>Part of what you described is built. Worth knowing before anyone estimates the work.</p>
+    </div>
+
+    <div class="rail">
+      <table>
+        <thead><tr><th>Capability you described</th><th>Status</th><th>Where it stands</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Main station shows overall sales from all stations</td>
+            <td><span class="chip part">half built</span></td>
+            <td>The <strong>General Report</strong> (<span class="m">reports/branch-summary</span>) is already restaurant-wide and rolls sales, COGS and profit up per station unconditionally. <span class="m">dish-sales</span> and <span class="m">dish-profitability</span> both widen to all stations when the active branch <span class="m">isMain</span>.</td>
+          </tr>
+          <tr>
+            <td>Main station dashboard aggregates everything</td>
+            <td><span class="chip no">not built</span></td>
+            <td><span class="m">restaurant/dashboard</span> is hard-scoped to one <span class="m">branchId</span>. Main sees only Main's own numbers on the home screen.</td>
+          </tr>
+          <tr>
+            <td>An order can contain dishes from several stations</td>
+            <td><span class="chip ok">built</span></td>
+            <td><span class="m">OrderItem.branchId</span> snapshots the station per line, and revenue is attributed to the dish-owning station at payment. A bar waiter can already sell a kitchen dish.</td>
+          </tr>
+          <tr>
+            <td>One menu item available at every station</td>
+            <td><span class="chip part">special case</span></td>
+            <td>Add-ons fan out — creating one copies the dish into every branch (<span class="m">dishes/route.ts</span> L83&ndash;89). The pattern exists but only for that category, and it's copies, not one shared record.</td>
+          </tr>
+          <tr>
+            <td>Stock entered once, consumed by every station</td>
+            <td><span class="chip no">not built</span></td>
+            <td>The core of this proposal. Every card and every batch is station-owned today.</td>
+          </tr>
+          <tr>
+            <td>Moving stock between stations</td>
+            <td><span class="chip no">not built</span></td>
+            <td>No transfer or issue concept anywhere in the schema or the API.</td>
+          </tr>
+          <tr>
+            <td>A "Main" station concept at all</td>
+            <td><span class="chip ok">built</span></td>
+            <td><span class="m">Branch.isMain</span>, guaranteed to exist by <span class="m">ensureMainBranchForRestaurant()</span>, and already the fallback everywhere. No new concept needed — it just gains a job.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">§ 5</span>
+      <h2>Proposal — Main as the mother stock</h2>
+    </div>
+    <div class="col">
+      <p>Stations draw straight from Main. No per-station shelves, no issuing paperwork, one number per ingredient. Recipes at every station point at the same ingredient card.</p>
+    </div>
+
+    <figure>
+      <div class="rail" style="padding: 1.2rem .8rem; background: var(--paper-2);">
+        <svg class="diagram" viewBox="0 0 720 250" role="img" aria-label="Diagram comparing today's seven separate station shelves with the proposed single Main store feeding all stations" style="min-width:620px">
+          <g fill="none" stroke="currentColor" stroke-width="1.2" opacity=".85">
+            <!-- LEFT: today -->
+            <text x="8" y="16" font-size="11" font-weight="650" letter-spacing="1.4" fill="currentColor" stroke="none" opacity=".6">TODAY</text>
+            <g>
+              <rect x="8" y="34" width="92" height="46" rx="2"/>
+              <rect x="116" y="34" width="92" height="46" rx="2"/>
+              <rect x="224" y="34" width="92" height="46" rx="2"/>
+              <rect x="8" y="120" width="92" height="46" rx="2"/>
+              <rect x="116" y="120" width="92" height="46" rx="2"/>
+              <rect x="224" y="120" width="92" height="46" rx="2"/>
+            </g>
+            <g stroke-dasharray="3 3" opacity=".5">
+              <path d="M54 80 v22"/><path d="M162 80 v22"/><path d="M270 80 v22"/>
+            </g>
+          </g>
+          <g fill="currentColor" stroke="none" font-size="10">
+            <text x="18" y="54" font-weight="640">Kitchen</text><text x="18" y="70" opacity=".62">own salt, oil, potato</text>
+            <text x="126" y="54" font-weight="640">Bar</text><text x="126" y="70" opacity=".62">own salt, oil, potato</text>
+            <text x="234" y="54" font-weight="640">Grill</text><text x="234" y="70" opacity=".62">own salt, oil, potato</text>
+            <text x="18" y="140" font-weight="640">Pastry</text><text x="18" y="156" opacity=".62">own salt, oil…</text>
+            <text x="126" y="140" font-weight="640">Terrace</text><text x="126" y="156" opacity=".62">own salt, oil…</text>
+            <text x="234" y="140" font-weight="640">+ 2 more</text><text x="234" y="156" opacity=".62">own salt, oil…</text>
+          </g>
+          <text x="8" y="196" font-size="10.5" fill="currentColor" stroke="none" opacity=".72">7 shelves · 7 entries per delivery</text>
+          <text x="8" y="212" font-size="10.5" fill="currentColor" stroke="none" opacity=".72">26 duplicate cards · 11 unit conflicts</text>
+
+          <!-- divider -->
+          <line x1="358" y1="24" x2="358" y2="226" stroke="currentColor" stroke-width="1" opacity=".22" stroke-dasharray="2 4"/>
+
+          <!-- RIGHT: proposed -->
+          <text x="396" y="16" font-size="11" font-weight="650" letter-spacing="1.4" fill="currentColor" stroke="none" opacity=".6">PROPOSED</text>
+          <g fill="none" stroke="currentColor" stroke-width="1.6">
+            <rect x="470" y="30" width="180" height="52" rx="2"/>
+          </g>
+          <g fill="currentColor" stroke="none">
+            <text x="482" y="50" font-size="10.5" font-weight="650">MAIN STORE</text>
+            <text x="482" y="66" font-size="10" opacity=".62">salt · oil · potato · batches</text>
+          </g>
+          <g fill="none" stroke="currentColor" stroke-width="1.2" opacity=".85">
+            <path d="M560 82 v20 M420 102 h280 M420 102 v18 M490 102 v18 M560 102 v18 M630 102 v18 M700 102 v18"/>
+            <rect x="396" y="120" width="48" height="40" rx="2"/>
+            <rect x="466" y="120" width="48" height="40" rx="2"/>
+            <rect x="536" y="120" width="48" height="40" rx="2"/>
+            <rect x="606" y="120" width="48" height="40" rx="2"/>
+            <rect x="676" y="120" width="36" height="40" rx="2"/>
+          </g>
+          <g fill="currentColor" stroke="none" font-size="9">
+            <text x="404" y="138">Kitchen</text><text x="404" y="151" opacity=".6">menu</text>
+            <text x="474" y="138">Bar</text><text x="474" y="151" opacity=".6">menu</text>
+            <text x="544" y="138">Grill</text><text x="544" y="151" opacity=".6">menu</text>
+            <text x="614" y="138">Pastry</text><text x="614" y="151" opacity=".6">menu</text>
+            <text x="684" y="138">+3</text><text x="684" y="151" opacity=".6">menu</text>
+          </g>
+          <text x="396" y="196" font-size="10.5" fill="currentColor" stroke="none" opacity=".72">1 shelf · 1 entry per delivery</text>
+          <text x="396" y="212" font-size="10.5" fill="currentColor" stroke="none" opacity=".72">Stations own menus and sales, not stock</text>
+        </svg>
+      </div>
+      <figcaption>Stations keep their own menus, recipes, tables, orders and sales attribution. They stop keeping their own shelves.</figcaption>
+    </figure>
+
+    <h3>The core change</h3>
+    <div class="col">
+      <p>One resolver, called from the places that read or write stock. Nothing else needs to know shared mode exists.</p>
+    </div>
+
+    <pre><code><span class="cmt">// lib/stockScope.ts  — new</span>
+export async function resolveStockBranchId(
+  db, restaurantId: string, sellingBranchId: string,
+): Promise&lt;string&gt; {
+  <span class="cmt">// Per-station mode keeps today's behaviour exactly.</span>
+  if (!(await isSharedStockEnabled(db, restaurantId))) return sellingBranchId
+  <span class="cmt">// Shared mode: every consumption reads Main's shelf.</span>
+  return (await getMainBranchId(db, restaurantId)) ?? sellingBranchId
+}</code></pre>
+
+    <div class="col">
+      <p>Then <span class="m">consumeIngredientStock</span> resolves once at the top and uses the result for the item lookup and the layer query — while continuing to stamp the <em>selling</em> station onto the ledger row, so per-station usage reporting survives intact. That distinction is the whole design: <strong>stock is read from Main, usage is attributed to the station that sold it.</strong></p>
+    </div>
+
+    <div class="rail">
+      <table>
+        <thead><tr><th>File</th><th>Change</th><th>Size</th></tr></thead>
+        <tbody>
+          <tr><td><span class="m">prisma/schema.prisma</span></td><td>Add <span class="m">Restaurant.stockMode</span> (<span class="m">'per_station' | 'shared'</span>, default per_station) + both migration tracks</td><td>small</td></tr>
+          <tr><td><span class="m">lib/stockScope.ts</span> <em>(new)</em></td><td>The resolver, with a request-level cache</td><td>small</td></tr>
+          <tr><td><span class="m">lib/inventoryConsumption.ts</span></td><td>Resolve the stock branch; keep stamping the selling branch on ledger rows</td><td>small</td></tr>
+          <tr><td><span class="m">lib/mepProduction.ts</span></td><td>Prep production and the prep-aware cascade read the same resolved shelf</td><td>medium</td></tr>
+          <tr><td><span class="m">…/dishes/[id]/ingredients/route.ts</span></td><td>Allow recipes to reference Main's items in shared mode</td><td>small</td></tr>
+          <tr><td><span class="m">…/ingredients/route.ts</span>, <span class="m">…/inventory-purchases/route.ts</span></td><td>In shared mode, list and write against Main regardless of the selected station</td><td>medium</td></tr>
+          <tr><td>Reports: <span class="m">inventory-movement</span>, <span class="m">theoretical-inventory</span>, <span class="m">stock-take</span>, <span class="m">waste</span></td><td>Read the resolved shelf; usage still splits per station via the ledger</td><td>medium</td></tr>
+          <tr><td>UI: recipe editor, inventory tabs</td><td>Stop implying stock belongs to the current station; show one shared figure</td><td>medium</td></tr>
+        </tbody>
+        <caption>A feature flag per restaurant means existing customers see no change until you switch them over, one at a time.</caption>
+      </table>
+    </div>
+
+    <h3>The data merge — the genuinely risky part</h3>
+    <div class="col">
+      <p>Twenty-one duplicated ingredients have to become one. Two hard constraints shape how:</p>
+      <ul>
+        <li><strong>Resolve the 11 unit conflicts first, by hand.</strong> Merging <span class="m">potato: 25,500 g</span> with <span class="m">potato: 0 kg</span> without agreeing a unit produces a silently wrong number that then costs every potato dish wrongly. This is a decision, not a script.</li>
+        <li><strong>Re-point, never re-create.</strong> Move existing cards and batches to Main by updating <span class="m">branchId</span>, and re-point <span class="m">dish_ingredients.inventoryItemId</span> at the surviving card. Do not create new <span class="m">InventoryItem</span> or <span class="m">InventoryPurchase</span> rows in a migration script — a new batch is a new FIFO layer and a phantom purchase in the accounts.</li>
+      </ul>
+      <p>Where two stations hold the same ingredient, the surviving card's <span class="m">quantity</span> must be recomputed from the merged layers rather than added arithmetically, so the running total and the batch balances can't drift apart.</p>
+    </div>
+
+    <div class="call">
+      <h4>What this design does not give you</h4>
+      <ul>
+        <li><strong>No per-station stock variance.</strong> With one shelf, "the bar is losing gin" becomes unanswerable from stock counts — you can still see it through per-station <em>usage</em> in the ledger, but a physical count at Main can't tell you which station lost it.</li>
+        <li><strong>No station-level stock-outs.</strong> Every station sees the same availability, which is right for a shared pantry and wrong for a bar that physically holds its own bottles. Your data shows exactly this split: the spirits duplicated between stations 2 and 6 are almost certainly two real, physically separate bars.</li>
+        <li><strong>Physical reality still has to match.</strong> One number in the app across seven rooms only stays honest if the stock is genuinely stored and counted centrally.</li>
+      </ul>
+      <p>If the bars turn out to need their own bottles, the hybrid variant — station shelf first, fall through to Main — is the same resolver returning a list instead of a single id. Worth keeping the door open in the interface shape even if you don't build it now.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">§ 6</span>
+      <h2>Sequencing</h2>
+    </div>
+    <div class="col">
+      <p>Ordered so that each phase is independently useful and independently reversible. Estimates assume the existing test suite is kept green.</p>
+    </div>
+
+    <div class="phases">
+      <div class="phase">
+        <div class="phase-h"><span class="phase-n">PHASE 1</span><span class="phase-t">Make the damage visible</span><span class="phase-e">~1 day</span></div>
+        <ul>
+          <li>Split the 36 zero-cost sales into causes: no recipe, missing card, empty stock.</li>
+          <li>Report on duplicate cards, unit conflicts and cost conflicts as a screen, not a script.</li>
+          <li>Ships value on its own, and tells you whether shared stock is the right fix before you build it.</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="phase-h"><span class="phase-n">PHASE 2</span><span class="phase-t">The resolver, behind a flag</span><span class="phase-e">~2–3 days</span></div>
+        <ul>
+          <li><span class="m">stockMode</span> field, <span class="m">lib/stockScope.ts</span>, consumption and MEP wired through it.</li>
+          <li>Ledger keeps stamping the selling station, so per-station usage reporting is unaffected.</li>
+          <li>Default off. No existing restaurant changes behaviour.</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="phase-h"><span class="phase-n">PHASE 3</span><span class="phase-t">Entry and recipe surfaces</span><span class="phase-e">~2–3 days</span></div>
+        <ul>
+          <li>Stock entry writes to Main in shared mode; the ingredient picker offers Main's catalogue at every station.</li>
+          <li>Inventory tabs stop showing a per-station figure that no longer means anything.</li>
+          <li>Reports read the resolved shelf.</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="phase-h"><span class="phase-n">PHASE 4</span><span class="phase-t">Merge one restaurant, watched</span><span class="phase-e">~1–2 days + observation</span></div>
+        <ul>
+          <li>Agree the 11 units by hand. Re-point cards, batches and recipes to Main. Recompute quantities from layers.</li>
+          <li>Take a full backup and a Neon restore point first — this rewrites live inventory.</li>
+          <li>Verify against the live DB before and after; do not migrate blind.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">§ 7</span>
+      <h2>The APC report</h2>
+    </div>
+    <div class="col">
+      <p>Average per cover. Independent of everything above — no shared reason to sequence them together, and it's much cheaper.</p>
+    </div>
+
+    <div class="rail">
+      <table>
+        <thead><tr><th>Metric</th><th>Available now?</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr><td>Average per check (per order)</td><td><span class="chip ok">yes</span></td><td><span class="m">RestaurantOrder.totalAmount</span> ÷ paid order count</td></tr>
+          <tr><td>By station</td><td><span class="chip ok">yes</span></td><td><span class="m">order.branchId</span>, or per-dish attribution via <span class="m">DishSale.branchId</span></td></tr>
+          <tr><td>By waiter</td><td><span class="chip ok">yes</span></td><td><span class="m">order.staffId</span> → <span class="m">Staff</span></td></tr>
+          <tr><td>By business day and shift</td><td><span class="chip ok">yes</span></td><td><span class="m">businessDate</span> already falls back to <span class="m">paidAt</span> — an 11pm table paid at 1am counts on the right day</td></tr>
+          <tr><td>By daypart / hour</td><td><span class="chip ok">yes</span></td><td><span class="m">createdAt</span> vs <span class="m">paidAt</span></td></tr>
+          <tr><td>Items per check, average dish price</td><td><span class="chip ok">yes</span></td><td><span class="m">OrderItem</span> counts</td></tr>
+          <tr><td><strong>Average per cover (per guest)</strong></td><td><span class="chip no">no</span></td><td><strong>Nothing records how many guests sat down.</strong> <span class="m">RestaurantTable.seats</span> is table capacity with a default of 4 — using it would report table size, not guests, and would be wrong on every shared or partly-filled table.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>To get true per-cover</h3>
+    <div class="col">
+      <ul>
+        <li><span class="m">RestaurantOrder.guestCount Int?</span> — nullable, so historical orders stay honest rather than being back-filled with a guess.</li>
+        <li>A guest-count step when the waiter opens a table, in <em>both</em> waiter apps (<span class="m">waiter-app</span> and <span class="m">waiter-app-desktop</span>), carried through the local SQLite order row and <span class="m">/api/mobile/push</span>.</li>
+        <li>The report shows per-cover only for the covered date range and states the coverage — a partial denominator quietly reported as a full one is worse than not reporting it.</li>
+      </ul>
+      <p>Roughly a day for the report against what exists, plus a day or so for the guest-count capture across both apps and the sync path. The report is worth shipping first on per-check while the covers data accumulates — per-cover is meaningless until you have a few weeks of it anyway.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">§ 8</span>
+      <h2>Decisions I need from you</h2>
+    </div>
+    <div class="col">
+      <ol>
+        <li><strong>Are the two bars physically separate?</strong> Stations 2 and 6 both hold Jack Daniel, Olmeca, Bacardi, in different units and at wildly different costs. If those are two real bars with their own bottles, pure shared stock will misreport both, and the hybrid is the right answer for drinks even if the kitchen shares one pantry.</li>
+        <li><strong>Is stock physically stored centrally?</strong> One number across seven rooms is only true if someone counts it in one place.</li>
+        <li><strong>Whose call are the 11 unit conflicts?</strong> Potato in g or kg, egg in pcs or piece, spirits in shots or ml. Someone who knows the operation has to decide, and it blocks the merge.</li>
+        <li><strong>Roll out to all restaurants or one?</strong> The flag makes per-restaurant rollout free. I'd migrate the seven-station account first and leave everyone else untouched.</li>
+        <li><strong>Ship the APC report on per-check now, or wait for covers?</strong> My recommendation is ship now and add the per-cover line once the guest counts have accumulated.</li>
+      </ol>
+    </div>
+  </section>
+
+  <hr class="end">
+  <p class="foot">Prepared against the working tree on branch <span class="m">main</span> · schema, consumption path and report scoping verified in code · duplication figures measured from <span class="m">scripts/_full_restaurant_dump.json</span></p>
+
+</div>
+
+</body>
+</html>

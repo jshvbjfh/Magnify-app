@@ -10,6 +10,9 @@ type DashboardData = {
   period: string; revenue: number; cogs: number; foodCostPct: number
   laborCost: number; laborPct: number; wasteCost: number; wastePct: number
   primeCost: number; primeCostPct: number; salesCount: number
+  // Average spend per cover, plus how much of the period it's based on —
+  // guest counts are optional, so only some orders carry one.
+  apc: number; guestCount: number; coveredOrders: number; totalPaidOrders: number
   topDishes: { name: string; revenue: number; orders: number }[]
   lowStockCount: number; alerts: { type: 'warning' | 'danger'; message: string }[]
   from?: string
@@ -298,6 +301,33 @@ export default function RestaurantDashboard({ onAskJesse }: { onAskJesse?: () =>
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Average per cover. Always period-level, never per selected day, so it
+          carries its own range label to avoid reading as the day above it. */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <Users className="h-5 w-5 text-indigo-500" />
+          <h3 className="font-semibold text-gray-800">Average Per Cover</h3>
+          <span className="text-xs text-gray-400 ml-auto">{data?.rangeLabel ?? ''}</span>
+        </div>
+        {(data?.coveredOrders ?? 0) > 0 ? (
+          <div className="flex items-end justify-between gap-4 flex-wrap">
+            <div>
+              <p className="text-4xl font-bold text-gray-900">{fmt(data?.apc ?? 0)} <span className="text-lg font-semibold text-gray-400">RWF</span></p>
+              <p className="text-sm text-gray-500 mt-1">per guest</p>
+            </div>
+            <div className="text-right text-xs text-gray-500 space-y-0.5">
+              <p><span className="font-semibold text-gray-700">{fmt(data?.guestCount ?? 0)}</span> guests served</p>
+              <p>from <span className="font-semibold text-gray-700">{data?.coveredOrders ?? 0}</span> of {data?.totalPaidOrders ?? 0} paid orders</p>
+            </div>
+          </div>
+        ) : (
+          <div className="py-3">
+            <p className="text-sm text-gray-500">No guest counts recorded yet for this period.</p>
+            <p className="text-xs text-gray-400 mt-1">Waiters enter the number of guests when confirming an order. It is optional, so orders without a count are left out of this average.</p>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

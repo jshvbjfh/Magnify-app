@@ -1922,11 +1922,24 @@ export async function POST(req: Request) {
   if (intents.includes('dish_query')) {
     const dishName = parseDishName(question)
     if (dishName) {
-      const sales = await prisma.dishSale.findMany({
+      // Match dish names case-insensitively in JS rather than via Prisma's
+      // `mode: 'insensitive'` — that filter option only exists on Postgres,
+      // and this route also compiles against the SQLite schema for local-first
+      // desktop builds, where the generated StringFilter type doesn't have it.
+      const dishNameLower = dishName.toLowerCase()
+      const candidateDishes = await prisma.dish.findMany({
+        where: { restaurantId },
+        select: { id: true, name: true },
+      })
+      const matchingDishIds = candidateDishes
+        .filter(d => d.name.toLowerCase().includes(dishNameLower))
+        .map(d => d.id)
+
+      const sales = matchingDishIds.length === 0 ? [] : await prisma.dishSale.findMany({
         where: {
           restaurantId,
           saleDate: { gte: range.start, lte: range.end },
-          dish: { name: { contains: dishName, mode: 'insensitive' } },
+          dishId: { in: matchingDishIds },
         },
         include: { dish: { select: { name: true } } },
       })
@@ -2083,11 +2096,13 @@ export async function POST(req: Request) {
   if (intents.includes('stock_level')) {
     const ingredientName = parseIngredientName(question)
     if (ingredientName) {
-      const items = await prisma.inventoryItem.findMany({
-        where: { restaurantId, ...branchFilter, name: { contains: ingredientName, mode: 'insensitive' } },
+      const ingredientNameLower = ingredientName.toLowerCase()
+      const candidateItems = await prisma.inventoryItem.findMany({
+        where: { restaurantId, ...branchFilter },
         select: { name: true, quantity: true, unit: true, reorderLevel: true, branch: { select: { name: true } } },
         orderBy: { name: 'asc' },
       })
+      const items = candidateItems.filter(i => i.name.toLowerCase().includes(ingredientNameLower))
       if (items.length === 0) {
         lines.push(`**Stock: "${ingredientName}"**`)
         lines.push(`  ::XCircle:: No ingredient matching that name found.`)

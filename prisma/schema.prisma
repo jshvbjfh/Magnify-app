@@ -243,6 +243,11 @@ model RestaurantOrder {
   totalAmount    Float            @default(0)
   staffId        String?
   staff          Staff?           @relation(fields: [staffId], references: [id])
+  // How many people sat at the table, typed by the waiter when the order is
+  // rung up. Optional — the waiter can skip it, and orders from before this
+  // existed carry null. Reports must therefore treat null as "unknown", never
+  // as zero, and exclude those orders from average-per-cover entirely.
+  guestCount     Int?
   createdByName  String?
   cancelReason   String?
   notes          String?

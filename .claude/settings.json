@@ -1,7 +1,23 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx tsc --noEmit *)"
+      "Bash(npx *)",
+      "Bash(npm *)",
+      "Bash(node *)",
+      "Bash(ls*)",
+      "Bash(cd * && npx *)",
+      "Bash(cd * && npm *)",
+      "Bash(cd * && node *)",
+      "Bash(cd * && ls*)",
+      "PowerShell(*)",
+      "Bash(tasklist *)",
+      "Bash(vercel whoami)",
+      "Bash(vercel env ls *)",
+      "Edit",
+      "Write",
+      "Read",
+      "Glob",
+      "Grep"
     ]
   }
 }

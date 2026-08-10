@@ -56,7 +56,7 @@ export default function StartupLogPage({ onClose }: StartupLogPageProps) {
 
   return (
     <div className="min-h-full bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50">
+      <div className="flex items-center justify-between gap-3 px-4 pt-12 pb-3 border-b border-gray-200 bg-gray-50">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-10 h-10 rounded-xl bg-gray-900 text-white flex items-center justify-center flex-shrink-0">
             <ScrollText className="h-5 w-5" />

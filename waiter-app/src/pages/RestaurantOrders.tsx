@@ -127,6 +127,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [selectedTableKey, setSelectedTableKey] = useState<string>('takeaway')
   const [localCart,        setLocalCart]        = useState<Record<string, CartItem[]>>({})
+  // Covers per table, kept as the raw typed string so an empty box stays empty
+  // rather than snapping to 0. Optional — a blank box records no guest count at
+  // all, which reports read as "unknown" and leave out of the average.
+  const [guestsByTable,    setGuestsByTable]    = useState<Record<string, string>>({})
   const [showPanel,        setShowPanel]        = useState<'dishes' | 'order'>('dishes')
   const [addedFlash,       setAddedFlash]       = useState(false)
   const [searchQuery,      setSearchQuery]      = useState('')
@@ -315,6 +319,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
       const { subtotal, vatAmount, totalAmount } = calcTotals(cart)
 
+      // Covers are optional: a blank or nonsense box stores null, not 0, so the
+      // manager's average is built only from tables where a real count was given.
+      const rawGuests = Number(guestsByTable[selectedTableKey] ?? '')
+      const parsedGuestCount = Number.isInteger(rawGuests) && rawGuests > 0 ? rawGuests : null
+
       await logInfo('order', 'Confirm order requested', {
         selectedTableKey,
         tableName,
@@ -340,6 +349,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         vat_amount:         vatAmount,
         total_amount:       totalAmount,
         created_by_name:    name,
+        guest_count:        parsedGuestCount,
         served_at:          null,
         paid_at:            null,
         canceled_at:        null,
@@ -359,6 +369,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         qty:        item.qty,
         status:     'ACTIVE',
         notes:      item.notes ?? null,
+        branch_id:  dishes.find(d => d.id === item.dishId)?.branch_id ?? null,
         created_at: now,
         updated_at: now,
       }))
@@ -376,6 +387,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       // ── Reload BEFORE clearing cart so the panel never flashes empty ──────
       await loadPOS()
       setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+      setGuestsByTable(prev => ({ ...prev, [selectedTableKey]: '' }))
       setShowPanel('order')
       setConfirmSuccess(`${orderNumber} confirmed for ${tableName}`)
       setTimeout(() => setConfirmSuccess(null), 4000)
@@ -1129,6 +1141,30 @@ ${itemRows}
               <span>Total</span><span>{fmtRWF(totalAmount)} RWF</span>
             </div>
 
+            {/* Covers — optional. Blank is fine; it just leaves this table out
+                of the manager's average spend per guest. */}
+            {isBuilding && (
+              <div className="flex items-center justify-between gap-2 border-t border-gray-100 pt-2">
+                <label htmlFor="guest-count" className="text-xs font-medium text-gray-500">
+                  Guests at table <span className="text-gray-400">(optional)</span>
+                </label>
+                <input
+                  id="guest-count"
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  value={guestsByTable[selectedTableKey] ?? ''}
+                  onChange={e => {
+                    const next = e.target.value
+                    setGuestsByTable(prev => ({ ...prev, [selectedTableKey]: next }))
+                  }}
+                  placeholder="—"
+                  className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-sm text-center outline-none focus:ring-2 focus:ring-orange-400"
+                />
+              </div>
+            )}
+
             {isBuilding ? (
               <>
                 <button onClick={() => { setSubmitError(null); setShowCodeModal(true) }} disabled={confirmingOrder}
@@ -1138,6 +1174,7 @@ ${itemRows}
                 <button
                   onClick={() => {
                     setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+                    setGuestsByTable(prev => ({ ...prev, [selectedTableKey]: '' }))
                     setSubmitError(null)
                   }}
                   disabled={confirmingOrder}

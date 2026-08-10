@@ -1,0 +1,512 @@
+{
+  "restaurantId": "cmqia7buf0003n5p19gkoov3k",
+  "generatedAt": "2026-07-21T10:01:18.380Z",
+  "softDeleted": [
+    {
+      "id": "cmrkxuey8002r9pwct6qx4pze",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "description": "DishSale: Heineken x1, Cappuccino x1, Water x1 · Table TM-10",
+      "entryDate": "2026-07-10T20:57:22.809Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrdzkjvw003lfqmgjtbw3em7",
+          "debit": 10500,
+          "credit": 0,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 10500,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        }
+      ]
+    },
+    {
+      "id": "cmrkxugt8002w9pwcuitb6xra",
+      "branchId": "cmqiafute000vn5p1zcngyawx",
+      "description": "DishSale: Tropical Sunset x1 · Table TM-10",
+      "entryDate": "2026-07-10T20:57:22.809Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrdzkjvw003lfqmgjtbw3em7",
+          "debit": 9000,
+          "credit": 0,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 9000,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        }
+      ]
+    },
+    {
+      "id": "cmrkxuixl00319pwc5zr21s77",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "description": "DishSale: Sizzling Wok Plate (Beef) x1 · Table TM-10",
+      "entryDate": "2026-07-10T20:57:22.809Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrdzkjvw003lfqmgjtbw3em7",
+          "debit": 16000,
+          "credit": 0,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 16000,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        }
+      ]
+    },
+    {
+      "id": "cmrkxul7a00369pwcg701ayak",
+      "branchId": "cmqiaa69u0008n5p1y8v0zkls",
+      "description": "DishSale: Fries x2 · Table TM-10",
+      "entryDate": "2026-07-10T20:57:22.809Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrdzkjvw003lfqmgjtbw3em7",
+          "debit": 6000,
+          "credit": 0,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 6000,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        }
+      ]
+    },
+    {
+      "id": "cmrkxuoes003c9pwc19ftnquo",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "description": "DishSale: Heineken x1, Cappuccino x1, Water x1 · Table TM-10",
+      "entryDate": "2026-07-10T20:57:22.809Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrdzkjvw003lfqmgjtbw3em7",
+          "debit": 10500,
+          "credit": 0,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 10500,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        }
+      ]
+    },
+    {
+      "id": "cmrkxupg4003h9pwcz1duhuin",
+      "branchId": "cmqiafute000vn5p1zcngyawx",
+      "description": "DishSale: Tropical Sunset x1 · Table TM-10",
+      "entryDate": "2026-07-10T20:57:22.809Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrdzkjvw003lfqmgjtbw3em7",
+          "debit": 9000,
+          "credit": 0,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 9000,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        }
+      ]
+    },
+    {
+      "id": "cmrkxuqu2003m9pwcz12urzm3",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "description": "DishSale: Sizzling Wok Plate (Beef) x1 · Table TM-10",
+      "entryDate": "2026-07-10T20:57:22.809Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrdzkjvw003lfqmgjtbw3em7",
+          "debit": 16000,
+          "credit": 0,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 16000,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        }
+      ]
+    },
+    {
+      "id": "cmrkxus6l003r9pwc2qqrid7j",
+      "branchId": "cmqiaa69u0008n5p1y8v0zkls",
+      "description": "DishSale: Fries x2 · Table TM-10",
+      "entryDate": "2026-07-10T20:57:22.809Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrdzkjvw003lfqmgjtbw3em7",
+          "debit": 6000,
+          "credit": 0,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 6000,
+          "description": "DishSale: Heineken [cmqqhqgzw0001cnq3mim3euwo] x1, Tropical Sunset [cmqqhri2n0019cnq3d9m87ec1] x1, Cappuccino [cmqqhs2rt001vcnq34v3adwgk] x1, Sizzling Wok Plate (Beef) [cmqjl31jx0039altlq3bg3ngy] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x2, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TM-10"
+        }
+      ]
+    },
+    {
+      "id": "cmrnpnkcj005mg5pkkwk9we6z",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "description": "DishSale: Fries [cmqjltqxj001b13q9olhh9mgw] x1, Vitalo [cmrcapw1x000214klo7dp4l5t] x1, Wok Fried Noodles (Veg) [cmqjl2s2n002raltl93dttrib] x1, Mango Lemonade [cmqqhrd4d0013cnq3qzpenntn] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Teriyaki Chicken Bowl [cmqjl2wn6002xaltldri6t7c9] x2 · Takeaway",
+      "entryDate": "2026-07-16T16:15:42.967Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrar855i002p1yi8km3awsxb",
+          "debit": 50000,
+          "credit": 0,
+          "description": "DishSale: Fries [cmqjltqxj001b13q9olhh9mgw] x1, Vitalo [cmrcapw1x000214klo7dp4l5t] x1, Wok Fried Noodles (Veg) [cmqjl2s2n002raltl93dttrib] x1, Mango Lemonade [cmqqhrd4d0013cnq3qzpenntn] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Teriyaki Chicken Bowl [cmqjl2wn6002xaltldri6t7c9] x2 · Takeaway"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 50000,
+          "description": "DishSale: Fries [cmqjltqxj001b13q9olhh9mgw] x1, Vitalo [cmrcapw1x000214klo7dp4l5t] x1, Wok Fried Noodles (Veg) [cmqjl2s2n002raltl93dttrib] x1, Mango Lemonade [cmqqhrd4d0013cnq3qzpenntn] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Teriyaki Chicken Bowl [cmqjl2wn6002xaltldri6t7c9] x2 · Takeaway"
+        }
+      ]
+    },
+    {
+      "id": "cmrnpnz9f00bwg5pk1q2x6kjc",
+      "branchId": "cmqiaa69u0008n5p1y8v0zkls",
+      "description": "DishSale: Double Chicken Burger [cmqjltp4o001713q9pyzfpphj] x2, Mizouzou (side) [cmqjmfvs90019bl80srt4i8r3] x1, BAO House Fried Rice (Egg) [cmqjl2vf1002valtlgxm4vdhk] x1, Coke [cmqqhqzau000ncnq3a35ighr4] x1, SODA [cmrkrl2og004l12s2ggbncv8n] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Panache [cmqqhr87m000xcnq3rylgfyl9] x1, Loaded Fries + Chicken [cmqjlttp8001f13q9ua3gy9h0] x1 · Takeaway",
+      "entryDate": "2026-07-16T16:16:02.248Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrar855i002p1yi8km3awsxb",
+          "debit": 56000,
+          "credit": 0,
+          "description": "DishSale: Double Chicken Burger [cmqjltp4o001713q9pyzfpphj] x2, Mizouzou (side) [cmqjmfvs90019bl80srt4i8r3] x1, BAO House Fried Rice (Egg) [cmqjl2vf1002valtlgxm4vdhk] x1, Coke [cmqqhqzau000ncnq3a35ighr4] x1, SODA [cmrkrl2og004l12s2ggbncv8n] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Panache [cmqqhr87m000xcnq3rylgfyl9] x1, Loaded Fries + Chicken [cmqjlttp8001f13q9ua3gy9h0] x1 · Takeaway"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 56000,
+          "description": "DishSale: Double Chicken Burger [cmqjltp4o001713q9pyzfpphj] x2, Mizouzou (side) [cmqjmfvs90019bl80srt4i8r3] x1, BAO House Fried Rice (Egg) [cmqjl2vf1002valtlgxm4vdhk] x1, Coke [cmqqhqzau000ncnq3a35ighr4] x1, SODA [cmrkrl2og004l12s2ggbncv8n] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Panache [cmqqhr87m000xcnq3rylgfyl9] x1, Loaded Fries + Chicken [cmqjlttp8001f13q9ua3gy9h0] x1 · Takeaway"
+        }
+      ]
+    },
+    {
+      "id": "cmrnpoaoh00f9g5pkbtzgfj0o",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "description": "DishSale: BAO House Fried Rice (Egg) [cmqjl2vf1002valtlgxm4vdhk] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, Mizouzou (side) [cmqjmfvs90019bl80srt4i8r3] x1, Add-on: Grilled Chicken [cmqjmnlal0011ccd7ydrykoz3] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x2 · Takeaway",
+      "entryDate": "2026-07-16T16:16:17.964Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrar855i002p1yi8km3awsxb",
+          "debit": 26000,
+          "credit": 0,
+          "description": "DishSale: BAO House Fried Rice (Egg) [cmqjl2vf1002valtlgxm4vdhk] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, Mizouzou (side) [cmqjmfvs90019bl80srt4i8r3] x1, Add-on: Grilled Chicken [cmqjmnlal0011ccd7ydrykoz3] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x2 · Takeaway"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 26000,
+          "description": "DishSale: BAO House Fried Rice (Egg) [cmqjl2vf1002valtlgxm4vdhk] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, Mizouzou (side) [cmqjmfvs90019bl80srt4i8r3] x1, Add-on: Grilled Chicken [cmqjmnlal0011ccd7ydrykoz3] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x2 · Takeaway"
+        }
+      ]
+    },
+    {
+      "id": "cmrnqnzqg003srtp79xgkznhr",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "description": "DishSale: Sizzling Fish Plate [cmqjl328w003baltldw04u3z4] x1, BAO House Fried Rice (Egg) [cmqjl2vf1002valtlgxm4vdhk] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, fresh juice [cmrkwktqp00ar12s29wudqfkg] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TG-11",
+      "entryDate": "2026-07-16T16:44:02.948Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrar855i002p1yi8km3awsxb",
+          "debit": 42000,
+          "credit": 0,
+          "description": "DishSale: Sizzling Fish Plate [cmqjl328w003baltldw04u3z4] x1, BAO House Fried Rice (Egg) [cmqjl2vf1002valtlgxm4vdhk] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, fresh juice [cmrkwktqp00ar12s29wudqfkg] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TG-11"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 42000,
+          "description": "DishSale: Sizzling Fish Plate [cmqjl328w003baltldw04u3z4] x1, BAO House Fried Rice (Egg) [cmqjl2vf1002valtlgxm4vdhk] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, fresh juice [cmrkwktqp00ar12s29wudqfkg] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1 · Table TG-11"
+        }
+      ]
+    },
+    {
+      "id": "cmrnqo78z005trtp7iqjv2we0",
+      "branchId": "cmqiadl7h000nn5p1trr8hdcc",
+      "description": "DishSale: Spaghetti [cmqqgfuis0001tgbuq56wc6oi] x2, Strawberry Margarita [cmqqgmk54000b12mpnfgx1cmv] x1, V.STRAWBERRY COLADA [cmrnpkq3z0035za9hhex17oml] x1, Add-on: Grilled Chicken [cmqjmnlal0011ccd7ydrykoz3] x2 · Table TG-13",
+      "entryDate": "2026-07-16T16:44:13.244Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrar855i002p1yi8km3awsxb",
+          "debit": 64000,
+          "credit": 0,
+          "description": "DishSale: Spaghetti [cmqqgfuis0001tgbuq56wc6oi] x2, Strawberry Margarita [cmqqgmk54000b12mpnfgx1cmv] x1, V.STRAWBERRY COLADA [cmrnpkq3z0035za9hhex17oml] x1, Add-on: Grilled Chicken [cmqjmnlal0011ccd7ydrykoz3] x2 · Table TG-13"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 64000,
+          "description": "DishSale: Spaghetti [cmqqgfuis0001tgbuq56wc6oi] x2, Strawberry Margarita [cmqqgmk54000b12mpnfgx1cmv] x1, V.STRAWBERRY COLADA [cmrnpkq3z0035za9hhex17oml] x1, Add-on: Grilled Chicken [cmqjmnlal0011ccd7ydrykoz3] x2 · Table TG-13"
+        }
+      ]
+    },
+    {
+      "id": "cmrnqokyw008zrtp7mtv4k3wk",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "description": "DishSale: Mutzig [cmqqhqo5i0009cnq35rsy50b3] x1, Coke [cmqqhqzau000ncnq3a35ighr4] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Wine by the glass [cmqqhqw8a000jcnq3qwq9r32o] x1, Teriyaki Chicken Bowl [cmqjl2wn6002xaltldri6t7c9] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, Sizzling tofu [cmrnpwn5z003eza9hog4xys93] x1, Steamed Jasmine Rice [cmqjl2xig002zaltlzus4ub1z] x1, extra cheese [cmrnoiz530010za9h84kdnpsg] x2 · Table TG-13",
+      "entryDate": "2026-07-16T16:44:30.491Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrar855i002p1yi8km3awsxb",
+          "debit": 54500,
+          "credit": 0,
+          "description": "DishSale: Mutzig [cmqqhqo5i0009cnq35rsy50b3] x1, Coke [cmqqhqzau000ncnq3a35ighr4] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Wine by the glass [cmqqhqw8a000jcnq3qwq9r32o] x1, Teriyaki Chicken Bowl [cmqjl2wn6002xaltldri6t7c9] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, Sizzling tofu [cmrnpwn5z003eza9hog4xys93] x1, Steamed Jasmine Rice [cmqjl2xig002zaltlzus4ub1z] x1, extra cheese [cmrnoiz530010za9h84kdnpsg] x2 · Table TG-13"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 54500,
+          "description": "DishSale: Mutzig [cmqqhqo5i0009cnq35rsy50b3] x1, Coke [cmqqhqzau000ncnq3a35ighr4] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Wine by the glass [cmqqhqw8a000jcnq3qwq9r32o] x1, Teriyaki Chicken Bowl [cmqjl2wn6002xaltldri6t7c9] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, Sizzling tofu [cmrnpwn5z003eza9hog4xys93] x1, Steamed Jasmine Rice [cmqjl2xig002zaltlzus4ub1z] x1, extra cheese [cmrnoiz530010za9h84kdnpsg] x2 · Table TG-13"
+        }
+      ]
+    },
+    {
+      "id": "cmrnqol580098rtp75sijmhxf",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "description": "DishSale: Mutzig [cmqqhqo5i0009cnq35rsy50b3] x1, Coke [cmqqhqzau000ncnq3a35ighr4] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Wine by the glass [cmqqhqw8a000jcnq3qwq9r32o] x1, Teriyaki Chicken Bowl [cmqjl2wn6002xaltldri6t7c9] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, Sizzling tofu [cmrnpwn5z003eza9hog4xys93] x1, Steamed Jasmine Rice [cmqjl2xig002zaltlzus4ub1z] x1, extra cheese [cmrnoiz530010za9h84kdnpsg] x2 · Table TG-13",
+      "entryDate": "2026-07-16T16:44:30.491Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrar855i002p1yi8km3awsxb",
+          "debit": 54500,
+          "credit": 0,
+          "description": "DishSale: Mutzig [cmqqhqo5i0009cnq35rsy50b3] x1, Coke [cmqqhqzau000ncnq3a35ighr4] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Wine by the glass [cmqqhqw8a000jcnq3qwq9r32o] x1, Teriyaki Chicken Bowl [cmqjl2wn6002xaltldri6t7c9] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, Sizzling tofu [cmrnpwn5z003eza9hog4xys93] x1, Steamed Jasmine Rice [cmqjl2xig002zaltlzus4ub1z] x1, extra cheese [cmrnoiz530010za9h84kdnpsg] x2 · Table TG-13"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 54500,
+          "description": "DishSale: Mutzig [cmqqhqo5i0009cnq35rsy50b3] x1, Coke [cmqqhqzau000ncnq3a35ighr4] x1, Water [cmqqhr9t7000zcnq37ue7cryb] x1, Wine by the glass [cmqqhqw8a000jcnq3qwq9r32o] x1, Teriyaki Chicken Bowl [cmqjl2wn6002xaltldri6t7c9] x1, Fries [cmqjltqxj001b13q9olhh9mgw] x1, Sizzling tofu [cmrnpwn5z003eza9hog4xys93] x1, Steamed Jasmine Rice [cmqjl2xig002zaltlzus4ub1z] x1, extra cheese [cmrnoiz530010za9h84kdnpsg] x2 · Table TG-13"
+        }
+      ]
+    },
+    {
+      "id": "cmrnqovlz00cjrtp7i7328ck1",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "description": "DishSale: Signature Dumplings (Pan-fried) [cmqjl2neh002jaltlxzoyu6a7] x1, SODA [cmrkrl2og004l12s2ggbncv8n] x2 · Table TG-13",
+      "entryDate": "2026-07-16T16:44:44.633Z",
+      "reference": null,
+      "lines": [
+        {
+          "accountId": "cmrar855i002p1yi8km3awsxb",
+          "debit": 13000,
+          "credit": 0,
+          "description": "DishSale: Signature Dumplings (Pan-fried) [cmqjl2neh002jaltlxzoyu6a7] x1, SODA [cmrkrl2og004l12s2ggbncv8n] x2 · Table TG-13"
+        },
+        {
+          "accountId": "cmqmhkxxq000g5jwvvo40zgjs",
+          "debit": 0,
+          "credit": 13000,
+          "description": "DishSale: Signature Dumplings (Pan-fried) [cmqjl2neh002jaltlxzoyu6a7] x1, SODA [cmrkrl2og004l12s2ggbncv8n] x2 · Table TG-13"
+        }
+      ]
+    }
+  ],
+  "created": [
+    {
+      "id": "cmruhhdnp0002u9mo7tr370n5",
+      "orderId": "d0877438-b04d-4246-8122-2663088c8944",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "amount": 10500
+    },
+    {
+      "id": "cmruhherx0007u9mobnfuvh1a",
+      "orderId": "d0877438-b04d-4246-8122-2663088c8944",
+      "branchId": "cmqiafute000vn5p1zcngyawx",
+      "amount": 9000
+    },
+    {
+      "id": "cmruhhgi2000cu9mo4auj2z27",
+      "orderId": "d0877438-b04d-4246-8122-2663088c8944",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "amount": 16000
+    },
+    {
+      "id": "cmruhhhpk000hu9mogvpr1u5c",
+      "orderId": "d0877438-b04d-4246-8122-2663088c8944",
+      "branchId": "cmqiaa69u0008n5p1y8v0zkls",
+      "amount": 6000
+    },
+    {
+      "id": "cmruhhkiz000nu9mopjxqq1hy",
+      "orderId": "821120e3-172c-434f-8fbd-6443e423e756",
+      "branchId": "cmqiaa69u0008n5p1y8v0zkls",
+      "amount": 3000
+    },
+    {
+      "id": "cmruhhlq0000su9moljm6aest",
+      "orderId": "821120e3-172c-434f-8fbd-6443e423e756",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "amount": 4000
+    },
+    {
+      "id": "cmruhhmqt000xu9mohiju3e8r",
+      "orderId": "821120e3-172c-434f-8fbd-6443e423e756",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "amount": 34000
+    },
+    {
+      "id": "cmruhhnsx0012u9moavndcd05",
+      "orderId": "821120e3-172c-434f-8fbd-6443e423e756",
+      "branchId": "cmqiafute000vn5p1zcngyawx",
+      "amount": 9000
+    },
+    {
+      "id": "cmruhhqh60018u9mo7fciatqf",
+      "orderId": "c3b25bdb-cbf6-4742-8e8b-9e24f010718a",
+      "branchId": "cmqiaa69u0008n5p1y8v0zkls",
+      "amount": 32500
+    },
+    {
+      "id": "cmruhhrrw001du9mot9b437in",
+      "orderId": "c3b25bdb-cbf6-4742-8e8b-9e24f010718a",
+      "branchId": "cmqiabkm5000dn5p1qj364jx9",
+      "amount": 3000
+    },
+    {
+      "id": "cmruhhsv0001iu9modzij63f4",
+      "orderId": "c3b25bdb-cbf6-4742-8e8b-9e24f010718a",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "amount": 11000
+    },
+    {
+      "id": "cmruhhtz9001nu9mofk43la3y",
+      "orderId": "c3b25bdb-cbf6-4742-8e8b-9e24f010718a",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "amount": 9500
+    },
+    {
+      "id": "cmruhhws6001tu9morthbdqgo",
+      "orderId": "94865793-4611-481e-b3ce-acf104d51226",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "amount": 11000
+    },
+    {
+      "id": "cmruhhy63001yu9mouffwyiq8",
+      "orderId": "94865793-4611-481e-b3ce-acf104d51226",
+      "branchId": "cmqiaa69u0008n5p1y8v0zkls",
+      "amount": 3000
+    },
+    {
+      "id": "cmruhi03u0023u9mok0urphjw",
+      "orderId": "94865793-4611-481e-b3ce-acf104d51226",
+      "branchId": "cmqiabkm5000dn5p1qj364jx9",
+      "amount": 3000
+    },
+    {
+      "id": "cmruhi17i0028u9moex3f086z",
+      "orderId": "94865793-4611-481e-b3ce-acf104d51226",
+      "branchId": "cmqiadl7h000nn5p1trr8hdcc",
+      "amount": 5000
+    },
+    {
+      "id": "cmruhi5h6002du9mo5rti446p",
+      "orderId": "94865793-4611-481e-b3ce-acf104d51226",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "amount": 4000
+    },
+    {
+      "id": "cmruhi9cl002ju9mo5eflvplr",
+      "orderId": "08738818-e584-4364-a01e-c5e6bebd8c63",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "amount": 30000
+    },
+    {
+      "id": "cmruhiaer002ou9moyg8htsip",
+      "orderId": "08738818-e584-4364-a01e-c5e6bebd8c63",
+      "branchId": "cmqiaa69u0008n5p1y8v0zkls",
+      "amount": 3000
+    },
+    {
+      "id": "cmruhibop002tu9mowv81z3r8",
+      "orderId": "08738818-e584-4364-a01e-c5e6bebd8c63",
+      "branchId": "cmqiafute000vn5p1zcngyawx",
+      "amount": 7000
+    },
+    {
+      "id": "cmruhicrx002yu9moe41zmst7",
+      "orderId": "08738818-e584-4364-a01e-c5e6bebd8c63",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "amount": 2000
+    },
+    {
+      "id": "cmruhifwg0034u9mobreqgggq",
+      "orderId": "afc75926-553e-4aff-b42e-3a47f76f658e",
+      "branchId": "cmqiadl7h000nn5p1trr8hdcc",
+      "amount": 40000
+    },
+    {
+      "id": "cmruhigxw0039u9mot8jtj0na",
+      "orderId": "afc75926-553e-4aff-b42e-3a47f76f658e",
+      "branchId": "cmqiafute000vn5p1zcngyawx",
+      "amount": 24000
+    },
+    {
+      "id": "cmruhijxf003fu9morkpwgpup",
+      "orderId": "a9016764-eb35-4912-81b4-485efdf286c2",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "amount": 16500
+    },
+    {
+      "id": "cmruhikz5003ku9moadq69ssj",
+      "orderId": "a9016764-eb35-4912-81b4-485efdf286c2",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "amount": 31000
+    },
+    {
+      "id": "cmruhilzb003pu9mo30vaz6km",
+      "orderId": "a9016764-eb35-4912-81b4-485efdf286c2",
+      "branchId": "cmqiaa69u0008n5p1y8v0zkls",
+      "amount": 7000
+    },
+    {
+      "id": "cmruhiox6003vu9moad7jvmjo",
+      "orderId": "bd05c92e-826b-4b22-85cf-b2710a27101b",
+      "branchId": "cmqiad2vx000in5p176jvqush",
+      "amount": 8000
+    },
+    {
+      "id": "cmruhipzy0040u9mowcawrry4",
+      "orderId": "bd05c92e-826b-4b22-85cf-b2710a27101b",
+      "branchId": "cmqiagbtb0010n5p1utvhc8s6",
+      "amount": 5000
+    }
+  ]
+}

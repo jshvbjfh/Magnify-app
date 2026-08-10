@@ -289,6 +289,13 @@ CREATE TABLE IF NOT EXISTS shifts (
       addColumnIfMissing(database, 'orders', 'business_date', 'TEXT')
     },
   },
+  {
+    // Covers: how many people sat at the table. The waiter can leave it blank,
+    // so null means "not recorded" — the manager's average-per-cover skips
+    // those orders rather than counting them as zero guests.
+    version: 9,
+    run: (database) => addColumnIfMissing(database, 'orders', 'guest_count', 'INTEGER'),
+  },
 ]
 
 function addColumnIfMissing(database, table, column, definition) {
@@ -857,6 +864,9 @@ async function createWindow() {
     height: 800,
     minWidth: 960,
     minHeight: 600,
+    // Stay hidden until the window is maximized and painted — otherwise the
+    // till flashes a small 1280x800 window for a beat before filling the screen.
+    show: false,
     title: 'Magnify POS',
     icon: path.join(__dirname, '..', 'public', 'icon.ico'),
     backgroundColor: '#000000',
@@ -876,6 +886,28 @@ async function createWindow() {
       webSecurity: true,
     },
   })
+
+  // Always open full-screen-sized. Field tills are opened by staff who never
+  // resize the window, so a half-screen POS costs them buttons every shift.
+  const showMaximized = () => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return
+    mainWindow.maximize()
+    mainWindow.show()
+    mainWindow.focus()
+  }
+  mainWindow.once('ready-to-show', showMaximized)
+  // The POS is only usable full-size, so "restore down" is never what staff
+  // want — snap straight back. Covers the caption's restore button, a title-bar
+  // double-click and a drag off the top edge. Minimize is left alone on purpose:
+  // staff still need to reach the desktop, and it returns maximized.
+  mainWindow.on('unmaximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.maximize()
+  })
+  // Safety net: if the page never reaches ready-to-show (dev server down, bad
+  // build, blank load) the window would stay invisible forever with show:false.
+  // Force it visible so the till shows an error page instead of nothing.
+  setTimeout(showMaximized, 10000)
+  mainWindow.webContents.on('did-fail-load', showMaximized)
 
   mainWindow.webContents.on('did-finish-load', () => {
     appendStartupLog('Renderer did-finish-load')
@@ -1023,6 +1055,8 @@ if (!gotLock) {
     // Focus the existing window if a second instance is attempted
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
+      if (!mainWindow.isMaximized()) mainWindow.maximize()
+      if (!mainWindow.isVisible()) mainWindow.show()
       mainWindow.focus()
     }
   })

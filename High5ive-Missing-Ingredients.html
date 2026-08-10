@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>High 5ive — Missing Ingredients Sheet</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f1f5f9; color: #1e293b; font-size: 14px; }
+
+  header {
+    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+    color: #fff; padding: 22px 32px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 1.3rem; font-weight: 700; }
+  header .sub { font-size: .82rem; color: #94a3b8; margin-top: 3px; }
+
+  .toolbar {
+    background: #fff; border-bottom: 1px solid #e2e8f0;
+    padding: 12px 32px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 6px rgba(0,0,0,.06);
+  }
+  .btn { padding: 8px 18px; border: none; border-radius: 7px; font-size: .85rem; font-weight: 600; cursor: pointer; }
+  .btn-copy  { background: #16a34a; color: #fff; }
+  .btn-clear { background: #e2e8f0; color: #475569; }
+  .btn-print { background: #0f172a; color: #fff; }
+  .btn:hover { opacity: .87; }
+  .hint { font-size: .78rem; color: #94a3b8; margin-left: 4px; }
+
+  .container { max-width: 900px; margin: 28px auto; padding: 0 16px 60px; }
+
+  /* branch label row */
+  .branch-label {
+    display: flex; align-items: center; gap: 10px;
+    margin: 28px 0 6px; padding: 8px 12px;
+    border-radius: 8px; font-weight: 700; font-size: .9rem; letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .branch-label.wb { background: #fef3c7; color: #92400e; border-left: 4px solid #f59e0b; }
+  .branch-label.gr { background: #fee2e2; color: #991b1b; border-left: 4px solid #ef4444; }
+  .branch-label.lt { background: #dbeafe; color: #1e3a8a; border-left: 4px solid #3b82f6; }
+  .branch-label.tp { background: #dcfce7; color: #14532d; border-left: 4px solid #22c55e; }
+
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.08); margin-bottom: 6px; }
+  thead tr { background: #f8fafc; }
+  th { padding: 10px 12px; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #64748b; border-bottom: 2px solid #e2e8f0; text-align: left; }
+  td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr.new-row { background: #fffbeb; }
+  tr.new-row td { border-bottom: 1px solid #fde68a; }
+
+  .item-name { font-weight: 600; color: #1e293b; }
+  .item-name.custom { color: #92400e; font-style: italic; }
+
+  /* editable inputs */
+  .inp {
+    width: 100%; border: 1.5px solid #e2e8f0; border-radius: 6px;
+    padding: 5px 8px; font-size: .85rem; font-family: inherit;
+    color: #1e293b; background: #f8fafc; outline: none;
+  }
+  .inp:focus { border-color: #6366f1; background: #fff; box-shadow: 0 0 0 3px #e0e7ff; }
+  .inp::placeholder { color: #cbd5e1; }
+  .inp-unit  { width: 72px; text-align: center; }
+  .inp-cost  { width: 88px; text-align: right; }
+  .inp-qty   { width: 80px; text-align: right; }
+  .inp-notes { width: 100%; min-width: 140px; }
+  .inp-name-custom { width: 100%; }
+
+  .badge-type { display: inline-block; border-radius: 4px; padding: 1px 7px; font-size: .68rem; font-weight: 700; text-transform: uppercase; }
+  .t-purchased { background: #dcfce7; color: #166534; }
+  .t-prep      { background: #dbeafe; color: #1d4ed8; }
+
+  .btn-del-row { border: none; background: #fee2e2; color: #dc2626; border-radius: 5px; width: 24px; height: 24px; cursor: pointer; font-size: .9rem; font-weight: 700; line-height: 1; }
+  .btn-del-row:hover { background: #fca5a5; }
+
+  .add-row-btn {
+    border: 1.5px dashed #cbd5e1; background: none; color: #6366f1;
+    border-radius: 8px; padding: 7px 16px; font-size: .82rem; font-weight: 700;
+    cursor: pointer; width: 100%; margin-top: 4px;
+  }
+  .add-row-btn:hover { background: #eef2ff; border-color: #6366f1; }
+
+  .footer-note { text-align: center; font-size: .75rem; color: #94a3b8; margin-top: 24px; }
+
+  /* salt-pepper status panel */
+  .sp-panel {
+    background: #fff; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.08);
+    padding: 16px 20px; margin-bottom: 28px;
+    border-left: 4px solid #f59e0b;
+  }
+  .sp-panel h3 { font-size: .85rem; font-weight: 700; color: #92400e; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .sp-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .sp-card { border-radius: 8px; padding: 10px 14px; background: #f8fafc; border: 1.5px solid #e2e8f0; }
+  .sp-card .sp-branch { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #64748b; margin-bottom: 8px; }
+  .sp-row { display: flex; justify-content: space-between; align-items: center; font-size: .82rem; margin-top: 4px; }
+  .sp-row .sp-name { color: #475569; }
+  .sp-ok   { color: #16a34a; font-weight: 700; font-size: .78rem; }
+  .sp-need { color: #dc2626; font-weight: 700; font-size: .78rem; }
+
+  @media (max-width: 640px) { .sp-grid { grid-template-columns: 1fr 1fr; } }
+
+  @media print {
+    .toolbar { position: static; box-shadow: none; }
+    .btn, .add-row-btn, .btn-del-row { display: none; }
+    body { background: #fff; }
+    .container { max-width: 100%; margin: 0; padding: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>HIGH 5IVE — Missing Ingredients Sheet</h1>
+    <div class="sub">Fill in Unit, Cost per unit, Qty to add, and Notes — then click Copy and paste here for me to record it</div>
+  </div>
+</header>
+
+<div class="toolbar">
+  <button class="btn btn-copy"  onclick="copyForMe()">&#x1F4CB; Copy and paste in Axel's whatsapp chat</button>
+  <span class="hint">&#x2139; Fill what you know, leave the rest blank. Everything saves automatically in your browser.</span>
+</div>
+
+<div class="container">
+
+  <!-- Salt & Pepper status panel -->
+  <div class="sp-panel">
+    <h3>&#x26A0; Salt &amp; Pepper — 3 items still need a quantity entered (THE GRILL Pepper, Little Taipei Salt &amp; Pepper)</h3>
+    <div class="sp-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="sp-card" style="border-color:#86efac">
+        <div class="sp-branch">&#x1F354; WHATABURGER</div>
+        <div class="sp-row"><span class="sp-name">Salt</span>        <span class="sp-ok">&#x2705; 1,000 g</span></div>
+        <div class="sp-row"><span class="sp-name">Black pepper</span><span class="sp-ok">&#x2705; 50 g</span></div>
+      </div>
+      <div class="sp-card">
+        <div class="sp-branch">&#x1F525; THE GRILL</div>
+        <div class="sp-row"><span class="sp-name">Salt</span>   <span class="sp-ok">&#x2705; 1,000 g</span></div>
+        <div class="sp-row"><span class="sp-name">Pepper</span> <span class="sp-need">&#x274C; 0 — fill below</span></div>
+      </div>
+      <div class="sp-card">
+        <div class="sp-branch">&#x1F962; Little Taipei</div>
+        <div class="sp-row"><span class="sp-name">Salt</span>   <span class="sp-need">&#x274C; 0 — fill below</span></div>
+        <div class="sp-row"><span class="sp-name">Pepper</span> <span class="sp-need">&#x274C; 0 — fill below</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ THE GRILL ══ -->
+  <div class="branch-label gr">&#x1F525; THE GRILL</div>
+  <table>
+    <thead><tr>
+      <th style="width:36px"></th>
+      <th>Ingredient</th>
+      <th style="width:110px">Bought as<br><small style="font-weight:400;text-transform:none;letter-spacing:0">kg bag · bottle · bunch · box…</small></th>
+      <th style="width:80px">Used in<br><small style="font-weight:400;text-transform:none;letter-spacing:0">g · ml · pcs…</small></th>
+      <th style="width:110px">Unit cost<br><small style="font-weight:400;text-transform:none;letter-spacing:0">cost per purchase unit</small></th>
+      <th style="width:110px">Stock on hand<br><small style="font-weight:400;text-transform:none;letter-spacing:0">qty in hand (use unit)</small></th>
+      <th>Notes / Brand</th>
+    </tr></thead>
+    <tbody id="body-gr">
+      <tr data-branch="gr" data-name="Pork chop" data-type="purchased">
+        <td><span class="badge-type t-purchased">Buy</span></td>
+        <td class="item-name">Pork chop</td>
+        <td><input class="inp inp-purchase-unit" placeholder="e.g. 1 kg pack" oninput="save()"></td>
+        <td><input class="inp inp-unit" placeholder="g" oninput="save()"></td>
+        <td><input class="inp inp-cost" placeholder="0.00" type="number" min="0" step="0.01" oninput="save()"></td>
+        <td><input class="inp inp-qty"  placeholder="0" type="number" min="0" oninput="save()"></td>
+        <td><input class="inp inp-notes" placeholder="" oninput="save()"></td>
+      </tr>
+      <tr data-branch="gr" data-name="Pepper" data-type="purchased">
+        <td><span class="badge-type t-purchased">Buy</span></td>
+        <td class="item-name">Pepper <small style="color:#dc2626;font-weight:600">&#x26A0; 0 in stock</small></td>
+        <td><input class="inp inp-purchase-unit" placeholder="e.g. 100 g jar" oninput="save()"></td>
+        <td><input class="inp inp-unit" placeholder="g" oninput="save()"></td>
+        <td><input class="inp inp-cost" placeholder="0.00" type="number" min="0" step="0.01" oninput="save()"></td>
+        <td><input class="inp inp-qty"  placeholder="0" type="number" min="0" oninput="save()"></td>
+        <td><input class="inp inp-notes" placeholder="" oninput="save()"></td>
+      </tr>
+    </tbody>
+  </table>
+  <button class="add-row-btn" onclick="addRow('gr')">+ Add another purchased item for THE GRILL</button>
+
+  <!-- ══ Little Taipei ══ -->
+  <div class="branch-label lt">&#x1F962; Little Taipei</div>
+  <table>
+    <thead><tr>
+      <th style="width:36px"></th>
+      <th>Ingredient</th>
+      <th style="width:110px">Bought as<br><small style="font-weight:400;text-transform:none;letter-spacing:0">kg bag · bottle · bunch · box…</small></th>
+      <th style="width:80px">Used in<br><small style="font-weight:400;text-transform:none;letter-spacing:0">g · ml · pcs…</small></th>
+      <th style="width:110px">Unit cost<br><small style="font-weight:400;text-transform:none;letter-spacing:0">cost per purchase unit</small></th>
+      <th style="width:110px">Stock on hand<br><small style="font-weight:400;text-transform:none;letter-spacing:0">qty in hand (use unit)</small></th>
+      <th>Notes / Brand</th>
+    </tr></thead>
+    <tbody id="body-lt">
+      <tr data-branch="lt" data-name="Doubanjiang (chili bean paste)" data-type="purchased">
+        <td><span class="badge-type t-purchased">Buy</span></td>
+        <td class="item-name">Doubanjiang (chili bean paste)</td>
+        <td><input class="inp inp-purchase-unit" placeholder="e.g. 500 g jar" oninput="save()"></td>
+        <td><input class="inp inp-unit" placeholder="g" oninput="save()"></td>
+        <td><input class="inp inp-cost" placeholder="0.00" type="number" min="0" step="0.01" oninput="save()"></td>
+        <td><input class="inp inp-qty"  placeholder="0" type="number" min="0" oninput="save()"></td>
+        <td><input class="inp inp-notes" placeholder="" oninput="save()"></td>
+      </tr>
+      <tr data-branch="lt" data-name="Flour" data-type="purchased">
+        <td><span class="badge-type t-purchased">Buy</span></td>
+        <td class="item-name">Flour</td>
+        <td><input class="inp inp-purchase-unit" placeholder="e.g. 25 kg bag" oninput="save()"></td>
+        <td><input class="inp inp-unit" placeholder="g" oninput="save()"></td>
+        <td><input class="inp inp-cost" placeholder="0.00" type="number" min="0" step="0.01" oninput="save()"></td>
+        <td><input class="inp inp-qty"  placeholder="0" type="number" min="0" oninput="save()"></td>
+        <td><input class="inp inp-notes" placeholder="" oninput="save()"></td>
+      </tr>
+      <tr data-branch="lt" data-name="Mixed vegetables" data-type="purchased">
+        <td><span class="badge-type t-purchased">Buy</span></td>
+        <td class="item-name">Mixed vegetables</td>
+        <td><input class="inp inp-purchase-unit" placeholder="e.g. 1 kg bag" oninput="save()"></td>
+        <td><input class="inp inp-unit" placeholder="g" oninput="save()"></td>
+        <td><input class="inp inp-cost" placeholder="0.00" type="number" min="0" step="0.01" oninput="save()"></td>
+        <td><input class="inp inp-qty"  placeholder="0" type="number" min="0" oninput="save()"></td>
+        <td><input class="inp inp-notes" placeholder="" oninput="save()"></td>
+      </tr>
+      <tr data-branch="lt" data-name="Salt" data-type="purchased">
+        <td><span class="badge-type t-purchased">Buy</span></td>
+        <td class="item-name">Salt <small style="color:#dc2626;font-weight:600">&#x26A0; 0 in stock</small></td>
+        <td><input class="inp inp-purchase-unit" placeholder="e.g. 1 kg bag" oninput="save()"></td>
+        <td><input class="inp inp-unit" placeholder="g" oninput="save()"></td>
+        <td><input class="inp inp-cost" placeholder="0.00" type="number" min="0" step="0.01" oninput="save()"></td>
+        <td><input class="inp inp-qty"  placeholder="0" type="number" min="0" oninput="save()"></td>
+        <td><input class="inp inp-notes" placeholder="" oninput="save()"></td>
+      </tr>
+      <tr data-branch="lt" data-name="Pepper" data-type="purchased">
+        <td><span class="badge-type t-purchased">Buy</span></td>
+        <td class="item-name">Pepper <small style="color:#dc2626;font-weight:600">&#x26A0; 0 in stock</small></td>
+        <td><input class="inp inp-purchase-unit" placeholder="e.g. 100 g jar" oninput="save()"></td>
+        <td><input class="inp inp-unit" placeholder="g" oninput="save()"></td>
+        <td><input class="inp inp-cost" placeholder="0.00" type="number" min="0" step="0.01" oninput="save()"></td>
+        <td><input class="inp inp-qty"  placeholder="0" type="number" min="0" oninput="save()"></td>
+        <td><input class="inp inp-notes" placeholder="" oninput="save()"></td>
+      </tr>
+      <tr data-branch="lt" data-name="Sesame seeds" data-type="purchased">
+        <td><span class="badge-type t-purchased">Buy</span></td>
+        <td class="item-name">Sesame seeds</td>
+        <td><input class="inp inp-purchase-unit" placeholder="e.g. 250 g bag" oninput="save()"></td>
+        <td><input class="inp inp-unit" placeholder="g" oninput="save()"></td>
+        <td><input class="inp inp-cost" placeholder="0.00" type="number" min="0" step="0.01" oninput="save()"></td>
+        <td><input class="inp inp-qty"  placeholder="0" type="number" min="0" oninput="save()"></td>
+        <td><input class="inp inp-notes" placeholder="" oninput="save()"></td>
+      </tr>
+    </tbody>
+  </table>
+  <button class="add-row-btn" onclick="addRow('lt')">+ Add another purchased item for Little Taipei</button>
+
+  <!-- ══ Tiamo Pasta — all resolved ══ -->
+  <div class="branch-label tp" style="opacity:.55">&#x2705; Tiamo Pasta — all resolved (Salt ✓ Pepper ✓ Parmesan removed)</div>
+
+  <p class="footer-note">High 5ive &middot; Magnify POS &middot; Fill in the sheet and click "Copy &amp; send to Claude"</p>
+</div>
+
+<script>
+const KEY = 'h5sheet_v1';
+const BRANCHES = { wb:'WHATABURGER', 'wb-prep':'WHATABURGER (Preps)', gr:'THE GRILL', 'gr-prep':'THE GRILL (Preps — Marinade)', lt:'Little Taipei', 'lt-prep':'Little Taipei (Preps)', 'lt-broth':'Little Taipei (Beef broth)', 'lt-chilioil':'Little Taipei (Chili oil)', 'lt-chilioilhot':'Little Taipei (Chili oil hot)', tp:'Tiamo Pasta' };
+const PREP_BRANCHES = new Set(['wb-prep', 'gr-prep', 'lt-prep', 'lt-broth', 'lt-chilioil', 'lt-chilioilhot']);
+
+function rowKey(tr) {
+  const b = tr.dataset.branch || '';
+  const n = tr.dataset.name   || tr.querySelector('.inp-name-custom')?.value || '';
+  const i = tr.dataset.customId || '';
+  return `${b}||${n}||${i}`;
+}
+
+/* ── persist ── */
+function save() {
+  const d = {};
+  document.querySelectorAll('tr[data-branch]').forEach(tr => {
+    const k = rowKey(tr);
+    d[k] = {
+      purchaseUnit: tr.querySelector('.inp-purchase-unit')?.value || '',
+      unit:  tr.querySelector('.inp-unit')?.value  || '',
+      cost:  tr.querySelector('.inp-cost')?.value  || '',
+      qty:   tr.querySelector('.inp-qty')?.value   || '',
+      notes: tr.querySelector('.inp-notes')?.value || '',
+      customName: tr.querySelector('.inp-name-custom')?.value || '',
+      customType: tr.querySelector('.type-sel-custom')?.value || '',
+    };
+  });
+  localStorage.setItem(KEY, JSON.stringify(d));
+}
+
+function load() {
+  let d; try { d = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { d = {}; }
+  document.querySelectorAll('tr[data-branch]').forEach(tr => {
+    const k = rowKey(tr);
+    const s = d[k]; if (!s) return;
+    const set = (sel, v) => { const el = tr.querySelector(sel); if (el && v) el.value = v; };
+    set('.inp-purchase-unit', s.purchaseUnit);
+    set('.inp-unit',  s.unit);
+    set('.inp-cost',  s.cost);
+    set('.inp-qty',   s.qty);
+    set('.inp-notes', s.notes);
+  });
+}
+
+/* ── add custom row ── */
+let customIdx = 0;
+function addRow(branch) {
+  const tbody = document.getElementById(`body-${branch}`);
+  const id = ++customIdx;
+  const tr = document.createElement('tr');
+  tr.dataset.branch   = branch;
+  tr.dataset.customId = id;
+  tr.dataset.type     = PREP_BRANCHES.has(branch) ? 'prep' : 'purchased';
+  tr.className = 'new-row';
+  const isPrep = PREP_BRANCHES.has(branch);
+  tr.innerHTML = isPrep ? `
+    <td>
+      <button class="btn-del-row" onclick="this.closest('tr').remove();save();" title="Remove">&times;</button>
+    </td>
+    <td><span class="badge-type t-prep">Prep</span><br>
+      <input class="inp inp-name-custom" placeholder="Prep name…" oninput="save()" style="margin-top:4px">
+    </td>
+    <td><input class="inp inp-unit" placeholder="g" oninput="save()"></td>
+    <td><input class="inp inp-qty"  placeholder="0" type="number" min="0" oninput="save()"></td>
+    <td><input class="inp inp-notes" placeholder="Notes…" oninput="save()"></td>` : `
+    <td>
+      <button class="btn-del-row" onclick="this.closest('tr').remove();save();" title="Remove">&times;</button>
+    </td>
+    <td>
+      <select class="type-sel-custom" style="border:1.5px solid #e2e8f0;border-radius:5px;padding:3px 6px;font-size:.75rem;font-weight:700;margin-bottom:4px;width:72px" onchange="save()">
+        <option value="purchased">Buy</option>
+        <option value="prep">Prep</option>
+      </select><br>
+      <input class="inp inp-name-custom" placeholder="Ingredient name…" oninput="save()" style="margin-top:2px">
+    </td>
+    <td><input class="inp inp-unit" placeholder="g" oninput="save()"></td>
+    <td><input class="inp inp-cost" placeholder="0.00" type="number" min="0" step="0.01" oninput="save()"></td>
+    <td><input class="inp inp-qty"  placeholder="0"    type="number" min="0" oninput="save()"></td>
+    <td><input class="inp inp-notes" placeholder="Notes…" oninput="save()"></td>`;
+  tbody.appendChild(tr);
+  tr.querySelector('.inp-name-custom').focus();
+  save();
+}
+
+/* ── clear ── */
+function clearAll() {
+  if (!confirm('Reset all filled data?')) return;
+  localStorage.removeItem(KEY);
+  document.querySelectorAll('.inp').forEach(el => el.value = '');
+  document.querySelectorAll('tr.new-row').forEach(tr => tr.remove());
+}
+
+/* ── copy for Claude ── */
+function copyForMe() {
+  const byBranch = {};
+  document.querySelectorAll('tr[data-branch]').forEach(tr => {
+    const b     = tr.dataset.branch;
+    const label = BRANCHES[b] || b;
+    const isCustom = !!tr.dataset.customId;
+    const name  = isCustom
+      ? (tr.querySelector('.inp-name-custom')?.value?.trim() || '')
+      : (tr.dataset.name || '');
+    if (!name) return;
+
+    const purchaseUnit = tr.querySelector('.inp-purchase-unit')?.value?.trim() || '';
+    const unit  = tr.querySelector('.inp-unit')?.value?.trim()  || '';
+    const cost  = tr.querySelector('.inp-cost')?.value?.trim()  || '';
+    const qty   = tr.querySelector('.inp-qty')?.value?.trim()   || '';
+    const notes = tr.querySelector('.inp-notes')?.value?.trim() || '';
+    const type  = isCustom
+      ? (tr.querySelector('.type-sel-custom')?.value || 'purchased')
+      : (tr.dataset.type || 'purchased');
+
+    // skip rows where nothing was filled
+    if (!purchaseUnit && !unit && !cost && !qty && !notes) return;
+
+    if (!byBranch[label]) byBranch[label] = [];
+    let line = `  • *${name}*`;
+    if (purchaseUnit) line += ` | bought as: ${purchaseUnit}`;
+    if (unit)  line += ` | used in: ${unit}`;
+    if (cost)  line += ` | cost/unit: ${cost}`;
+    if (qty)   line += ` | qty: ${qty}`;
+    if (type === 'prep') line += ` | [PREP]`;
+    if (notes) line += `\n    ${notes}`;
+    byBranch[label].push(line);
+  });
+
+  if (!Object.keys(byBranch).length) {
+    alert('Nothing filled in yet — add at least one unit, cost, or quantity first.');
+    return;
+  }
+
+  const lines = ['*High 5ive — Missing Ingredients Data*\n'];
+  for (const [branch, rows] of Object.entries(byBranch)) {
+    lines.push(`*${branch}*`);
+    lines.push(rows.join('\n'));
+    lines.push('');
+  }
+  const text = lines.join('\n').trim();
+
+  navigator.clipboard.writeText(text)
+    .then(() => alert('✅ Copied!\n\nNow:\n1. Open WhatsApp on your phone or WhatsApp Web\n2. Go to Axel\'s chat\n3. Click in the message box and press Ctrl + V to paste\n4. Send it!'))
+    .catch(() => {
+      const box = document.createElement('textarea');
+      box.value = text;
+      box.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);width:600px;height:300px;z-index:9999;padding:12px;font-size:13px;border-radius:8px;border:2px solid #6366f1';
+      document.body.appendChild(box);
+      box.select();
+      document.execCommand('copy');
+      setTimeout(() => box.remove(), 8000);
+      alert('✅ Copied!\n\nNow:\n1. Open WhatsApp on your phone or WhatsApp Web\n2. Go to Axel\'s chat\n3. Click in the message box and press Ctrl + V to paste\n4. Send it!');
+    });
+}
+
+load();
+</script>
+</body>
+</html>

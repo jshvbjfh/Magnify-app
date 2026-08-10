@@ -94,6 +94,26 @@ export async function GET(req: Request) {
   const cogs = sales.reduce((s: number, x) => s + (x.calculatedFoodCost ?? 0), 0)
   const foodCostPct = revenue > 0 ? (cogs / revenue) * 100 : 0
 
+  // APC — average spend per cover. Only orders where a waiter actually entered a
+  // guest count take part, on BOTH sides of the division: counting all revenue
+  // against only some of the guests would roughly double the figure and still
+  // look plausible. coveredOrders vs totalPaidOrders tells the manager how much
+  // of the period the average is built from.
+  const paidOrders = await prisma.restaurantOrder.findMany({
+    where: {
+      restaurantId,
+      branchId,
+      status: 'PAID',
+      paidAt: { gte: from, lte: to },
+      deletedAt: null,
+    },
+    select: { totalAmount: true, guestCount: true },
+  })
+  const ordersWithGuests = paidOrders.filter((order) => (order.guestCount ?? 0) > 0)
+  const guestCount = ordersWithGuests.reduce((sum, order) => sum + (order.guestCount ?? 0), 0)
+  const guestRevenue = ordersWithGuests.reduce((sum, order) => sum + (order.totalAmount ?? 0), 0)
+  const apc = guestCount > 0 ? guestRevenue / guestCount : 0
+
   const shifts = await prisma.employeeShift.findMany({
     where: { restaurantId, branchId, clockInAt: { gte: from, lte: to } },
     select: { clockInAt: true, calculatedWage: true },
@@ -237,6 +257,10 @@ export async function GET(req: Request) {
     lowStockCount,
     alerts,
     salesCount: sales.length,
+    apc: Math.round(apc),
+    guestCount,
+    coveredOrders: ordersWithGuests.length,
+    totalPaidOrders: paidOrders.length,
     dailyHistory,
   }, 60)
 }

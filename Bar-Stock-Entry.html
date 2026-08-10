@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Bar Stock Entry — High 5ive</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#f4f6f9;color:#222;font-size:14px}
+  header{background:#1a1a2e;color:#f5c518;padding:18px 28px;display:flex;align-items:center;justify-content:space-between}
+  header h1{font-size:20px;font-weight:700;letter-spacing:1px}
+  header span{font-size:12px;color:#aaa}
+  .tabs{display:flex;gap:0;background:#111;padding:0 28px}
+  .tab{padding:12px 28px;cursor:pointer;color:#aaa;font-weight:600;font-size:13px;border-bottom:3px solid transparent;transition:.2s}
+  .tab.active{color:#f5c518;border-bottom-color:#f5c518}
+  .branch-section{display:none;padding:24px 28px}
+  .branch-section.active{display:block}
+  .category-block{margin-bottom:28px}
+  .category-title{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#f5c518;background:#1a1a2e;padding:8px 14px;border-radius:6px 6px 0 0;margin-bottom:0}
+  table{width:100%;border-collapse:collapse;background:#fff;border-radius:0 0 6px 6px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+  th{background:#2c2c54;color:#f5c518;text-align:left;padding:9px 14px;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  td{padding:8px 14px;border-bottom:1px solid #f0f0f0;vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:#fffbea}
+  .unit{color:#888;font-size:12px}
+  input[type=number]{width:110px;padding:6px 10px;border:1px solid #d0d0d0;border-radius:5px;font-size:14px;text-align:right}
+  input[type=number]:focus{outline:none;border-color:#f5c518;box-shadow:0 0 0 2px rgba(245,197,24,.2)}
+  .prev{color:#555;font-size:13px}
+  .diff{font-size:12px;font-weight:600}
+  .diff.pos{color:#e74c3c}
+  .diff.neg{color:#27ae60}
+  .diff.zero{color:#888}
+  .actions{padding:20px 28px;display:flex;gap:12px;flex-wrap:wrap}
+  button{padding:10px 24px;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;transition:.15s}
+  .btn-primary{background:#f5c518;color:#111}
+  .btn-primary:hover{background:#e0b010}
+  .btn-secondary{background:#e0e0e0;color:#333}
+  .btn-secondary:hover{background:#ccc}
+  .btn-copy{background:#2c2c54;color:#f5c518}
+  .btn-copy:hover{background:#1a1a2e}
+  .summary-bar{background:#fff;border:1px solid #eee;border-radius:8px;padding:14px 20px;margin:0 28px 20px;display:flex;gap:32px;font-size:13px;flex-wrap:wrap}
+  .summary-bar b{display:block;font-size:18px;color:#1a1a2e}
+  .toast{position:fixed;bottom:24px;right:24px;background:#27ae60;color:#fff;padding:12px 22px;border-radius:8px;font-weight:600;opacity:0;transition:.3s;pointer-events:none;z-index:999}
+  .toast.show{opacity:1}
+  @media print{.tabs,.actions,.toast{display:none!important}.branch-section{display:block!important;padding:10px}.category-title{color:#000;background:#ddd}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>BAR STOCK ENTRY — HIGH 5IVE</h1>
+  <span id="dateLabel"></span>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('parking')">Parking Bar</div>
+  <div class="tab" onclick="switchTab('banana')">Banana Bar</div>
+</div>
+
+<!-- ═══════════ PARKING BAR ═══════════ -->
+<div class="branch-section active" id="tab-parking">
+
+  <div class="summary-bar">
+    <div><span>Total Items</span><b id="p-total">—</b></div>
+    <div><span>Filled In</span><b id="p-filled">0</b></div>
+    <div><span>Items Used</span><b id="p-used">0</b></div>
+    <div><span>Items Unchanged</span><b id="p-same">0</b></div>
+  </div>
+
+  <div id="parking-tables"></div>
+
+  <div class="actions">
+    <button class="btn-primary" onclick="copyData('parking')">Copy for Import</button>
+    <button class="btn-secondary" onclick="clearBranch('parking')">Clear</button>
+    <button class="btn-copy" onclick="window.print()">Print</button>
+  </div>
+</div>
+
+<!-- ═══════════ BANANA BAR ═══════════ -->
+<div class="branch-section" id="tab-banana">
+
+  <div class="summary-bar">
+    <div><span>Total Items</span><b id="b-total">—</b></div>
+    <div><span>Filled In</span><b id="b-filled">0</b></div>
+    <div><span>Items Used</span><b id="b-used">0</b></div>
+    <div><span>Items Unchanged</span><b id="b-same">0</b></div>
+  </div>
+
+  <div id="banana-tables"></div>
+
+  <div class="actions">
+    <button class="btn-primary" onclick="copyData('banana')">Copy for Import</button>
+    <button class="btn-secondary" onclick="clearBranch('banana')">Clear</button>
+    <button class="btn-copy" onclick="window.print()">Print</button>
+  </div>
+</div>
+
+<div class="toast" id="toast">Copied!</div>
+
+<script>
+const PARKING = [
+  { cat:'Beer', items:[
+    { name:'Amstel',         unit:'bottle', prev:62  },
+    { name:'Mutzing',        unit:'bottle', prev:65  },
+    { name:'Heineken',       unit:'bottle', prev:21  },
+    { name:'Desperado',      unit:'bottle', prev:20  },
+    { name:'Skol Lager',     unit:'bottle', prev:22  },
+    { name:'Skol Malt',      unit:'bottle', prev:67  },
+    { name:'Virunga Silver', unit:'bottle', prev:51  },
+    { name:'Virunga Mist',   unit:'bottle', prev:19  },
+    { name:'Virunga Gold',   unit:'bottle', prev:50  },
+  ]},
+  { cat:'Soft Drinks', items:[
+    { name:'Fanta Orange',           unit:'bottle', prev:40  },
+    { name:'Fanta Citron',           unit:'bottle', prev:66  },
+    { name:'Fanta Fiesta',           unit:'bottle', prev:61  },
+    { name:'Coca Cola',              unit:'bottle', prev:63  },
+    { name:'Coca Zero (50cl)',        unit:'bottle', prev:16  },
+    { name:'Coca Zero (30cl)',        unit:'bottle', prev:14  },
+    { name:'Panache',                unit:'bottle', prev:55  },
+    { name:'Sparkling Water Virunga',unit:'bottle', prev:0   },
+    { name:'Sparkling Water Vitalo', unit:'bottle', prev:16  },
+    { name:'Sprite',                 unit:'bottle', prev:27  },
+    { name:'Wow Water',              unit:'bottle', prev:241 },
+    { name:'Fanta Orange (small)',    unit:'bottle', prev:16  },
+  ]},
+  { cat:'Whisky', items:[
+    { name:'Red Label',        unit:'bottle', prev:0  },
+    { name:'Red Label (shots)',unit:'shots',  prev:16 },
+    { name:'Jack Daniel',      unit:'bottle', prev:1  },
+    { name:'Jack Daniel (shots)',unit:'shots',prev:20 },
+  ]},
+  { cat:'Vodka', items:[
+    { name:'Absolute Vodka (shots)', unit:'shots', prev:17 },
+  ]},
+  { cat:'Gin', items:[
+    { name:'Camino',              unit:'bottle', prev:0  },
+    { name:'Camino (shots)',       unit:'shots',  prev:10 },
+    { name:'Olmeca Silver',       unit:'bottle', prev:1  },
+    { name:'Olmeca Silver (shots)',unit:'shots',  prev:22 },
+    { name:'Olmeca Gold',         unit:'bottle', prev:1  },
+    { name:'Olmeca Gold (shots)',  unit:'shots',  prev:22 },
+  ]},
+  { cat:'Liquor', items:[
+    { name:'Jagermeister',          unit:'bottle', prev:1  },
+    { name:'Jagermeister (shots)',   unit:'shots',  prev:22 },
+    { name:'Bacardi',               unit:'bottle', prev:0  },
+    { name:'Martini Rosso',         unit:'bottle', prev:1  },
+    { name:'Cointreau',             unit:'bottle', prev:1  },
+    { name:'Triple Sec',            unit:'bottle', prev:1  },
+  ]},
+  { cat:'Sparkling Wine', items:[
+    { name:'Centrachi', unit:'bottle', prev:11 },
+    { name:'Prosecco',  unit:'bottle', prev:3  },
+  ]},
+  { cat:'White Wine', items:[
+    { name:'Bacada',               unit:'glass', prev:0  },
+    { name:'Jardin des C Sauvignon',unit:'glass', prev:54 },
+  ]},
+  { cat:'Red Wine', items:[
+    { name:'Angelo',   unit:'glass',  prev:0  },
+    { name:'Palo Alto',unit:'glass',  prev:35 },
+    { name:'Merlot',   unit:'bottle', prev:11 },
+  ]},
+]
+
+const BANANA = [
+  { cat:'Spirits', items:[
+    { name:'Bacardi',        unit:'ml',    prev:0    },
+    { name:'Captain Morgan', unit:'ml',    prev:925  },
+    { name:'Campari',        unit:'ml',    prev:820  },
+    { name:'Jameson',        unit:'shots', prev:22   },
+    { name:'Gin Gordon',     unit:'ml',    prev:1370 },
+    { name:'Tequila Camino', unit:'shots', prev:12   },
+    { name:'Cointreau',      unit:'shots', prev:22   },
+    { name:'Triple Sec',     unit:'ml',    prev:1120 },
+    { name:'Martini Rosso',  unit:'ml',    prev:720  },
+    { name:'Jack Daniel',    unit:'shots', prev:22   },
+    { name:'Olmeca Gold',    unit:'ml',    prev:1425 },
+    { name:'Blue Curacao',   unit:'shots', prev:16   },
+    { name:'Olmeca Silver',  unit:'ml',    prev:1310 },
+  ]},
+]
+
+function buildTables(data, prefix) {
+  const container = document.getElementById(`${prefix}-tables`)
+  let totalItems = 0
+  data.forEach(({ cat, items }) => {
+    totalItems += items.length
+    const rows = items.map(item => `
+      <tr>
+        <td>${item.name}</td>
+        <td><span class="unit">${item.unit}</span></td>
+        <td class="prev">${item.prev}</td>
+        <td><input type="number" min="0" step="any" placeholder="—"
+          id="${prefix}-${item.name.replace(/\s+/g,'_')}"
+          data-prev="${item.prev}"
+          oninput="updateDiff(this,'${prefix}-diff-${item.name.replace(/\s+/g,'_')}','${prefix}')"/></td>
+        <td><span class="diff zero" id="${prefix}-diff-${item.name.replace(/\s+/g,'_')}">—</span></td>
+      </tr>`).join('')
+    container.insertAdjacentHTML('beforeend', `
+      <div class="category-block">
+        <div class="category-title">${cat}</div>
+        <table>
+          <thead><tr><th>Item</th><th>Unit</th><th>Last Stock</th><th>New Count</th><th>Change</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`)
+  })
+  document.getElementById(`${prefix}-total`).textContent = totalItems
+  updateSummary(prefix)
+}
+
+function updateDiff(input, diffId, prefix) {
+  const prev = parseFloat(input.dataset.prev) || 0
+  const val = input.value === '' ? null : parseFloat(input.value)
+  const el = document.getElementById(diffId)
+  if (val === null) { el.textContent = '—'; el.className = 'diff zero' }
+  else {
+    const d = val - prev
+    el.textContent = (d > 0 ? '+' : '') + d.toFixed(d % 1 === 0 ? 0 : 1)
+    el.className = 'diff ' + (d < 0 ? 'neg' : d > 0 ? 'pos' : 'zero')
+  }
+  updateSummary(prefix)
+}
+
+function updateSummary(prefix) {
+  const inputs = document.querySelectorAll(`#tab-${prefix} input[type=number]`)
+  let filled = 0, used = 0, same = 0
+  inputs.forEach(inp => {
+    if (inp.value === '') return
+    filled++
+    const prev = parseFloat(inp.dataset.prev) || 0
+    const val = parseFloat(inp.value)
+    if (val < prev) used++
+    else if (val === prev) same++
+  })
+  document.getElementById(`${prefix[0]}-filled`).textContent = filled
+  document.getElementById(`${prefix[0]}-used`).textContent = used
+  document.getElementById(`${prefix[0]}-same`).textContent = same
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', ['parking','banana'][i] === name))
+  document.querySelectorAll('.branch-section').forEach(s => s.classList.remove('active'))
+  document.getElementById(`tab-${name}`).classList.add('active')
+}
+
+function clearBranch(prefix) {
+  document.querySelectorAll(`#tab-${prefix} input`).forEach(i => { i.value = '' })
+  document.querySelectorAll(`#tab-${prefix} .diff`).forEach(d => { d.textContent = '—'; d.className = 'diff zero' })
+  updateSummary(prefix)
+}
+
+function copyData(prefix) {
+  const lines = [`Branch: ${prefix === 'parking' ? 'Parking Bar' : 'Banana Bar'}`, `Date: ${new Date().toLocaleDateString()}`, '']
+  document.querySelectorAll(`#tab-${prefix} input`).forEach(inp => {
+    if (inp.value === '') return
+    const name = inp.id.replace(`${prefix}-`,'').replace(/_/g,' ')
+    const prev = inp.dataset.prev
+    lines.push(`${name}: ${prev} → ${inp.value}`)
+  })
+  navigator.clipboard.writeText(lines.join('\n'))
+  const t = document.getElementById('toast'); t.classList.add('show')
+  setTimeout(() => t.classList.remove('show'), 2000)
+}
+
+document.getElementById('dateLabel').textContent = new Date().toLocaleDateString('en-GB',{weekday:'long',year:'numeric',month:'long',day:'numeric'})
+buildTables(PARKING, 'parking')
+buildTables(BANANA, 'banana')
+</script>
+</body>
+</html>

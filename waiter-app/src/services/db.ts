@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS order_items (
   dish_price REAL NOT NULL,
   qty INTEGER NOT NULL,
   status TEXT DEFAULT 'ACTIVE',
+  branch_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -115,6 +116,20 @@ CREATE TABLE IF NOT EXISTS cancellation_approvers (
   name TEXT NOT NULL,
   pin_hash TEXT NOT NULL
 );`,
+  },
+  {
+    // Station snapshot at order-creation time, so a dish reassigned to a
+    // different station while an order sits open/unpaid can't retroactively
+    // misattribute the sale.
+    version: 6,
+    sql: 'ALTER TABLE order_items ADD COLUMN branch_id TEXT;',
+  },
+  {
+    // Covers: how many people sat at the table. The waiter can leave it blank,
+    // so null means "not recorded" — the manager's average spend per guest
+    // skips those orders rather than counting them as zero guests.
+    version: 7,
+    sql: 'ALTER TABLE orders ADD COLUMN guest_count INTEGER;',
   },
 ]
 
@@ -348,6 +363,8 @@ export interface Order {
   vat_amount: number
   total_amount: number
   created_by_name: string | null
+  // How many people sat at the table. Optional — null means the waiter skipped it.
+  guest_count: number | null
   served_at: string | null
   paid_at: string | null
   canceled_at: string | null
@@ -367,6 +384,7 @@ export interface OrderItem {
   qty: number
   status: string
   notes: string | null
+  branch_id: string | null
   created_at: string
   updated_at: string
 }
@@ -377,20 +395,21 @@ export async function createOrder(order: Order, items: OrderItem[]): Promise<voi
     `INSERT INTO orders
       (id, restaurant_id, branch_id, table_id, table_name, order_number, status,
        payment_method, subtotal_amount, vat_amount, total_amount, created_by_name,
-       served_at, paid_at, canceled_at, cancel_reason, synced, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+       guest_count, served_at, paid_at, canceled_at, cancel_reason, synced, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
     [
       order.id, order.restaurant_id, order.branch_id, order.table_id, order.table_name,
       order.order_number, order.status, order.payment_method, order.subtotal_amount,
       order.vat_amount, order.total_amount, order.created_by_name,
+      order.guest_count ?? null,
       order.served_at, order.paid_at, order.canceled_at, order.cancel_reason,
       order.created_at, order.updated_at,
     ]
   )
   for (const item of items) {
     await d.run(
-      'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.created_at, item.updated_at]
+      'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.branch_id ?? null, item.created_at, item.updated_at]
     )
   }
 }
@@ -527,6 +546,25 @@ export async function upsertIncomingOrders(orders: IncomingOrder[]): Promise<voi
       )
     }
   }
+}
+
+// Purge local copies of active orders the server no longer has (hard-deleted
+// upstream, e.g. an owner removing a mistake order). Only touches orders the
+// server has already acknowledged (synced = 1) — unpushed local orders are
+// never destroyed. Returns how many orders were removed.
+export async function deleteServerRemovedOrders(restaurantId: string, serverOrderIds: string[]): Promise<number> {
+  const d = getDB()
+  const rows = (await d.query(
+    `SELECT id FROM orders WHERE restaurant_id = ? AND synced = 1 AND status IN ('PENDING', 'OPEN', 'UNCONFIRMED')`,
+    [restaurantId],
+  )) as unknown as Array<{ id: string }>
+  const keep = new Set(serverOrderIds)
+  const removedIds = rows.map(r => r.id).filter(id => !keep.has(id))
+  for (const id of removedIds) {
+    await d.run('DELETE FROM order_items WHERE order_id = ?', [id])
+    await d.run('DELETE FROM orders WHERE id = ?', [id])
+  }
+  return removedIds.length
 }
 
 // ─── Cancellation Approvers ──────────────────────────────────────────────────

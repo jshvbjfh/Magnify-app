@@ -38,16 +38,21 @@ export async function POST(req: NextRequest) {
   let body: Record<string, unknown> = {}
   try { body = await req.json() } catch { /* no-op: body is optional */ }
 
-  // Resolve sync credentials — server-managed env vars take precedence over client-provided
+  // Resolve sync credentials — server-managed env vars take precedence over client-provided,
+  // but a blank env var (e.g. OWNER_SYNC_EMAIL="" from an unconfigured runtime.env) must not
+  // shadow a value the user entered in Settings, so fall through on empty string too.
+  const envTargetUrl = String(process.env.OWNER_SYNC_TARGET_URL ?? '').trim()
   const targetUrl = normalizeTargetUrl(
-    String(process.env.OWNER_SYNC_TARGET_URL ?? body.targetUrl ?? getCanonicalCloudAppUrl() ?? '').trim(),
+    String(envTargetUrl || body.targetUrl || getCanonicalCloudAppUrl() || '').trim(),
   )
   const sessionEmail = typeof session.user.email === 'string' ? session.user.email.trim().toLowerCase() : ''
   const requestEmail = String(body.email ?? sessionEmail).trim().toLowerCase()
   const requestPassword = String(body.password ?? '').trim()
-  const email = String(process.env.OWNER_SYNC_EMAIL ?? body.email ?? sessionEmail).trim().toLowerCase()
+  const envEmail = String(process.env.OWNER_SYNC_EMAIL ?? '').trim()
+  const email = String(envEmail || body.email || sessionEmail || '').trim().toLowerCase()
   const sharedSecret = String(process.env.OWNER_SYNC_SHARED_SECRET ?? '').trim()
-  const password = sharedSecret ? '' : String(process.env.OWNER_SYNC_PASSWORD ?? body.password ?? '').trim()
+  const envPassword = String(process.env.OWNER_SYNC_PASSWORD ?? '').trim()
+  const password = sharedSecret ? '' : String(envPassword || body.password || '').trim()
 
   if (!targetUrl) {
     return NextResponse.json({ ok: false, message: 'Cloud sync target URL is not configured.' }, { status: 200 })
@@ -156,14 +161,17 @@ export async function POST(req: NextRequest) {
     changes,
   })
 
-  // Pull cursors so the cloud can return changes we haven't seen yet
+  // Pull cursors so the cloud can return changes we haven't seen yet. Must be scoped to
+  // *this* target — a cursor left over from syncing a different restaurant (or a different
+  // target) on this device must not suppress a fresh pull for a scope we've never synced.
   const syncCursors = await prisma.syncCursor.findMany({
-    where: { scopeId: { in: [restaurant.id, GLOBAL_SYNC_SCOPE_ID] } },
+    where: { scopeId: { in: [restaurant.id, GLOBAL_SYNC_SCOPE_ID] }, target: targetUrl },
   })
-  const pullCursors = syncCursors.map((cursor) => ({
-    scopeId: cursor.scopeId,
-    target: cursor.target,
-    lastPulledAt: cursor.lastPulledAt?.toISOString() ?? null,
+  const cursorByScope = new Map(syncCursors.map((cursor) => [cursor.scopeId, cursor]))
+  const pullCursors = [restaurant.id, GLOBAL_SYNC_SCOPE_ID].map((scopeId) => ({
+    scopeId,
+    target: targetUrl,
+    lastPulledAt: cursorByScope.get(scopeId)?.lastPulledAt?.toISOString() ?? null,
   }))
 
   // Include branch identity so the cloud can remap branch IDs correctly
@@ -178,13 +186,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // POST changes to the cloud sync endpoint
-  let cloudOk = false
-  let cloudError: string | null = null
-  let cloudPullChanges: SyncChangeEnvelope[] = []
-  let cloudPullCursors: Array<{ scopeId: string; lastPulledAt: string | null }> = []
+  // POST to the cloud sync endpoint, looping the pull side so a device that's badly behind
+  // (e.g. catching up after never having synced this restaurant before) fully catches up in
+  // one request instead of requiring the caller to click "Sync now" repeatedly — each round
+  // trip only returns a bounded page of changes (see SYNC_MAX_CHANGES_PER_BATCH server-side).
+  const SYNC_MAX_PULL_ROUNDS = 40
 
-  try {
+  async function callCloudSync(roundChanges: SyncChangeEnvelope[], roundPullCursors: typeof pullCursors) {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'x-sync-email': email,
@@ -198,69 +206,97 @@ export async function POST(req: NextRequest) {
       const res = await fetch(`${targetUrl}/api/sync`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ joinCode, ...(restaurantSyncId ? { restaurantSyncId } : {}), batchId, payloadHash, deviceId, branchId, branchIdentity, changes, pullCursors }),
+        body: JSON.stringify({
+          joinCode,
+          ...(restaurantSyncId ? { restaurantSyncId } : {}),
+          batchId,
+          payloadHash,
+          deviceId,
+          branchId,
+          branchIdentity,
+          changes: roundChanges,
+          pullCursors: roundPullCursors,
+        }),
         signal: controller.signal,
       })
       const payload = await res.json().catch(() => null)
-      cloudOk = res.ok
       if (!res.ok) {
-        cloudError = String(payload?.error ?? payload?.message ?? `HTTP ${res.status}`)
-      } else {
-        if (Array.isArray(payload?.pullChanges)) cloudPullChanges = payload.pullChanges
-        if (Array.isArray(payload?.pullCursors)) cloudPullCursors = payload.pullCursors
+        return { ok: false as const, error: String(payload?.error ?? payload?.message ?? `HTTP ${res.status}`) }
       }
+      return {
+        ok: true as const,
+        pullChanges: Array.isArray(payload?.pullChanges) ? (payload.pullChanges as SyncChangeEnvelope[]) : [],
+        pullCursors: Array.isArray(payload?.pullCursors)
+          ? (payload.pullCursors as Array<{ scopeId: string; lastPulledAt: string | null }>)
+          : [],
+      }
+    } catch (err: unknown) {
+      return { ok: false as const, error: err instanceof Error ? err.message : 'Network error during cloud sync' }
     } finally {
       clearTimeout(timeoutId)
     }
-  } catch (err: unknown) {
-    cloudError = err instanceof Error ? err.message : 'Network error during cloud sync'
   }
 
-  if (!cloudOk) {
-    if (outboxRows.length > 0) {
-      await markSyncOutboxChangesFailed(prisma, outboxRows, cloudError ?? 'Sync failed')
+  let totalPullApplied = 0
+  let roundPullCursors = pullCursors
+
+  for (let round = 0; round < SYNC_MAX_PULL_ROUNDS; round += 1) {
+    const result = await callCloudSync(round === 0 ? changes : [], roundPullCursors)
+
+    if (!result.ok) {
+      if (round === 0 && outboxRows.length > 0) {
+        await markSyncOutboxChangesFailed(prisma, outboxRows, result.error ?? 'Sync failed')
+      }
+      return NextResponse.json({
+        ok: false,
+        message: result.error ?? 'Cloud sync failed.',
+        consecutiveFailures: 1,
+        pullApplied: totalPullApplied,
+      })
     }
-    return NextResponse.json({
-      ok: false,
-      message: cloudError ?? 'Cloud sync failed.',
-      consecutiveFailures: 1,
-    })
+
+    if (round === 0 && outboxRows.length > 0) {
+      await markSyncOutboxChangesSynced(prisma, outboxRows.map((r) => r.id))
+    }
+
+    if (result.pullChanges.length > 0) {
+      const pullResult = await applyIncomingSyncChanges(prisma, result.pullChanges, { localDeviceId: deviceId })
+      totalPullApplied += pullResult.applied
+    }
+
+    // Advance pull cursors locally so the next round (and the next sync call) doesn't re-fetch
+    // changes we've already applied.
+    const nextRoundCursors = new Map(roundPullCursors.map((c) => [c.scopeId, c]))
+    for (const cursor of result.pullCursors) {
+      if (!cursor.scopeId || !cursor.lastPulledAt) continue
+      await prisma.syncCursor.upsert({
+        where: { scopeId_target: { scopeId: cursor.scopeId, target: targetUrl } },
+        update: { lastPulledAt: new Date(cursor.lastPulledAt) },
+        create: {
+          scopeId: cursor.scopeId,
+          target: targetUrl,
+          lastPulledAt: new Date(cursor.lastPulledAt),
+          lastPushedAt: new Date(0),
+        },
+      })
+      nextRoundCursors.set(cursor.scopeId, { scopeId: cursor.scopeId, target: targetUrl, lastPulledAt: cursor.lastPulledAt })
+    }
+    roundPullCursors = Array.from(nextRoundCursors.values())
+
+    // A short page means we've caught up — stop looping instead of spending another round trip.
+    if (result.pullChanges.length < SYNC_MAX_CHANGES_PER_BATCH) break
   }
 
-  if (outboxRows.length > 0) {
-    await markSyncOutboxChangesSynced(prisma, outboxRows.map((r) => r.id))
-  }
-
-  // Apply changes pulled from cloud into the local database
-  let pullApplied = 0
-  if (cloudPullChanges.length > 0) {
-    const pullResult = await applyIncomingSyncChanges(prisma, cloudPullChanges, { localDeviceId: deviceId })
-    pullApplied = pullResult.applied
-  }
-
-  // Advance pull cursors so the next sync doesn't re-fetch the same changes
-  for (const cursor of cloudPullCursors) {
-    if (!cursor.scopeId || !cursor.lastPulledAt) continue
-    await prisma.syncCursor.upsert({
-      where: { scopeId_target: { scopeId: cursor.scopeId, target: targetUrl } },
-      update: { lastPulledAt: new Date(cursor.lastPulledAt) },
-      create: {
-        scopeId: cursor.scopeId,
-        target: targetUrl,
-        lastPulledAt: new Date(cursor.lastPulledAt),
-        lastPushedAt: new Date(0),
-      },
-    })
-  }
+  const pushedChanges = changes.length
 
   return NextResponse.json({
     ok: true,
-    message: changes.length > 0 || pullApplied > 0
-      ? `Synced ${changes.length} change(s) to cloud; pulled ${pullApplied} change(s) from cloud.`
+    message: pushedChanges > 0 || totalPullApplied > 0
+      ? `Synced ${pushedChanges} change(s) to cloud; pulled ${totalPullApplied} change(s) from cloud.`
       : 'No pending changes to sync.',
     consecutiveFailures: 0,
     syncedTransactions: 0,
     syncedSummaries: 0,
-    pullApplied,
+    pullApplied: totalPullApplied,
   })
 }

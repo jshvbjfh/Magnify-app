@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>High 5ive — Missing Drink Recipes</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f1f5f9; color: #1e293b; font-size: 14px; }
+
+  header {
+    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+    color: #fff; padding: 22px 32px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 1.3rem; font-weight: 700; }
+  header .sub { font-size: .82rem; color: #94a3b8; margin-top: 3px; }
+
+  .toolbar {
+    background: #fff; border-bottom: 1px solid #e2e8f0;
+    padding: 12px 32px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 6px rgba(0,0,0,.06);
+  }
+  .btn { padding: 8px 18px; border: none; border-radius: 7px; font-size: .85rem; font-weight: 600; cursor: pointer; }
+  .btn-copy { background: #16a34a; color: #fff; }
+  .btn:hover { opacity: .87; }
+  .hint { font-size: .78rem; color: #94a3b8; margin-left: 4px; }
+
+  .container { max-width: 900px; margin: 28px auto; padding: 0 16px 60px; }
+
+  .section-title {
+    font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em;
+    color: #94a3b8; padding: 0 4px; margin: 36px 0 2px;
+  }
+  .cat-divider {
+    margin: 20px 0 4px; padding: 5px 12px;
+    background: #f1f5f9; border-radius: 6px;
+    font-size: .72rem; font-weight: 800; text-transform: uppercase;
+    letter-spacing: .07em; color: #64748b;
+  }
+
+  .branch-label {
+    display: flex; align-items: center; gap: 10px;
+    margin: 16px 0 6px; padding: 8px 12px;
+    border-radius: 8px; font-weight: 700; font-size: .9rem; letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .branch-label.bb      { background: #fef9c3; color: #854d0e; border-left: 4px solid #eab308; }
+  .branch-label.pb      { background: #dbeafe; color: #1e3a8a; border-left: 4px solid #3b82f6; }
+  .branch-label.pb-sh   { background: #dcfce7; color: #14532d; border-left: 4px solid #22c55e; }
+  .branch-label.pb-cf   { background: #fef3c7; color: #78350f; border-left: 4px solid #d97706; }
+  .branch-label.pb-ot   { background: #f1f5f9; color: #475569; border-left: 4px solid #94a3b8; }
+
+  .price-chip {
+    font-size: .72rem; font-weight: 700; letter-spacing: 0; text-transform: none;
+    background: rgba(0,0,0,.10); color: inherit; padding: 2px 9px;
+    border-radius: 20px; margin-left: auto; white-space: nowrap;
+  }
+
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.08); margin-bottom: 6px; }
+  thead tr { background: #f8fafc; }
+  th {
+    padding: 10px 12px; font-size: .72rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .05em; color: #64748b;
+    border-bottom: 2px solid #e2e8f0; text-align: left; vertical-align: top;
+  }
+  th small { display: block; font-weight: 400; text-transform: none; letter-spacing: 0; color: #94a3b8; font-size: .68rem; margin-top: 2px; }
+  td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr.new-row { background: #fffbeb; }
+  tr.new-row td { border-bottom: 1px solid #fde68a; }
+
+  .badge { display: inline-block; border-radius: 4px; padding: 2px 7px; font-size: .68rem; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+  .badge-in  { background: #dcfce7; color: #166534; }
+  .badge-add { background: #fef3c7; color: #92400e; }
+
+  .item-name { font-weight: 600; color: #1e293b; }
+
+  .inp {
+    width: 100%; border: 1.5px solid #e2e8f0; border-radius: 6px;
+    padding: 5px 8px; font-size: .85rem; font-family: inherit;
+    color: #1e293b; background: #f8fafc; outline: none;
+  }
+  .inp:focus { border-color: #6366f1; background: #fff; box-shadow: 0 0 0 3px #e0e7ff; }
+  .inp::placeholder { color: #cbd5e1; }
+  .inp-qty  { width: 70px; text-align: right; }
+  .inp-unit { width: 60px; text-align: center; }
+
+  .btn-del-row { border: none; background: #fee2e2; color: #dc2626; border-radius: 5px; width: 24px; height: 24px; cursor: pointer; font-size: .9rem; font-weight: 700; line-height: 1; }
+  .btn-del-row:hover { background: #fca5a5; }
+
+  .add-row-btn {
+    border: 1.5px dashed #cbd5e1; background: none; color: #6366f1;
+    border-radius: 8px; padding: 7px 16px; font-size: .82rem; font-weight: 700;
+    cursor: pointer; width: 100%; margin-top: 4px; margin-bottom: 8px;
+  }
+  .add-row-btn:hover { background: #eef2ff; border-color: #6366f1; }
+
+  .footer-note { text-align: center; font-size: .75rem; color: #94a3b8; margin-top: 24px; }
+
+  @media print {
+    .toolbar { position: static; box-shadow: none; }
+    .btn, .add-row-btn, .btn-del-row { display: none; }
+    body { background: #fff; }
+    .container { max-width: 100%; margin: 0; padding: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>HIGH 5IVE — Missing Drink Recipes</h1>
+    <div class="sub">Adjust quantities &amp; units for each drink — then click Copy and paste in Axel's WhatsApp chat</div>
+  </div>
+</header>
+
+<div class="toolbar">
+  <button class="btn btn-copy" onclick="copyForMe()">&#x1F4CB; Copy and paste in Axel's WhatsApp chat</button>
+  <span class="hint">&#x2139; Quantities are estimated — correct them, then copy &amp; send. Saves automatically.</span>
+</div>
+
+<div class="container">
+
+<div class="section-title">&#x1F379; Banana Bar — Cocktails</div>
+
+<!-- ── Gin & Tonic ── -->
+<div class="branch-label bb">Gin &amp; Tonic <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-gin-tonic">
+  <tr data-branch="bb" data-dish="Gin & Tonic" data-name="Gin Gordon"><td><span class="badge badge-in">IN</span></td><td class="item-name">Gin Gordon</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Gin & Tonic" data-name="Tonic water"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Tonic water</td><td><input class="inp inp-qty" value="150" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Gin & Tonic" data-name="Lime juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lime juice</td><td><input class="inp inp-qty" value="10" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-gin-tonic','Gin &amp; Tonic','bb')">+ Add another ingredient for Gin &amp; Tonic</button>
+
+<!-- ── Bisoke Mojito ── -->
+<div class="branch-label bb">Bisoke Mojito <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-bisoke-mojito">
+  <tr data-branch="bb" data-dish="Bisoke Mojito" data-name="Bacardi"><td><span class="badge badge-in">IN</span></td><td class="item-name">Bacardi</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Bisoke Mojito" data-name="Lime juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lime juice</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Bisoke Mojito" data-name="Fresh mint"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Fresh mint</td><td><input class="inp inp-qty" value="5" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Bisoke Mojito" data-name="Sugar syrup"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Sugar syrup</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Bisoke Mojito" data-name="Soda water"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Soda water</td><td><input class="inp inp-qty" value="90" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-bisoke-mojito','Bisoke Mojito','bb')">+ Add another ingredient for Bisoke Mojito</button>
+
+<!-- ── Passion Mojito ── -->
+<div class="branch-label bb">Passion Mojito <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-passion-mojito">
+  <tr data-branch="bb" data-dish="Passion Mojito" data-name="Bacardi"><td><span class="badge badge-in">IN</span></td><td class="item-name">Bacardi</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Passion Mojito" data-name="Passion fruit"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Passion fruit</td><td><input class="inp inp-qty" value="30" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Passion Mojito" data-name="Lime juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lime juice</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Passion Mojito" data-name="Fresh mint"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Fresh mint</td><td><input class="inp inp-qty" value="5" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Passion Mojito" data-name="Sugar syrup"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Sugar syrup</td><td><input class="inp inp-qty" value="10" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Passion Mojito" data-name="Soda water"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Soda water</td><td><input class="inp inp-qty" value="80" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-passion-mojito','Passion Mojito','bb')">+ Add another ingredient for Passion Mojito</button>
+
+<!-- ── High5 Basil Smash ── -->
+<div class="branch-label bb">High5 Basil Smash <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-basil-smash">
+  <tr data-branch="bb" data-dish="High5 Basil Smash" data-name="Gin Gordon"><td><span class="badge badge-in">IN</span></td><td class="item-name">Gin Gordon</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="High5 Basil Smash" data-name="Lemon juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lemon juice</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="High5 Basil Smash" data-name="Fresh basil"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Fresh basil</td><td><input class="inp inp-qty" value="5" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="High5 Basil Smash" data-name="Sugar syrup"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Sugar syrup</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-basil-smash','High5 Basil Smash','bb')">+ Add another ingredient for High5 Basil Smash</button>
+
+<!-- ── Strawberry Colada ── -->
+<div class="branch-label bb">Strawberry Colada <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-strawberry-colada">
+  <tr data-branch="bb" data-dish="Strawberry Colada" data-name="Captain Morgan"><td><span class="badge badge-in">IN</span></td><td class="item-name">Captain Morgan</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Strawberry Colada" data-name="Coconut cream"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Coconut cream</td><td><input class="inp inp-qty" value="30" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Strawberry Colada" data-name="Strawberry"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Strawberry</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Strawberry Colada" data-name="Pineapple juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Pineapple juice</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-strawberry-colada','Strawberry Colada','bb')">+ Add another ingredient for Strawberry Colada</button>
+
+<!-- ── Strawberry Margarita ── -->
+<div class="branch-label bb">Strawberry Margarita <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-strawberry-marg">
+  <tr data-branch="bb" data-dish="Strawberry Margarita" data-name="Olmeca Gold"><td><span class="badge badge-in">IN</span></td><td class="item-name">Olmeca Gold</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Strawberry Margarita" data-name="Triple Sec"><td><span class="badge badge-in">IN</span></td><td class="item-name">Triple Sec</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Strawberry Margarita" data-name="Lime juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lime juice</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Strawberry Margarita" data-name="Strawberry"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Strawberry</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-strawberry-marg','Strawberry Margarita','bb')">+ Add another ingredient for Strawberry Margarita</button>
+
+<!-- ── High5 Passion Rita ── -->
+<div class="branch-label bb">High5 Passion Rita <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-passion-rita">
+  <tr data-branch="bb" data-dish="High5 Passion Rita" data-name="Tequila Camino"><td><span class="badge badge-in">IN</span></td><td class="item-name">Tequila Camino</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="High5 Passion Rita" data-name="Triple Sec"><td><span class="badge badge-in">IN</span></td><td class="item-name">Triple Sec</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="High5 Passion Rita" data-name="Passion fruit"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Passion fruit</td><td><input class="inp inp-qty" value="30" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="High5 Passion Rita" data-name="Lime juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lime juice</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-passion-rita','High5 Passion Rita','bb')">+ Add another ingredient for High5 Passion Rita</button>
+
+<!-- ── High5 Red Lipstick ── -->
+<div class="branch-label bb">High5 Red Lipstick <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-red-lipstick">
+  <tr data-branch="bb" data-dish="High5 Red Lipstick" data-name="Tequila Camino"><td><span class="badge badge-in">IN</span></td><td class="item-name">Tequila Camino</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="High5 Red Lipstick" data-name="Cointreau"><td><span class="badge badge-in">IN</span></td><td class="item-name">Cointreau</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="High5 Red Lipstick" data-name="Strawberry"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Strawberry</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="High5 Red Lipstick" data-name="Lime juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lime juice</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-red-lipstick','High5 Red Lipstick','bb')">+ Add another ingredient for High5 Red Lipstick</button>
+
+<!-- ── Bold & Bitter ── -->
+<div class="branch-label bb">Bold &amp; Bitter <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-bold-bitter">
+  <tr data-branch="bb" data-dish="Bold & Bitter" data-name="Campari"><td><span class="badge badge-in">IN</span></td><td class="item-name">Campari</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Bold & Bitter" data-name="Martini Rosso"><td><span class="badge badge-in">IN</span></td><td class="item-name">Martini Rosso</td><td><input class="inp inp-qty" value="30" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Bold & Bitter" data-name="Soda water"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Soda water</td><td><input class="inp inp-qty" value="80" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Bold & Bitter" data-name="Orange juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Orange juice</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-bold-bitter','Bold &amp; Bitter','bb')">+ Add another ingredient for Bold &amp; Bitter</button>
+
+<!-- ── Hibiscus Velvet ── -->
+<div class="branch-label bb">Hibiscus Velvet <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-hibiscus-velvet">
+  <tr data-branch="bb" data-dish="Hibiscus Velvet" data-name="Gin Gordon"><td><span class="badge badge-in">IN</span></td><td class="item-name">Gin Gordon</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Hibiscus Velvet" data-name="Hibiscus syrup"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Hibiscus syrup</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Hibiscus Velvet" data-name="Lemon juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lemon juice</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Hibiscus Velvet" data-name="Soda water"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Soda water</td><td><input class="inp inp-qty" value="80" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-hibiscus-velvet','Hibiscus Velvet','bb')">+ Add another ingredient for Hibiscus Velvet</button>
+
+<!-- ── City Slicker ── -->
+<div class="branch-label bb">City Slicker <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-city-slicker">
+  <tr data-branch="bb" data-dish="City Slicker" data-name="Gin Gordon"><td><span class="badge badge-in">IN</span></td><td class="item-name">Gin Gordon</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="City Slicker" data-name="Cointreau"><td><span class="badge badge-in">IN</span></td><td class="item-name">Cointreau</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="City Slicker" data-name="Lemon juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lemon juice</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="City Slicker" data-name="Sugar syrup"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Sugar syrup</td><td><input class="inp inp-qty" value="10" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-city-slicker','City Slicker','bb')">+ Add another ingredient for City Slicker</button>
+
+<!-- ── Salsa Sunrise ── -->
+<div class="branch-label bb">Salsa Sunrise <span class="price-chip">18,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-salsa-sunrise">
+  <tr data-branch="bb" data-dish="Salsa Sunrise" data-name="Olmeca Gold"><td><span class="badge badge-in">IN</span></td><td class="item-name">Olmeca Gold</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Salsa Sunrise" data-name="Orange juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Orange juice</td><td><input class="inp inp-qty" value="100" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Salsa Sunrise" data-name="Grenadine"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Grenadine</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-salsa-sunrise','Salsa Sunrise','bb')">+ Add another ingredient for Salsa Sunrise</button>
+
+<!-- ── Sweet Surrender ── -->
+<div class="branch-label bb">Sweet Surrender <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-sweet-surrender">
+  <tr data-branch="bb" data-dish="Sweet Surrender" data-name="Captain Morgan"><td><span class="badge badge-in">IN</span></td><td class="item-name">Captain Morgan</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Sweet Surrender" data-name="Blue Curacao"><td><span class="badge badge-in">IN</span></td><td class="item-name">Blue Curacao</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Sweet Surrender" data-name="Pineapple juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Pineapple juice</td><td><input class="inp inp-qty" value="60" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Sweet Surrender" data-name="Coconut cream"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Coconut cream</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-sweet-surrender','Sweet Surrender','bb')">+ Add another ingredient for Sweet Surrender</button>
+
+<!-- ── The Revival ── -->
+<div class="branch-label bb">The Revival <span class="price-chip">15,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-the-revival">
+  <tr data-branch="bb" data-dish="The Revival" data-name="Jack Daniel"><td><span class="badge badge-in">IN</span></td><td class="item-name">Jack Daniel</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="The Revival" data-name="Lemon juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lemon juice</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="The Revival" data-name="Honey"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Honey</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="The Revival" data-name="Ginger beer"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Ginger beer</td><td><input class="inp inp-qty" value="80" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-the-revival','The Revival','bb')">+ Add another ingredient for The Revival</button>
+
+<!-- ── Banana Bar Special ── -->
+<div class="branch-label bb">Banana Bar Special <span class="price-chip">18,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-bb-special">
+  <tr data-branch="bb" data-dish="Banana Bar Special" data-name="Bacardi"><td><span class="badge badge-in">IN</span></td><td class="item-name">Bacardi</td><td><input class="inp inp-qty" value="30" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Banana Bar Special" data-name="Captain Morgan"><td><span class="badge badge-in">IN</span></td><td class="item-name">Captain Morgan</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Banana Bar Special" data-name="Blue Curacao"><td><span class="badge badge-in">IN</span></td><td class="item-name">Blue Curacao</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Banana Bar Special" data-name="Pineapple juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Pineapple juice</td><td><input class="inp inp-qty" value="60" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="bb" data-dish="Banana Bar Special" data-name="Orange juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Orange juice</td><td><input class="inp inp-qty" value="30" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-bb-special','Banana Bar Special','bb')">+ Add another ingredient for Banana Bar Special</button>
+
+<!-- ════════════════════════ PARKING BAR ════════════════════════ -->
+<div class="section-title" style="margin-top:52px">&#x1F17F; Parking Bar — Drinks</div>
+
+<div class="cat-divider">Mocktails</div>
+
+<!-- ── Blue Candy ── -->
+<div class="branch-label pb">Blue Candy <span class="price-chip">9,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-blue-candy">
+  <tr data-branch="pb" data-dish="Blue Candy" data-name="Blue Curacao syrup"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Blue Curacao syrup</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Blue Candy" data-name="Sprite lemonade"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Sprite / lemonade</td><td><input class="inp inp-qty" value="150" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Blue Candy" data-name="Lime juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lime juice</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-blue-candy','Blue Candy','pb')">+ Add another ingredient for Blue Candy</button>
+
+<!-- ── Virgin Mojito ── -->
+<div class="branch-label pb">Virgin Mojito <span class="price-chip">9,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-virgin-mojito">
+  <tr data-branch="pb" data-dish="Virgin Mojito" data-name="Lime juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lime juice</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Virgin Mojito" data-name="Fresh mint"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Fresh mint</td><td><input class="inp inp-qty" value="5" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Virgin Mojito" data-name="Sugar syrup"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Sugar syrup</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Virgin Mojito" data-name="Soda water"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Soda water</td><td><input class="inp inp-qty" value="100" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-virgin-mojito','Virgin Mojito','pb')">+ Add another ingredient for Virgin Mojito</button>
+
+<!-- ── Virgin Piña Colada ── -->
+<div class="branch-label pb">Virgin Pi&#xF1;a Colada <span class="price-chip">9,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-virgin-colada">
+  <tr data-branch="pb" data-dish="Virgin Piña Colada" data-name="Pineapple juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Pineapple juice</td><td><input class="inp inp-qty" value="100" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Virgin Piña Colada" data-name="Coconut cream"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Coconut cream</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-virgin-colada','Virgin Piña Colada','pb')">+ Add another ingredient for Virgin Pi&#xF1;a Colada</button>
+
+<!-- ── Tropical Sunset ── -->
+<div class="branch-label pb">Tropical Sunset <span class="price-chip">9,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-tropical-sunset">
+  <tr data-branch="pb" data-dish="Tropical Sunset" data-name="Orange juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Orange juice</td><td><input class="inp inp-qty" value="80" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Tropical Sunset" data-name="Pineapple juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Pineapple juice</td><td><input class="inp inp-qty" value="60" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Tropical Sunset" data-name="Grenadine"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Grenadine</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-tropical-sunset','Tropical Sunset','pb')">+ Add another ingredient for Tropical Sunset</button>
+
+<!-- ── Mango Lemonade ── -->
+<div class="branch-label pb">Mango Lemonade <span class="price-chip">9,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-mango-lemonade">
+  <tr data-branch="pb" data-dish="Mango Lemonade" data-name="Mango juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Mango juice</td><td><input class="inp inp-qty" value="80" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Mango Lemonade" data-name="Lemon juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lemon juice</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Mango Lemonade" data-name="Sugar syrup"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Sugar syrup</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Mango Lemonade" data-name="Soda water"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Soda water</td><td><input class="inp inp-qty" value="80" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-mango-lemonade','Mango Lemonade','pb')">+ Add another ingredient for Mango Lemonade</button>
+
+<!-- ── Melon Splash ── -->
+<div class="branch-label pb">Melon Splash <span class="price-chip">9,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-melon-splash">
+  <tr data-branch="pb" data-dish="Melon Splash" data-name="Watermelon juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Watermelon juice</td><td><input class="inp inp-qty" value="120" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Melon Splash" data-name="Lime juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lime juice</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Melon Splash" data-name="Sugar syrup"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Sugar syrup</td><td><input class="inp inp-qty" value="10" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-melon-splash','Melon Splash','pb')">+ Add another ingredient for Melon Splash</button>
+
+<!-- ── High 5 Joy ── -->
+<div class="branch-label pb">High 5 Joy <span class="price-chip">8,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-high5-joy">
+  <tr data-branch="pb" data-dish="High 5 Joy" data-name="Passion fruit"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Passion fruit</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="High 5 Joy" data-name="Mango juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Mango juice</td><td><input class="inp inp-qty" value="80" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="High 5 Joy" data-name="Lime juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lime juice</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="High 5 Joy" data-name="Soda water"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Soda water</td><td><input class="inp inp-qty" value="60" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-high5-joy','High 5 Joy','pb')">+ Add another ingredient for High 5 Joy</button>
+
+<!-- ── Fresh Juice ── -->
+<div class="branch-label pb">Fresh Juice <span class="price-chip">7,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-fresh-juice">
+  <tr data-branch="pb" data-dish="Fresh Juice" data-name="Fresh fruit seasonal"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Fresh fruit (seasonal)</td><td><input class="inp inp-qty" value="200" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" placeholder="specify fruit" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-fresh-juice','Fresh Juice','pb')">+ Add another ingredient for Fresh Juice</button>
+
+<div class="cat-divider">Shakes &amp; Wellness</div>
+
+<!-- ── Chocolate Shake ── -->
+<div class="branch-label pb-sh">Chocolate Shake <span class="price-chip">8,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-choc-shake">
+  <tr data-branch="pb" data-dish="Chocolate Shake" data-name="Milk"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Milk</td><td><input class="inp inp-qty" value="200" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Chocolate Shake" data-name="Chocolate powder"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Chocolate powder</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Chocolate Shake" data-name="Ice cream vanilla"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Ice cream (vanilla)</td><td><input class="inp inp-qty" value="60" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-choc-shake','Chocolate Shake','pb')">+ Add another ingredient for Chocolate Shake</button>
+
+<!-- ── Urukundo Shake ── -->
+<div class="branch-label pb-sh">Urukundo Shake <span class="price-chip">8,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-urukundo-shake">
+  <tr data-branch="pb" data-dish="Urukundo Shake" data-name="Milk"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Milk</td><td><input class="inp inp-qty" value="180" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Urukundo Shake" data-name="Strawberry"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Strawberry</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Urukundo Shake" data-name="Banana"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Banana</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-urukundo-shake','Urukundo Shake','pb')">+ Add another ingredient for Urukundo Shake</button>
+
+<!-- ── Proteine Shake ── -->
+<div class="branch-label pb-sh">Proteine Shake <span class="price-chip">8,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-proteine-shake">
+  <tr data-branch="pb" data-dish="Proteine Shake" data-name="Milk"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Milk</td><td><input class="inp inp-qty" value="250" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Proteine Shake" data-name="Protein powder"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Protein powder</td><td><input class="inp inp-qty" value="30" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Proteine Shake" data-name="Banana"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Banana</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-proteine-shake','Proteine Shake','pb')">+ Add another ingredient for Proteine Shake</button>
+
+<!-- ── Healing ── -->
+<div class="branch-label pb-sh">Healing <span class="price-chip">8,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-healing">
+  <tr data-branch="pb" data-dish="Healing" data-name="Ginger juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Ginger juice</td><td><input class="inp inp-qty" value="30" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Healing" data-name="Lemon juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lemon juice</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Healing" data-name="Honey"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Honey</td><td><input class="inp inp-qty" value="15" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Healing" data-name="Warm water"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Warm water</td><td><input class="inp inp-qty" value="150" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-healing','Healing','pb')">+ Add another ingredient for Healing</button>
+
+<!-- ── Detox 5 ── -->
+<div class="branch-label pb-sh">Detox 5 <span class="price-chip">8,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-detox5">
+  <tr data-branch="pb" data-dish="Detox 5" data-name="Cucumber"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Cucumber</td><td><input class="inp inp-qty" value="40" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Detox 5" data-name="Lemon juice"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Lemon juice</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Detox 5" data-name="Mint"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Mint</td><td><input class="inp inp-qty" value="5" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Detox 5" data-name="Water"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Water</td><td><input class="inp inp-qty" value="150" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-detox5','Detox 5','pb')">+ Add another ingredient for Detox 5</button>
+
+<div class="cat-divider">Coffee &amp; Tea</div>
+
+<!-- ── Expresso ── -->
+<div class="branch-label pb-cf">Expresso <span class="price-chip">4,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-expresso">
+  <tr data-branch="pb" data-dish="Expresso" data-name="Coffee grounds"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Coffee grounds</td><td><input class="inp inp-qty" value="7" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-expresso','Expresso','pb')">+ Add another ingredient for Expresso</button>
+
+<!-- ── Americano ── -->
+<div class="branch-label pb-cf">Americano <span class="price-chip">5,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-americano">
+  <tr data-branch="pb" data-dish="Americano" data-name="Coffee grounds"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Coffee grounds</td><td><input class="inp inp-qty" value="14" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-americano','Americano','pb')">+ Add another ingredient for Americano</button>
+
+<!-- ── Black coffee ── -->
+<div class="branch-label pb-cf">Black coffee <span class="price-chip">4,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-black-coffee">
+  <tr data-branch="pb" data-dish="Black coffee" data-name="Coffee grounds"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Coffee grounds</td><td><input class="inp inp-qty" value="10" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-black-coffee','Black coffee','pb')">+ Add another ingredient for Black coffee</button>
+
+<!-- ── Cappuccino ── -->
+<div class="branch-label pb-cf">Cappuccino <span class="price-chip">5,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-cappuccino">
+  <tr data-branch="pb" data-dish="Cappuccino" data-name="Coffee grounds"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Coffee grounds</td><td><input class="inp inp-qty" value="7" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Cappuccino" data-name="Milk"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Milk</td><td><input class="inp inp-qty" value="120" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-cappuccino','Cappuccino','pb')">+ Add another ingredient for Cappuccino</button>
+
+<!-- ── Café Latte ── -->
+<div class="branch-label pb-cf">Caf&#xe9; Latte <span class="price-chip">5,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-cafe-latte">
+  <tr data-branch="pb" data-dish="Café Latte" data-name="Coffee grounds"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Coffee grounds</td><td><input class="inp inp-qty" value="7" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Café Latte" data-name="Milk"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Milk</td><td><input class="inp inp-qty" value="200" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-cafe-latte','Café Latte','pb')">+ Add another ingredient for Caf&#xe9; Latte</button>
+
+<!-- ── Latte Macchiato ── -->
+<div class="branch-label pb-cf">Latte Macchiato <span class="price-chip">5,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-latte-macchiato">
+  <tr data-branch="pb" data-dish="Latte Macchiato" data-name="Coffee grounds"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Coffee grounds</td><td><input class="inp inp-qty" value="7" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Latte Macchiato" data-name="Milk"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Milk</td><td><input class="inp inp-qty" value="180" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-latte-macchiato','Latte Macchiato','pb')">+ Add another ingredient for Latte Macchiato</button>
+
+<!-- ── Coffee & milk ── -->
+<div class="branch-label pb-cf">Coffee &amp; milk <span class="price-chip">5,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-coffee-milk">
+  <tr data-branch="pb" data-dish="Coffee & milk" data-name="Coffee grounds"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Coffee grounds</td><td><input class="inp inp-qty" value="10" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Coffee & milk" data-name="Milk"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Milk</td><td><input class="inp inp-qty" value="100" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-coffee-milk','Coffee &amp; milk','pb')">+ Add another ingredient for Coffee &amp; milk</button>
+
+<!-- ── Hot chocolate ── -->
+<div class="branch-label pb-cf">Hot chocolate <span class="price-chip">5,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-hot-choc">
+  <tr data-branch="pb" data-dish="Hot chocolate" data-name="Chocolate powder"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Chocolate powder</td><td><input class="inp inp-qty" value="20" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Hot chocolate" data-name="Milk"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Milk</td><td><input class="inp inp-qty" value="200" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-hot-choc','Hot chocolate','pb')">+ Add another ingredient for Hot chocolate</button>
+
+<!-- ── Hot Milk ── -->
+<div class="branch-label pb-cf">Hot Milk <span class="price-chip">2,500 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-hot-milk">
+  <tr data-branch="pb" data-dish="Hot Milk" data-name="Milk"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Milk</td><td><input class="inp inp-qty" value="250" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-hot-milk','Hot Milk','pb')">+ Add another ingredient for Hot Milk</button>
+
+<!-- ── African tea ── -->
+<div class="branch-label pb-cf">African tea <span class="price-chip">5,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-african-tea">
+  <tr data-branch="pb" data-dish="African tea" data-name="Tea bags"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Tea bags</td><td><input class="inp inp-qty" value="1" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="pcs" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="African tea" data-name="Milk"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Milk</td><td><input class="inp inp-qty" value="50" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-african-tea','African tea','pb')">+ Add another ingredient for African tea</button>
+
+<!-- ── Spice tea ── -->
+<div class="branch-label pb-cf">Spice tea <span class="price-chip">5,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-spice-tea">
+  <tr data-branch="pb" data-dish="Spice tea" data-name="Tea bags"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Tea bags</td><td><input class="inp inp-qty" value="1" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="pcs" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Spice tea" data-name="Cinnamon"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Cinnamon</td><td><input class="inp inp-qty" value="1" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+  <tr data-branch="pb" data-dish="Spice tea" data-name="Ginger"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Ginger</td><td><input class="inp inp-qty" value="2" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-spice-tea','Spice tea','pb')">+ Add another ingredient for Spice tea</button>
+
+<!-- ── Green tea ── -->
+<div class="branch-label pb-cf">Green tea <span class="price-chip">3,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-green-tea">
+  <tr data-branch="pb" data-dish="Green tea" data-name="Green tea bag"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Green tea bag</td><td><input class="inp inp-qty" value="1" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="pcs" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-green-tea','Green tea','pb')">+ Add another ingredient for Green tea</button>
+
+<!-- ── Black tea ── -->
+<div class="branch-label pb-cf">Black tea <span class="price-chip">3,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-black-tea">
+  <tr data-branch="pb" data-dish="Black tea" data-name="Black tea bag"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Black tea bag</td><td><input class="inp inp-qty" value="1" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="pcs" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-black-tea','Black tea','pb')">+ Add another ingredient for Black tea</button>
+
+<!-- ── Fresh Mint tea ── -->
+<div class="branch-label pb-cf">Fresh Mint tea <span class="price-chip">5,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-mint-tea">
+  <tr data-branch="pb" data-dish="Fresh Mint tea" data-name="Fresh mint"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Fresh mint</td><td><input class="inp inp-qty" value="8" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="g" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-mint-tea','Fresh Mint tea','pb')">+ Add another ingredient for Fresh Mint tea</button>
+
+<div class="cat-divider">Other</div>
+
+<!-- ── Wine by the glass ── -->
+<div class="branch-label pb-ot">Wine by the glass <span class="price-chip">9,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-wine-glass">
+  <tr data-branch="pb" data-dish="Wine by the glass" data-name="Jardin des C Sauvignon"><td><span class="badge badge-in">IN</span></td><td class="item-name">Jardin des C Sauvignon</td><td><input class="inp inp-qty" value="150" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="ml" oninput="save()"></td><td><input class="inp" placeholder="or Merlot / Palo Alto" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-wine-glass','Wine by the glass','pb')">+ Add another ingredient for Wine by the glass</button>
+
+<!-- ── Fanta (plain) ── -->
+<div class="branch-label pb-ot">Fanta (plain) <span class="price-chip">2,500 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-fanta">
+  <tr data-branch="pb" data-dish="Fanta (plain)" data-name="Fanta bottle"><td><span class="badge badge-in">IN</span></td><td class="item-name">Fanta bottle</td><td><input class="inp inp-qty" value="1" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="pcs" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-fanta','Fanta (plain)','pb')">+ Add another ingredient for Fanta (plain)</button>
+
+<!-- ── Tonic ── -->
+<div class="branch-label pb-ot">Tonic <span class="price-chip">2,500 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-tonic">
+  <tr data-branch="pb" data-dish="Tonic" data-name="Tonic water bottle"><td><span class="badge badge-add">ADD</span></td><td class="item-name">Tonic water bottle</td><td><input class="inp inp-qty" value="1" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="pcs" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-tonic','Tonic','pb')">+ Add another ingredient for Tonic</button>
+
+<!-- ── Water ── -->
+<div class="branch-label pb-ot">Water <span class="price-chip">2,000 RWF</span></div>
+<table><thead><tr><th style="width:36px"></th><th>Ingredient</th><th style="width:100px">Qty / serve<small>ml · g · pcs per drink</small></th><th style="width:70px">Unit<small>ml · g · pcs…</small></th><th>Notes</th></tr></thead>
+<tbody id="t-water">
+  <tr data-branch="pb" data-dish="Water" data-name="Wow Water"><td><span class="badge badge-in">IN</span></td><td class="item-name">Wow Water</td><td><input class="inp inp-qty" value="1" type="number" min="0" oninput="save()"></td><td><input class="inp inp-unit" value="bottle" oninput="save()"></td><td><input class="inp" oninput="save()"></td></tr>
+</tbody></table>
+<button class="add-row-btn" onclick="addRow('t-water','Water','pb')">+ Add another ingredient for Water</button>
+
+<p class="footer-note">High 5ive &middot; Magnify POS &middot; Adjust recipes and click "Copy and paste in Axel's WhatsApp chat"</p>
+</div>
+
+<script>
+const KEY = 'h5recipes_v4';
+
+function rowKey(tr) {
+  return `${tr.dataset.branch}||${tr.dataset.dish}||${tr.dataset.name}||${tr.dataset.customId || ''}`;
+}
+
+function save() {
+  const d = {};
+  document.querySelectorAll('tr[data-branch]').forEach(tr => {
+    const inputs = tr.querySelectorAll('input.inp');
+    const k = rowKey(tr);
+    d[k] = { qty: inputs[0]?.value || '', unit: inputs[1]?.value || '', notes: inputs[2]?.value || '' };
+  });
+  localStorage.setItem(KEY, JSON.stringify(d));
+}
+
+function load() {
+  let d; try { d = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { d = {}; }
+  document.querySelectorAll('tr[data-branch]').forEach(tr => {
+    const k = rowKey(tr);
+    const s = d[k]; if (!s) return;
+    const inputs = tr.querySelectorAll('input.inp');
+    if (inputs[0] && s.qty)   inputs[0].value = s.qty;
+    if (inputs[1] && s.unit)  inputs[1].value = s.unit;
+    if (inputs[2] && s.notes) inputs[2].value = s.notes;
+  });
+}
+
+let customIdx = 0;
+function addRow(tbodyId, dish, branch) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  const id = ++customIdx;
+  const tr = document.createElement('tr');
+  tr.dataset.branch   = branch;
+  tr.dataset.dish     = dish.replace(/&amp;/g, '&');
+  tr.dataset.name     = `custom-${id}`;
+  tr.dataset.customId = id;
+  tr.className = 'new-row';
+  tr.innerHTML = `
+    <td><button class="btn-del-row" onclick="this.closest('tr').remove();save();">&times;</button></td>
+    <td><input class="inp" placeholder="Ingredient name" style="font-weight:600" oninput="save()"></td>
+    <td><input class="inp inp-qty" placeholder="0" type="number" min="0" oninput="save()"></td>
+    <td><input class="inp inp-unit" placeholder="ml" oninput="save()"></td>
+    <td><input class="inp" placeholder="Notes" oninput="save()"></td>`;
+  tbody.appendChild(tr);
+  tr.querySelector('input').focus();
+  save();
+}
+
+function copyForMe() {
+  const sections = {};
+  document.querySelectorAll('tr[data-branch]').forEach(tr => {
+    const branch = tr.dataset.branch === 'bb' ? 'Banana Bar' : 'Parking Bar';
+    const dish   = tr.dataset.dish || '(extra)';
+    const ing    = tr.querySelector('.item-name')?.textContent?.trim() ||
+                   tr.querySelectorAll('input.inp')[0]?.value?.trim() || '';
+    const inputs = tr.querySelectorAll('input.inp');
+    const qty    = inputs[0]?.value?.trim() || '';
+    const unit   = inputs[1]?.value?.trim() || '';
+    if (!ing || !qty) return;
+    if (!sections[branch]) sections[branch] = {};
+    if (!sections[branch][dish]) sections[branch][dish] = [];
+    sections[branch][dish].push(`    - ${ing}: ${qty} ${unit}`);
+  });
+
+  const lines = ['*High 5ive — Drink Recipes*\n'];
+  for (const [branch, dishes] of Object.entries(sections)) {
+    lines.push(`*${branch}*`);
+    for (const [dish, ings] of Object.entries(dishes)) {
+      lines.push(`  *${dish}*`);
+      lines.push(ings.join('\n'));
+    }
+    lines.push('');
+  }
+
+  const text = lines.join('\n').trim();
+  navigator.clipboard.writeText(text)
+    .then(() => alert('✅ Copied!\n\nNow:\n1. Open WhatsApp on your phone or WhatsApp Web\n2. Go to Axel\'s chat\n3. Click in the message box and press Ctrl + V to paste\n4. Send it!'))
+    .catch(() => {
+      const box = document.createElement('textarea');
+      box.value = text;
+      box.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);width:600px;height:300px;z-index:9999;padding:12px;font-size:13px;border-radius:8px;border:2px solid #6366f1';
+      document.body.appendChild(box);
+      box.select();
+      document.execCommand('copy');
+      setTimeout(() => box.remove(), 8000);
+    });
+}
+
+window.addEventListener('load', load);
+</script>
+</body>
+</html>
