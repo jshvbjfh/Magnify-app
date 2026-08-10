@@ -1876,7 +1876,12 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         {/* Content area */}
         <div className="p-5">
 
-          {activeTab !== 'payment_methods' && activeTab !== 'general' && dailyRows.length > 0 ? (
+          {/* The day chips drill into a single day via fetchReportRange, which only
+              refreshes the per-branch reports. General and Upselling fetch
+              independently (they are restaurant-account-wide), so the chips would
+              highlight a day while their numbers still showed the whole range.
+              A single day is also too few orders for Upselling to say anything. */}
+          {activeTab !== 'payment_methods' && activeTab !== 'general' && activeTab !== 'upselling' && dailyRows.length > 0 ? (
             <div className="mb-4 space-y-2">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-gray-500">{rangeMode === 'custom' ? `Custom range: ${draftFrom} - ${draftTo}` : loadedPeriod}</p>
