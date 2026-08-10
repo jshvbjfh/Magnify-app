@@ -1,12 +1,41 @@
 ﻿'use client'
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange, Store, Share2 } from 'lucide-react'
+import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange, Store, Share2, ArrowUpRight } from 'lucide-react'
 import { fmtDesc } from '@/lib/displayId'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { BranchBadge, useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
 
-type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory' | 'general'
+type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory' | 'general' | 'upselling'
+
+type UpsellServerRow = {
+  serverKey: string
+  serverName: string
+  terminalAccount: string | null
+  checks: number
+  checksWithItems: number
+  revenue: number
+  avgCheck: number
+  items: number
+  itemsPerCheck: number
+  addonChecks: number
+  addonRate: number | null
+  foodChecks: number
+  drinkAttachChecks: number
+  drinkAttachRate: number | null
+  upsellRevenue: number
+  upsellRevenueShare: number
+  covers: number
+  coveredChecks: number
+  apc: number | null
+}
+
+type UpsellingData = {
+  rows: UpsellServerRow[]
+  house: UpsellServerRow | null
+  attachedItems: { dishId: string; dishName: string; category: string | null; group: string; qty: number; checks: number; revenue: number }[]
+  meta: { totalChecks: number; serverChecks: number; selfOrderChecks: number; checksWithoutServer: number; coveredChecks: number; uncategorizedItems: number }
+}
 
 type BranchSummaryRow = {
   branchId: string
@@ -57,7 +86,14 @@ const TABS: { id: ReportTab; label: string; short: string; icon: React.ElementTy
   { id:'dish_profit',       label:'Orders Report',          short:'Orders',      icon:Utensils,   desc:'Orders, waiter, status, quantity sold, cost, price, total price, revenue and profit' },
   { id:'inventory_movement', label:'Inventory Movement',    short:'Inventory',   icon:Package,    desc:'Opening stock, in-period purchases, usage, remaining quantity and stock value' },
   { id:'theoretical_inventory', label:'Theoretical Inventory', short:'Theory Inv', icon:Package, desc:'Opening stock, expected usage, waste, theoretical closing and variance versus actual stock' },
+  { id:'upselling',         label:'Upselling Report',       short:'Upselling', icon:ArrowUpRight, desc:'How often each waiter attaches an add-on or a drink, their average bill and how they compare to the house, across your whole restaurant account' },
 ]
+
+// Tabs that report the whole restaurant account rather than the station the
+// user is currently switched to. Showing the station badge above these reads as
+// a filter that isn't being applied — an owner on Parking Bar would take the
+// house upselling figures for Parking Bar's.
+const RESTAURANT_WIDE_TABS = new Set<ReportTab>(['general', 'upselling'])
 
 const PERIOD_LABELS: Record<Period, string> = {
   today:'Today', week:'Last 7 Days', month:'This Month', quarter:'This Quarter', year:'This Year'
@@ -778,6 +814,92 @@ function BranchSummaryTable({ data, onExportPdf, onSharePdf, exporting }: {
   )
 }
 
+function UpsellingTable({ data }: { data: UpsellingData | null }) {
+  if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading upselling report…</div>
+  const rows = data.rows ?? []
+  const house = data.house
+  const attached = data.attachedItems ?? []
+  const meta = data.meta ?? { totalChecks: 0, serverChecks: 0, selfOrderChecks: 0, checksWithoutServer: 0, coveredChecks: 0, uncategorizedItems: 0 }
+  const pct = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`)
+
+  return (
+    <>
+      <div className="grid grid-cols-4 gap-3 mb-4">
+        <StatCard label="Add-on Attach Rate" value={pct(house?.addonRate ?? null)} color="bg-orange-50 border-orange-200" />
+        <StatCard label="Drink Attach Rate" value={pct(house?.drinkAttachRate ?? null)} color="bg-blue-50 border-blue-200" />
+        <StatCard label="Average Bill" value={`${fmt(house?.avgCheck ?? 0)} RWF`} color="bg-green-50 border-green-200" />
+        <StatCard label="Upsell Revenue" value={`${fmt(house?.upsellRevenue ?? 0)} RWF`} color="bg-purple-50 border-purple-200" />
+      </div>
+
+      <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-800 mb-4">
+        Covers every station, not just the one you&apos;re switched to — one bill often spans stations, and it is the bill that gets upsold. Waiters are identified by the name they ring up under, not by the terminal screen&apos;s account, since several waiters share one screen. Add-on rate is the share of a waiter&apos;s bills carrying an add-on, side or dessert. Drink attach rate counts only bills that had food on them — a drinks-only visit was never a drink upsell.
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="py-8 text-center text-gray-400 text-sm">No paid orders found for this period.</div>
+      ) : (
+        <DataTable
+          head={['Waiter', 'Terminal', 'Bills', 'Add-on Rate', 'Drink Attach', 'Avg Bill (RWF)', 'Items / Bill', 'Upsell Revenue (RWF)', 'Upsell Share', 'APC (RWF)']}
+          rows={rows.map((r) => [
+            r.serverName,
+            r.terminalAccount ?? '—',
+            r.checks,
+            pct(r.addonRate),
+            pct(r.drinkAttachRate),
+            fmt(r.avgCheck),
+            r.itemsPerCheck.toFixed(1),
+            fmt(r.upsellRevenue),
+            pct(r.upsellRevenueShare),
+            r.apc === null ? '—' : fmt(r.apc),
+          ])}
+          foot={house ? [
+            'HOUSE AVERAGE',
+            '',
+            house.checks,
+            pct(house.addonRate),
+            pct(house.drinkAttachRate),
+            fmt(house.avgCheck),
+            house.itemsPerCheck.toFixed(1),
+            fmt(house.upsellRevenue),
+            pct(house.upsellRevenueShare),
+            house.apc === null ? '—' : fmt(house.apc),
+          ] : undefined}
+        />
+      )}
+
+      {attached.length > 0 && (
+        <div className="mt-6">
+          <h4 className="text-sm font-bold text-gray-900 mb-2">Most attached items</h4>
+          <DataTable
+            head={['Item', 'Category', 'Type', 'Qty Sold', 'Bills', 'Revenue (RWF)']}
+            rows={attached.slice(0, 15).map((i) => [
+              i.dishName,
+              i.category ?? '—',
+              i.group === 'addon' ? 'Add-on' : 'Drink',
+              i.qty,
+              i.checks,
+              fmt(i.revenue),
+            ])}
+          />
+        </div>
+      )}
+
+      {meta.coveredChecks === 0 && (
+        <p className="mt-3 text-xs text-amber-600">APC is blank until waiters start entering guest counts.</p>
+      )}
+      {meta.selfOrderChecks > 0 && (
+        <p className="mt-1 text-xs text-gray-400">{meta.selfOrderChecks} guest QR bills are excluded — no server took them.</p>
+      )}
+      {meta.checksWithoutServer > 0 && (
+        <p className="mt-1 text-xs text-gray-400">{meta.checksWithoutServer} of {meta.serverChecks} bills have no server recorded.</p>
+      )}
+      {meta.uncategorizedItems > 0 && (
+        <p className="mt-1 text-xs text-gray-400">{meta.uncategorizedItems} sold items have no menu category and are excluded from attach rates.</p>
+      )}
+    </>
+  )
+}
+
 function InventoryMovementTable({ data }: { data: any }) {
   if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading inventory movement data…</div>
   const items: any[] = data.items ?? []
@@ -979,6 +1101,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
   const [theoreticalInvData, setTheoreticalInvData] = useState<any>(null)
   const [branchSummaryData, setBranchSummaryData] = useState<{ rows: BranchSummaryRow[]; totals: { totalSales: number; totalCost: number; totalProfit: number } } | null>(null)
   const [branchSummaryExporting, setBranchSummaryExporting] = useState(false)
+  const [upsellingData, setUpsellingData] = useState<UpsellingData | null>(null)
   const [loadedPeriod, setLoadedPeriod] = useState<string>('')
   const [exporting, setExporting] = useState(false)
   const branchCtx = useRestaurantBranch()
@@ -987,6 +1110,11 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
 
   const isFirstMount = useRef(true)
   const autoSelectedPeriod = useRef<Period | null>(null)
+  // General Report fetches independently of the auto period-detection below —
+  // without this gate it fires immediately for the default 'today' period,
+  // flashes "No sales found" for whichever period turns out to have no data,
+  // then flashes again once auto-detection lands on the right period.
+  const [initialPeriodReady, setInitialPeriodReady] = useState(false)
 
   const fetchReportRange = useCallback(async (
     start: string, end: string, label: string, isPeriodFetch = true,
@@ -1059,6 +1187,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
             setPeriodTxData(rows)
             setLoadedPeriod(label)
             setLoading(false)
+            setInitialPeriodReady(true)
             if (rows.length > 0) {
               try { localStorage.setItem('magnify-reports-period', p) } catch { /* */ }
             }
@@ -1087,6 +1216,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         } catch { /* continue to next period */ }
       }
       setLoading(false)
+      setInitialPeriodReady(true)
     }
     loadInitial()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1191,7 +1321,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
   // General Report (branch summary) is restaurant-account-wide, not branch-scoped —
   // fetched independently of the other tabs' per-branch Promise.all calls above
   useEffect(() => {
-    if (activeTab !== 'general') return
+    if (activeTab !== 'general' || !initialPeriodReady) return
     const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)
     let cancelled = false
     fetch(`/api/restaurant/reports/branch-summary?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS)
@@ -1199,7 +1329,21 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
       .then((data) => { if (!cancelled) setBranchSummaryData(data) })
       .catch(() => { if (!cancelled) setBranchSummaryData(null) })
     return () => { cancelled = true }
-  }, [activeTab, period, rangeMode, draftFrom, draftTo])
+  }, [activeTab, period, rangeMode, draftFrom, draftTo, initialPeriodReady])
+
+  // Upselling is restaurant-account-wide for the same reason the General Report
+  // is: one bill routinely spans stations, and slicing it per station would
+  // report a burger-and-a-soda check as "no drink attached" at the grill.
+  useEffect(() => {
+    if (activeTab !== 'upselling' || !initialPeriodReady) return
+    const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)
+    let cancelled = false
+    fetch(`/api/restaurant/reports/upselling?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (!cancelled) setUpsellingData(data) })
+      .catch(() => { if (!cancelled) setUpsellingData(null) })
+    return () => { cancelled = true }
+  }, [activeTab, period, rangeMode, draftFrom, draftTo, initialPeriodReady])
 
   const buildBranchSummaryDoc = useCallback((rangeLabel: string) => {
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
@@ -1514,7 +1658,14 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-bold text-gray-800">Financial Reports</h2>
-            <BranchBadge />
+            {RESTAURANT_WIDE_TABS.has(activeTab) ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 border border-gray-300 px-2.5 py-0.5 text-xs font-medium text-gray-600">
+                <span className="h-1.5 w-1.5 rounded-full bg-gray-400 flex-shrink-0" />
+                All stations
+              </span>
+            ) : (
+              <BranchBadge />
+            )}
           </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             <div className="p-0.5 rounded bg-gradient-to-br from-orange-500 to-red-600">
@@ -1644,7 +1795,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
           )}
 
           {/* Report tables */}
-          {(txData || activeTab==='dish_profit' || activeTab==='inventory_movement' || activeTab==='theoretical_inventory' || activeTab==='general')&&!loading&&(
+          {(txData || activeTab==='dish_profit' || activeTab==='inventory_movement' || activeTab==='theoretical_inventory' || activeTab==='general' || activeTab==='upselling')&&!loading&&(
             <div className="space-y-2">
               {/* Attribution */}
               <div className="flex items-center justify-between mb-4">
@@ -1674,6 +1825,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
               {activeTab==='income'     &&<IncomeTable      txs={txData??[]}/>}
               {activeTab==='payment_methods' &&<PaymentMethodsTable txs={txData??[]}/>} 
               {activeTab==='dish_profit'        &&<DishProfitTable        data={dishProfitData}/>}
+              {activeTab==='upselling'          &&<UpsellingTable         data={upsellingData}/>}
               {activeTab==='inventory_movement' &&<InventoryMovementTable data={invMovementData}/>}
               {activeTab==='theoretical_inventory' &&<TheoreticalInventoryTable data={theoreticalInvData} onCountSaved={() => {
                 const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)
