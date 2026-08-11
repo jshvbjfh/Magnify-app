@@ -1,12 +1,13 @@
 ﻿'use client'
 import { useState, useEffect, useRef } from 'react'
 import { useSession } from 'next-auth/react'
-import { Plus, Trash2, ChefHat, X, Edit2, ToggleLeft, ToggleRight, Sparkles, Search, ChevronDown } from 'lucide-react'
+import { Plus, Trash2, ChefHat, X, Edit2, ToggleLeft, ToggleRight, Sparkles, Search, ChevronDown, BookOpen } from 'lucide-react'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { getActiveDishVariants, getDishStartingPrice } from '@/lib/dishVariants'
 import { estimateFifoCostForQuantity } from '@/lib/fifoCosting'
 import { DEFAULT_MENU_CATEGORY_SUGGESTIONS, MENU_TYPE_OPTIONS, getDishMenuTypeLabel, normalizeDishMenuType, resolveDishMenuType } from '@/lib/menuMetadata'
 import RestaurantQrMenuStudio from '@/components/restaurant/RestaurantQrMenuStudio'
+import AllStationsMenu from '@/components/restaurant/AllStationsMenu'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 
 type Ingredient = { id: string; name: string; unit: string; unitCost: number | null; quantity: number; type?: string | null }
@@ -41,6 +42,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   const { data: session } = useSession()
   const restaurantBranch = useRestaurantBranch()
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<MenuWorkspaceTab>('items')
+  const [showFullMenu, setShowFullMenu] = useState(false)
   const [dishes, setDishes] = useState<Dish[]>([])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
   const [purchases, setPurchases] = useState<PurchaseLayer[]>([])
@@ -404,6 +406,12 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
           <button disabled className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-200 text-orange-300 bg-white opacity-60 cursor-not-allowed">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse AI <span className="ml-1 text-[10px] font-bold bg-orange-100 text-orange-400 rounded px-1 py-0.5 leading-none">Soon</span>
           </button>
+          {/* This tab only ever shows the station you are switched to. This opens
+              every station's menu on one page, scrolled to the one you came from. */}
+          <button onClick={() => setShowFullMenu(true)}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 transition-colors">
+            <BookOpen className="h-3.5 w-3.5"/> View Menu
+          </button>
           {activeWorkspaceTab === 'items' ? (
             <button onClick={()=>{setShowForm(true);setEditDish(null);setForm(createEmptyDishForm())}}
             className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
@@ -437,6 +445,12 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
           QR Menu
         </button>
       </div>
+
+      <AllStationsMenu
+        open={showFullMenu}
+        onClose={() => setShowFullMenu(false)}
+        currentBranchId={restaurantBranch?.branchId ?? null}
+      />
 
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

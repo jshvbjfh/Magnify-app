@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Full Menu — High 5ive</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; background:#f3f4f6; color:#111827; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size:14px; line-height:1.5; }
+  .shell { max-width: 900px; margin: 24px auto; background:#fff; border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.12); overflow:hidden; }
+  .head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:16px 20px; border-bottom:1px solid #f3f4f6; }
+  .head h1 { margin:0; font-size:18px; font-weight:700; }
+  .head p { margin:2px 0 0; font-size:12px; color:#6b7280; }
+  .tools { display:flex; gap:8px; align-items:center; }
+  .btn { border:1px solid #e5e7eb; background:#fff; border-radius:8px; padding:6px 12px; font-size:12px; font-weight:600; color:#374151; cursor:pointer; text-decoration:none; }
+  .btn:hover { background:#f9fafb; }
+  input[type=search] { border:1px solid #e5e7eb; border-radius:8px; padding:6px 10px; font-size:12px; outline:none; width:180px; }
+  input[type=search]:focus { border-color:#fdba74; }
+  .jump { display:flex; gap:8px; overflow-x:auto; padding:10px 20px; border-bottom:1px solid #f3f4f6; }
+  .jump a { flex:0 0 auto; border:1px solid #e5e7eb; border-radius:8px; padding:6px 12px; font-size:12px; font-weight:600; color:#4b5563; text-decoration:none; white-space:nowrap; }
+  .jump a:hover { background:#f9fafb; }
+  .jump a.here { border-color:#fdba74; background:#fff7ed; color:#c2410c; }
+  .jump a span { color:#9ca3af; margin-left:6px; }
+  .body { padding:16px 20px 28px; }
+  section { margin-bottom:30px; scroll-margin-top:12px; }
+  .sec-head { display:flex; align-items:baseline; gap:8px; border-bottom:2px solid #f97316; padding-bottom:6px; margin-bottom:12px; }
+  .sec-head h2 { margin:0; font-size:16px; font-weight:700; }
+  .sec-head .n { font-size:12px; color:#9ca3af; }
+  .cat { margin-bottom:16px; }
+  .cat h3 { margin:0 0 6px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#ea580c; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { display:flex; align-items:baseline; justify-content:space-between; gap:16px; padding:6px 0; border-bottom:1px solid #f3f4f6; }
+  li .nm { color:#1f2937; }
+  li .pr { font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .note { font-size:12px; color:#9ca3af; border-top:1px solid #f3f4f6; padding-top:14px; }
+  .hint { margin:0 auto 14px; max-width:900px; font-size:12px; color:#6b7280; background:#fff7ed; border:1px dashed #fdba74; border-radius:10px; padding:10px 14px; }
+  .hidden-row { display:none !important; }
+  @media print {
+    body { background:#fff; }
+    .shell { box-shadow:none; margin:0; max-width:none; }
+    .jump, .tools, .hint { display:none; }
+  }
+</style>
+</head>
+<body>
+<div class="hint">
+  Static preview of the <strong>View Menu</strong> page, generated from live data
+  (High 5ive, 112 active items across 6 stations).
+  In the app this opens from the Menu tab and scrolls automatically to the station you were on —
+  here the station links do that manually.
+</div>
+
+<div class="shell">
+  <div class="head">
+    <div style="display:flex;align-items:center;gap:12px">
+      <button class="btn" onclick="history.back()">&larr; Back</button>
+      <div>
+        <h1>Full Menu</h1>
+        <p>Every station in this restaurant · 112 items</p>
+      </div>
+    </div>
+    <div class="tools">
+      <input type="search" id="q" placeholder="Search dishes" aria-label="Search dishes">
+      <button class="btn" onclick="window.print()">Print</button>
+    </div>
+  </div>
+
+  <div class="jump">
+    <a class="here" href="#s-cmqiafute000vn5p1zcngyawx">Banana Bar<span>44</span></a>
+    <a class="" href="#s-cmqiad2vx000in5p176jvqush">Little Taipei<span>19</span></a>
+    <a class="" href="#s-cmqiagbtb0010n5p1utvhc8s6">Parking Bar<span>16</span></a>
+    <a class="" href="#s-cmqiabkm5000dn5p1qj364jx9">THE GRILL<span>8</span></a>
+    <a class="" href="#s-cmqiadl7h000nn5p1trr8hdcc">Tiamo Pasta<span>7</span></a>
+    <a class="" href="#s-cmqiaa69u0008n5p1y8v0zkls">WHATABURGER<span>18</span></a>
+  </div>
+
+  <div class="body">
+    <section id="s-cmqiafute000vn5p1zcngyawx" data-station="banana bar">
+      <div class="sec-head"><h2>Banana Bar Menu</h2><span class="n">44 items</span></div>
+      <div class="cat" data-cat="cocktails">
+        <h3>Cocktails</h3>
+        <ul>
+          <li data-name="banana bar special"><span class="nm">Banana Bar Special</span><span class="pr">18,000</span></li>
+          <li data-name="bisoke mojito"><span class="nm">Bisoke Mojito</span><span class="pr">15,000</span></li>
+          <li data-name="bold &amp; bitter"><span class="nm">Bold &amp; Bitter</span><span class="pr">15,000</span></li>
+          <li data-name="city slicker"><span class="nm">City Slicker</span><span class="pr">15,000</span></li>
+          <li data-name="gin &amp; tonic"><span class="nm">Gin &amp; Tonic</span><span class="pr">15,000</span></li>
+          <li data-name="hibiscus velvet"><span class="nm">Hibiscus Velvet</span><span class="pr">15,000</span></li>
+          <li data-name="high5 basil smash"><span class="nm">High5 Basil Smash</span><span class="pr">15,000</span></li>
+          <li data-name="high5 passion rita"><span class="nm">High5 Passion Rita</span><span class="pr">15,000</span></li>
+          <li data-name="high5 red lipstick"><span class="nm">High5 Red Lipstick</span><span class="pr">15,000</span></li>
+          <li data-name="passion mojito"><span class="nm">Passion Mojito</span><span class="pr">15,000</span></li>
+          <li data-name="salsa sunrise"><span class="nm">Salsa Sunrise</span><span class="pr">18,000</span></li>
+          <li data-name="strawberry colada"><span class="nm">Strawberry Colada</span><span class="pr">15,000</span></li>
+          <li data-name="strawberry margarita"><span class="nm">Strawberry Margarita</span><span class="pr">15,000</span></li>
+          <li data-name="sweet surrender"><span class="nm">Sweet Surrender</span><span class="pr">15,000</span></li>
+          <li data-name="the revival"><span class="nm">The Revival</span><span class="pr">15,000</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="hot beverages">
+        <h3>Hot Beverages</h3>
+        <ul>
+          <li data-name="african tea"><span class="nm">African tea</span><span class="pr">5,000</span></li>
+          <li data-name="americano"><span class="nm">Americano</span><span class="pr">5,000</span></li>
+          <li data-name="black coffee"><span class="nm">Black coffee</span><span class="pr">4,000</span></li>
+          <li data-name="black tea"><span class="nm">Black tea</span><span class="pr">3,000</span></li>
+          <li data-name="café latte"><span class="nm">Café Latte</span><span class="pr">5,000</span></li>
+          <li data-name="cappuccino"><span class="nm">Cappuccino</span><span class="pr">5,000</span></li>
+          <li data-name="coffee &amp; milk"><span class="nm">Coffee &amp; milk</span><span class="pr">5,000</span></li>
+          <li data-name="expresso"><span class="nm">Expresso</span><span class="pr">4,000</span></li>
+          <li data-name="fresh mint tea"><span class="nm">Fresh Mint tea</span><span class="pr">5,000</span></li>
+          <li data-name="green tea"><span class="nm">Green tea</span><span class="pr">3,000</span></li>
+          <li data-name="hot chocolate"><span class="nm">Hot chocolate</span><span class="pr">5,000</span></li>
+          <li data-name="hot milk"><span class="nm">Hot Milk</span><span class="pr">2,500</span></li>
+          <li data-name="latte macchiato"><span class="nm">Latte Macchiato</span><span class="pr">5,000</span></li>
+          <li data-name="spice tea"><span class="nm">Spice tea</span><span class="pr">5,000</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="mocktails">
+        <h3>Mocktails</h3>
+        <ul>
+          <li data-name="blue candy"><span class="nm">Blue Candy</span><span class="pr">9,000</span></li>
+          <li data-name="cocktail juice"><span class="nm">Cocktail Juice</span><span class="pr">10,000</span></li>
+          <li data-name="fresh juice"><span class="nm">fresh juice</span><span class="pr">7,000</span></li>
+          <li data-name="mango lemonade"><span class="nm">Mango Lemonade</span><span class="pr">9,000</span></li>
+          <li data-name="melon splash"><span class="nm">Melon Splash</span><span class="pr">9,000</span></li>
+          <li data-name="tropical sunset"><span class="nm">Tropical Sunset</span><span class="pr">9,000</span></li>
+          <li data-name="v.strawberry colada"><span class="nm">V.STRAWBERRY COLADA</span><span class="pr">9,000</span></li>
+          <li data-name="virgin mojito"><span class="nm">Virgin Mojito</span><span class="pr">9,000</span></li>
+          <li data-name="virgin piña colada"><span class="nm">Virgin Piña Colada</span><span class="pr">9,000</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="smoothies &amp; shakes">
+        <h3>Smoothies &amp; Shakes</h3>
+        <ul>
+          <li data-name="chocolate shake"><span class="nm">Chocolate Shake</span><span class="pr">8,000</span></li>
+          <li data-name="detox 5"><span class="nm">Detox 5</span><span class="pr">8,000</span></li>
+          <li data-name="healing"><span class="nm">Healing</span><span class="pr">8,000</span></li>
+          <li data-name="high 5 joy"><span class="nm">High 5 joy</span><span class="pr">8,000</span></li>
+          <li data-name="proteine shake"><span class="nm">Proteine Shake</span><span class="pr">8,000</span></li>
+          <li data-name="urukundo shake"><span class="nm">Urukundo Shake</span><span class="pr">8,000</span></li>
+        </ul>
+      </div>
+    </section>
+    <section id="s-cmqiad2vx000in5p176jvqush" data-station="little taipei">
+      <div class="sec-head"><h2>Little Taipei Menu</h2><span class="n">19 items</span></div>
+      <div class="cat" data-cat="dumplings &amp; wontons">
+        <h3>Dumplings &amp; Wontons</h3>
+        <ul>
+          <li data-name="chili oil wontons"><span class="nm">Chili Oil Wontons</span><span class="pr">8,000</span></li>
+          <li data-name="signature dumplings (pan-fried)"><span class="nm">Signature Dumplings (Pan-fried)</span><span class="pr">8,000</span></li>
+          <li data-name="signature dumplings (steamed/boiled)"><span class="nm">Signature Dumplings (Steamed/Boiled)</span><span class="pr">7,000</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="noodles">
+        <h3>Noodles</h3>
+        <ul>
+          <li data-name="dan dan street noodles"><span class="nm">Dan Dan Street Noodles</span><span class="pr">13,000</span></li>
+          <li data-name="hot oil noodles"><span class="nm">Hot Oil Noodles</span><span class="pr">12,000</span></li>
+          <li data-name="taipei beef noodle soup"><span class="nm">Taipei Beef Noodle Soup</span><span class="pr">12,000</span></li>
+          <li data-name="wok fried noodles (veg)"><span class="nm">Wok Fried Noodles (Veg)</span><span class="pr">12,000</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="rice bowls">
+        <h3>Rice Bowls</h3>
+        <ul>
+          <li data-name="bao house fried rice (egg)"><span class="nm">BAO House Fried Rice (Egg)</span><span class="pr">11,000</span></li>
+          <li data-name="steamed jasmine rice"><span class="nm">Steamed Jasmine Rice</span><span class="pr">4,000</span></li>
+          <li data-name="teriyaki chicken bowl"><span class="nm">Teriyaki Chicken Bowl</span><span class="pr">11,000</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="wok &amp; sizzling">
+        <h3>Wok &amp; Sizzling</h3>
+        <ul>
+          <li data-name="firecracker chicken"><span class="nm">Firecracker Chicken</span><span class="pr">14,000</span></li>
+          <li data-name="sichuan mapo tofu"><span class="nm">Sichuan Mapo Tofu</span><span class="pr">11,000</span></li>
+          <li data-name="sizzling fish plate"><span class="nm">Sizzling Fish Plate</span><span class="pr">19,000</span></li>
+          <li data-name="sizzling tofu"><span class="nm">Sizzling tofu</span><span class="pr">16,000</span></li>
+          <li data-name="sizzling wok plate (beef)"><span class="nm">Sizzling Wok Plate (Beef)</span><span class="pr">16,000</span></li>
+          <li data-name="sizzling wok plate (chicken)"><span class="nm">Sizzling Wok Plate (Chicken)</span><span class="pr">16,000</span></li>
+          <li data-name="sizzling wok plate (pork)"><span class="nm">Sizzling Wok Plate (Pork)</span><span class="pr">16,000</span></li>
+          <li data-name="sweet &amp; sour fish"><span class="nm">Sweet &amp; Sour Fish</span><span class="pr">19,000</span></li>
+          <li data-name="sweet &amp; sour wok (chicken)"><span class="nm">Sweet &amp; Sour Wok (Chicken)</span><span class="pr">16,000</span></li>
+        </ul>
+      </div>
+    </section>
+    <section id="s-cmqiagbtb0010n5p1utvhc8s6" data-station="parking bar">
+      <div class="sec-head"><h2>Parking Bar Menu</h2><span class="n">16 items</span></div>
+      <div class="cat" data-cat="beers">
+        <h3>Beers</h3>
+        <ul>
+          <li data-name="amstel"><span class="nm">Amstel</span><span class="pr">4,000</span></li>
+          <li data-name="desperado"><span class="nm">Desperado</span><span class="pr">5,000</span></li>
+          <li data-name="heineken"><span class="nm">Heineken</span><span class="pr">3,500</span></li>
+          <li data-name="mutzig"><span class="nm">Mutzig</span><span class="pr">3,000</span></li>
+          <li data-name="skoll lager"><span class="nm">Skoll Lager</span><span class="pr">5,000</span></li>
+          <li data-name="skoll malt"><span class="nm">Skoll Malt</span><span class="pr">3,500</span></li>
+          <li data-name="virunga"><span class="nm">Virunga</span><span class="pr">3,500</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="soft drinks">
+        <h3>Soft Drinks</h3>
+        <ul>
+          <li data-name="coke"><span class="nm">Coke</span><span class="pr">2,500</span></li>
+          <li data-name="panache"><span class="nm">Panache</span><span class="pr">2,500</span></li>
+          <li data-name="soda"><span class="nm">SODA</span><span class="pr">2,500</span></li>
+          <li data-name="vitalo"><span class="nm">Vitalo</span><span class="pr">2,000</span></li>
+          <li data-name="water"><span class="nm">Water</span><span class="pr">2,000</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="wines">
+        <h3>Wines</h3>
+        <ul>
+          <li data-name="prosecco"><span class="nm">Prosecco</span><span class="pr">48,000</span></li>
+          <li data-name="red wine (merlot)"><span class="nm">Red Wine (Merlot)</span><span class="pr">36,000</span></li>
+          <li data-name="white wine (sauvignon)"><span class="nm">White Wine (Sauvignon)</span><span class="pr">38,000</span></li>
+          <li data-name="wine by the glass"><span class="nm">Wine by the glass</span><span class="pr">9,000</span></li>
+        </ul>
+      </div>
+    </section>
+    <section id="s-cmqiabkm5000dn5p1qj364jx9" data-station="the grill">
+      <div class="sec-head"><h2>THE GRILL Menu</h2><span class="n">8 items</span></div>
+      <div class="cat" data-cat="grill">
+        <h3>Grill</h3>
+        <ul>
+          <li data-name="bbq wing (6 pcs)"><span class="nm">BBQ Wing (6 pcs)</span><span class="pr">11,000</span></li>
+          <li data-name="brochette (beef)"><span class="nm">Brochette (Beef)</span><span class="pr">6,000</span></li>
+          <li data-name="brochette (chicken)"><span class="nm">Brochette (Chicken)</span><span class="pr">6,000</span></li>
+          <li data-name="high five land plancha"><span class="nm">High Five Land Plancha</span><span class="pr">30,000</span></li>
+          <li data-name="king brochette"><span class="nm">King Brochette</span><span class="pr">15,000</span></li>
+          <li data-name="the chop life (pork edition)"><span class="nm">The Chop Life (Pork Edition)</span><span class="pr">15,000</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="sides">
+        <h3>Sides</h3>
+        <ul>
+          <li data-name="frites (side)"><span class="nm">Frites (side)</span><span class="pr">3,000</span></li>
+          <li data-name="mizouzou (side)"><span class="nm">Mizouzou (side)</span><span class="pr">3,000</span></li>
+        </ul>
+      </div>
+    </section>
+    <section id="s-cmqiadl7h000nn5p1trr8hdcc" data-station="tiamo pasta">
+      <div class="sec-head"><h2>Tiamo Pasta Menu</h2><span class="n">7 items</span></div>
+      <div class="cat" data-cat="add-ons">
+        <h3>Add-ons</h3>
+        <ul>
+          <li data-name="add-on: grilled chicken"><span class="nm">Add-on: Grilled Chicken</span><span class="pr">5,000</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="pasta">
+        <h3>Pasta</h3>
+        <ul>
+          <li data-name="macaroni"><span class="nm">Macaroni</span><span class="pr">15,000</span></li>
+          <li data-name="spaghetti"><span class="nm">Spaghetti</span><span class="pr">15,000</span></li>
+          <li data-name="tagliatelle"><span class="nm">Tagliatelle</span><span class="pr">15,000</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="sauces">
+        <h3>Sauces</h3>
+        <ul>
+          <li data-name="bolognese"><span class="nm">Bolognese</span><span class="pr">0</span></li>
+          <li data-name="mac &amp; cheese"><span class="nm">Mac &amp; Cheese</span><span class="pr">0</span></li>
+          <li data-name="pomodoro"><span class="nm">Pomodoro</span><span class="pr">0</span></li>
+        </ul>
+      </div>
+    </section>
+    <section id="s-cmqiaa69u0008n5p1y8v0zkls" data-station="whataburger">
+      <div class="sec-head"><h2>WHATABURGER Menu</h2><span class="n">18 items</span></div>
+      <div class="cat" data-cat="add-ons">
+        <h3>Add-ons</h3>
+        <ul>
+          <li data-name="bbq sauce"><span class="nm">BBQ Sauce</span><span class="pr">0</span></li>
+          <li data-name="caramerized onions"><span class="nm">caramerized onions</span><span class="pr">1,000</span></li>
+          <li data-name="egg"><span class="nm">EGG</span><span class="pr">1,000</span></li>
+          <li data-name="extra cheese"><span class="nm">extra cheese</span><span class="pr">2,000</span></li>
+          <li data-name="mayonnaise"><span class="nm">mayonnaise</span><span class="pr">1,000</span></li>
+          <li data-name="mustard"><span class="nm">Mustard</span><span class="pr">0</span></li>
+          <li data-name="pickles"><span class="nm">PICKLES</span><span class="pr">0</span></li>
+          <li data-name="spicy sauce"><span class="nm">SPICY SAUCE</span><span class="pr">0</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="burgers">
+        <h3>Burgers</h3>
+        <ul>
+          <li data-name="chicken burger"><span class="nm">Chicken Burger</span><span class="pr">9,000</span></li>
+          <li data-name="double chicken burger"><span class="nm">Double Chicken Burger</span><span class="pr">11,500</span></li>
+          <li data-name="double smash burger"><span class="nm">Double Smash Burger</span><span class="pr">11,000</span></li>
+          <li data-name="mega smash burger"><span class="nm">Mega Smash Burger</span><span class="pr">15,000</span></li>
+          <li data-name="single smash burger"><span class="nm">Single Smash Burger</span><span class="pr">8,000</span></li>
+          <li data-name="triple smash burger"><span class="nm">Triple Smash Burger</span><span class="pr">13,000</span></li>
+          <li data-name="what a burger (signature)"><span class="nm">What A Burger (Signature)</span><span class="pr">13,500</span></li>
+        </ul>
+      </div>
+      <div class="cat" data-cat="sides">
+        <h3>Sides</h3>
+        <ul>
+          <li data-name="fries"><span class="nm">Fries</span><span class="pr">3,000</span></li>
+          <li data-name="loaded fries + beef"><span class="nm">Loaded Fries + Beef</span><span class="pr">9,500</span></li>
+          <li data-name="loaded fries + chicken"><span class="nm">Loaded Fries + Chicken</span><span class="pr">9,500</span></li>
+        </ul>
+      </div>
+    </section>
+    <p class="note">No menu items yet on: All.</p>
+  </div>
+</div>
+
+<script>
+  // Same filter behaviour as the component's search box.
+  var q = document.getElementById('q');
+  q.addEventListener('input', function () {
+    var term = q.value.trim().toLowerCase();
+    document.querySelectorAll('section').forEach(function (sec) {
+      var anyInSection = false;
+      sec.querySelectorAll('.cat').forEach(function (cat) {
+        var anyInCat = false;
+        cat.querySelectorAll('li').forEach(function (li) {
+          var match = !term || li.dataset.name.indexOf(term) !== -1 || cat.dataset.cat.indexOf(term) !== -1;
+          li.classList.toggle('hidden-row', !match);
+          if (match) anyInCat = true;
+        });
+        cat.classList.toggle('hidden-row', !anyInCat);
+        if (anyInCat) anyInSection = true;
+      });
+      sec.classList.toggle('hidden-row', !anyInSection);
+    });
+  });
+</script>
+</body>
+</html>
