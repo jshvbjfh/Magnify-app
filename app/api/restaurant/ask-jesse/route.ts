@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
 import { recordJournalEntry } from '@/lib/accounting'
+import { parseIntents, type Intent } from '@/lib/jesseIntents'
 
 const TZ = 'Africa/Kigali'
 
@@ -305,91 +306,14 @@ function resolveBranch(q: string, branches: { id: string; name: string; code: st
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Intent =
-  | 'revenue' | 'profit' | 'orders' | 'expenses' | 'waste' | 'food_cost'
-  | 'payment' | 'top_dishes' | 'low_stock' | 'stock_level'
-  | 'dish_query' | 'branch_comparison' | 'pending_orders' | 'avg_order'
-  | 'greeting' | 'catchup' | 'trends' | 'why' | 'record_transaction'
-
-function parseIntents(q: string): Intent[] {
-  const s = new Set<Intent>()
-  if (/\brevenue\b|\bsales\b|\bincome\b|\bhow much.*made\b|\bwe\s+made\b|\bearned\b|\bmade.*money\b/i.test(q)) s.add('revenue')
-  if (/\bprofit\b|\bnet\s+profit\b|\bearning/i.test(q)) s.add('profit')
-  if (/\bloss\b|\blosing\b/i.test(q)) s.add('profit')
-  if (/\borders?\b|\bhow many\s+orders?\b|\bnumber\s+of\s+orders?\b|\bcount\s+orders?\b/i.test(q)) s.add('orders')
-  if (/\bexpenses?\b|\bpurchases?\b|\bprocurement\b|\bspent\b|\bspend\b|\bsuppl(y|ier)\b|\binventory\s+cost\b/i.test(q)) s.add('expenses')
-  if (/\bwaste\b|\bwasted\b|\bspoilage?\b|\bspoilt?\b/i.test(q)) s.add('waste')
-  if (/\bfood\s*cost\b|\bcogs\b|\bcost\s*of\s*goods\b/i.test(q)) s.add('food_cost')
-  if (/\btop\s*dish(es)?\b|\bbest.?sell\b|\bpopular\b|\bmost\s*ordered\b|\bbest\s*dish\b|\bbest\s*drink\b|\bour\s+best\b/i.test(q)) s.add('top_dishes')
-  if (/\blow\s*stock\b|\brun(ning)?\s*out\b|\breorder\b|\bshortage\b|\bfinish(ing|ed)?\b|\brestock\b|\bstock\s*up\b|\bwhat\s+should\s+i\s+restock\b|\bwhat.*restock\b|\bneed\s+to\s+buy\b|\bneed\s+restocking\b/i.test(q)) s.add('low_stock')
-  if (/\bmomo\b|\bmobile\s*money\b|\bbank\b|\bcheque\b|\bcheck\b|\bcard\b|\bcash\b|\bcredit\b|\bpayment\s*method\b|\bpaid\s*by\b|\bbreakdown\b/i.test(q)) s.add('payment')
-  if (/\bin\s+stock\b|\bstock\s+level\b|\bstock\s+of\b|\bquantity\s+of\b|\bdo\s+we\s+have\b|\bhow\s+much\s+.{2,40}\s+(do\s+we|is\s+left|remaining|available)\b|\bhow\s+many\s+\w+\s+of\b/i.test(q)) s.add('stock_level')
-  // General inventory / stock status — "how's our stock", "our inventory",
-  // "stock report", "inventory for <branch>". Without this, a bare stock/inventory
-  // question matches no intent and wrongly falls through to the revenue default.
-  if (!s.has('stock_level') && !s.has('low_stock')
-    && /\b(stock|inventory)\b/i.test(q)
-    && !/\binventory\s+(cost|purchases?|expenses?)\b/i.test(q)
-    && !/\bspend\b|\bspent\b/i.test(q)) s.add('low_stock')
-  // Specific dish revenue/sales — "how much from burgers", "how many chicken wings did we sell"
-  if (
-    (/\b(revenue|sales|income|made|earned)\s+(from|of)\s+[a-z]/i.test(q) ||
-     /\bhow\s+many\s+[a-z][\w\s]+\s+(did\s+we\s+sell|sold|were\s+sold)\b/i.test(q) ||
-     /\bhow\s+much\s+(did\s+we\s+make\s+from|from)\s+[a-z]/i.test(q) ||
-     /\b[a-z][\w\s]+\s+(sales|revenue)\s+(today|yesterday|this|last|past)\b/i.test(q)) &&
-    !/\b(momo|cash|bank|cheque|card|credit)\b/i.test(q)
-  ) s.add('dish_query')
-  // Station comparison — "which station made the most", "revenue by station", "expenses station by station"
-  // (also recognizes the legacy "branch" wording so older habits still work)
-  if (/\bwhich\s+(branch|station)\b|\b(branch|station)(es|s)?\s+(comparison|performance|revenue|sales|ranking)\b|\brevenue\s+by\s+(branch|station)\b|\btop\s+(branch|station)\b|\bper\s+(branch|station)\b|\b(branch|station)\s+by\s+(branch|station)\b|\bby\s+(branch|station)\b/i.test(q)) s.add('branch_comparison')
-  // Pending / outstanding orders right now
-  if (/\bpending\s+orders?\b|\boutstanding\s+orders?\b|\bopen\s+orders?\b|\borders?\s+(still\s+)?(pending|open|outstanding)\b|\bright\s+now\b.*orders?\b|\borders?.*right\s+now\b/i.test(q)) s.add('pending_orders')
-  // Average order value
-  if (/\baverage\s+(order|sale|transaction|value|revenue)\b|\bavg\s+(order|sale|value)\b/i.test(q)) s.add('avg_order')
-  // ── Greeting ─────────────────────────────────────────────────────────────────
-  if (/^(hi+|hello+|hey+|good\s*(morning|afternoon|evening|day|night)|howdy|greetings|morning|evening|afternoon|how\s+are\s+you|how'?s\s+it(\s+going)?|what'?s\s+up|sup|yo|salut|bonjour|hola|jambo|muraho|niaje|habari|mwaramutse|amakuru)\b/i.test(q.trim())) s.add('greeting')
-  // Record transaction — keyword/sentence based detection
-  const hasAmount = /\b\d[\d,]*\s*(k|thousand)?\b/i.test(q)
-  const isQuery = /\b(how much|how many|what did|what are|how little|which|show me|list|total|summary|report)\b/i.test(q)
-  if (!isQuery && !s.has('pending_orders') && !s.has('avg_order') && (
-    // ── Clear recording commands (no amount needed) ──
-    /\b(record\s+this|log\s+this|save\s+this\s+(transaction|expense|record|payment)|add\s+this\s+entry|create\s+(an?\s+)?entry|book\s+this\s+transaction|register\s+this\s+payment|enter\s+this\s+expense|post\s+this\s+entry|journalize(\s+this)?|add\s+to\s+(ledger|books)|create\s+(accounting|bookkeeping)\s+(record|entry)|process\s+payroll|close\s+the\s+books|reconcile\s+account|bank\s+reconciliation|accrue\s+this|defer\s+this\s+revenue|capitalize\s+this|amortize\s+this|write\s+off\s+the|reverse\s+accrual|update\s+trial\s+balance|reflect\s+in\s+p.?l|update\s+balance\s+sheet|note\s+this\s+transaction|track\s+this\s+(purchase|payment|expense)|capture\s+this\s+expense|save\s+record|sync\s+transaction|post\s+to\s+ledger)\b/i.test(q) ||
-    // ── Explicit record triggers with category ──
-    /\b(record|log|add|post|enter)\s+(?:a\s+)?(?:transaction|entry|expense|income|payment|sale|purchase|journal|payroll|salary|refund|invoice|deposit|loan|asset|depreciation)\b/i.test(q) ||
-    // ── Income / Revenue sentence phrases ──
-    /\b(received\s+payment|got\s+paid|client\s+(paid|cleared|settled)|customer\s+(paid|settled|cleared)|invoice\s+was\s+paid|received\s+money|money\s+came\s+in|received\s+deposit|got\s+revenue|earned\s+income|collected\s+cash|received\s+transfer|payment\s+received|booked\s+revenue|sales\s+came\s+in|cash\s+received\s+today|money\s+received\s+today|the\s+client\s+finally\s+paid|customer\s+cleared\s+(their\s+)?balance|supplier\s+refunded\s+us|refund\s+received|cashback\s+received|settlement\s+received|installment\s+received|financing\s+received|funding\s+secured|investment\s+received|dividend\s+received|remittance\s+received|claim\s+received|insurance\s+payout|we\s+received\s+cash)\b/i.test(q) ||
-    // ── Expense / Payment sentence phrases ──
-    /\b(settled\s+the\s+bill|cleared\s+the\s+invoice|paid\s+(supplier|vendor|employees|staff|salary|wages|rent|invoice|contractor|freelancer|tax|vat|insurance|utility|bill|interest|loan|penalty|fee)|paid\s+via\s+(mtn|airtel|momo|bank|card)|processed\s+payroll|salary\s+paid|wages\s+paid|staff\s+payment|payroll\s+processed|commission\s+paid|bonus\s+paid|allowance\s+paid|reimbursed\s+(employee|expense)|made\s+(a\s+)?payment|sent\s+payment|made\s+(a\s+)?transfer|transferred\s+funds|moved\s+money|bank\s+charged\s+fee|bank\s+deducted|withdrew\s+cash|deposited\s+cash|momo\s+payment|mobile\s+money\s+payment|card\s+was\s+charged|pos\s+payment|supplier\s+has\s+been\s+paid|employee\s+salaries\s+went\s+out|we\s+paid\s+for|we\s+(spent|bought|purchased)|covered\s+expenses|asset\s+acquired|equipment\s+(purchased|bought|installed)|record\s+depreciation|depreciate\s+asset|disposed\s+asset|sold\s+asset|asset\s+write.?off|subscription\s+renewed|monthly\s+payment\s+made|annual\s+fee\s+paid|insurance\s+premium\s+paid|maintenance\s+contract\s+renewed|standing\s+order\s+executed|advance\s+payment\s+made|prepayment\s+made|security\s+deposit\s+paid|escrow\s+payment|retention\s+payment|converted\s+currency|forex\s+(gain|loss)\s+recorded|international\s+payment\s+sent|remittance\s+sent|owner\s+(invested|withdrew)|shareholder\s+contribution|capital\s+injected|dividend\s+paid|drawings\s+recorded|profit\s+reinvested|equity\s+contribution|customer\s+refunded|refund\s+issued|credit\s+note\s+issued|discount\s+(applied|given)|purchase\s+returned|sales\s+return|damaged\s+goods\s+returned)\b/i.test(q) ||
-    // ── Natural conversational phrases ──
-    /\b(please\s+save\s+this\s+expense|add\s+this\s+to\s+(accounting|books)|I\s+need\s+this\s+recorded|log\s+the\s+(utility|fuel|salary|rent|payroll|water|electricity|internet)\s+payment|record\s+today.?s\s+sales|track\s+this\s+payment|register\s+the\s+incoming\s+transfer|the\s+bank\s+deducted\s+charges|fix\s+the\s+duplicate\s+transaction|remove\s+the\s+wrong\s+entry|adjust\s+the\s+(final\s+)?balance|update\s+the\s+(invoice|record|financials))\b/i.test(q) ||
-    // ── Natural payee-before-amount: "we paid our employee 250,000", "we sold a dish for 250,000" ──
-    (hasAmount && /\b(we\s+)?(paid|sold|spent|received|earned|bought|gave)\s+(?:our\s+|a\s+|the\s+|an\s+|for\s+)?\w/i.test(q)) ||
-    // ── With amounts: action words + number ──
-    (hasAmount && (
-      /\b(paid|spent|bought|purchased|received|earned|sold|withdrew|deposited)\s+[\d,]+/i.test(q) ||
-      /\b[\d,]+\s*(k\b)?\s+(for|on)\s+\w/i.test(q) ||
-      /\b(fuel|diesel|petrol|rent|salary|wages|payroll|electricity|water|internet|airtime|repair|maintenance|supplies|insurance|tax|vat|paye|cleaning|transport|delivery|bonus|overtime|commission\s+payout|per\s+diem|contractor|allowance|equipment|vehicle|laptop|machinery|furniture|capex|depreciation|loan\s+repayment|installment|mortgage|dividend|drawings|petty\s+cash|shipping|freight|customs|logistics|marketing|advertising|legal\s+fee|audit\s+fee|consultancy|training|workshop|seminar|school\s+fees|membership|donation|interest\s+expense|bank\s+fee|hosting|domain|saas|cloud|hardware|phone\s+bill|data\s+bundle|telecom|insurance\s+premium|procurement|sourcing|packaging|warehousing|sponsorship|branding|pr\s+expense|permit\s+fee|registration\s+fee|government\s+fee|oil\s+change|tire|security\s+deposit|advance\s+payment|prepayment|reimbursement|settlement)\s+[\d,]+/i.test(q) ||
-      /\b(expense|payment|bill|invoice|fee|charge|cost)\s+of\s+[\d,]+/i.test(q) ||
-      /\b(utility|travel|fuel|maintenance|operating|staff|payroll|rent|office|software|subscription|telecom|legal|marketing|advertising|promotion|training|insurance|procurement|logistics|shipping|delivery|courier|freight|transport|storage|cleaning|security|repair|it\s+support|hosting|domain|saas|cloud|hardware|donation|membership|education|workshop|seminar)\s+expense\b/i.test(q)
-    )) ||
-    // ── Accounting-specific terms (always record intent) ──
-    /\b(journal\s+entry|ledger\s+entry|bookkeeping|accrual|adjustment\s+entry|reversal\s+entry|adjusting\s+entry|closing\s+entry|accrue\s+this|defer\s+this|capitalize\s+this\s+cost|amortize\s+this|recognize\s+the\s+revenue|impair\s+the\s+asset|allocate\s+overhead|distribute\s+cost|journalize\s+this|create\s+adjusting\s+entry|close\s+(revenue|expense)\s+account|record\s+retained\s+earnings)\b/i.test(q)
-  )) s.add('record_transaction')
-
-  // Catch-up — "how's business?", "how are we doing?", "give me a summary", "anything I should know?"
-  if (/\b(how.?s\s*business|how\s+are\s+we\s+doing|how.?s\s+today|how.?s\s+it\s+going|what.?s\s+the\s+situation|give\s+me\s+a\s+summary|anything\s+(new|i\s+should\s+know)|what.?s\s+up|catch\s+me\s+up|update\s+me|what\s+happened\s+today|daily\s+recap|overview|snapshot)\b/i.test(q)) s.add('catchup')
-  // Trends — "trending?", "are we improving?", "this week vs last", "compare periods"
-  if (/\b(trend(ing)?|improving|getting\s+better|getting\s+worse|this\s+week\s+vs|last\s+week\s+vs|compare\s+(to|with)\s+(last|previous)|versus\s+last|period\s+over\s+period|week\s+on\s+week|month\s+on\s+month|are\s+we\s+(up|down|growing|declining))\b/i.test(q)) s.add('trends')
-  // Why — "why is X low?", "what caused this?", "explain", or bare "why?"
-  if (/\b(why(\s+is|\s+are|\s+did|\s+has|\s+were)?|what\s+caused|what.?s\s+causing|explain(\s+this|\s+the|\s+why)?|what\s+went\s+wrong|what.?s\s+the\s+reason|how\s+come|tell\s+me\s+why)\b/i.test(q)) s.add('why')
-
-  if (s.size === 0) s.add('revenue')
-  return [...s]
-}
+// Intent parsing lives in lib/jesseIntents.ts so it can be tested directly.
 
 // ── Follow-up chip suggestions per intent ────────────────────────────────────
 function getFollowUps(intents: Intent[], branchCount: number): string[] {
   const has = (i: Intent) => intents.includes(i)
+  if (has('capabilities') || has('acknowledgement')) {
+    return ["How's business today?", "Today's revenue?", 'Any low stock?']
+  }
   if (has('catchup') || (has('greeting') && intents.length === 1)) {
     return ["Today's revenue?", 'Any pending orders?', 'Low stock alert?']
   }
@@ -2116,31 +2040,66 @@ export async function POST(req: Request) {
 
   // ── Low Stock ─────────────────────────────────────────────────────────────────
   if (intents.includes('low_stock')) {
-    const items = await prisma.inventoryItem.findMany({
-      where: { restaurantId, ...branchFilter },
-      select: { name: true, quantity: true, reorderLevel: true, unit: true, branch: { select: { name: true } } },
+    // Under one shared pool the stock belongs to the whole restaurant, so
+    // filtering it by station would answer "nothing here" for every station
+    // that is not Main — technically true and completely useless.
+    const restaurantRow = await prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+      select: { sharedStock: true },
     })
-    const branchLabel = targetBranch ? ` · ${targetBranch.name}` : ''
+    const stockIsShared = Boolean(restaurantRow?.sharedStock)
+    const stockFilter = stockIsShared ? {} : branchFilter
+
+    const items = await prisma.inventoryItem.findMany({
+      where: { restaurantId, ...stockFilter, deletedAt: null, type: { not: 'prep' } },
+      select: {
+        id: true, name: true, quantity: true, reorderLevel: true, unit: true,
+        branch: { select: { name: true } },
+        // Needed to know what a normal delivery of this item looks like.
+        purchases: {
+          where: { deletedAt: null },
+          select: { quantityPurchased: true, purchasedAt: true },
+          orderBy: { purchasedAt: 'desc' },
+          take: 3,
+        },
+      },
+    })
+    const branchLabel = stockIsShared || !targetBranch ? '' : ` · ${targetBranch.name}`
     const all  = items.length
+
+    // Same rule the stock screen uses: a manager-set reorder level wins,
+    // otherwise 15% of a typical delivery. Without the fallback, and with no
+    // reorder levels set anywhere, "low stock" could only ever mean "already
+    // finished" — which tells you the one thing it is too late to act on.
+    const thresholdFor = (i: typeof items[number]) => {
+      if (Number(i.reorderLevel) > 0) return Number(i.reorderLevel)
+      if (i.purchases.length === 0) return 0
+      const typical = i.purchases.reduce((s, p) => s + Number(p.quantityPurchased), 0) / i.purchases.length
+      return typical * 0.15
+    }
+
     const low  = items
-      .filter(i => i.quantity <= (i.reorderLevel ?? 0))
-      .map(i => ({ ...i, deficit: (i.reorderLevel ?? 0) - i.quantity, pctLeft: (i.reorderLevel ?? 0) > 0 ? (i.quantity / (i.reorderLevel ?? 1)) * 100 : 100 }))
+      .map(i => { const threshold = thresholdFor(i); return { ...i, threshold } })
+      // An item that is out counts however it was set up; one that is merely
+      // running low needs a threshold to be running low against.
+      .filter(i => Number(i.quantity) <= 0 || (i.threshold > 0 && Number(i.quantity) <= i.threshold))
+      .map(i => ({ ...i, deficit: i.threshold - i.quantity, pctLeft: i.threshold > 0 ? (i.quantity / i.threshold) * 100 : 0 }))
       .sort((a, b) => a.pctLeft - b.pctLeft)
 
     const isRestockQuery = /restock|what\s+should|need\s+to\s+buy/i.test(question)
 
     if (low.length === 0) {
-      lines.push(`**::CheckCircle:: Stock Alert${branchLabel}** — All ${all} item${all !== 1 ? 's' : ''} are above reorder levels`)
-      lines.push(`  No restocking needed right now.`)
+      lines.push(`**::CheckCircle:: Stock Alert${branchLabel}** — all ${all} item${all !== 1 ? 's are' : ' is'} at a healthy level`)
+      lines.push(`  Nothing needs restocking right now.`)
     } else {
       const critical = low.filter(i => i.quantity <= 0)
       const urgent   = low.filter(i => i.quantity > 0 && i.pctLeft < 50)
-      const warning  = low.filter(i => i.pctLeft >= 50)
+      const warning  = low.filter(i => i.quantity > 0 && i.pctLeft >= 50)
 
       if (isRestockQuery) {
         lines.push(`**Restock Priority${branchLabel}** — ${low.length} item${low.length !== 1 ? 's' : ''} need attention`)
       } else {
-        lines.push(`**::AlertTriangle:: Low Stock Alert${branchLabel}** — ${low.length} of ${all} item${all !== 1 ? 's' : ''} below reorder level`)
+        lines.push(`**::AlertTriangle:: Low Stock Alert${branchLabel}** — ${low.length} of ${all} item${all !== 1 ? 's' : ''} running low or out`)
       }
       lines.push(``)
 
@@ -2152,15 +2111,15 @@ export async function POST(req: Request) {
       }
 
       if (urgent.length > 0) {
-        lines.push(`**Urgent — Below 50% of reorder level (${urgent.length})**`)
-        urgent.slice(0, 5).forEach(i => lines.push(`  ::AlertTriangle:: **${i.name}** — ${Number(i.quantity.toFixed(2))} ${i.unit} left (need ${Number((i.reorderLevel ?? 0).toFixed(2))}) · ${i.branch.name}`))
+        lines.push(`**Nearly out (${urgent.length})**`)
+        urgent.slice(0, 5).forEach(i => lines.push(`  ::AlertTriangle:: **${i.name}** — ${Number(i.quantity.toFixed(2))} ${i.unit} left, usually reordered around ${Number(i.threshold.toFixed(2))}`))
         if (urgent.length > 5) lines.push(`  ...and ${urgent.length - 5} more`)
         lines.push(``)
       }
 
       if (warning.length > 0) {
-        lines.push(`**At Reorder Level (${warning.length})**`)
-        warning.slice(0, 5).forEach(i => lines.push(`  ::Clock:: **${i.name}** — ${Number(i.quantity.toFixed(2))} ${i.unit} · ${i.branch.name}`))
+        lines.push(`**Getting low (${warning.length})**`)
+        warning.slice(0, 5).forEach(i => lines.push(`  ::Clock:: **${i.name}** — ${Number(i.quantity.toFixed(2))} ${i.unit} left of a usual ${Number((i.threshold / 0.15).toFixed(0))} ${i.unit} delivery`))
         if (warning.length > 5) lines.push(`  ...and ${warning.length - 5} more`)
         lines.push(``)
       }
@@ -2171,7 +2130,7 @@ export async function POST(req: Request) {
       } else if (urgent.length > 0) {
         lines.push(`  **${urgent[0].name}** is the most urgent — only ${Number(urgent[0].quantity.toFixed(2))} ${urgent[0].unit} left. Order soon to avoid stockouts.`)
       } else {
-        lines.push(`  ${low.length} item${low.length !== 1 ? 's have' : ' has'} hit the reorder threshold. Schedule restocking soon.`)
+        lines.push(`  ${low.length} item${low.length !== 1 ? 's are' : ' is'} running low. Worth adding to the next order.`)
       }
     }
   }
@@ -2186,6 +2145,42 @@ export async function POST(req: Request) {
   }
 
   // ── Greeting ─────────────────────────────────────────────────────────────────
+  // "thanks" / "ok" — close the exchange rather than answering a question that
+  // was not asked. Reporting revenue at someone who just said thank you is the
+  // clearest sign an assistant is not listening.
+  if (intents.includes('acknowledgement') && intents.length === 1) {
+    const replies = [
+      `Anytime! Anything else you want to check?`,
+      `Happy to help. Just ask if you need another number.`,
+      `You're welcome — I'm here whenever you need the figures.`,
+    ]
+    lines.push(replies[Math.floor(Date.now() / 1000) % replies.length])
+  }
+
+  // "what can you do?" — say so plainly instead of guessing at a report.
+  if (intents.includes('capabilities') && !intents.some(i => !['capabilities', 'greeting', 'acknowledgement'].includes(i))) {
+    lines.push(`I'm **Jesse** — I read your restaurant's numbers and answer questions about them.`)
+    lines.push(``)
+    lines.push(`**Money**`)
+    lines.push(`  "what's today's revenue?" · "profit this month" · "are we profitable?"`)
+    lines.push(`  "what's our food cost?" · "biggest expenses" · "payment breakdown"`)
+    lines.push(``)
+    lines.push(`**Stock**`)
+    lines.push(`  "any low stock?" · "what should I restock?" · "how much soy sauce do we have?"`)
+    lines.push(``)
+    lines.push(`**Sales**`)
+    lines.push(`  "top dishes" · "how many orders today?" · "any pending orders?"`)
+    lines.push(`  "which station made the most?" · "how much did we make from burgers?"`)
+    lines.push(``)
+    lines.push(`**Comparing and explaining**`)
+    lines.push(`  "this week vs last week" · "are we improving?" · "why is profit down?"`)
+    lines.push(``)
+    lines.push(`**Recording**`)
+    lines.push(`  "record an expense of 50,000 for fuel" · "we paid staff 250,000"`)
+    lines.push(``)
+    lines.push(`You can name a period ("in July", "last week") or a station ("at Banana Bar") in any question.`)
+  }
+
   if (intents.includes('greeting') && intents.length === 1) {
     if (/\b(how\s+are\s+you|how'?s\s+it(\s+going)?|what'?s\s+up|sup)\b/i.test(question)) {
       const replies = [
