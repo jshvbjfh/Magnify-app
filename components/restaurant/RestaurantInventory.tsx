@@ -3,6 +3,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { X, Sparkles, ShoppingCart, Search, Trash2 } from 'lucide-react'
 import { createInventoryBatchSuffix, formatInventoryBatchId } from '@/lib/inventoryBatch'
+import { findItemNameCompletion } from '@/lib/inventorySuggestions'
 import {
   createStockEntryId,
   discardStockEntryTicket,
@@ -54,18 +55,27 @@ type Purchase = {
   remainingQuantity: number
   unitCost: number
   totalCost: number
+  paymentMethod: string | null
   purchasedAt: string
+  expiresAt: string | null
   createdAt: string
   ingredient: { name: string; unit: string; purchaseUnit: string | null; unitsPerPurchaseUnit: number | null }
 }
 type PurchaseBatchGroup = { key: string; batchId: string | null; purchasedAt: string; earliestCreatedAt: string; totalCost: number; purchases: Purchase[] }
+// The completion offered while an item name is being typed. `remainder` is the
+// untyped tail shown as ghost text; accepting fills the row from `purchase`.
+type ItemSuggestion = { purchase: Purchase; itemName: string; remainder: string; summary: string }
 type PrepRecipeRow = { id: string; prepItemId: string; ingredientItemId: string; quantityRequired: number; ingredient: { id: string; name: string; unit: string } }
-const INVENTORY_COLUMN_LABELS = ['Item', 'Supplier', 'Unit', 'Qty bought', 'Cost/unit', 'Stock on hand', 'Tot. stock value', 'Actions'] as const
+const INVENTORY_COLUMN_LABELS = ['Item', 'Supplier', 'Unit', 'Qty bought', 'Cost/unit', 'Expires', 'Stock on hand', 'Tot. stock value', 'Actions'] as const
+const INVENTORY_COLUMN_COUNT = INVENTORY_COLUMN_LABELS.length
 const FRESH_FETCH_OPTIONS = { credentials: 'include' as const, cache: 'no-store' as const }
 
 const fmt = (n: number) => n.toLocaleString('en-RW', { maximumFractionDigits: 0 })
 const fmtQty = (n: number) => n.toLocaleString('en-RW', { maximumFractionDigits: 2 })
 const PURCHASE_USAGE_EPSILON = 0.000001
+const MS_PER_DAY = 86_400_000
+// How far ahead an expiry date starts showing as a warning rather than plain text.
+const EXPIRY_SOON_DAYS = 7
 const normalizeInventoryItemName = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase()
 const todayInputValue = () => {
   const now = new Date()
@@ -85,6 +95,7 @@ const createEmptyPurchaseForm = (purchasedAt = todayInputValue()) => ({
   purchaseQuantity: '',
   purchaseUnitCost: '',
   purchasedAt,
+  expiresAt: '',
 })
 
 function parseDateInput(value: string) {
@@ -111,6 +122,42 @@ function formatBatchCreatedTimeLabel(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return 'Unknown time'
   return date.toLocaleTimeString('en-RW', { hour: '2-digit', minute: '2-digit' })
+}
+
+// Whole days from today to an expiry date, compared as calendar days so a date
+// stored at midnight never reads as "tomorrow" for part of the current day.
+function daysUntilExpiry(value: string) {
+  const expiry = new Date(value)
+  if (Number.isNaN(expiry.getTime())) return null
+  const now = new Date()
+  const expiryDay = new Date(expiry.getFullYear(), expiry.getMonth(), expiry.getDate()).getTime()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  return Math.round((expiryDay - today) / MS_PER_DAY)
+}
+
+function formatExpiryStatus(days: number) {
+  if (days < 0) return days === -1 ? 'Expired yesterday' : `Expired ${Math.abs(days)} days ago`
+  if (days === 0) return 'Expires today'
+  if (days === 1) return 'Expires tomorrow'
+  return `In ${days} days`
+}
+
+function renderExpiryCell(expiresAt: string | null) {
+  const days = expiresAt ? daysUntilExpiry(expiresAt) : null
+  if (!expiresAt || days === null) return <td className="px-4 py-3 text-gray-300">—</td>
+
+  const expired = days < 0
+  const expiringSoon = days <= EXPIRY_SOON_DAYS
+  return (
+    <td className="px-4 py-3">
+      <p className={expired ? 'font-semibold text-red-600' : expiringSoon ? 'font-semibold text-amber-700' : 'text-gray-700'}>
+        {formatBatchDateLabel(expiresAt)}
+      </p>
+      <p className={`text-xs ${expired ? 'text-red-500' : expiringSoon ? 'text-amber-600' : 'text-gray-400'}`}>
+        {formatExpiryStatus(days)}
+      </p>
+    </td>
+  )
 }
 
 function formatUnitSummary(purchaseUnit: string, usageUnit: string, unitsPerPurchaseUnit: number) {
@@ -166,6 +213,36 @@ function getPurchaseDisplayMeta(purchase: Purchase) {
     purchaseQuantity,
     purchaseUnitCost,
   }
+}
+
+// Everything the recorder remembers from an item's last entry: who supplied it,
+// how it was packaged, how much was bought and what it cost. Typing the item
+// name back in offers the whole set at once, so a repeat buy is one keystroke.
+function buildPurchasePreset(purchase: Purchase) {
+  const meta = getPurchaseDisplayMeta(purchase)
+  const hasKnownPurchaseCost = purchase.purchaseUnitCost != null || purchase.unitCost != null
+  return {
+    supplier: purchase.supplier || '',
+    paymentMethod: purchase.paymentMethod || 'Cash',
+    usageUnit: meta.usageUnit,
+    purchaseUnit: meta.purchaseUnit,
+    unitsPerPurchaseUnit: meta.purchaseUnit.toLowerCase() === meta.usageUnit.toLowerCase()
+      ? ''
+      : String(meta.unitsPerPurchaseUnit),
+    purchaseQuantity: meta.purchaseQuantity > 0 ? String(meta.purchaseQuantity) : '',
+    purchaseUnitCost: hasKnownPurchaseCost ? String(meta.purchaseUnitCost) : '',
+  }
+}
+
+// One line naming what accepting a suggestion is about to fill in.
+function formatPurchasePresetSummary(purchase: Purchase) {
+  const meta = getPurchaseDisplayMeta(purchase)
+  return [
+    purchase.ingredient.name.trim(),
+    purchase.supplier?.trim() || null,
+    `${fmtQty(meta.purchaseQuantity)} ${meta.purchaseUnit}`,
+    `${fmt(meta.purchaseUnitCost)} RWF/${meta.purchaseUnit}`,
+  ].filter(Boolean).join(' · ')
 }
 
 function extractBatchSuffix(batchId: string) {
@@ -251,7 +328,9 @@ function ticketToPurchaseRow(ticket: StockEntryTicket): Purchase {
     remainingQuantity: quantityPurchased,
     unitCost,
     totalCost: quantityPurchased * unitCost,
+    paymentMethod: ticket.payload.paymentMethod,
     purchasedAt: ticket.payload.purchasedAt,
+    expiresAt: ticket.payload.expiresAt ?? null,
     createdAt: ticket.createdAtIso,
     ingredient: {
       name: ticket.payload.itemName,
@@ -276,6 +355,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const [purchaseError, setPurchaseError] = useState<string | null>(null)
   const [purchaseAutofillNotice, setPurchaseAutofillNotice] = useState<string | null>(null)
   const [purchaseAutofillMatchKey, setPurchaseAutofillMatchKey] = useState('')
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false)
   const [pForm, setPForm] = useState(createEmptyPurchaseForm())
   const [inventoryView, setInventoryView] = useState<'stock' | 'preps'>('stock')
   const [showPrepForm, setShowPrepForm] = useState(false)
@@ -418,17 +498,9 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       .sort(comparePurchaseRows)[0]
 
     if (latestPurchase) {
-      const purchaseMeta = getPurchaseDisplayMeta(latestPurchase)
-      const hasKnownPurchaseCost = latestPurchase.purchaseUnitCost != null || latestPurchase.unitCost != null
       return {
-        supplier: latestPurchase.supplier || '',
-        usageUnit: purchaseMeta.usageUnit,
-        purchaseUnit: purchaseMeta.purchaseUnit,
-        unitsPerPurchaseUnit: purchaseMeta.purchaseUnit.toLowerCase() === purchaseMeta.usageUnit.toLowerCase()
-          ? ''
-          : String(purchaseMeta.unitsPerPurchaseUnit),
-        purchaseUnitCost: hasKnownPurchaseCost ? String(purchaseMeta.purchaseUnitCost) : '',
-        notice: `Autofilled from the latest ${latestPurchase.ingredient.name} record. Keep it or edit any field before saving.`,
+        fields: buildPurchasePreset(latestPurchase),
+        notice: `Filled from your last ${latestPurchase.ingredient.name.trim()} entry — edit any field before saving.`,
       }
     }
 
@@ -447,14 +519,18 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         })
       : null
 
+    // No purchase history for this item, so only its saved settings are known —
+    // supplier, quantity and payment method stay as the user left them.
     return {
-      supplier: '',
-      usageUnit: matchedItem.unit,
-      purchaseUnit,
-      unitsPerPurchaseUnit: purchaseUnit.toLowerCase() === matchedItem.unit.toLowerCase()
-        ? ''
-        : String(unitsPerPurchaseUnit),
-      purchaseUnitCost: purchaseUnitCost == null ? '' : String(purchaseUnitCost),
+      fields: {
+        supplier: '',
+        usageUnit: matchedItem.unit,
+        purchaseUnit,
+        unitsPerPurchaseUnit: purchaseUnit.toLowerCase() === matchedItem.unit.toLowerCase()
+          ? ''
+          : String(unitsPerPurchaseUnit),
+        purchaseUnitCost: purchaseUnitCost == null ? '' : String(purchaseUnitCost),
+      },
       notice: `Autofilled from saved ${matchedItem.name} settings. Keep it or edit any field before saving.`,
     }
   }
@@ -466,14 +542,14 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       : null
     const shouldApplyAutofill = Boolean(autofillPreset && normalizedItemName && purchaseAutofillMatchKey !== normalizedItemName)
 
+    // Every edit re-opens the door to a completion: a dismissal only ever
+    // applies to the name that was showing when it was dismissed.
+    setSuggestionDismissed(false)
+
     setPForm((current) => ({
       ...current,
+      ...(shouldApplyAutofill ? autofillPreset!.fields : {}),
       itemName: nextItemName,
-      supplier: shouldApplyAutofill ? autofillPreset!.supplier : current.supplier,
-      usageUnit: shouldApplyAutofill ? autofillPreset!.usageUnit : current.usageUnit,
-      purchaseUnit: shouldApplyAutofill ? autofillPreset!.purchaseUnit : current.purchaseUnit,
-      unitsPerPurchaseUnit: shouldApplyAutofill ? autofillPreset!.unitsPerPurchaseUnit : current.unitsPerPurchaseUnit,
-      purchaseUnitCost: shouldApplyAutofill ? autofillPreset!.purchaseUnitCost : current.purchaseUnitCost,
     }))
 
     if (shouldApplyAutofill) {
@@ -486,6 +562,37 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       setPurchaseAutofillMatchKey('')
       setPurchaseAutofillNotice(null)
     }
+  }
+
+  function applyItemSuggestion(suggestion: ItemSuggestion) {
+    setPForm((current) => ({ ...current, ...buildPurchasePreset(suggestion.purchase), itemName: suggestion.itemName }))
+    setPurchaseAutofillMatchKey(normalizeInventoryItemName(suggestion.itemName))
+    setPurchaseAutofillNotice(`Filled from your last ${suggestion.itemName} entry — edit any field before saving.`)
+    setSuggestionDismissed(false)
+  }
+
+  function handleItemNameKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (itemSuggestion) {
+      // Enter is never taken from the row: it records the entry, suggestion
+      // showing or not. Space takes the completion instead, except where the
+      // completion carries on into another word — there a space is far more
+      // likely to be what's being typed ("Cooking" on the way to "Cooking Wine").
+      const spaceAccepts = event.key === ' ' && !itemSuggestion.remainder.startsWith(' ')
+      if (event.key === 'Tab' || spaceAccepts) {
+        event.preventDefault()
+        applyItemSuggestion(itemSuggestion)
+        return
+      }
+      if (event.key === 'Escape') {
+        // Drop the completion only — Esc must not also close the recorder and
+        // take the half-typed row down with it.
+        event.preventDefault()
+        setSuggestionDismissed(true)
+        return
+      }
+    }
+
+    handlePurchaseRowKeyDown(event)
   }
 
   function closePurchaseForm() {
@@ -557,10 +664,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       purchaseUnit: purchaseMeta.purchaseUnit,
       unitsPerPurchaseUnit: purchaseMeta.unitsPerPurchaseUnit === 1 ? '' : String(purchaseMeta.unitsPerPurchaseUnit),
       supplier: purchase.supplier || '',
-      paymentMethod: (purchase as any).paymentMethod || 'Cash',
+      paymentMethod: purchase.paymentMethod || 'Cash',
       purchaseQuantity: String(purchaseMeta.purchaseQuantity),
       purchaseUnitCost: String(purchaseMeta.purchaseUnitCost),
       purchasedAt: formatDateInput(purchase.purchasedAt),
+      expiresAt: purchase.expiresAt ? formatDateInput(purchase.expiresAt) : '',
     })
   }
 
@@ -602,6 +710,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         purchaseQuantity: Number(pForm.purchaseQuantity),
         purchaseUnitCost: Number(pForm.purchaseUnitCost),
         purchasedAt: activeBatchDate,
+        expiresAt: pForm.expiresAt || null,
       },
     })
 
@@ -643,6 +752,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       unitCost,
       totalCost: quantityPurchased * unitCost,
       purchasedAt: pForm.purchasedAt,
+      expiresAt: pForm.expiresAt || null,
       ingredient: { ...existingPurchase.ingredient, name: pForm.itemName, unit: unitConfig.usageUnit },
     }
 
@@ -673,6 +783,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           purchaseQuantity: purchaseQuantityInput,
           purchaseUnitCost: purchaseUnitCostInput,
           purchasedAt: pForm.purchasedAt,
+          expiresAt: pForm.expiresAt || null,
         })
       })
       if (!res.ok) {
@@ -973,10 +1084,18 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const batchCount = new Set(displayPurchases.map(purchase => purchase.batchId || purchase.id)).size + (showPurchaseForm && activeBatchPurchases.length === 0 ? 1 : 0)
   const estimatedTotal = pForm.purchaseQuantity && pForm.purchaseUnitCost
     ? Number(pForm.purchaseQuantity) * Number(pForm.purchaseUnitCost) : null
-  const knownItemNames = Array.from(new Set([
-    ...items.map(item => item.name.trim()).filter(Boolean),
-    ...displayPurchases.map(purchase => purchase.ingredient.name.trim()).filter(Boolean),
-  ])).sort((left, right) => left.localeCompare(right))
+  // What the recorder offers to complete while an item name is being typed.
+  // Suppressed while editing an existing row, and once dismissed for the name
+  // currently in the field.
+  const nameCompletion = editingPurchaseId || !showPurchaseRecorder || suggestionDismissed
+    ? null
+    : findItemNameCompletion(displayPurchases, pForm.itemName)
+  const itemSuggestion: ItemSuggestion | null = nameCompletion && {
+    purchase: nameCompletion.entry,
+    itemName: nameCompletion.itemName,
+    remainder: nameCompletion.remainder,
+    summary: formatPurchasePresetSummary(nameCompletion.entry),
+  }
   const knownSupplierNames = Array.from(new Set(
     displayPurchases.map(p => (p.supplier ?? '').trim()).filter(Boolean)
   )).sort((a, b) => a.localeCompare(b))
@@ -1054,6 +1173,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                 className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
                 placeholder="Cost per bought unit"/>
             </td>
+            <td className="px-3 py-2 align-top">
+              <input type="date" value={pForm.expiresAt} onChange={e=>setPForm(f=>({...f,expiresAt:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                title="Expiry date — clear it if this item has none"
+                className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"/>
+            </td>
             <td className="px-4 py-2 text-sm text-gray-500">Auto</td>
             <td className="px-4 py-2 text-sm font-semibold text-gray-800">{estimatedTotal!=null?`${fmt(estimatedTotal)} RWF`:'auto'}</td>
             <td className="px-4 py-2">
@@ -1064,7 +1188,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
             </td>
           </tr>
           <tr className="bg-amber-50/80">
-            <td colSpan={8} className="px-4 py-2 text-xs text-amber-800">
+            <td colSpan={INVENTORY_COLUMN_COUNT} className="px-4 py-2 text-xs text-amber-800">
               <span className="rounded border border-amber-300 bg-white px-1.5 py-0.5 font-semibold">Enter</span>
               <span className="ml-2 mr-4">Update row</span>
               <span className="rounded border border-amber-300 bg-white px-1.5 py-0.5 font-semibold">Esc</span>
@@ -1090,6 +1214,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           <p>{fmt(purchaseMeta.purchaseUnitCost)} RWF</p>
           <p className="text-xs text-gray-400">per {purchaseMeta.purchaseUnit}</p>
         </td>
+        {renderExpiryCell(purchase.expiresAt)}
         <td className="px-4 py-3">
           <span
             title={hasLayerDrift ? 'Current stock is tracked at the ingredient level while FIFO batch layers are out of sync.' : undefined}
@@ -1246,13 +1371,6 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         </div>
       )}
 
-      {knownItemNames.length > 0 && (
-        <datalist id="inventory-known-items">
-          {knownItemNames.map((name) => (
-            <option key={name} value={name} />
-          ))}
-        </datalist>
-      )}
       {knownSupplierNames.length > 0 && (
         <datalist id="inventory-known-suppliers">
           {knownSupplierNames.map((name) => (
@@ -1280,12 +1398,12 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           {purSearch && <p className="px-4 py-2 text-xs text-gray-400 border-b border-gray-100">Showing {filteredPurchaseCount} of {purchases.length} inventory rows</p>}
-          <div className="overflow-x-auto"><table className="w-full text-sm min-w-[920px]">
+          <div className="overflow-x-auto"><table className="w-full text-sm min-w-[1040px]">
             <tbody className="divide-y divide-gray-50">
               {showPurchaseForm && (
                 <>
                   <tr className="bg-orange-400 border-y border-orange-700">
-                    <td colSpan={8} className="px-3 py-1.5">
+                    <td colSpan={INVENTORY_COLUMN_COUNT} className="px-3 py-1.5">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] font-semibold text-gray-900">
                           <span>BATCH_ID: {activeBatchId}</span>
@@ -1325,9 +1443,20 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                     <>
                   <tr className="bg-emerald-50/80">
                     <td className="px-3 py-2 align-top">
-                      <input value={pForm.itemName} onChange={e=>handlePurchaseItemNameChange(e.target.value)} onKeyDown={handlePurchaseRowKeyDown} list="inventory-known-items"
-                        className="w-full rounded-md border border-emerald-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"
-                        placeholder="Item name"/>
+                      {/* The ghost sits on top of a transparent input, so the untyped
+                          tail of the suggested name reads as a continuation of what
+                          was typed. Both boxes carry identical text metrics. */}
+                      <div className="relative rounded-md bg-white">
+                        <input value={pForm.itemName} onChange={e=>handlePurchaseItemNameChange(e.target.value)} onKeyDown={handleItemNameKeyDown}
+                          autoComplete="off"
+                          className="relative z-10 w-full rounded-md border border-emerald-300 bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"
+                          placeholder="Item name"/>
+                        {itemSuggestion?.remainder && (
+                          <p aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre rounded-md border border-transparent px-3 py-2 text-sm text-gray-400">
+                            <span className="invisible">{pForm.itemName}</span>{itemSuggestion.remainder}
+                          </p>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-2 align-top">
                       <div className="space-y-1.5">
@@ -1375,6 +1504,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                         className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"
                         placeholder="Cost per bought unit"/>
                     </td>
+                    <td className="px-3 py-2 align-top">
+                      <input type="date" value={pForm.expiresAt} onChange={e=>setPForm(f=>({...f,expiresAt:e.target.value}))} onKeyDown={handlePurchaseRowKeyDown}
+                        title="Expiry date — leave empty if this item has none"
+                        className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"/>
+                    </td>
                     <td className="px-4 py-2 text-sm text-gray-500">Auto</td>
                     <td className="px-4 py-2 text-sm font-semibold text-gray-800">{estimatedTotal!=null?`${fmt(estimatedTotal)} RWF`:'auto'}</td>
                     <td className="px-4 py-2">
@@ -1385,12 +1519,23 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                     </td>
                   </tr>
                   <tr className="bg-emerald-50/80">
-                    <td colSpan={8} className="px-4 py-2 text-xs text-emerald-800">
-                      {purchaseAutofillNotice && <span className="mr-4 font-medium">{purchaseAutofillNotice}</span>}
-                      <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Enter</span>
-                      <span className="ml-2 mr-4">Done and close recorder</span>
-                      <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Esc</span>
-                      <span className="ml-2">Cancel recorder</span>
+                    <td colSpan={INVENTORY_COLUMN_COUNT} className="px-4 py-2 text-xs text-emerald-800">
+                      {/* A showing completion only changes what Space and Esc do;
+                          Enter still records the entry either way. */}
+                      {itemSuggestion ? (<>
+                        <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Space</span>
+                        <span className="ml-2 mr-4 font-medium">Fill {itemSuggestion.summary}</span>
+                        <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Esc</span>
+                        <span className="ml-2 mr-4">Ignore it</span>
+                        <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Enter</span>
+                        <span className="ml-2">Done and close recorder</span>
+                      </>) : (<>
+                        {purchaseAutofillNotice && <span className="mr-4 font-medium">{purchaseAutofillNotice}</span>}
+                        <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Enter</span>
+                        <span className="ml-2 mr-4">Done and close recorder</span>
+                        <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Esc</span>
+                        <span className="ml-2">Cancel recorder</span>
+                      </>)}
                     </td>
                   </tr>
                     </>
@@ -1401,7 +1546,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
               {purchaseGroups.map(group => (
                 <Fragment key={group.key}>
                   <tr className="bg-orange-400 border-y border-orange-700">
-                    <td colSpan={8} className="px-3 py-1.5">
+                    <td colSpan={INVENTORY_COLUMN_COUNT} className="px-3 py-1.5">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] font-semibold text-gray-900">
                           <span>BATCH_ID: {group.batchId || 'NO BATCH ID'}</span>

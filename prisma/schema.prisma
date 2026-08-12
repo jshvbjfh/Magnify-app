@@ -440,6 +440,9 @@ model InventoryPurchase {
   paymentMethod        String        @default("Cash")
   paidAt               DateTime?
   purchasedAt          DateTime      @default(now())
+  // Optional: most stock is recorded without one, so null means "no expiry
+  // tracked" and must never be read as "expires today".
+  expiresAt            DateTime?
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
   deletedAt            DateTime?

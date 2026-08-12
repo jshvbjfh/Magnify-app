@@ -594,6 +594,8 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.unitsPerPurchaseUnit')
 	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "purchaseUnitCost" REAL;`, SKIP_TABLE)
 	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.purchaseUnitCost')
+	r = dbExecute(`ALTER TABLE "inventory_purchases" ADD COLUMN "expiresAt" DATETIME;`, SKIP_TABLE)
+	if (r.ok && !r.skipped) actions.push('Added inventory_purchases.expiresAt')
 
 	// dish_ingredients
 	r = dbExecute(`ALTER TABLE "dish_ingredients" ADD COLUMN "inventoryItemId" TEXT;`, SKIP_TABLE)

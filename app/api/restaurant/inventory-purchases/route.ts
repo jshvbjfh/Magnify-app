@@ -59,6 +59,16 @@ function hasConsumedPurchaseQuantity(purchase: { quantityPurchased: number; rema
   return purchase.quantityPurchased - purchase.remainingQuantity > PURCHASE_USAGE_EPSILON
 }
 
+// Expiry is optional. Absent or blank means "no expiry tracked" and is stored
+// as null - on PUT that null is also how the user clears a date they'd set.
+// Only a value that was actually sent but can't be read as a date is an error.
+function parseOptionalExpiryDate(value: unknown): { ok: boolean; value: Date | null } {
+  if (typeof value !== 'string' || !value.trim()) return { ok: true, value: null }
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return { ok: false, value: null }
+  return { ok: true, value: parsed }
+}
+
 async function resolveInventoryIngredient(
   tx: Prisma.TransactionClient,
   params: {
@@ -280,6 +290,10 @@ export async function POST(req: Request) {
     if (Number.isNaN(purchasedAt.getTime())) {
       return NextResponse.json({ error: 'purchasedAt must be a valid date' }, { status: 400 })
     }
+    const expiry = parseOptionalExpiryDate(body.expiresAt)
+    if (!expiry.ok) {
+      return NextResponse.json({ error: 'Expiry must be a valid date' }, { status: 400 })
+    }
 
     const totalCost = quantityPurchased * unitCost
     const normalizedPaymentMethod = typeof paymentMethod === 'string' && paymentMethod.trim() ? paymentMethod.trim() : 'Cash'
@@ -326,6 +340,7 @@ export async function POST(req: Request) {
           totalCost,
           paymentMethod: normalizedPaymentMethod,
           purchasedAt,
+          expiresAt: expiry.value,
         },
       })
 
@@ -411,6 +426,10 @@ export async function PUT(req: Request) {
     }
     if (Number.isNaN(purchasedAt.getTime())) {
       return NextResponse.json({ error: 'purchasedAt must be a valid date' }, { status: 400 })
+    }
+    const expiry = parseOptionalExpiryDate(body.expiresAt)
+    if (!expiry.ok) {
+      return NextResponse.json({ error: 'Expiry must be a valid date' }, { status: 400 })
     }
 
     const totalCost = quantityPurchased * unitCost
@@ -536,6 +555,7 @@ export async function PUT(req: Request) {
           totalCost,
           paymentMethod: normalizedPaymentMethod,
           purchasedAt,
+          expiresAt: expiry.value,
         },
       })
 

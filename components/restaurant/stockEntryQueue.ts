@@ -24,6 +24,8 @@ export type StockEntryPayload = {
   purchaseQuantity: number
   purchaseUnitCost: number
   purchasedAt: string
+  // Optional — null when the user left the expiry field empty.
+  expiresAt: string | null
 }
 
 export type StockEntryTicket = {
