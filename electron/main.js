@@ -477,6 +477,8 @@ async function attemptDesktopSchemaCompatibilityRepair({ userDataDir, runtimeDbP
 	if (r.ok && !r.skipped) actions.push('Added restaurants.fifoEnabled')
 	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "fifoConfiguredAt" DATETIME;`, SKIP_DUP)
 	if (r.ok && !r.skipped) actions.push('Added restaurants.fifoConfiguredAt')
+	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "sharedStock" INTEGER NOT NULL DEFAULT 0;`, SKIP_DUP)
+	if (r.ok && !r.skipped) actions.push('Added restaurants.sharedStock')
 	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "syncRestaurantId" TEXT;`, SKIP_DUP)
 	if (r.ok && !r.skipped) actions.push('Added restaurants.syncRestaurantId')
 	r = dbExecute(`ALTER TABLE "restaurants" ADD COLUMN "deletedAt" DATETIME;`, SKIP_DUP)

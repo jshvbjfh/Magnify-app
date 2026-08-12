@@ -300,11 +300,24 @@ export async function POST(req: Request) {
         }
 
         // ── Inventory purchases ──
+        // Every column the export writes has to be listed here. Anything left
+        // out is silently dropped on the way back in, and for a purchase that
+        // means losing how it was packaged — so a restored batch would recost
+        // itself wrongly. Keep this in step with the InventoryPurchase model.
         for (const purchase of (backup.inventoryPurchases ?? [])) {
+          const packaging = {
+            supplier: purchase.supplier ?? null,
+            purchaseQuantity: purchase.purchaseQuantity ?? null,
+            purchaseUnit: purchase.purchaseUnit ?? null,
+            unitsPerPurchaseUnit: purchase.unitsPerPurchaseUnit ?? null,
+            purchaseUnitCost: purchase.purchaseUnitCost ?? null,
+            paidAt: purchase.paidAt ? new Date(purchase.paidAt) : null,
+            expiresAt: purchase.expiresAt ? new Date(purchase.expiresAt) : null,
+          }
           await tx.inventoryPurchase.upsert({
             where: { id: purchase.id },
-            update: { restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, batchId: purchase.batchId ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash', expiresAt: purchase.expiresAt ? new Date(purchase.expiresAt) : null },
-            create: { id: purchase.id, restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, batchId: purchase.batchId ?? null, supplier: purchase.supplier ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash', purchasedAt: new Date(purchase.purchasedAt), createdAt: new Date(purchase.createdAt), expiresAt: purchase.expiresAt ? new Date(purchase.expiresAt) : null },
+            update: { restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, batchId: purchase.batchId ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash', ...packaging },
+            create: { id: purchase.id, restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, batchId: purchase.batchId ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash', purchasedAt: new Date(purchase.purchasedAt), createdAt: new Date(purchase.createdAt), ...packaging },
           })
         }
 
