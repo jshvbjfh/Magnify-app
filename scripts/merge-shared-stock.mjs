@@ -142,6 +142,21 @@ const items = await prisma.inventoryItem.findMany({
   },
 })
 
+// Open FIFO layers are where stock value actually lives — the item's own
+// unitCost is only a derived headline. Loading them lets the run prove that
+// re-expressing a quantity in a different unit moves no money.
+const openLayers = await prisma.inventoryPurchase.findMany({
+  where: { restaurantId: restaurant.id, deletedAt: null, remainingQuantity: { gt: 0 } },
+  select: { id: true, ingredientId: true, remainingQuantity: true, unitCost: true },
+})
+const layersByItem = new Map()
+for (const layer of openLayers) {
+  if (!layersByItem.has(layer.ingredientId)) layersByItem.set(layer.ingredientId, [])
+  layersByItem.get(layer.ingredientId).push(layer)
+}
+const layerValue = (itemId) => (layersByItem.get(itemId) ?? [])
+  .reduce((sum, l) => sum + Number(l.remainingQuantity) * Number(l.unitCost), 0)
+
 console.log(`\n${'='.repeat(72)}`)
 console.log(`${APPLY ? 'APPLYING' : 'DRY RUN'} — ${restaurant.name}`)
 console.log(`shared stock switch: ${!switchDeployed ? 'NOT DEPLOYED YET' : sharedStock ? 'ON' : 'OFF'}`)
@@ -180,6 +195,9 @@ for (const item of poolable) {
 let plannedMerges = 0
 let plannedMoves = 0
 let unresolved = 0
+let valueBeforeTotal = 0
+let valueAfterTotal = 0
+let valueDrift = 0
 const plan = []
 
 for (const [target, { spec, rows }] of groups) {
@@ -249,6 +267,24 @@ for (const [target, { spec, rows }] of groups) {
     console.log(`          repoint ${refs}, then remove the row`)
   }
 
+  // Stock value must come out the other side unchanged. Quantities are scaled
+  // up and the cost per unit scaled down by the same factor, so the money each
+  // layer represents is identical — only the unit it is counted in changes.
+  const valueBefore = rows.reduce((sum, r) => sum + layerValue(r.id), 0)
+  const valueAfter = rows.reduce((sum, r) => {
+    const factor = conversions.find((c) => c.row.id === r.id)?.factor ?? 1
+    return sum + (layersByItem.get(r.id) ?? [])
+      .reduce((s, l) => s + (Number(l.remainingQuantity) * factor) * (Number(l.unitCost) / factor), 0)
+  }, 0)
+  valueBeforeTotal += valueBefore
+  valueAfterTotal += valueAfter
+  if (Math.abs(valueBefore - valueAfter) > 0.5) {
+    console.log(`   !! VALUE MOVED: ${fmt(valueBefore)} -> ${fmt(valueAfter)} RWF`)
+    valueDrift++
+  } else if (valueBefore > 0) {
+    console.log(`          stock value unchanged at ${fmt(valueBefore)} RWF`)
+  }
+
   plan.push({ target, targetUnit, winnerId: winner.id, totalQuantity, conversions: conversions.map(c => ({ id: c.row.id, factor: c.factor })), loserIds: losers.map(l => l.id) })
 }
 
@@ -256,6 +292,10 @@ console.log(`\n${'='.repeat(72)}`)
 console.log(`${plannedMerges} groups would collapse; ${plannedMoves} survivors move to ${mainBranch.name}`)
 console.log(`${preps.length} prep items stay with their kitchen and are not touched`)
 if (unresolved > 0) console.log(`${unresolved} groups BLOCKED on a missing unit conversion — resolve before applying`)
+console.log(`\nSTOCK VALUE  before ${fmt(valueBeforeTotal)} RWF  ->  after ${fmt(valueAfterTotal)} RWF`)
+console.log(valueDrift === 0
+  ? 'No money moves: quantities are re-expressed, not revalued.'
+  : `!! ${valueDrift} groups change value — investigate before applying.`)
 console.log('='.repeat(72))
 
 if (!APPLY) {
@@ -269,6 +309,9 @@ if (unresolved > 0) {
   await prisma.$disconnect()
   process.exit(1)
 }
+
+// Winners' pre-merge headline costs, for the no-open-layers fallback above.
+const winnerBefore = new Map(items.map((i) => [i.id, Number(i.unitCost ?? 0)]))
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-')
 const reversePath = new URL(`./.merge-reverse-${stamp}.json`, import.meta.url)
@@ -306,9 +349,30 @@ for (const group of plan) {
       await tx.inventoryItem.delete({ where: { id: loserId } })
     }
 
+    // Re-derive the headline cost from the layers rather than carrying the
+    // winner's old one over. If the surviving row was the one converted — a
+    // wing counted in pieces becoming grams — its stored cost is still on the
+    // old basis, and left alone it would read 600 a gram instead of 8.
+    const layers = await tx.inventoryPurchase.findMany({
+      where: { ingredientId: group.winnerId, remainingQuantity: { gt: 0 }, deletedAt: null },
+      select: { remainingQuantity: true, unitCost: true },
+    })
+    const openQuantity = layers.reduce((s, l) => s + Number(l.remainingQuantity), 0)
+    const openValue = layers.reduce((s, l) => s + Number(l.remainingQuantity) * Number(l.unitCost), 0)
+    const winnerFactor = group.conversions.find((c) => c.id === group.winnerId)?.factor ?? 1
+    const derivedUnitCost = openQuantity > 0
+      ? openValue / openQuantity
+      : Number(winnerBefore.get(group.winnerId) ?? 0) / winnerFactor
+
     await tx.inventoryItem.update({
       where: { id: group.winnerId },
-      data: { name: group.target, unit: group.targetUnit, quantity: group.totalQuantity, branchId: mainBranch.id },
+      data: {
+        name: group.target,
+        unit: group.targetUnit,
+        quantity: group.totalQuantity,
+        branchId: mainBranch.id,
+        unitCost: derivedUnitCost,
+      },
     })
     await tx.inventoryPurchase.updateMany({ where: { ingredientId: group.winnerId }, data: { branchId: mainBranch.id } })
   }, { maxWait: 15000, timeout: 120000 })
