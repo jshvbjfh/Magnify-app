@@ -89,6 +89,10 @@ const mobileTabMeta: Record<TabId, { label: string; icon: React.ReactNode }> = {
 
 const confirmedBranchCookies = new Set<string>()
 
+// Which page the manager was last on, so a refresh does not throw them back to
+// Transactions every time.
+const ACTIVE_TAB_STORAGE_KEY = 'magnify.manager.activeTab'
+
 export default function RestaurantShell() {
   const { data: session, status, update } = useSession()
   const [activeTab, setActiveTab] = useState<TabId>('transactions')
@@ -122,6 +126,29 @@ export default function RestaurantShell() {
     setActiveTab(tab)
     setMountedTabs(prev => { const next = new Set(prev); next.add(tab); return next })
   }
+
+  // Come back to the page you were on. Restored after mount rather than in the
+  // initial state so the server and client agree on the first render, and
+  // validated against the current tab list so a tab that has since been
+  // removed or disabled cannot strand the shell on a blank page.
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY)
+      if (!saved || !(saved in pageMeta)) return
+      if (saved === 'analytics' && !AI_ANALYTICS_ENABLED) return
+      handleTabChange(saved as TabId)
+    } catch {
+      // Private browsing or a full storage quota: just open where we always did.
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTab)
+    } catch {
+      // Not being able to remember the tab is not worth breaking the page over.
+    }
+  }, [activeTab])
 
   useEffect(() => {
     if (status !== 'authenticated') return
