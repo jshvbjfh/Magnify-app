@@ -38,8 +38,7 @@ export async function GET() {
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
       select: { id: true, name: true, sortOrder: true },
     }),
-    // Categories typed onto items before this table existed still deserve a
-    // tab, so the list is the union rather than just the saved rows.
+    // Only for counting. Tabs are never derived from these values — see below.
     prisma.inventoryItem.groupBy({
       by: ['category'],
       where: { restaurantId, deletedAt: null, type: { not: 'prep' }, NOT: { category: null } },
@@ -47,14 +46,13 @@ export async function GET() {
     }),
   ])
 
+  // Tabs exist only because someone made one. A category name left on an item
+  // is not a tab: inventing tabs from stray values put "chicken broth" and
+  // "Supplies" on screen as though they were deliberate groupings. Those items
+  // simply sit under All until a matching tab is created, at which point they
+  // slot into it on their own.
   const counts = new Map(used.map((row) => [String(row.category), row._count.category]))
   const categories = saved.map((c) => ({ id: c.id, name: c.name, itemCount: counts.get(c.name) ?? 0 }))
-
-  for (const [name, itemCount] of counts) {
-    if (!name.trim()) continue
-    if (categories.some((c) => c.name.toLowerCase() === name.toLowerCase())) continue
-    categories.push({ id: `implicit:${name}`, name, itemCount })
-  }
 
   const uncategorised = await prisma.inventoryItem.count({
     where: { restaurantId, deletedAt: null, type: { not: 'prep' }, OR: [{ category: null }, { category: '' }] },
