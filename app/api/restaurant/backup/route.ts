@@ -303,8 +303,8 @@ export async function POST(req: Request) {
         for (const purchase of (backup.inventoryPurchases ?? [])) {
           await tx.inventoryPurchase.upsert({
             where: { id: purchase.id },
-            update: { restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, batchId: purchase.batchId ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash' },
-            create: { id: purchase.id, restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, batchId: purchase.batchId ?? null, supplier: purchase.supplier ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash', purchasedAt: new Date(purchase.purchasedAt), createdAt: new Date(purchase.createdAt) },
+            update: { restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, batchId: purchase.batchId ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash', expiresAt: purchase.expiresAt ? new Date(purchase.expiresAt) : null },
+            create: { id: purchase.id, restaurantId: rId, branchId: bId, ingredientId: purchase.ingredientId, batchId: purchase.batchId ?? null, supplier: purchase.supplier ?? null, quantityPurchased: purchase.quantityPurchased, remainingQuantity: purchase.remainingQuantity, unitCost: purchase.unitCost, totalCost: purchase.totalCost, paymentMethod: purchase.paymentMethod ?? 'Cash', purchasedAt: new Date(purchase.purchasedAt), createdAt: new Date(purchase.createdAt), expiresAt: purchase.expiresAt ? new Date(purchase.expiresAt) : null },
           })
         }
 
