@@ -67,7 +67,10 @@ const ALIAS_GROUPS = [
 const REFERENCING_TABLES = [
   { model: 'inventoryPurchase', field: 'ingredientId', scale: 'quantity' },
   { model: 'dishIngredient', field: 'inventoryItemId', scale: 'recipe' },
-  { model: 'dishSaleIngredient', field: 'inventoryItemId', scale: 'quantity' },
+  // Note the field name differs from dishIngredient's — this one is
+  // ingredientId. Getting it wrong fails only once writing starts, which is
+  // why the pre-flight below proves every pair before anything is touched.
+  { model: 'dishSaleIngredient', field: 'ingredientId', scale: 'quantity' },
   { model: 'inventoryBatchUsageLedger', field: 'ingredientId', scale: 'quantity' },
   { model: 'wasteLog', field: 'ingredientId', scale: 'waste' },
   { model: 'inventoryAdjustmentLog', field: 'ingredientId', scale: 'none' },
@@ -156,6 +159,23 @@ for (const layer of openLayers) {
 }
 const layerValue = (itemId) => (layersByItem.get(itemId) ?? [])
   .reduce((sum, l) => sum + Number(l.remainingQuantity) * Number(l.unitCost), 0)
+
+// Prove every table/field pair exists before anything is written. A wrong name
+// otherwise surfaces only once the first group is mid-transaction, which is the
+// worst possible moment to discover it.
+const badRefs = []
+for (const { model, field } of REFERENCING_TABLES) {
+  try {
+    await prisma[model].findFirst({ where: { [field]: '__preflight__' }, select: { id: true } })
+  } catch (error) {
+    badRefs.push(`${model}.${field} — ${String(error?.message ?? error).split('\n').find((l) => l.includes('Unknown')) ?? 'unusable'}`)
+  }
+}
+if (badRefs.length) {
+  console.error('\nPRE-FLIGHT FAILED — these references are wrong, nothing was touched:')
+  for (const bad of badRefs) console.error(`  ${bad}`)
+  process.exit(1)
+}
 
 console.log(`\n${'='.repeat(72)}`)
 console.log(`${APPLY ? 'APPLYING' : 'DRY RUN'} — ${restaurant.name}`)
