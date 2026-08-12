@@ -22,6 +22,11 @@ function makeDb(dish: { id: string; branchId: string; name: string }) {
   const dishSaleUpdate = vi.fn().mockResolvedValue({ id: 'sale-1' })
   return {
     db: {
+      // Recording a sale reads the restaurant's shared-stock setting once, to
+      // decide whether stock is resolved restaurant-wide or per station.
+      restaurant: {
+        findUnique: vi.fn().mockResolvedValue({ sharedStock: false }),
+      },
       dish: {
         findMany: vi.fn().mockResolvedValue([{ ...dish, ingredients: [] }]),
         findUnique: vi.fn().mockResolvedValue({ preparedPortions: 0, preparedPortionCost: 0 }),

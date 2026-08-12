@@ -7,6 +7,7 @@ import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 import { cached } from '@/lib/apiCache'
 import { recalculatePrepUnitCost } from '@/lib/prepCosting'
+import { getRestaurantSharedStock } from '@/lib/inventoryConsumption'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
 
@@ -32,8 +33,16 @@ export async function GET() {
 
   if (!restaurantId || !branchId) return NextResponse.json([])
 
+  // This one list feeds both the stock screen and the recipe ingredient picker.
+  // Under shared stock every station sees the whole restaurant's raw ingredients
+  // — so a recipe can be built on anything the restaurant actually holds — while
+  // preps stay with the kitchen that made them, because a sauce one kitchen
+  // produced is not stock another kitchen can draw on.
+  const sharedStock = await getRestaurantSharedStock(prisma, restaurantId)
   const ingredients = await prisma.inventoryItem.findMany({
-    where: { restaurantId, branchId },
+    where: sharedStock
+      ? { restaurantId, OR: [{ type: { not: 'prep' } }, { branchId }] }
+      : { restaurantId, branchId },
     orderBy: { name: 'asc' },
   })
   return cached(ingredients)

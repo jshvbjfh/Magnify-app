@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient, PrepLog } from '@prisma/client'
 
 import { getActiveFifoUnitCost } from '@/lib/fifoCosting'
 import { generateInventoryBatchId } from '@/lib/inventoryBatch'
-import { consumeIngredientStock, getRestaurantFifoEnabled } from '@/lib/inventoryConsumption'
+import { consumeIngredientStock, getRestaurantFifoEnabled, getRestaurantSharedStock } from '@/lib/inventoryConsumption'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
@@ -66,6 +66,10 @@ export async function consumePrepAwareIngredient(
   params: {
     restaurantId: string
     branchId: string
+    // Applies to the raw cascade only. A prep belongs to the kitchen that made
+    // it — a sauce Little Taipei cooked is not stock the grill can draw on — so
+    // the prep's own layers stay station-scoped either way.
+    sharedStock?: boolean
     ingredient: PrepAwareIngredient
     quantityNeeded: number
     fifoEnabled: boolean
@@ -87,6 +91,8 @@ export async function consumePrepAwareIngredient(
     const ownConsumption = await consumeIngredientStock(db, {
       restaurantId: params.restaurantId,
       branchId: params.branchId,
+      // Deliberately not shared: this is the kitchen's own made stock.
+      sharedStock: false,
       ingredientId: params.ingredient.id,
       quantity: quantityNeeded,
       fifoEnabled: params.fifoEnabled,
@@ -123,6 +129,8 @@ export async function consumePrepAwareIngredient(
       const rawConsumption = await consumeIngredientStock(db, {
         restaurantId: params.restaurantId,
         branchId: params.branchId,
+        // Raw ingredients do come from the shared pool.
+        sharedStock: params.sharedStock,
         ingredientId: prepRow.ingredientItemId,
         quantity: rawNeeded,
         fifoEnabled: params.fifoEnabled,
@@ -249,6 +257,9 @@ export async function producePrepStock(
   }
 
   const fifoEnabled = getRestaurantFifoEnabled()
+  // A chef logging production draws raw stock the same way a sale does, so this
+  // path has to resolve it the same way or prepping would find nothing.
+  const sharedStock = await getRestaurantSharedStock(db, params.restaurantId)
   const warnings: string[] = []
   let totalCost = 0
 
@@ -259,6 +270,7 @@ export async function producePrepStock(
       const consumption = await consumeIngredientStock(db, {
         restaurantId: params.restaurantId,
         branchId: params.branchId,
+        sharedStock,
         ingredientId: prepRow.ingredientItemId,
         quantity: rawNeeded,
         fifoEnabled,
@@ -433,6 +445,8 @@ export async function produceDishPortions(
   }
 
   const fifoEnabled = getRestaurantFifoEnabled()
+  // Batch-cooking a dish ahead of service draws raw stock too.
+  const sharedStock = await getRestaurantSharedStock(db, params.restaurantId)
   const warnings: string[] = []
   let totalCost = 0
 
@@ -445,6 +459,7 @@ export async function produceDishPortions(
       const prepConsumption = await consumePrepAwareIngredient(db, {
         restaurantId: params.restaurantId,
         branchId: dishBranchId,
+        sharedStock,
         ingredient: row.inventoryItem,
         quantityNeeded: totalNeeded,
         fifoEnabled,
@@ -460,6 +475,7 @@ export async function produceDishPortions(
         const consumption = await consumeIngredientStock(db, {
           restaurantId: params.restaurantId,
           branchId: dishBranchId,
+          sharedStock,
           ingredientId: row.inventoryItemId,
           quantity: totalNeeded,
           fifoEnabled,
