@@ -1231,6 +1231,13 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     remainder: nameCompletion.remainder,
     summary: formatPurchasePresetSummary(nameCompletion.entry),
   }
+  // Everything filed under the open tab, whether or not it has stock batches.
+  const categoryMembers = activeCategory === null
+    ? []
+    : items
+        .filter(item => item.type !== 'prep' && item.category === activeCategory)
+        .sort((left, right) => left.name.localeCompare(right.name))
+
   // What the search finds that is NOT in the open tab, so one box both filters
   // the category and offers what is missing from it.
   const itemsOutsideCategory = (() => {
@@ -1602,6 +1609,33 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           )}
         </div>
         {categoryError && <p className="mt-2 text-xs text-red-600">{categoryError}</p>}
+
+        {/* What is actually in the open tab, with a way out of it. The table
+            below lists purchase batches, so an item with none would otherwise
+            be invisible here — you could add something and see no sign of it. */}
+        {activeCategory && (
+          <div className="mt-2 border-t border-gray-100 pt-2">
+            {categoryMembers.length === 0 ? (
+              <p className="text-xs text-gray-400">
+                Nothing in “{activeCategory}” yet — search above for an item to add it.
+              </p>
+            ) : (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-gray-400 mr-1">In this category:</span>
+                {categoryMembers.map(item => (
+                  <span key={item.id} className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 pl-2.5 pr-1 py-0.5 text-xs text-gray-700">
+                    {item.name}
+                    <button type="button" onClick={() => void assignToCategory([item.id], null)} disabled={categoryBusy}
+                      title={`Remove ${item.name} from ${activeCategory}`}
+                      className="rounded-full p-0.5 text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-700 disabled:opacity-50">
+                      <X className="h-3 w-3"/>
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 text-sm text-gray-600 shadow-sm">
