@@ -358,6 +358,9 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const [suggestionDismissed, setSuggestionDismissed] = useState(false)
   const [pForm, setPForm] = useState(createEmptyPurchaseForm())
   const [inventoryView, setInventoryView] = useState<'stock' | 'preps'>('stock')
+  // Stock lives at the main station once the pool is shared; everywhere else the
+  // page is about preps only.
+  const showStockTab = !restaurantBranch?.sharedStock || Boolean(restaurantBranch?.branchIsMain)
   const [showPrepForm, setShowPrepForm] = useState(false)
   const [prepSaving, setPrepSaving] = useState(false)
   const [prepError, setPrepError] = useState<string | null>(null)
@@ -377,6 +380,12 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   // straight from the tickets so the screen and the queue can never disagree.
   const [queueTickets, setQueueTickets] = useState<StockEntryTicket[]>([])
   const resumedTicketIdsRef = useRef<Set<string>>(new Set(loadStockEntryTickets().map((ticket) => ticket.id)))
+
+  // Switching to a station that holds no stock must not leave the page sitting
+  // on a tab that is no longer there.
+  useEffect(() => {
+    if (!showStockTab && inventoryView === 'stock') setInventoryView('preps')
+  }, [showStockTab, inventoryView])
 
   useEffect(() => {
     const unsubscribeTickets = subscribeStockEntryTickets(setQueueTickets)
@@ -1314,7 +1323,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse
           </button>
-          {inventoryView === 'stock' ? (
+          {inventoryView === 'stock' && showStockTab ? (
             <button onClick={openNewPurchaseRow} className="bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
               + Record new Batch
             </button>
@@ -1327,10 +1336,16 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       </div>
 
       <div className="flex border-b border-gray-200">
-        <button type="button" onClick={() => setInventoryView('stock')}
-          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${inventoryView === 'stock' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-          Stock
-        </button>
+        {/* With one shared pool only the main station holds stock, so a Stock
+            tab on any other station lists a pool it cannot record into and
+            shows an empty batch table underneath — it has nothing to manage.
+            Those stations get Preps alone, which is theirs. */}
+        {showStockTab && (
+          <button type="button" onClick={() => setInventoryView('stock')}
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${inventoryView === 'stock' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            Stock
+          </button>
+        )}
         <button type="button" onClick={() => setInventoryView('preps')}
           className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${inventoryView === 'preps' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
           Preps

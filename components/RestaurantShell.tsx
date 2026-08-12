@@ -102,6 +102,7 @@ export default function RestaurantShell() {
   const [branches, setBranches] = useState<BranchTab[]>([])
   const [activeBranchId, setActiveBranchId] = useState<string | null>(null)
   const [branchesLoaded, setBranchesLoaded] = useState(false)
+  const [sharedStock, setSharedStock] = useState(false)
   const [branchConnecting, setBranchConnecting] = useState(false)
   const [branchSwitchingId, setBranchSwitchingId] = useState<string | null>(null)
   const [branchError, setBranchError] = useState<string | null>(null)
@@ -161,6 +162,7 @@ useEffect(() => {
         if (nextActiveBranchId) confirmedBranchCookies.add(nextActiveBranchId)
         setBranches(Array.isArray(data?.branches) ? data.branches : [])
         setActiveBranchId(nextActiveBranchId)
+        setSharedStock(Boolean(data?.sharedStock))
         setBranchError(null)
         setBranchConnecting(false)
       } catch (error) {
@@ -467,6 +469,7 @@ useEffect(() => {
     branchName: activeBranch?.name ?? null,
     branchType: (activeBranch?.type === 'bar' ? 'bar' : 'kitchen') as 'kitchen' | 'bar',
     branchIsMain: Boolean(activeBranch?.isMain),
+    sharedStock,
   }
 
   const sessionRestaurantId = typeof (session?.user as any)?.restaurantId === 'string'
