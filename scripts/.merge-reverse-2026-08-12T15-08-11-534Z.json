@@ -1,0 +1,2239 @@
+{
+  "restaurant": "cmqia7buf0003n5p19gkoov3k",
+  "mainBranch": "cmqia7fah0005n5p1kqcnq3eb",
+  "plan": [
+    {
+      "target": "Onions",
+      "targetUnit": "g",
+      "winnerId": "cmqjmfhvr000bbl80nl7fiwgr",
+      "totalQuantity": 10850,
+      "conversions": [
+        {
+          "id": "cmqjmn2pb0009ccd76mk34fqd",
+          "factor": 1
+        },
+        {
+          "id": "cmqjmfhvr000bbl80nl7fiwgr",
+          "factor": 1
+        },
+        {
+          "id": "cmqpa1wbo001bx7k59ca1xjkm",
+          "factor": 1
+        },
+        {
+          "id": "cmqpa2fn20023x7k5hrgw4sj1",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqjmn2pb0009ccd76mk34fqd",
+        "cmqpa1wbo001bx7k59ca1xjkm",
+        "cmqpa2fn20023x7k5hrgw4sj1"
+      ]
+    },
+    {
+      "target": "Potatoes",
+      "targetUnit": "g",
+      "winnerId": "cmrm4ddtx000gob1dbspj5eyy",
+      "totalQuantity": 27800,
+      "conversions": [
+        {
+          "id": "cmqjmfjje000fbl80gjv8ewmx",
+          "factor": 1
+        },
+        {
+          "id": "cmrm4ddtx000gob1dbspj5eyy",
+          "factor": 1
+        },
+        {
+          "id": "cmqjlt8d6000913q90xup8256",
+          "factor": 1000
+        }
+      ],
+      "loserIds": [
+        "cmqjlt8d6000913q90xup8256",
+        "cmqjmfjje000fbl80gjv8ewmx"
+      ]
+    },
+    {
+      "target": "Chicken wings",
+      "targetUnit": "g",
+      "winnerId": "cmqjmfgb10007bl80rfx8oody",
+      "totalQuantity": 4994,
+      "conversions": [
+        {
+          "id": "cmrm1cizg000k11143u832g08",
+          "factor": 1
+        },
+        {
+          "id": "cmqjmfgb10007bl80rfx8oody",
+          "factor": 75
+        }
+      ],
+      "loserIds": [
+        "cmrm1cizg000k11143u832g08"
+      ]
+    },
+    {
+      "target": "Tomato slices",
+      "targetUnit": "pcs",
+      "winnerId": "cmqjltbgf000f13q9h8cimny3",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjltbgf000f13q9h8cimny3",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Eggs",
+      "targetUnit": "pcs",
+      "winnerId": "cmqjl1daw000haltle9gka675",
+      "totalQuantity": 55.206,
+      "conversions": [
+        {
+          "id": "cmqjl1daw000haltle9gka675",
+          "factor": 1
+        },
+        {
+          "id": "cmqjlt65o000513q9moyx69c6",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqjlt65o000513q9moyx69c6"
+      ]
+    },
+    {
+      "target": "Jack Daniel",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1h1jy0029c32vy59b3rr5",
+      "totalQuantity": 99,
+      "conversions": [
+        {
+          "id": "cmqw1f06j002pt1p65pu4nhtr",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1exyc002lt1p6smsmpwe4",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1h1jy0029c32vy59b3rr5",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqw1exyc002lt1p6smsmpwe4",
+        "cmqw1f06j002pt1p65pu4nhtr"
+      ]
+    },
+    {
+      "target": "Olmeca Gold",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1fd8h003dt1p6q52aspa6",
+      "totalQuantity": 66,
+      "conversions": [
+        {
+          "id": "cmqw1ffng003ht1p6p7xzwaju",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1fd8h003dt1p6q52aspa6",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1h3rr002dc32vwk2e2a93",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqw1h3rr002dc32vwk2e2a93",
+        "cmqw1ffng003ht1p6p7xzwaju"
+      ]
+    },
+    {
+      "target": "Olmeca Silver",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1h8qv002lc32vsm7ykf3o",
+      "totalQuantity": 58.08,
+      "conversions": [
+        {
+          "id": "cmqw1fb3l0039t1p6frf03vgk",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1f8z00035t1p6gzzq0unz",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1h8qv002lc32vsm7ykf3o",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqw1f8z00035t1p6gzzq0unz",
+        "cmqw1fb3l0039t1p6frf03vgk"
+      ]
+    },
+    {
+      "target": "Camino",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1f4hn002xt1p6wkbv4n2u",
+      "totalQuantity": 18,
+      "conversions": [
+        {
+          "id": "cmqw1f6mu0031t1p65wbvdt72",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1f4hn002xt1p6wkbv4n2u",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqw1f6mu0031t1p65wbvdt72"
+      ]
+    },
+    {
+      "target": "Jagermeister",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1fkdt003pt1p61ejwdgtk",
+      "totalQuantity": 16,
+      "conversions": [
+        {
+          "id": "cmqw1fi01003lt1p6pwf78kdd",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1fkdt003pt1p61ejwdgtk",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqw1fi01003lt1p6pwf78kdd"
+      ]
+    },
+    {
+      "target": "Red Label",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1esxx002dt1p68c18qpqt",
+      "totalQuantity": 66,
+      "conversions": [
+        {
+          "id": "cmqw1ev2v002ht1p6m72395ev",
+          "factor": 1.8333333333333333
+        },
+        {
+          "id": "cmqw1esxx002dt1p68c18qpqt",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqw1ev2v002ht1p6m72395ev"
+      ]
+    },
+    {
+      "target": "Absolute Vodka",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1f2b6002tt1p6x060pzgb",
+      "totalQuantity": 22,
+      "conversions": [
+        {
+          "id": "cmqw1f2b6002tt1p6x060pzgb",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Bacardi",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1gecg0019c32vp8zeadam",
+      "totalQuantity": 132,
+      "conversions": [
+        {
+          "id": "cmqw1fmtc0001c32vzd2fq6mr",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1gecg0019c32vp8zeadam",
+          "factor": 0.033003300330033
+        }
+      ],
+      "loserIds": [
+        "cmqw1fmtc0001c32vzd2fq6mr"
+      ]
+    },
+    {
+      "target": "Triple Sec",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1fuf8000dc32vwjk634u9",
+      "totalQuantity": 33,
+      "conversions": [
+        {
+          "id": "cmqw1gwpt0021c32vodw22adx",
+          "factor": 0.033003300330033
+        },
+        {
+          "id": "cmqw1fuf8000dc32vwjk634u9",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqw1gwpt0021c32vodw22adx"
+      ]
+    },
+    {
+      "target": "Cointreau",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1frtn0009c32vaq8al3yn",
+      "totalQuantity": 33,
+      "conversions": [
+        {
+          "id": "cmqw1gu42001xc32vhpio2c1k",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1frtn0009c32vaq8al3yn",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqw1gu42001xc32vhpio2c1k"
+      ]
+    },
+    {
+      "target": "Tomatoes",
+      "targetUnit": "g",
+      "winnerId": "cms1y61i6001v13kxxcqwtiam",
+      "totalQuantity": 6700,
+      "conversions": [
+        {
+          "id": "cms1y61i6001v13kxxcqwtiam",
+          "factor": 1
+        },
+        {
+          "id": "cmqpa25he001nx7k5vs97xup3",
+          "factor": 1000
+        }
+      ],
+      "loserIds": [
+        "cmqpa25he001nx7k5vs97xup3"
+      ]
+    },
+    {
+      "target": "Banana",
+      "targetUnit": "g",
+      "winnerId": "cmragqqvy001j9b5g3uwb6j1h",
+      "totalQuantity": 4995,
+      "conversions": [
+        {
+          "id": "cmragqqvy001j9b5g3uwb6j1h",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Wooden skewer",
+      "targetUnit": "pcs",
+      "winnerId": "cmqjmfpb0000tbl808stnfjla",
+      "totalQuantity": 355,
+      "conversions": [
+        {
+          "id": "cmqjmfpb0000tbl808stnfjla",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Black pepper",
+      "targetUnit": "g",
+      "winnerId": "cmqpa14ip0009x7k58t0ujkt2",
+      "totalQuantity": 336,
+      "conversions": [
+        {
+          "id": "cmqpa14ip0009x7k58t0ujkt2",
+          "factor": 1
+        },
+        {
+          "id": "cmrg8ckwx002n65zpy0i8m70s",
+          "factor": 1
+        },
+        {
+          "id": "cmqs9tvx60001pqg4dfvkkcc2",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmrg8ckwx002n65zpy0i8m70s",
+        "cmqs9tvx60001pqg4dfvkkcc2"
+      ]
+    },
+    {
+      "target": "Vegetable oil",
+      "targetUnit": "ml",
+      "winnerId": "cmqjl1z19001faltlj0bbz0bx",
+      "totalQuantity": 21033,
+      "conversions": [
+        {
+          "id": "cmqjmflzj000lbl80spwyqqyy",
+          "factor": 1
+        },
+        {
+          "id": "cmqjltgyf000r13q95byjv6ct",
+          "factor": 1
+        },
+        {
+          "id": "cmqjl1z19001faltlj0bbz0bx",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqjltgyf000r13q95byjv6ct",
+        "cmqjmflzj000lbl80spwyqqyy"
+      ]
+    },
+    {
+      "target": "Vitalo",
+      "targetUnit": "bottle",
+      "winnerId": "cmrcaf23w0002c7oyrodvyupt",
+      "totalQuantity": 56,
+      "conversions": [
+        {
+          "id": "cmrcaf23w0002c7oyrodvyupt",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Coffee Beans",
+      "targetUnit": "g",
+      "winnerId": "cmragud1i006j9b5gh6hkzok5",
+      "totalQuantity": 9860,
+      "conversions": [
+        {
+          "id": "cmragud1i006j9b5gh6hkzok5",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Garlic (minced)",
+      "targetUnit": "g",
+      "winnerId": "cmqjl1r280011altl5s51h2kx",
+      "totalQuantity": 1885,
+      "conversions": [
+        {
+          "id": "cmqjmn1p60007ccd72kvy540i",
+          "factor": 1
+        },
+        {
+          "id": "cmqjl1r280011altl5s51h2kx",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqjmn1p60007ccd72kvy540i"
+      ]
+    },
+    {
+      "target": "Cooking water",
+      "targetUnit": "ltr",
+      "winnerId": "cms36rphj000213d9l71u5xa6",
+      "totalQuantity": 999999999999.9,
+      "conversions": [
+        {
+          "id": "cms36rphj000213d9l71u5xa6",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Tagliatelle",
+      "targetUnit": "g",
+      "winnerId": "cmrkk6iqn0002oub2as0s320o",
+      "totalQuantity": 1380,
+      "conversions": [
+        {
+          "id": "cmrkk6iqn0002oub2as0s320o",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Salt",
+      "targetUnit": "g",
+      "winnerId": "cmqjmfocx000rbl80kt7at8nx",
+      "totalQuantity": 5217.9,
+      "conversions": [
+        {
+          "id": "cmqjmfocx000rbl80kt7at8nx",
+          "factor": 1
+        },
+        {
+          "id": "cmqpa0tev0001x7k562osxcpl",
+          "factor": 1
+        },
+        {
+          "id": "cmqjltipz000v13q907a6xbqc",
+          "factor": 1
+        },
+        {
+          "id": "cmqpa0ytf0005x7k5igpmsp8i",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqpa0ytf0005x7k5igpmsp8i",
+        "cmqjltipz000v13q907a6xbqc",
+        "cmqpa0tev0001x7k562osxcpl"
+      ]
+    },
+    {
+      "target": "Star anise",
+      "targetUnit": "g",
+      "winnerId": "cmqjl2gxi0027altl7c1gfz9a",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjl2gxi0027altl7c1gfz9a",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Sesame oil",
+      "targetUnit": "ml",
+      "winnerId": "cmqjl1y2h001daltlib3977m2",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjl1y2h001daltlib3977m2",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Pasta",
+      "targetUnit": "g",
+      "winnerId": "cmqjmmxgz0001ccd7s09q2wpf",
+      "totalQuantity": 350,
+      "conversions": [
+        {
+          "id": "cmqjmmxgz0001ccd7s09q2wpf",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Chicken breast",
+      "targetUnit": "g",
+      "winnerId": "cmqjmfepv0003bl80pufaodzc",
+      "totalQuantity": 15530,
+      "conversions": [
+        {
+          "id": "cmqjmfepv0003bl80pufaodzc",
+          "factor": 1
+        },
+        {
+          "id": "cmqjl16t20007altlklx9xh2v",
+          "factor": 1
+        },
+        {
+          "id": "cmqjmnd3j000pccd7k8gu1vov",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqjl16t20007altlklx9xh2v",
+        "cmqjmnd3j000pccd7k8gu1vov"
+      ]
+    },
+    {
+      "target": "Flour + breadcrumbs",
+      "targetUnit": "g",
+      "winnerId": "cmqjlt9gs000b13q9hk8qfek0",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjlt9gs000b13q9hk8qfek0",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "tonic",
+      "targetUnit": "ml",
+      "winnerId": "cmrj2bd7m005igq3p7gmwvj1r",
+      "totalQuantity": 6000,
+      "conversions": [
+        {
+          "id": "cmrj2bd7m005igq3p7gmwvj1r",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Bok choy",
+      "targetUnit": "g",
+      "winnerId": "cmqjl1s7a0013altl6x8fz8wu",
+      "totalQuantity": 1800,
+      "conversions": [
+        {
+          "id": "cmqjl1s7a0013altl6x8fz8wu",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Cheddar cheese",
+      "targetUnit": "g",
+      "winnerId": "cmrlsz9qc005b9h9b6o6na407",
+      "totalQuantity": 1993,
+      "conversions": [
+        {
+          "id": "cmrlsz9qc005b9h9b6o6na407",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Olive oil",
+      "targetUnit": "ml",
+      "winnerId": "cmqjmn4zk000dccd7b47owpqp",
+      "totalQuantity": 959,
+      "conversions": [
+        {
+          "id": "cmqjmn4zk000dccd7b47owpqp",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Mayonnaise",
+      "targetUnit": "g",
+      "winnerId": "cmqs8ffjl0001v8atk5pxqghd",
+      "totalQuantity": 1087,
+      "conversions": [
+        {
+          "id": "cmqs8ffjl0001v8atk5pxqghd",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Tomato paste",
+      "targetUnit": "g",
+      "winnerId": "cmqjmmzxa0005ccd75uv20pma",
+      "totalQuantity": 1970,
+      "conversions": [
+        {
+          "id": "cmqjmmzxa0005ccd75uv20pma",
+          "factor": 1
+        },
+        {
+          "id": "cmqpa2db7001zx7k5kdpt1u4t",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqpa2db7001zx7k5kdpt1u4t"
+      ]
+    },
+    {
+      "target": "Chili paste",
+      "targetUnit": "g",
+      "winnerId": "cmqjl29qc001valtlrsel0vnb",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjl29qc001valtlrsel0vnb",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Tea bag",
+      "targetUnit": "piece",
+      "winnerId": "cmrunskpe003d148aeppdkxib",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmrunskpe003d148aeppdkxib",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Panache",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1eeq3001pt1p6owjfwwjk",
+      "totalQuantity": 36,
+      "conversions": [
+        {
+          "id": "cmqw1eeq3001pt1p6owjfwwjk",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Chicken broth",
+      "targetUnit": "ml",
+      "winnerId": "cmqjl2azu001xaltlvtufl2nc",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjl2azu001xaltlvtufl2nc",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Bell pepper",
+      "targetUnit": "g",
+      "winnerId": "cmqjmfh390009bl80mc4gz8oo",
+      "totalQuantity": 1280,
+      "conversions": [
+        {
+          "id": "cmqjmfh390009bl80mc4gz8oo",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Beef broth",
+      "targetUnit": "ml",
+      "winnerId": "cmqjl2c6m001zaltli2hhaf83",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjl2c6m001zaltli2hhaf83",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Ground pork",
+      "targetUnit": "g",
+      "winnerId": "cmqjl13jp0001altltslkyhw1",
+      "totalQuantity": 2905,
+      "conversions": [
+        {
+          "id": "cmqjl13jp0001altltslkyhw1",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Beef (strips)",
+      "targetUnit": "g",
+      "winnerId": "cmqjl15sg0005altlb7q8tk4a",
+      "totalQuantity": 3490,
+      "conversions": [
+        {
+          "id": "cmqjl15sg0005altlb7q8tk4a",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "SODA",
+      "targetUnit": "bottle",
+      "winnerId": "cmrkui9uk007g12s2uevqot9n",
+      "totalQuantity": 12,
+      "conversions": [
+        {
+          "id": "cmrkui9uk007g12s2uevqot9n",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Cabbage (napa)",
+      "targetUnit": "g",
+      "winnerId": "cmqjl1n4a000valtlz7nl24t6",
+      "totalQuantity": 2437,
+      "conversions": [
+        {
+          "id": "cmqjl1n4a000valtlz7nl24t6",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Silken tofu",
+      "targetUnit": "g",
+      "winnerId": "cmqjl1cbw000faltli26x6dns",
+      "totalQuantity": 3000,
+      "conversions": [
+        {
+          "id": "cmqjl1cbw000faltli26x6dns",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Beef (braised chunks)",
+      "targetUnit": "g",
+      "winnerId": "cmqjl14vy0003altl4z3slilb",
+      "totalQuantity": 3520,
+      "conversions": [
+        {
+          "id": "cmqjl14vy0003altl4z3slilb",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Chicken breast/thigh",
+      "targetUnit": "g",
+      "winnerId": "cmqjl1a1i000baltlhycgry7s",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjl1a1i000baltlhycgry7s",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Chicken thigh (pieces)",
+      "targetUnit": "g",
+      "winnerId": "cmqjl18j50009altlyhwuqxms",
+      "totalQuantity": 5830,
+      "conversions": [
+        {
+          "id": "cmqjl18j50009altlyhwuqxms",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Tea bag GREEN",
+      "targetUnit": "piece",
+      "winnerId": "cmrunvf5l0041148ads7n9jwm",
+      "totalQuantity": 100,
+      "conversions": [
+        {
+          "id": "cmrunvf5l0041148ads7n9jwm",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "breadcrumbs",
+      "targetUnit": "g",
+      "winnerId": "cmrg91vur004e65zpqp1dfzl2",
+      "totalQuantity": 1950,
+      "conversions": [
+        {
+          "id": "cmrg91vur004e65zpqp1dfzl2",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Spring onion",
+      "targetUnit": "g",
+      "winnerId": "cmqjl1ort000xaltloq4f0fg3",
+      "totalQuantity": 584,
+      "conversions": [
+        {
+          "id": "cmqjl1ort000xaltloq4f0fg3",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "White fish fillet",
+      "targetUnit": "g",
+      "winnerId": "cmqjl1awj000daltlp804kya8",
+      "totalQuantity": 3640,
+      "conversions": [
+        {
+          "id": "cmqjl1awj000daltlp804kya8",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "GORDEN TEA LEAVES",
+      "targetUnit": "g",
+      "winnerId": "cmrunus1v003p148au3proh2p",
+      "totalQuantity": 420,
+      "conversions": [
+        {
+          "id": "cmrunus1v003p148au3proh2p",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Water",
+      "targetUnit": "ltr",
+      "winnerId": "cmrkoq2ym003512s2lckyha1p",
+      "totalQuantity": 99997629,
+      "conversions": [
+        {
+          "id": "cmrkoq2ym003512s2lckyha1p",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Coconut Cream",
+      "targetUnit": "ml",
+      "winnerId": "cmragpx8h000p9b5gadrbmy4x",
+      "totalQuantity": 3940,
+      "conversions": [
+        {
+          "id": "cmragpx8h000p9b5gadrbmy4x",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Lemon",
+      "targetUnit": "g",
+      "winnerId": "cmragpdeq00019b5gqlawycq1",
+      "totalQuantity": 2255,
+      "conversions": [
+        {
+          "id": "cmragpdeq00019b5gqlawycq1",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Jasmine rice",
+      "targetUnit": "g",
+      "winnerId": "cmqjl1l5h000taltlappnm9xx",
+      "totalQuantity": 93190,
+      "conversions": [
+        {
+          "id": "cmqjl1l5h000taltlappnm9xx",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Mustard",
+      "targetUnit": "g",
+      "winnerId": "cmqpa2ii50027x7k5dyr8pq6l",
+      "totalQuantity": 1810.25,
+      "conversions": [
+        {
+          "id": "cmqpa2ii50027x7k5dyr8pq6l",
+          "factor": 1
+        },
+        {
+          "id": "cmqpa285h001rx7k5wj30yivq",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqpa285h001rx7k5wj30yivq"
+      ]
+    },
+    {
+      "target": "Ginger (fresh)",
+      "targetUnit": "g",
+      "winnerId": "cmqjl1prt000zaltl3ogxg8me",
+      "totalQuantity": 1830,
+      "conversions": [
+        {
+          "id": "cmqjl1prt000zaltl3ogxg8me",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Oyster sauce",
+      "targetUnit": "ml",
+      "winnerId": "cmqjl23od001laltlb1czr0lr",
+      "totalQuantity": 240,
+      "conversions": [
+        {
+          "id": "cmqjl23od001laltlb1czr0lr",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Cornstarch",
+      "targetUnit": "g",
+      "winnerId": "cmqjl2k90002daltl82vd5cxh",
+      "totalQuantity": 245,
+      "conversions": [
+        {
+          "id": "cmqjl2k90002daltl82vd5cxh",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Chili flakes",
+      "targetUnit": "g",
+      "winnerId": "cmqjl2hup0029altlopo51ghc",
+      "totalQuantity": 3986,
+      "conversions": [
+        {
+          "id": "cmqjl2hup0029altlopo51ghc",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Ginger",
+      "targetUnit": "g",
+      "winnerId": "cmragqx7h001r9b5g1aw1fj15",
+      "totalQuantity": 3910,
+      "conversions": [
+        {
+          "id": "cmragqx7h001r9b5g1aw1fj15",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Coke",
+      "targetUnit": "bottle",
+      "winnerId": "cmrz25cjv0003106nvauvjuok",
+      "totalQuantity": 8,
+      "conversions": [
+        {
+          "id": "cmrz25cjv0003106nvauvjuok",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Pork chop",
+      "targetUnit": "g",
+      "winnerId": "cmqjmffic0005bl80vzf4xq0k",
+      "totalQuantity": 2600,
+      "conversions": [
+        {
+          "id": "cmqjmffic0005bl80vzf4xq0k",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "BBQ sauce",
+      "targetUnit": "g",
+      "winnerId": "cmqjmfl7h000jbl802s1cuz5x",
+      "totalQuantity": 260,
+      "conversions": [
+        {
+          "id": "cmqjmfl7h000jbl802s1cuz5x",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Plantain (ripe)",
+      "targetUnit": "g",
+      "winnerId": "cmqjmfiqz000dbl802e4ak98o",
+      "totalQuantity": 2000,
+      "conversions": [
+        {
+          "id": "cmqjmfiqz000dbl802e4ak98o",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Watermelon",
+      "targetUnit": "g",
+      "winnerId": "cmragqbem00139b5gj8eageyg",
+      "totalQuantity": 3840,
+      "conversions": [
+        {
+          "id": "cmragqbem00139b5gj8eageyg",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Fresh cream",
+      "targetUnit": "g",
+      "winnerId": "cmqjmn7pg000hccd7lo3ljsy6",
+      "totalQuantity": 800,
+      "conversions": [
+        {
+          "id": "cmqjmn7pg000hccd7lo3ljsy6",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Nutmeg",
+      "targetUnit": "g",
+      "winnerId": "cmqjmnea4000rccd73df30rxj",
+      "totalQuantity": 38,
+      "conversions": [
+        {
+          "id": "cmqjmnea4000rccd73df30rxj",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Tei leaves",
+      "targetUnit": "g",
+      "winnerId": "cmqjmfms0000nbl80sqvlhcpa",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjmfms0000nbl80sqvlhcpa",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Cheddar / gouda",
+      "targetUnit": "g",
+      "winnerId": "cmqjmnb44000lccd7fsttjnxj",
+      "totalQuantity": 1920,
+      "conversions": [
+        {
+          "id": "cmqjmnb44000lccd7fsttjnxj",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Pickles",
+      "targetUnit": "g",
+      "winnerId": "cmqjltdgj000j13q9iwkyykpx",
+      "totalQuantity": 1389,
+      "conversions": [
+        {
+          "id": "cmqjltdgj000j13q9iwkyykpx",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Parsley",
+      "targetUnit": "g",
+      "winnerId": "cmqpa17fk000bx7k5c4yjcu6f",
+      "totalQuantity": 300,
+      "conversions": [
+        {
+          "id": "cmqpa17fk000bx7k5c4yjcu6f",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Chicken thigh",
+      "targetUnit": "g",
+      "winnerId": "cmqjlt5ac000313q9s2hbc7n7",
+      "totalQuantity": 2860,
+      "conversions": [
+        {
+          "id": "cmqjlt5ac000313q9s2hbc7n7",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Beef filet",
+      "targetUnit": "g",
+      "winnerId": "cmqjmfdqc0001bl80o2q109du",
+      "totalQuantity": 1200,
+      "conversions": [
+        {
+          "id": "cmqjmfdqc0001bl80o2q109du",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Fresh basil",
+      "targetUnit": "g",
+      "winnerId": "cmqjmn3zm000bccd7027uewun",
+      "totalQuantity": 40,
+      "conversions": [
+        {
+          "id": "cmqjmn3zm000bccd7027uewun",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Pepper",
+      "targetUnit": "g",
+      "winnerId": "cmqpa0vc40003x7k51fp7uwg7",
+      "totalQuantity": 178,
+      "conversions": [
+        {
+          "id": "cmqpa10ic0007x7k5wi817exq",
+          "factor": 1
+        },
+        {
+          "id": "cmqpa0vc40003x7k51fp7uwg7",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqpa10ic0007x7k5wi817exq"
+      ]
+    },
+    {
+      "target": "Chicken Masala",
+      "targetUnit": "g",
+      "winnerId": "cmqpa1kxw000vx7k59fern5dk",
+      "totalQuantity": 120,
+      "conversions": [
+        {
+          "id": "cmqpa1kxw000vx7k59fern5dk",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Ground beef",
+      "targetUnit": "g",
+      "winnerId": "cmqjlt4kb000113q9yrzqlp0n",
+      "totalQuantity": 8390,
+      "conversions": [
+        {
+          "id": "cmqjmnc6d000nccd7z7n87btj",
+          "factor": 1
+        },
+        {
+          "id": "cmqjlt4kb000113q9yrzqlp0n",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqjmnc6d000nccd7z7n87btj"
+      ]
+    },
+    {
+      "target": "Crushed tomatoes",
+      "targetUnit": "g",
+      "winnerId": "cmqjmmyh30003ccd7hdu0a1ih",
+      "totalQuantity": 1460,
+      "conversions": [
+        {
+          "id": "cmqjmmyh30003ccd7hdu0a1ih",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Rosemary",
+      "targetUnit": "g",
+      "winnerId": "cmqpa1d3k000jx7k5x4u8gto7",
+      "totalQuantity": 300,
+      "conversions": [
+        {
+          "id": "cmqpa1d3k000jx7k5x4u8gto7",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Butter",
+      "targetUnit": "g",
+      "winnerId": "cmqjmn66d000fccd72kb94sj5",
+      "totalQuantity": 470,
+      "conversions": [
+        {
+          "id": "cmqjmn66d000fccd72kb94sj5",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Beef bones",
+      "targetUnit": "kg",
+      "winnerId": "cmqpa1tva0017x7k5jx16jlwv",
+      "totalQuantity": 3,
+      "conversions": [
+        {
+          "id": "cmqpa1tva0017x7k5jx16jlwv",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Green beans",
+      "targetUnit": "kg",
+      "winnerId": "cmqpa1zjn001fx7k5dezepnep",
+      "totalQuantity": 1,
+      "conversions": [
+        {
+          "id": "cmqpa1zjn001fx7k5dezepnep",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Coriander",
+      "targetUnit": "bunch",
+      "winnerId": "cmqpa227l001jx7k5tyyzdkca",
+      "totalQuantity": 1,
+      "conversions": [
+        {
+          "id": "cmqpa227l001jx7k5tyyzdkca",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Virunga Silver",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1drbm000pt1p64aqwxmw6",
+      "totalQuantity": 42,
+      "conversions": [
+        {
+          "id": "cmqw1drbm000pt1p64aqwxmw6",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Beef masala",
+      "targetUnit": "g",
+      "winnerId": "cmqpa2amq001vx7k5o0v655ov",
+      "totalQuantity": 70,
+      "conversions": [
+        {
+          "id": "cmqpa2amq001vx7k5o0v655ov",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Coca Zero (30cl)",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1ebsu001lt1p6k6e6nmaa",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqw1ebsu001lt1p6k6e6nmaa",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Skol Malt",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1dor5000lt1p6ic0dv2nb",
+      "totalQuantity": 64,
+      "conversions": [
+        {
+          "id": "cmqw1dor5000lt1p6ic0dv2nb",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Amstel",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1dcie0001t1p6vvzwi3uk",
+      "totalQuantity": 48,
+      "conversions": [
+        {
+          "id": "cmqw1dcie0001t1p6vvzwi3uk",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Fanta Fiesta",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1e4fw0019t1p6i13jm9fw",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqw1e4fw0019t1p6i13jm9fw",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Mutzing",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1devv0005t1p618k29aoc",
+      "totalQuantity": 56,
+      "conversions": [
+        {
+          "id": "cmqw1devv0005t1p618k29aoc",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Wow Water",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1eom10025t1p6asv2ogel",
+      "totalQuantity": 12,
+      "conversions": [
+        {
+          "id": "cmqw1eom10025t1p6asv2ogel",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Virunga Mist",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1dtpo000tt1p6sf6n36eu",
+      "totalQuantity": 19,
+      "conversions": [
+        {
+          "id": "cmqw1dtpo000tt1p6sf6n36eu",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Bell pepper (mixed)",
+      "targetUnit": "g",
+      "winnerId": "cmqjl1uje0017altldouihumr",
+      "totalQuantity": 1760,
+      "conversions": [
+        {
+          "id": "cmqjl1uje0017altldouihumr",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Sprite",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1em3a0021t1p63n273e66",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqw1em3a0021t1p63n273e66",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Coca Cola",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1e6pn001dt1p6ai4f0gux",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqw1e6pn001dt1p6ai4f0gux",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Sparkling Water Vitalo",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1ejgk001xt1p67x20m3r0",
+      "totalQuantity": 16,
+      "conversions": [
+        {
+          "id": "cmqw1ejgk001xt1p67x20m3r0",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Paprika",
+      "targetUnit": "g",
+      "winnerId": "cmqs8a1cz0001ul2jjjt4ttz0",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqs8a1cz0001ul2jjjt4ttz0",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Fanta Orange (small)",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1eqrt0029t1p6op6wjdl8",
+      "totalQuantity": 16,
+      "conversions": [
+        {
+          "id": "cmqw1eqrt0029t1p6op6wjdl8",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Fanta Orange",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1dzno0011t1p6annv8p4p",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqw1dzno0011t1p6annv8p4p",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Sparkling Water Virunga",
+      "targetUnit": "ml",
+      "winnerId": "cmqw1eh7x001tt1p6r0uvle7u",
+      "totalQuantity": 12000,
+      "conversions": [
+        {
+          "id": "cmqw1eh7x001tt1p6r0uvle7u",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Coca Zero (50cl)",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1e94v001ht1p6wyoegply",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqw1e94v001ht1p6wyoegply",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Heineken",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1dh580009t1p6koy4pjfl",
+      "totalQuantity": 16,
+      "conversions": [
+        {
+          "id": "cmqw1dh580009t1p6koy4pjfl",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Maggi",
+      "targetUnit": "piece",
+      "winnerId": "cmqs8fgo60003v8ato1v2md2r",
+      "totalQuantity": 54,
+      "conversions": [
+        {
+          "id": "cmqs8fgo60003v8ato1v2md2r",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Skol Lager",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1dm9u000ht1p6jwvyz8ep",
+      "totalQuantity": 18,
+      "conversions": [
+        {
+          "id": "cmqw1dm9u000ht1p6jwvyz8ep",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Jameson",
+      "targetUnit": "ml",
+      "winnerId": "cmqw1gm3m001lc32v2onkvx7f",
+      "totalQuantity": 1500,
+      "conversions": [
+        {
+          "id": "cmqw1gm3m001lc32v2onkvx7f",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Prosecco",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1fz4j000lc32vmjc6efz1",
+      "totalQuantity": 3,
+      "conversions": [
+        {
+          "id": "cmqw1fz4j000lc32vmjc6efz1",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Centrachi",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1fwvo000hc32vp4o1igtf",
+      "totalQuantity": 7,
+      "conversions": [
+        {
+          "id": "cmqw1fwvo000hc32vp4o1igtf",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Merlot",
+      "targetUnit": "ml",
+      "winnerId": "cmqw1gb220015c32v5x1slq1m",
+      "totalQuantity": 4800,
+      "conversions": [
+        {
+          "id": "cmqw1gb220015c32v5x1slq1m",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Gin Gordon",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1gonk001pc32vwn0rjiiv",
+      "totalQuantity": 29.04,
+      "conversions": [
+        {
+          "id": "cmqw1gonk001pc32vwn0rjiiv",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Bacada",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1g1ex000pc32vifdl5rxu",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqw1g1ex000pc32vifdl5rxu",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Jardin des C Sauvignon",
+      "targetUnit": "ml",
+      "winnerId": "cmqw1g3oa000tc32vwlhoy94j",
+      "totalQuantity": 6630,
+      "conversions": [
+        {
+          "id": "cmqw1g3oa000tc32vwlhoy94j",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Angelo",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1g6bi000xc32vujllprjs",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqw1g6bi000xc32vujllprjs",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Martini Rosso",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1gz610025c32vji2b9izl",
+      "totalQuantity": 66,
+      "conversions": [
+        {
+          "id": "cmqw1gz610025c32vji2b9izl",
+          "factor": 1
+        },
+        {
+          "id": "cmqw1fpjy0005c32vw62oe710",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmqw1fpjy0005c32vw62oe710"
+      ]
+    },
+    {
+      "target": "Captain Morgan",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1ghde001dc32vq8afwg6e",
+      "totalQuantity": 66,
+      "conversions": [
+        {
+          "id": "cmqw1ghde001dc32vq8afwg6e",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Palo Alto",
+      "targetUnit": "ml",
+      "winnerId": "cmqw1g8tr0011c32v5ul0no4m",
+      "totalQuantity": 3750,
+      "conversions": [
+        {
+          "id": "cmqw1g8tr0011c32v5ul0no4m",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Campari",
+      "targetUnit": "shot",
+      "winnerId": "cmqw1gjom001hc32v34phduf2",
+      "totalQuantity": 44,
+      "conversions": [
+        {
+          "id": "cmqw1gjom001hc32v34phduf2",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Tequila Camino",
+      "targetUnit": "ml",
+      "winnerId": "cmqw1grfw001tc32vts06jyiw",
+      "totalQuantity": 3000,
+      "conversions": [
+        {
+          "id": "cmqw1grfw001tc32vts06jyiw",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Blue Curacao",
+      "targetUnit": "ml",
+      "winnerId": "cmqw1h67j002hc32vv1w9dmq3",
+      "totalQuantity": 1000,
+      "conversions": [
+        {
+          "id": "cmqw1h67j002hc32vv1w9dmq3",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Desperado",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1djrq000dt1p6tqszaad0",
+      "totalQuantity": 19,
+      "conversions": [
+        {
+          "id": "cmqw1djrq000dt1p6tqszaad0",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Virunga Gold",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1dwfb000xt1p6ml4g8own",
+      "totalQuantity": 50,
+      "conversions": [
+        {
+          "id": "cmqw1dwfb000xt1p6ml4g8own",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Mint",
+      "targetUnit": "g",
+      "winnerId": "cmragpi1t00079b5ge2rif6vv",
+      "totalQuantity": 1920,
+      "conversions": [
+        {
+          "id": "cmragpi1t00079b5ge2rif6vv",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Apple",
+      "targetUnit": "g",
+      "winnerId": "cmragqhey00199b5gxj4ka3c1",
+      "totalQuantity": 4530,
+      "conversions": [
+        {
+          "id": "cmragqhey00199b5gxj4ka3c1",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Orange",
+      "targetUnit": "g",
+      "winnerId": "cmragq4ih000x9b5gvo7drfv7",
+      "totalQuantity": 4050,
+      "conversions": [
+        {
+          "id": "cmragq4ih000x9b5gvo7drfv7",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Sugar",
+      "targetUnit": "g",
+      "winnerId": "cmragpex000039b5gevuor5qt",
+      "totalQuantity": 3850,
+      "conversions": [
+        {
+          "id": "cmragpex000039b5gevuor5qt",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Soda Water",
+      "targetUnit": "ml",
+      "winnerId": "cmragq9r000119b5g8ndb36ow",
+      "totalQuantity": 3600,
+      "conversions": [
+        {
+          "id": "cmragq9r000119b5g8ndb36ow",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Cucumber",
+      "targetUnit": "g",
+      "winnerId": "cmragqfun00179b5gx9dg022h",
+      "totalQuantity": 4880,
+      "conversions": [
+        {
+          "id": "cmragqfun00179b5gx9dg022h",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Hibiscus",
+      "targetUnit": "g",
+      "winnerId": "cmragpzix000r9b5gsqg84o3u",
+      "totalQuantity": 4970,
+      "conversions": [
+        {
+          "id": "cmragpzix000r9b5gsqg84o3u",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Flour",
+      "targetUnit": "g",
+      "winnerId": "cmr1z9tm30001ys5p38rypm23",
+      "totalQuantity": 5452,
+      "conversions": [
+        {
+          "id": "cmr1z9tm30001ys5p38rypm23",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Monin Syrup",
+      "targetUnit": "ml",
+      "winnerId": "cmragqed000159b5gkrqd8uh2",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmragqed000159b5gkrqd8uh2",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Cinnamon",
+      "targetUnit": "g",
+      "winnerId": "cmragq172000t9b5gw5y1j560",
+      "totalQuantity": 4994,
+      "conversions": [
+        {
+          "id": "cmragq172000t9b5gw5y1j560",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Mango",
+      "targetUnit": "g",
+      "winnerId": "cmragqjmd001b9b5gj5ah0kj0",
+      "totalQuantity": 810,
+      "conversions": [
+        {
+          "id": "cmragqjmd001b9b5gj5ah0kj0",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Grenadine",
+      "targetUnit": "ml",
+      "winnerId": "cmragq6qq000z9b5gxobshxu0",
+      "totalQuantity": 3955,
+      "conversions": [
+        {
+          "id": "cmragq6qq000z9b5gxobshxu0",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Passion Fruit",
+      "targetUnit": "g",
+      "winnerId": "cmragpghb00059b5go0bpiy8n",
+      "totalQuantity": 4355,
+      "conversions": [
+        {
+          "id": "cmragpghb00059b5go0bpiy8n",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Chocolate Powder",
+      "targetUnit": "g",
+      "winnerId": "cmraguggh006n9b5gqcc77811",
+      "totalQuantity": 425,
+      "conversions": [
+        {
+          "id": "cmraguggh006n9b5gqcc77811",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Vanilla Ice Cream",
+      "targetUnit": "ml",
+      "winnerId": "cmragqsmx001l9b5gkipq5zul",
+      "totalQuantity": 9700,
+      "conversions": [
+        {
+          "id": "cmragqsmx001l9b5gkipq5zul",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Pineapple",
+      "targetUnit": "g",
+      "winnerId": "cmragpvn5000n9b5g2ec5kuns",
+      "totalQuantity": 8275,
+      "conversions": [
+        {
+          "id": "cmragpvn5000n9b5g2ec5kuns",
+          "factor": 1
+        },
+        {
+          "id": "cmrfcgnie000qp7qec395iao4",
+          "factor": 1
+        }
+      ],
+      "loserIds": [
+        "cmrfcgnie000qp7qec395iao4"
+      ]
+    },
+    {
+      "target": "Peanut Butter",
+      "targetUnit": "g",
+      "winnerId": "cmragqlew001d9b5gtwbnp9kx",
+      "totalQuantity": 4850,
+      "conversions": [
+        {
+          "id": "cmragqlew001d9b5gtwbnp9kx",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Red Rebal Whiskey",
+      "targetUnit": "shot",
+      "winnerId": "cmragpslz000j9b5g4a0gn8kp",
+      "totalQuantity": 66,
+      "conversions": [
+        {
+          "id": "cmragpslz000j9b5g4a0gn8kp",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Cocoa",
+      "targetUnit": "g",
+      "winnerId": "cmragqogm001h9b5gwjl0e5vb",
+      "totalQuantity": 6925,
+      "conversions": [
+        {
+          "id": "cmragqogm001h9b5gwjl0e5vb",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Basil",
+      "targetUnit": "g",
+      "winnerId": "cmragpjjk00099b5g9jltwerx",
+      "totalQuantity": 2000,
+      "conversions": [
+        {
+          "id": "cmragpjjk00099b5g9jltwerx",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Tabay",
+      "targetUnit": "shot",
+      "winnerId": "cmragpo6t000f9b5g5bn7z3sp",
+      "totalQuantity": 65,
+      "conversions": [
+        {
+          "id": "cmragpo6t000f9b5g5bn7z3sp",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Chocolate Ice Cream",
+      "targetUnit": "ml",
+      "winnerId": "cmragqu3f001n9b5g14df6el7",
+      "totalQuantity": 5000,
+      "conversions": [
+        {
+          "id": "cmragqu3f001n9b5g14df6el7",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Chocolate Syrup",
+      "targetUnit": "ml",
+      "winnerId": "cmragqvo6001p9b5gbijjmn7s",
+      "totalQuantity": 5000,
+      "conversions": [
+        {
+          "id": "cmragqvo6001p9b5gbijjmn7s",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Fanta Citron",
+      "targetUnit": "bottle",
+      "winnerId": "cmqw1e1xc0015t1p63y8p3qzp",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqw1e1xc0015t1p63y8p3qzp",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Vanilla Extract",
+      "targetUnit": "ml",
+      "winnerId": "cmragq2wx000v9b5gy7m9f6jp",
+      "totalQuantity": 990,
+      "conversions": [
+        {
+          "id": "cmragq2wx000v9b5gy7m9f6jp",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Soy sauce",
+      "targetUnit": "ml",
+      "winnerId": "cmqjl1wuq001baltl8mtq3kbh",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjl1wuq001baltl8mtq3kbh",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Cheddar cheese slice",
+      "targetUnit": "pcs",
+      "winnerId": "cmqjltaga000d13q9dg2oq3n5",
+      "totalQuantity": 0,
+      "conversions": [
+        {
+          "id": "cmqjltaga000d13q9dg2oq3n5",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Brioche bun",
+      "targetUnit": "pcs",
+      "winnerId": "cmqjlt727000713q9lyzs4u2s",
+      "totalQuantity": 193,
+      "conversions": [
+        {
+          "id": "cmqjlt727000713q9lyzs4u2s",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Strawberry",
+      "targetUnit": "g",
+      "winnerId": "cmragpu48000l9b5gvk3r0maf",
+      "totalQuantity": 4820,
+      "conversions": [
+        {
+          "id": "cmragpu48000l9b5gvk3r0maf",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    },
+    {
+      "target": "Milk",
+      "targetUnit": "ml",
+      "winnerId": "cmragqmx1001f9b5gzx5d8nvx",
+      "totalQuantity": 7440,
+      "conversions": [
+        {
+          "id": "cmragqmx1001f9b5gzx5d8nvx",
+          "factor": 1
+        }
+      ],
+      "loserIds": []
+    }
+  ]
+}
