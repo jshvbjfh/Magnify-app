@@ -371,6 +371,12 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const [categoryBusy, setCategoryBusy] = useState(false)
   const [showCategoryPicker, setShowCategoryPicker] = useState(false)
   const [categorySearch, setCategorySearch] = useState('')
+  // Typed inline rather than through window.prompt, which the desktop build
+  // does not support at all — it returns nothing and the click does nothing.
+  // null means "not naming anything right now".
+  const [newCategoryName, setNewCategoryName] = useState<string | null>(null)
+  const [renamingCategory, setRenamingCategory] = useState<{ from: string; value: string } | null>(null)
+  const [confirmDeleteCategory, setConfirmDeleteCategory] = useState<string | null>(null)
   const [showPrepForm, setShowPrepForm] = useState(false)
   const [prepSaving, setPrepSaving] = useState(false)
   const [prepError, setPrepError] = useState<string | null>(null)
@@ -440,8 +446,8 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     }
   }
 
-  async function createCategory() {
-    const name = window.prompt('Name this category')?.trim()
+  async function createCategory(rawName: string) {
+    const name = rawName.trim()
     if (!name) return
     setCategoryBusy(true)
     setCategoryError(null)
@@ -456,6 +462,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       if (!res.ok) { setCategoryError(data?.error || 'Could not create that category'); return }
       await loadCategories()
       setActiveCategory(data?.category?.name ?? name)
+      setNewCategoryName(null)
     } finally {
       setCategoryBusy(false)
     }
@@ -490,9 +497,9 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     }
   }
 
-  async function renameCategory(from: string) {
-    const to = window.prompt(`Rename "${from}" to`, from)?.trim()
-    if (!to || to === from) return
+  async function renameCategory(from: string, rawTo: string) {
+    const to = rawTo.trim()
+    if (!to || to === from) { setRenamingCategory(null); return }
     setCategoryBusy(true)
     setCategoryError(null)
     try {
@@ -505,6 +512,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       const data = await res.json().catch(() => null)
       if (!res.ok) { setCategoryError(data?.error || 'Could not rename that category'); return }
       setActiveCategory(to)
+      setRenamingCategory(null)
       await Promise.all([loadCategories(), load()])
     } finally {
       setCategoryBusy(false)
@@ -512,7 +520,6 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   }
 
   async function deleteCategory(name: string) {
-    if (!window.confirm(`Remove the "${name}" tab? Its items stay in stock and move back to All.`)) return
     setCategoryBusy(true)
     setCategoryError(null)
     try {
@@ -526,6 +533,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         return
       }
       setActiveCategory(null)
+      setConfirmDeleteCategory(null)
       await Promise.all([loadCategories(), load()])
     } finally {
       setCategoryBusy(false)
@@ -1523,24 +1531,79 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
               {cat.name} <span className="opacity-70">{cat.itemCount}</span>
             </button>
           ))}
-          <button type="button" onClick={() => void createCategory()} disabled={categoryBusy}
-            className="rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-500 transition-colors hover:border-orange-300 hover:text-orange-600 disabled:opacity-50">
-            + Category
-          </button>
+          {newCategoryName === null ? (
+            <button type="button" onClick={() => { setNewCategoryName(''); setCategoryError(null) }} disabled={categoryBusy}
+              className="rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-500 transition-colors hover:border-orange-300 hover:text-orange-600 disabled:opacity-50">
+              + Category
+            </button>
+          ) : (
+            <span className="flex items-center gap-1">
+              <input autoFocus value={newCategoryName}
+                onChange={e => setNewCategoryName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { e.preventDefault(); void createCategory(newCategoryName) }
+                  if (e.key === 'Escape') { e.preventDefault(); setNewCategoryName(null) }
+                }}
+                placeholder="Category name"
+                className="w-40 rounded-lg border border-orange-300 px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-orange-200"/>
+              <button type="button" onClick={() => void createCategory(newCategoryName)} disabled={categoryBusy || !newCategoryName.trim()}
+                className="rounded-lg bg-orange-500 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 disabled:opacity-50">
+                Create
+              </button>
+              <button type="button" onClick={() => setNewCategoryName(null)}
+                className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-semibold text-gray-500 hover:bg-gray-50">
+                Cancel
+              </button>
+            </span>
+          )}
           {activeCategory && (
             <span className="ml-auto flex items-center gap-1.5">
               <button type="button" onClick={() => setShowCategoryPicker(true)} disabled={categoryBusy}
                 className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50">
                 + Add items
               </button>
-              <button type="button" onClick={() => void renameCategory(activeCategory)} disabled={categoryBusy}
-                className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-50">
-                Rename
-              </button>
-              <button type="button" onClick={() => void deleteCategory(activeCategory)} disabled={categoryBusy}
-                className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 disabled:opacity-50">
-                Remove tab
-              </button>
+              {renamingCategory?.from === activeCategory ? (
+                <>
+                  <input autoFocus value={renamingCategory.value}
+                    onChange={e => setRenamingCategory({ from: activeCategory, value: e.target.value })}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') { e.preventDefault(); void renameCategory(activeCategory, renamingCategory.value) }
+                      if (e.key === 'Escape') { e.preventDefault(); setRenamingCategory(null) }
+                    }}
+                    className="w-36 rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-orange-200"/>
+                  <button type="button" onClick={() => void renameCategory(activeCategory, renamingCategory.value)} disabled={categoryBusy}
+                    className="rounded-lg bg-gray-800 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-gray-900 disabled:opacity-50">
+                    Save
+                  </button>
+                  <button type="button" onClick={() => setRenamingCategory(null)}
+                    className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-semibold text-gray-500 hover:bg-gray-50">
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button type="button" onClick={() => setRenamingCategory({ from: activeCategory, value: activeCategory })} disabled={categoryBusy}
+                  className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                  Rename
+                </button>
+              )}
+              {confirmDeleteCategory === activeCategory ? (
+                <>
+                  <span className="text-xs text-gray-500">Remove tab? Items return to All.</span>
+                  <button type="button" onClick={() => void deleteCategory(activeCategory)} disabled={categoryBusy}
+                    className="rounded-lg bg-red-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+                    Yes, remove
+                  </button>
+                  <button type="button" onClick={() => setConfirmDeleteCategory(null)}
+                    className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-semibold text-gray-500 hover:bg-gray-50">
+                    Keep
+                  </button>
+                </>
+              ) : (
+                <button type="button" onClick={() => setConfirmDeleteCategory(activeCategory)} disabled={categoryBusy}
+                  className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 disabled:opacity-50">
+                  Remove tab
+                </button>
+              )}
             </span>
           )}
         </div>

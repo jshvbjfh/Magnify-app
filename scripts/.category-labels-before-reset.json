@@ -1,0 +1,562 @@
+{
+  "restaurant": "cmqia7buf0003n5p19gkoov3k",
+  "clearedAt": "2026-08-12T16:07:09.209Z",
+  "items": [
+    {
+      "id": "cmqjmfpb0000tbl808stnfjla",
+      "name": "Wooden skewer",
+      "category": "Supplies"
+    },
+    {
+      "id": "cmqjmfocx000rbl80kt7at8nx",
+      "name": "Salt",
+      "category": "Dry Goods & Spices"
+    },
+    {
+      "id": "cmqjl2gxi0027altl7c1gfz9a",
+      "name": "Star anise",
+      "category": "Dry Goods & Spices"
+    },
+    {
+      "id": "cmqjl20n2001haltld8trzj9v",
+      "name": "Chili oil",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjl1y2h001daltlib3977m2",
+      "name": "Sesame oil",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjlt9gs000b13q9hk8qfek0",
+      "name": "Flour + breadcrumbs",
+      "category": "Dry Goods"
+    },
+    {
+      "id": "cmqjl1s7a0013altl6x8fz8wu",
+      "name": "Bok choy",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjltecc000l13q9fqlnn5mg",
+      "name": "Caramelized onions",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjmn4zk000dccd7b47owpqp",
+      "name": "Olive oil",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjmmzxa0005ccd75uv20pma",
+      "name": "Tomato paste",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjl29qc001valtlrsel0vnb",
+      "name": "Chili paste",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqw1eeq3001pt1p6owjfwwjk",
+      "name": "Panache",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqjl2azu001xaltlvtufl2nc",
+      "name": "Chicken broth",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjmmxgz0001ccd7s09q2wpf",
+      "name": "Pasta",
+      "category": "Pasta & Grains"
+    },
+    {
+      "id": "cmrkk6iqn0002oub2as0s320o",
+      "name": "Tagliatelle",
+      "category": "Pasta"
+    },
+    {
+      "id": "cmqjmfepv0003bl80pufaodzc",
+      "name": "Chicken breast",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjmfh390009bl80mc4gz8oo",
+      "name": "Bell pepper",
+      "category": "Produce"
+    },
+    {
+      "id": "cmrg8x97o003z65zpzjddeizl",
+      "name": "tomato slice",
+      "category": "salad"
+    },
+    {
+      "id": "cms1ybscq002i13kx0nahqqlx",
+      "name": "pinneaple chunks",
+      "category": "sweet and sour wok"
+    },
+    {
+      "id": "cmqjl14vy0003altl4z3slilb",
+      "name": "Beef (braised chunks)",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjl1a1i000baltlhycgry7s",
+      "name": "Chicken breast/thigh",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjl18j50009altlyhwuqxms",
+      "name": "Chicken thigh (pieces)",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjl1gpr000naltlojqbhmr2",
+      "name": "Wheat noodles (fresh)",
+      "category": "Noodles & Rice"
+    },
+    {
+      "id": "cmqjl1ie5000paltl73h4b07o",
+      "name": "Egg noodles (fresh)",
+      "category": "Noodles & Rice"
+    },
+    {
+      "id": "cmqjl1ort000xaltloq4f0fg3",
+      "name": "Spring onion",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjl1r280011altl5s51h2kx",
+      "name": "Garlic (minced)",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjl1awj000daltlp804kya8",
+      "name": "White fish fillet",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjl1fgv000laltl4g94xe1b",
+      "name": "Wonton wrappers",
+      "category": "Noodles & Rice"
+    },
+    {
+      "id": "cmqjl1jtq000raltlmqyrpuh4",
+      "name": "Hand-pulled noodles",
+      "category": "Noodles & Rice"
+    },
+    {
+      "id": "cmqjl1edv000jaltl4cautkwp",
+      "name": "Dumpling wrappers",
+      "category": "Noodles & Rice"
+    },
+    {
+      "id": "cmqjl2c6m001zaltli2hhaf83",
+      "name": "Beef broth",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjl13jp0001altltslkyhw1",
+      "name": "Ground pork",
+      "category": "Protein"
+    },
+    {
+      "id": "cms36sqmi000d13d9e7wrz23c",
+      "name": "broth (chicken)",
+      "category": "chicken broth"
+    },
+    {
+      "id": "cmqjl15sg0005altlb7q8tk4a",
+      "name": "Beef (strips)",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjl1n4a000valtlz7nl24t6",
+      "name": "Cabbage (napa)",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjl1cbw000faltli26x6dns",
+      "name": "Silken tofu",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjmfhvr000bbl80nl7fiwgr",
+      "name": "Onions",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjl1daw000haltle9gka675",
+      "name": "Eggs",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjl1z19001faltlj0bbz0bx",
+      "name": "Vegetable oil",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjl1l5h000taltlappnm9xx",
+      "name": "Jasmine rice",
+      "category": "Noodles & Rice"
+    },
+    {
+      "id": "cmqjl1prt000zaltl3ogxg8me",
+      "name": "Ginger (fresh)",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjl23od001laltlb1czr0lr",
+      "name": "Oyster sauce",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjl2k90002daltl82vd5cxh",
+      "name": "Cornstarch",
+      "category": "Dry Goods & Spices"
+    },
+    {
+      "id": "cmqjl2hup0029altlopo51ghc",
+      "name": "Chili flakes",
+      "category": "Dry Goods & Spices"
+    },
+    {
+      "id": "cmqjltg9v000p13q99dlgiy4m",
+      "name": "Burger sauce",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjmfms0000nbl80sqvlhcpa",
+      "name": "Tei leaves",
+      "category": "Dry Goods & Spices"
+    },
+    {
+      "id": "cmqjmnb44000lccd7fsttjnxj",
+      "name": "Cheddar / gouda",
+      "category": "Dairy"
+    },
+    {
+      "id": "cmqjltdgj000j13q9iwkyykpx",
+      "name": "Pickles",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjlt5ac000313q9s2hbc7n7",
+      "name": "Chicken thigh",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjmfdqc0001bl80o2q109du",
+      "name": "Beef filet",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjmn3zm000bccd7027uewun",
+      "name": "Fresh basil",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjmffic0005bl80vzf4xq0k",
+      "name": "Pork chop",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjmn66d000fccd72kb94sj5",
+      "name": "Butter",
+      "category": "Dairy"
+    },
+    {
+      "id": "cmqjmfl7h000jbl802s1cuz5x",
+      "name": "BBQ sauce",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjmfiqz000dbl802e4ak98o",
+      "name": "Plantain (ripe)",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjmmyh30003ccd7hdu0a1ih",
+      "name": "Crushed tomatoes",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjmfgb10007bl80rfx8oody",
+      "name": "Chicken wings",
+      "category": "Protein"
+    },
+    {
+      "id": "cmqjmn7pg000hccd7lo3ljsy6",
+      "name": "Fresh cream",
+      "category": "Dairy"
+    },
+    {
+      "id": "cmqjmnea4000rccd73df30rxj",
+      "name": "Nutmeg",
+      "category": "Dry Goods & Spices"
+    },
+    {
+      "id": "cmqjmfkbu000hbl801p9tf7vt",
+      "name": "Marinade (oil+spices)",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqw1drbm000pt1p64aqwxmw6",
+      "name": "Virunga Silver",
+      "category": "Beer"
+    },
+    {
+      "id": "cmqw1ebsu001lt1p6k6e6nmaa",
+      "name": "Coca Zero (30cl)",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqw1eqrt0029t1p6op6wjdl8",
+      "name": "Fanta Orange (small)",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqw1dzno0011t1p6annv8p4p",
+      "name": "Fanta Orange",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqw1dor5000lt1p6ic0dv2nb",
+      "name": "Skol Malt",
+      "category": "Beer"
+    },
+    {
+      "id": "cmqw1dcie0001t1p6vvzwi3uk",
+      "name": "Amstel",
+      "category": "Beer"
+    },
+    {
+      "id": "cmqw1e4fw0019t1p6i13jm9fw",
+      "name": "Fanta Fiesta",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqw1devv0005t1p618k29aoc",
+      "name": "Mutzing",
+      "category": "Beer"
+    },
+    {
+      "id": "cmqw1eh7x001tt1p6r0uvle7u",
+      "name": "Sparkling Water Virunga",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqw1f4hn002xt1p6wkbv4n2u",
+      "name": "Camino",
+      "category": "Gin"
+    },
+    {
+      "id": "cmqw1e94v001ht1p6wyoegply",
+      "name": "Coca Zero (50cl)",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqw1dh580009t1p6koy4pjfl",
+      "name": "Heineken",
+      "category": "Beer"
+    },
+    {
+      "id": "cmqw1eom10025t1p6asv2ogel",
+      "name": "Wow Water",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqw1dtpo000tt1p6sf6n36eu",
+      "name": "Virunga Mist",
+      "category": "Beer"
+    },
+    {
+      "id": "cmqjl1uje0017altldouihumr",
+      "name": "Bell pepper (mixed)",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqw1em3a0021t1p63n273e66",
+      "name": "Sprite",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqw1e6pn001dt1p6ai4f0gux",
+      "name": "Coca Cola",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqw1ejgk001xt1p67x20m3r0",
+      "name": "Sparkling Water Vitalo",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqw1dm9u000ht1p6jwvyz8ep",
+      "name": "Skol Lager",
+      "category": "Beer"
+    },
+    {
+      "id": "cmqw1esxx002dt1p68c18qpqt",
+      "name": "Red Label",
+      "category": "Whisky"
+    },
+    {
+      "id": "cmqw1fd8h003dt1p6q52aspa6",
+      "name": "Olmeca Gold",
+      "category": "Gin"
+    },
+    {
+      "id": "cmqw1f2b6002tt1p6x060pzgb",
+      "name": "Absolute Vodka",
+      "category": "Vodka"
+    },
+    {
+      "id": "cmqw1gm3m001lc32v2onkvx7f",
+      "name": "Jameson",
+      "category": "Spirits"
+    },
+    {
+      "id": "cmqw1fz4j000lc32vmjc6efz1",
+      "name": "Prosecco",
+      "category": "Sparkling Wine"
+    },
+    {
+      "id": "cmqw1fwvo000hc32vp4o1igtf",
+      "name": "Centrachi",
+      "category": "Sparkling Wine"
+    },
+    {
+      "id": "cmqw1gb220015c32v5x1slq1m",
+      "name": "Merlot",
+      "category": "Red Wine"
+    },
+    {
+      "id": "cmqw1gonk001pc32vwn0rjiiv",
+      "name": "Gin Gordon",
+      "category": "Spirits"
+    },
+    {
+      "id": "cmqw1g1ex000pc32vifdl5rxu",
+      "name": "Bacada",
+      "category": "White Wine"
+    },
+    {
+      "id": "cmqw1g3oa000tc32vwlhoy94j",
+      "name": "Jardin des C Sauvignon",
+      "category": "White Wine"
+    },
+    {
+      "id": "cmqw1g6bi000xc32vujllprjs",
+      "name": "Angelo",
+      "category": "Red Wine"
+    },
+    {
+      "id": "cmqw1gz610025c32vji2b9izl",
+      "name": "Martini Rosso",
+      "category": "Spirits"
+    },
+    {
+      "id": "cmqw1ghde001dc32vq8afwg6e",
+      "name": "Captain Morgan",
+      "category": "Spirits"
+    },
+    {
+      "id": "cmqw1g8tr0011c32v5ul0no4m",
+      "name": "Palo Alto",
+      "category": "Red Wine"
+    },
+    {
+      "id": "cmqw1gjom001hc32v34phduf2",
+      "name": "Campari",
+      "category": "Spirits"
+    },
+    {
+      "id": "cmqw1grfw001tc32vts06jyiw",
+      "name": "Tequila Camino",
+      "category": "Spirits"
+    },
+    {
+      "id": "cmqw1h67j002hc32vv1w9dmq3",
+      "name": "Blue Curacao",
+      "category": "Spirits"
+    },
+    {
+      "id": "cmqw1h1jy0029c32vy59b3rr5",
+      "name": "Jack Daniel",
+      "category": "Spirits"
+    },
+    {
+      "id": "cmqw1h8qv002lc32vsm7ykf3o",
+      "name": "Olmeca Silver",
+      "category": "Spirits"
+    },
+    {
+      "id": "cmqw1fkdt003pt1p61ejwdgtk",
+      "name": "Jagermeister",
+      "category": "Liquor"
+    },
+    {
+      "id": "cmqw1gecg0019c32vp8zeadam",
+      "name": "Bacardi",
+      "category": "Spirits"
+    },
+    {
+      "id": "cmqw1fuf8000dc32vwjk634u9",
+      "name": "Triple Sec",
+      "category": "Liquor"
+    },
+    {
+      "id": "cmqw1frtn0009c32vaq8al3yn",
+      "name": "Cointreau",
+      "category": "Liquor"
+    },
+    {
+      "id": "cmqjl226h001jaltlmraa0fj2",
+      "name": "Chili oil (hot)",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqw1djrq000dt1p6tqszaad0",
+      "name": "Desperado",
+      "category": "Beer"
+    },
+    {
+      "id": "cmqw1dwfb000xt1p6ml4g8own",
+      "name": "Virunga Gold",
+      "category": "Beer"
+    },
+    {
+      "id": "cmqw1e1xc0015t1p63y8p3qzp",
+      "name": "Fanta Citron",
+      "category": "Soft Drinks"
+    },
+    {
+      "id": "cmqjl1wuq001baltl8mtq3kbh",
+      "name": "Soy sauce",
+      "category": "Sauces & Oils"
+    },
+    {
+      "id": "cmqjltaga000d13q9dg2oq3n5",
+      "name": "Cheddar cheese slice",
+      "category": "Dairy"
+    },
+    {
+      "id": "cmqjlt727000713q9lyzs4u2s",
+      "name": "Brioche bun",
+      "category": "Bakery"
+    },
+    {
+      "id": "cmqjltbgf000f13q9h8cimny3",
+      "name": "Tomato slices",
+      "category": "Produce"
+    },
+    {
+      "id": "cmqjlt4kb000113q9yrzqlp0n",
+      "name": "Ground beef",
+      "category": "Protein"
+    }
+  ],
+  "tabs": []
+}
