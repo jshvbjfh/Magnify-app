@@ -5,6 +5,8 @@ const CONVO: [string, string][] = [
   ['GREETING', 'hi'],
   ['GREETING', 'good evening jesse'],
   ['GREETING', 'muraho'],
+  ['SMALL TALK', 'ok umm how was your day?'],
+  ['SMALL TALK', 'how are you doing today'],
   ['SMALL TALK', 'thanks'],
   ['SMALL TALK', 'thank you that helps'],
   ['SMALL TALK', 'ok cool'],

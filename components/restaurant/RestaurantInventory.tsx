@@ -369,8 +369,6 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const [activeCategory, setActiveCategory] = useState<string | null>(null)
   const [categoryError, setCategoryError] = useState<string | null>(null)
   const [categoryBusy, setCategoryBusy] = useState(false)
-  const [showCategoryPicker, setShowCategoryPicker] = useState(false)
-  const [categorySearch, setCategorySearch] = useState('')
   // Typed inline rather than through window.prompt, which the desktop build
   // does not support at all — it returns nothing and the click does nothing.
   // null means "not naming anything right now".
@@ -1233,11 +1231,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     remainder: nameCompletion.remainder,
     summary: formatPurchasePresetSummary(nameCompletion.entry),
   }
-  // Items offered when adding to a category: raw stock only, excluding what is
-  // already in this tab, ranked so an exact-ish match comes first.
-  const categoryPickerResults = (() => {
-    const needle = normalizeInventoryItemName(categorySearch)
-    if (!needle) return []
+  // What the search finds that is NOT in the open tab, so one box both filters
+  // the category and offers what is missing from it.
+  const itemsOutsideCategory = (() => {
+    const needle = normalizeInventoryItemName(purSearch)
+    if (!needle || !activeCategory) return []
     return items
       .filter(item => item.type !== 'prep' && item.category !== activeCategory)
       .filter(item => normalizeInventoryItemName(item.name).includes(needle))
@@ -1246,7 +1244,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         const r = normalizeInventoryItemName(right.name).startsWith(needle) ? 0 : 1
         return l - r || left.name.localeCompare(right.name)
       })
-      .slice(0, 25)
+      .slice(0, 12)
   })()
 
   const knownSupplierNames = Array.from(new Set(
@@ -1558,10 +1556,6 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           )}
           {activeCategory && (
             <span className="ml-auto flex items-center gap-1.5">
-              <button type="button" onClick={() => setShowCategoryPicker(true)} disabled={categoryBusy}
-                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50">
-                + Add items
-              </button>
               {renamingCategory?.from === activeCategory ? (
                 <>
                   <input autoFocus value={renamingCategory.value}
@@ -1610,40 +1604,6 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         {categoryError && <p className="mt-2 text-xs text-red-600">{categoryError}</p>}
       </div>
 
-      {showCategoryPicker && activeCategory && (
-        <div className="bg-white rounded-xl border border-emerald-200 shadow-sm p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-gray-800">Add items to “{activeCategory}”</p>
-            <button type="button" onClick={() => { setShowCategoryPicker(false); setCategorySearch('') }} className="p-1 rounded hover:bg-gray-100">
-              <X className="h-3.5 w-3.5 text-gray-500"/>
-            </button>
-          </div>
-          <input autoFocus value={categorySearch} onChange={e => setCategorySearch(e.target.value)}
-            placeholder="Search an item to add…"
-            className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"/>
-          <div className="max-h-64 overflow-y-auto divide-y divide-gray-50">
-            {categoryPickerResults.length === 0 ? (
-              <p className="py-6 text-center text-sm text-gray-400">
-                {categorySearch.trim() ? 'No item matches that.' : 'Type to find an item.'}
-              </p>
-            ) : categoryPickerResults.map(item => (
-              <div key={item.id} className="flex items-center justify-between py-2">
-                <div className="min-w-0">
-                  <p className="truncate text-sm text-gray-800">{item.name}</p>
-                  <p className="text-xs text-gray-400">
-                    {fmtQty(item.quantity)} {item.unit}{item.category ? ` · currently in ${item.category}` : ''}
-                  </p>
-                </div>
-                <button type="button" onClick={() => void assignToCategory([item.id], activeCategory)} disabled={categoryBusy}
-                  className="ml-3 flex-shrink-0 rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
-                  Add
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 text-sm text-gray-600 shadow-sm">
         {batchCount} batch{batchCount===1?'':'es'} • {purchases.length} inventory row{purchases.length===1?'':'s'} • {fmt(totalPurchaseCost)} RWF recorded
       </div>
@@ -1652,8 +1612,36 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none"/>
           <input value={purSearch} onChange={e=>setPurSearch(e.target.value)}
-            placeholder="Search batch ID, item or supplier…"
+            placeholder={activeCategory ? `Search “${activeCategory}” — or any item, to add it here` : 'Search batch ID, item or supplier…'}
             className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-orange-400 bg-gray-50"/>
+        </div>
+      )}
+
+      {/* The same search reaches past the tab. Searching inside a category for
+          something that is not in it used to be a dead end — the row simply did
+          not exist here — when the reason for searching was usually to put it
+          in. Those items are listed underneath with a way to do exactly that. */}
+      {activeCategory && purSearch.trim() && itemsOutsideCategory.length > 0 && (
+        <div className="bg-white rounded-xl border border-emerald-200 shadow-sm overflow-hidden">
+          <p className="px-4 py-2 text-xs font-medium text-emerald-800 bg-emerald-50 border-b border-emerald-100">
+            Not in “{activeCategory}” — add {itemsOutsideCategory.length === 1 ? 'it' : 'any of these'}
+          </p>
+          <ul className="divide-y divide-gray-50">
+            {itemsOutsideCategory.map(item => (
+              <li key={item.id} className="flex items-center justify-between px-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-gray-800">{item.name}</p>
+                  <p className="text-xs text-gray-400">
+                    {fmtQty(item.quantity)} {item.unit}{item.category ? ` · currently in ${item.category}` : ' · not in any category'}
+                  </p>
+                </div>
+                <button type="button" onClick={() => void assignToCategory([item.id], activeCategory)} disabled={categoryBusy}
+                  className="ml-3 flex-shrink-0 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50">
+                  Add to {activeCategory}
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

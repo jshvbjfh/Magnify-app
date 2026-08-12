@@ -63,7 +63,11 @@ export function parseIntents(q: string): Intent[] {
   // Average order value
   if (/\baverage\s+(order|sale|transaction|value|revenue)\b|\bavg\s+(order|sale|value)\b/i.test(q)) s.add('avg_order')
   // ── Greeting ─────────────────────────────────────────────────────────────────
-  if (/^(hi+|hello+|hey+|good\s*(morning|afternoon|evening|day|night)|howdy|greetings|morning|evening|afternoon|how\s+are\s+you|how'?s\s+it(\s+going)?|what'?s\s+up|sup|yo|salut|bonjour|hola|jambo|muraho|niaje|habari|mwaramutse|amakuru)\b/i.test(q.trim())) s.add('greeting')
+  // Allows a lead-in — "ok umm how was your day?" — because people rarely open
+  // a message with the greeting sitting at character one. Without that, such a
+  // question matched nothing and came back as a revenue report.
+  if (/^(hi+|hello+|hey+|good\s*(morning|afternoon|evening|day|night)|howdy|greetings|morning|evening|afternoon|how\s+are\s+you|how'?s\s+it(\s+going)?|what'?s\s+up|sup|yo|salut|bonjour|hola|jambo|muraho|niaje|habari|mwaramutse|amakuru)\b/i.test(q.trim())
+      || /\b(how\s+(was|is)\s+your\s+(day|evening|morning|night)|how\s+are\s+you\s+(doing|today)|how\s+have\s+you\s+been|are\s+you\s+(ok|okay|well|there)|hope\s+you'?re\s+well)\b/i.test(q)) s.add('greeting')
   // Record transaction — keyword/sentence based detection
   const hasAmount = /\b\d[\d,]*\s*(k|thousand)?\b/i.test(q)
   const isQuery = /\b(how much|how many|what did|what are|how little|which|show me|list|total|summary|report)\b/i.test(q)
