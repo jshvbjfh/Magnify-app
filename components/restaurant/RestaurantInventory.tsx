@@ -1420,6 +1420,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                 </span>
               )}
             </div>
+          ) : activeCategory ? (
+            // A category is a lens for organising, not a place to change stock.
+            // Editing and deleting a batch belong in All, where the whole
+            // picture is visible — not behind a filter that hides most of it.
+            <span className="text-xs text-gray-300">—</span>
           ) : (
           <div className="flex items-center gap-2">
             <button
