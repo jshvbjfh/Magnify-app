@@ -214,6 +214,27 @@ describe('POST /api/restaurant/inventory-purchases', () => {
     expect(prismaMock.$transaction).not.toHaveBeenCalled()
   })
 
+  it('stores an entered expiry date', async () => {
+    await postInventoryPurchase(makeRequest(makeBody({ expiresAt: '2026-09-30' })))
+
+    expect(txMock.inventoryPurchase.create.mock.calls[0][0].data.expiresAt).toEqual(new Date('2026-09-30'))
+  })
+
+  it('leaves the expiry null when the field was skipped', async () => {
+    await postInventoryPurchase(makeRequest(makeBody()))
+
+    expect(txMock.inventoryPurchase.create.mock.calls[0][0].data.expiresAt).toBeNull()
+  })
+
+  it('rejects an unreadable expiry date', async () => {
+    const response = await postInventoryPurchase(makeRequest(makeBody({ expiresAt: 'not-a-date' })))
+
+    expect(response.status).toBe(400)
+    const payload = await response.json()
+    expect(payload.error).toBe('Expiry must be a valid date')
+    expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+
   it('rejects a malformed client id', async () => {
     const response = await postInventoryPurchase(makeRequest(makeBody({ id: 'x!' })))
 

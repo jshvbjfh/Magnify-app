@@ -35,6 +35,7 @@ function makePayload(overrides: Partial<StockEntryPayload> = {}): StockEntryPayl
     purchaseQuantity: 20,
     purchaseUnitCost: 100,
     purchasedAt: '2026-07-13',
+    expiresAt: null,
     ...overrides,
   }
 }
