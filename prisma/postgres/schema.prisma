@@ -426,6 +426,27 @@ model PrepIngredient {
   @@map("prep_ingredients")
 }
 
+// A user-made tab for grouping stock on the inventory screen. Purely a lens:
+// an item's category never affects costing, consumption or reporting, and an
+// item with none simply lives under "All" like everything else.
+//
+// The tab list is the union of these rows and whatever category names items
+// already carry, so categories typed before this table existed keep working
+// while a freshly created, still-empty tab survives a reload.
+model InventoryCategory {
+  id           String    @id @default(cuid())
+  restaurantId String
+  name         String
+  sortOrder    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId])
+  @@map("inventory_categories")
+}
+
 model InventoryPurchase {
   id                   String        @id @default(cuid())
   restaurantId         String
