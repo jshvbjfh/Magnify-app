@@ -712,7 +712,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     // amount, and the printed total is what the guest actually hands over. A
     // buffet on its own prints and totals normally — that slip is the record of
     // the cover the hotel is being charged for.
-    const hidden = hotelBuffetPriceHidden(items.map(i => ({
+    const hidden = hotelBuffetPriceHidden(order.restaurant_id, items.map(i => ({
       name: i.dish_name, category: dishes.find(d => d.id === i.dish_id)?.category,
     })))
     const billLines = items.map((i, idx) => ({ item: i, hidePrice: hidden[idx] }))
@@ -1328,7 +1328,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
   // Every hotel buffet is settled by the hotel as a receivable, so it is never
   // collected at the table. Split out here so the waiter reads the figure they
   // actually take from the guest.
-  const cartCredits    = hotelCreditLines(cartItems.map(i => ({
+  const cartCredits    = hotelCreditLines(restaurantId, cartItems.map(i => ({
     name: i.dishName, category: dishes.find(d => d.id === i.dishId)?.category,
   })))
   const cartCreditAmount = cartItems.reduce((s, i, idx) => s + (cartCredits[idx] ? i.dishPrice * i.qty : 0), 0)

@@ -133,7 +133,7 @@ export async function recordDishSalesForPaidOrder(
         // with — otherwise sales-by-tender reports would count the receivable
         // as cash in the drawer. Matches the journal split in
         // finalizeRestaurantOrderPayment.
-        paymentMethod: isHotelBuffetLine(item.dishName ?? dish.name, dish.category)
+        paymentMethod: isHotelBuffetLine(params.restaurantId, item.dishName ?? dish.name, dish.category)
           ? 'Credit'
           : (params.paymentMethod || 'Cash'),
         totalSaleAmount,

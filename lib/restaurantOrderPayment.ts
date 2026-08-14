@@ -191,7 +191,9 @@ export async function finalizeRestaurantOrderPayment(
     // dish, so the lookup is skipped entirely unless a line already matches by
     // name — which keeps the ordinary order at zero extra queries.
     const buffetDishIds = [...new Set(
-      currentOrder.items.filter((item) => isHotelBuffetLine(item.dishName)).map((item) => item.dishId),
+      currentOrder.items
+        .filter((item) => isHotelBuffetLine(params.restaurantId, item.dishName))
+        .map((item) => item.dishId),
     )]
     const dishCategories = new Map<string, string | null>(
       buffetDishIds.length
@@ -202,7 +204,7 @@ export async function finalizeRestaurantOrderPayment(
         : [],
     )
     const settlesOnCredit = (item: { dishId: string; dishName: string }) =>
-      isHotelBuffetLine(item.dishName, dishCategories.get(item.dishId))
+      isHotelBuffetLine(params.restaurantId, item.dishName, dishCategories.get(item.dishId))
 
     for (const [itemsBranchId, branchItems] of itemsByBranch) {
       const onCredit = branchItems.filter(settlesOnCredit)

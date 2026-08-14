@@ -152,6 +152,8 @@ describe('finalizeRestaurantOrderPayment — per-station journal booking', () =>
 // guest handed over for their add-ons.
 describe('finalizeRestaurantOrderPayment — hotel buffet books to Accounts Receivable', () => {
   const BREAKFAST = 'breakfast-menu'
+  // The rule is scoped to this one account by design — see lib/hotelBuffet.ts.
+  const SIROCCO = 'cmssn2wif000210rcxlzs1jny'
 
   /** Order of a hotel buffet plus whatever add-ons are passed. */
   function makeBuffetDb(addOns: Array<{ id: string; dishId: string; dishName: string; dishPrice: number }>) {
@@ -159,7 +161,7 @@ describe('finalizeRestaurantOrderPayment — hotel buffet books to Accounts Rece
       { id: 'it-buffet', dishId: 'dish-buffet', dishName: 'HOTEL BUFFET', dishPrice: 12000, qty: 1, dishVariantId: null, dishVariantName: null, status: 'ACTIVE' },
       ...addOns.map((a) => ({ ...a, qty: 1, dishVariantId: null, dishVariantName: null, status: 'ACTIVE' })),
     ]
-    const current = { id: ORDER, restaurantId: REST, branchId: BREAKFAST, status: 'OPEN', tableId: 't-4', tableName: 'T4', paidAt: null, paymentMethod: null, items }
+    const current = { id: ORDER, restaurantId: SIROCCO, branchId: BREAKFAST, status: 'OPEN', tableId: 't-4', tableName: 'T4', paidAt: null, paymentMethod: null, items }
     const paid = { ...current, status: 'PAID', paidAt: new Date('2026-08-14T07:15:00Z') }
     return {
       restaurantOrder: {
@@ -191,7 +193,7 @@ describe('finalizeRestaurantOrderPayment — hotel buffet books to Accounts Rece
   it('books the buffet to Credit and the add-ons to the tender the guest paid', async () => {
     const db = makeBuffetDb([{ id: 'it-egg', dishId: 'dish-egg', dishName: 'Poached egg', dishPrice: 5000 }])
 
-    await finalizeRestaurantOrderPayment(db, { restaurantId: REST, branchId: BREAKFAST, orderId: ORDER, paymentMethod: 'Cash' })
+    await finalizeRestaurantOrderPayment(db, { restaurantId: SIROCCO, branchId: BREAKFAST, orderId: ORDER, paymentMethod: 'Cash' })
 
     const byTender = callsByTender()
     expect(recordJournalEntryMock).toHaveBeenCalledTimes(2)
@@ -203,12 +205,35 @@ describe('finalizeRestaurantOrderPayment — hotel buffet books to Accounts Rece
   it('books a buffet ordered alone entirely to Credit, never to the till', async () => {
     const db = makeBuffetDb([])
 
-    await finalizeRestaurantOrderPayment(db, { restaurantId: REST, branchId: BREAKFAST, orderId: ORDER, paymentMethod: 'Cash' })
+    await finalizeRestaurantOrderPayment(db, { restaurantId: SIROCCO, branchId: BREAKFAST, orderId: ORDER, paymentMethod: 'Cash' })
 
     const byTender = callsByTender()
     expect(recordJournalEntryMock).toHaveBeenCalledTimes(1)
     expect(byTender.get('Credit')).toBe(grossOf([{ dishPrice: 12000, qty: 1 }]))
     expect(byTender.has('Cash')).toBe(false)
+  })
+
+  it('does NOT credit an identically-named dish at any other restaurant', async () => {
+    // The one-off is scoped to Sirocco. Another account selling a dish called
+    // "HOTEL BUFFET" takes the guest's cash and books it as cash.
+    const db = makeBuffetDb([{ id: 'it-egg', dishId: 'dish-egg', dishName: 'Poached egg', dishPrice: 5000 }])
+    db.restaurantOrder.findFirst = vi.fn()
+      .mockResolvedValueOnce({
+        id: ORDER, restaurantId: REST, branchId: BREAKFAST, status: 'OPEN',
+        tableId: 't-4', tableName: 'T4', paidAt: null, paymentMethod: null,
+        items: [
+          { id: 'it-buffet', dishId: 'dish-buffet', dishName: 'HOTEL BUFFET', dishPrice: 12000, qty: 1, dishVariantId: null, dishVariantName: null, status: 'ACTIVE' },
+          { id: 'it-egg', dishId: 'dish-egg', dishName: 'Poached egg', dishPrice: 5000, qty: 1, dishVariantId: null, dishVariantName: null, status: 'ACTIVE' },
+        ],
+      })
+      .mockResolvedValueOnce({ id: ORDER, paidAt: new Date('2026-08-14T07:15:00Z') })
+
+    await finalizeRestaurantOrderPayment(db, { restaurantId: REST, branchId: BREAKFAST, orderId: ORDER, paymentMethod: 'Cash' })
+
+    const byTender = callsByTender()
+    expect(recordJournalEntryMock).toHaveBeenCalledTimes(1)
+    expect(byTender.get('Cash')).toBe(grossOf([{ dishPrice: 12000, qty: 1 }, { dishPrice: 5000, qty: 1 }]))
+    expect(byTender.has('Credit')).toBe(false)
   })
 
   it('leaves an ordinary order on a single tender, with no dish lookup at all', async () => {
