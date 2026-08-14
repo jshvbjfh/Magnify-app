@@ -10,6 +10,10 @@ type RestaurantBranchContextValue = {
   // Main is the whole-restaurant lens: pages scoped per station show every
   // station's data instead of just its own when this is set.
   branchIsMain: boolean
+  // One stock pool for the restaurant, held by the main station. Stations other
+  // than Main then hold no stock of their own, so screens that exist to manage
+  // a station's stock have nothing to manage.
+  sharedStock: boolean
 }
 
 const RestaurantBranchContext = createContext<RestaurantBranchContextValue | null>(null)

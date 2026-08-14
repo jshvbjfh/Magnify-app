@@ -33,6 +33,9 @@ const txMock = vi.hoisted(() => ({
 
 const prismaMock = vi.hoisted(() => ({
   $transaction: vi.fn(),
+  restaurant: {
+    findUnique: vi.fn(),
+  },
   branch: {
     findFirst: vi.fn(),
   },
@@ -119,6 +122,8 @@ beforeEach(() => {
   getRestaurantContextFromSessionMock.mockReturnValue({ restaurantId: 'rest-1', branchId: 'branch-main' })
 
   prismaMock.$transaction.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock))
+  // Per-station stock unless a test says otherwise — today's behaviour.
+  prismaMock.restaurant.findUnique.mockResolvedValue({ sharedStock: false })
 
   txMock.inventoryItem.findFirst.mockResolvedValue(oilIngredient)
   txMock.inventoryItem.update.mockResolvedValue({ ...oilIngredient, quantity: 25 })
@@ -233,6 +238,33 @@ describe('POST /api/restaurant/inventory-purchases', () => {
     const payload = await response.json()
     expect(payload.error).toBe('Expiry must be a valid date')
     expect(prismaMock.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('files the purchase under the main station when stock is shared', async () => {
+    // Whoever records it and wherever they are signed in, one pool means the
+    // stock lands in one place — otherwise a purchase would quietly recreate
+    // the per-station duplicate the merge exists to remove.
+    prismaMock.restaurant.findUnique.mockResolvedValue({ sharedStock: true })
+    prismaMock.branch.findFirst.mockResolvedValue({ id: 'branch-main' })
+
+    const response = await postInventoryPurchase(makeRequest(makeBody()))
+
+    expect(response.status).toBe(201)
+    expect(prismaMock.branch.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { restaurantId: 'rest-1', isMain: true },
+    }))
+    expect(txMock.inventoryPurchase.create.mock.calls[0][0].data.branchId).toBe('branch-main')
+  })
+
+  it('keeps the purchase at the recording station when stock is not shared', async () => {
+    // Same entry, shared stock off: it must stay where it was typed rather than
+    // being pulled to the main station.
+    prismaMock.branch.findFirst.mockResolvedValue({ id: 'branch-bar' })
+
+    const response = await postInventoryPurchase(makeRequest(makeBody({ branchId: 'branch-bar' })))
+
+    expect(response.status).toBe(201)
+    expect(txMock.inventoryPurchase.create.mock.calls[0][0].data.branchId).toBe('branch-bar')
   })
 
   it('rejects a malformed client id', async () => {

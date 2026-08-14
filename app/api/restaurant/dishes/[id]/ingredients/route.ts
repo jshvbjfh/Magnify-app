@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { getRestaurantSharedStock, recipeIngredientScopeWhere } from '@/lib/inventoryConsumption'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -39,9 +40,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   const { id } = await params
+  // The dish belongs to the station being edited, but the ingredient need not:
+  // under shared stock the pool sits at the main station and every station
+  // cooks from it, so scope the lookup the same way the picker lists it.
+  const sharedStock = await getRestaurantSharedStock(prisma, context.restaurantId)
   const [dish, ingredient] = await Promise.all([
     prisma.dish.findFirst({ where: { id, restaurantId: context.restaurantId, branchId: context.branchId }, select: { id: true } }),
-    prisma.inventoryItem.findFirst({ where: { id: inventoryItemId, restaurantId: context.restaurantId, branchId: context.branchId }, select: { id: true } }),
+    prisma.inventoryItem.findFirst({
+      where: {
+        id: inventoryItemId,
+        ...recipeIngredientScopeWhere({ restaurantId: context.restaurantId, branchId: context.branchId, sharedStock }),
+      },
+      select: { id: true },
+    }),
   ])
 
   if (!dish) return NextResponse.json({ error: 'Dish not found' }, { status: 404 })

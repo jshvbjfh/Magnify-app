@@ -18,7 +18,14 @@ type ConsumptionSourceType = 'dishSale' | 'waste' | 'adjustment' | 'prepProducti
 
 type ConsumeIngredientStockParams = {
   restaurantId: string
+  // The station doing the consuming. Under shared stock this no longer says
+  // where the stock is kept — only who used it — and that is deliberate: the
+  // ledger keeps recording it so "how much did this station get through" still
+  // has an answer once the pool is common.
   branchId: string
+  // One pool for the whole restaurant, held by the main station, instead of
+  // every station keeping its own. Off unless the restaurant opted in.
+  sharedStock?: boolean
   ingredientId: string
   quantity: number
   fifoEnabled: boolean
@@ -72,6 +79,38 @@ export function getRestaurantFifoEnabled(): boolean {
   return FIFO_FEATURE_AVAILABLE
 }
 
+// Whether this restaurant keeps one shared pool. Read once per operation and
+// passed down, the same way fifoEnabled is, so a loop over a dish's ingredients
+// does not re-query it for every line.
+export async function getRestaurantSharedStock(db: PrismaDb, restaurantId: string): Promise<boolean> {
+  const restaurant = await db.restaurant.findUnique({
+    where: { id: restaurantId },
+    select: { sharedStock: true },
+  })
+  return Boolean(restaurant?.sharedStock)
+}
+
+// What a station is allowed to build a recipe on. Under shared stock that is
+// every raw ingredient the restaurant holds — the pool sits at the main station
+// but belongs to all of them — while preps stay with the kitchen that made
+// them, because a sauce one kitchen produced is not stock another can draw on.
+// The picker, the dish recipe and the prep sub-recipe all have to agree on this,
+// or the list offers an ingredient the save then rejects.
+export function recipeIngredientScopeWhere(params: { restaurantId: string; branchId: string; sharedStock?: boolean }) {
+  return params.sharedStock
+    ? { restaurantId: params.restaurantId, OR: [{ type: { not: 'prep' } }, { branchId: params.branchId }] }
+    : { restaurantId: params.restaurantId, branchId: params.branchId }
+}
+
+// Where to look for the stock itself. Shared stock searches the whole
+// restaurant; otherwise only the station that is consuming, which is the
+// behaviour every restaurant has today.
+function stockScopeWhere(params: { restaurantId: string; branchId: string; sharedStock?: boolean }) {
+  return params.sharedStock
+    ? { restaurantId: params.restaurantId }
+    : { restaurantId: params.restaurantId, branchId: params.branchId }
+}
+
 export async function consumeIngredientStock(
   db: PrismaDb,
   params: ConsumeIngredientStockParams,
@@ -86,8 +125,7 @@ export async function consumeIngredientStock(
     : await db.inventoryItem.findFirst({
         where: {
           id: params.ingredientId,
-          restaurantId: params.restaurantId,
-          branchId: params.branchId,
+          ...stockScopeWhere(params),
         },
         select: {
           id: true,
@@ -116,8 +154,7 @@ export async function consumeIngredientStock(
     where: {
       ingredientId: params.ingredientId,
       remainingQuantity: { gt: 0 },
-      restaurantId: params.restaurantId,
-      branchId: params.branchId,
+      ...stockScopeWhere(params),
     },
     orderBy: [{ purchasedAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
   })
@@ -187,7 +224,9 @@ export async function consumeIngredientStock(
 
       await enqueueSyncChange(db, {
         restaurantId: params.restaurantId,
-        branchId: params.branchId,
+        // The layer's own station, not the consuming one — under shared stock a
+        // batch drawn on by one station still belongs to whichever holds it.
+        branchId: updatedPurchase.branchId,
         entityType: 'inventoryPurchase',
         entityId: updatedPurchase.id,
         operation: 'upsert',
@@ -265,7 +304,8 @@ export async function consumeIngredientStock(
 
     await enqueueSyncChange(db, {
       restaurantId: params.restaurantId,
-      branchId: params.branchId,
+      // The item's own station, not the consuming one — see the layer above.
+      branchId: updatedIngredient.branchId,
       entityType: 'inventoryItem',
       entityId: updatedIngredient.id,
       operation: 'upsert',

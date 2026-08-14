@@ -62,6 +62,7 @@ type Purchase = {
   ingredient: { name: string; unit: string; purchaseUnit: string | null; unitsPerPurchaseUnit: number | null }
 }
 type PurchaseBatchGroup = { key: string; batchId: string | null; purchasedAt: string; earliestCreatedAt: string; totalCost: number; purchases: Purchase[] }
+type InventoryCategory = { id: string; name: string; itemCount: number }
 // The completion offered while an item name is being typed. `remainder` is the
 // untyped tail shown as ghost text; accepting fills the row from `purchase`.
 type ItemSuggestion = { purchase: Purchase; itemName: string; remainder: string; summary: string }
@@ -358,6 +359,22 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const [suggestionDismissed, setSuggestionDismissed] = useState(false)
   const [pForm, setPForm] = useState(createEmptyPurchaseForm())
   const [inventoryView, setInventoryView] = useState<'stock' | 'preps'>('stock')
+  // Stock lives at the main station once the pool is shared; everywhere else the
+  // page is about preps only.
+  const showStockTab = !restaurantBranch?.sharedStock || Boolean(restaurantBranch?.branchIsMain)
+
+  // Category tabs are a lens over the same stock — "All" is not a stored
+  // category, it is simply no filter.
+  const [categories, setCategories] = useState<InventoryCategory[]>([])
+  const [activeCategory, setActiveCategory] = useState<string | null>(null)
+  const [categoryError, setCategoryError] = useState<string | null>(null)
+  const [categoryBusy, setCategoryBusy] = useState(false)
+  // Typed inline rather than through window.prompt, which the desktop build
+  // does not support at all — it returns nothing and the click does nothing.
+  // null means "not naming anything right now".
+  const [newCategoryName, setNewCategoryName] = useState<string | null>(null)
+  const [renamingCategory, setRenamingCategory] = useState<{ from: string; value: string } | null>(null)
+  const [confirmDeleteCategory, setConfirmDeleteCategory] = useState<string | null>(null)
   const [showPrepForm, setShowPrepForm] = useState(false)
   const [prepSaving, setPrepSaving] = useState(false)
   const [prepError, setPrepError] = useState<string | null>(null)
@@ -377,6 +394,12 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   // straight from the tickets so the screen and the queue can never disagree.
   const [queueTickets, setQueueTickets] = useState<StockEntryTicket[]>([])
   const resumedTicketIdsRef = useRef<Set<string>>(new Set(loadStockEntryTickets().map((ticket) => ticket.id)))
+
+  // Switching to a station that holds no stock must not leave the page sitting
+  // on a tab that is no longer there.
+  useEffect(() => {
+    if (!showStockTab && inventoryView === 'stock') setInventoryView('preps')
+  }, [showStockTab, inventoryView])
 
   useEffect(() => {
     const unsubscribeTickets = subscribeStockEntryTickets(setQueueTickets)
@@ -411,6 +434,110 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     setItemsLoading(false)
   }
 
+  async function loadCategories() {
+    try {
+      const res = await fetch('/api/restaurant/inventory-categories', FRESH_FETCH_OPTIONS)
+      const data = await res.json().catch(() => null)
+      setCategories(Array.isArray(data?.categories) ? data.categories : [])
+    } catch {
+      // A failed load just means no tabs this render; "All" still works.
+    }
+  }
+
+  async function createCategory(rawName: string) {
+    const name = rawName.trim()
+    if (!name) return
+    setCategoryBusy(true)
+    setCategoryError(null)
+    try {
+      const res = await fetch('/api/restaurant/inventory-categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) { setCategoryError(data?.error || 'Could not create that category'); return }
+      await loadCategories()
+      setActiveCategory(data?.category?.name ?? name)
+      setNewCategoryName(null)
+    } finally {
+      setCategoryBusy(false)
+    }
+  }
+
+  async function assignToCategory(itemIds: string[], category: string | null) {
+    if (itemIds.length === 0) return
+    setCategoryBusy(true)
+    setCategoryError(null)
+    // Apply straight away — this is a label, not stock, so a wrong guess costs
+    // nothing and waiting on the round trip makes bulk tagging feel broken.
+    setItems(current => current.map(item => itemIds.includes(item.id) ? { ...item, category } : item))
+    try {
+      const res = await fetch('/api/restaurant/inventory-categories', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ itemIds, category }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        setCategoryError(data?.error || 'Could not move those items')
+        void load()
+        return
+      }
+      void loadCategories()
+    } catch {
+      setCategoryError('Could not move those items')
+      void load()
+    } finally {
+      setCategoryBusy(false)
+    }
+  }
+
+  async function renameCategory(from: string, rawTo: string) {
+    const to = rawTo.trim()
+    if (!to || to === from) { setRenamingCategory(null); return }
+    setCategoryBusy(true)
+    setCategoryError(null)
+    try {
+      const res = await fetch('/api/restaurant/inventory-categories', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ from, to }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) { setCategoryError(data?.error || 'Could not rename that category'); return }
+      setActiveCategory(to)
+      setRenamingCategory(null)
+      await Promise.all([loadCategories(), load()])
+    } finally {
+      setCategoryBusy(false)
+    }
+  }
+
+  async function deleteCategory(name: string) {
+    setCategoryBusy(true)
+    setCategoryError(null)
+    try {
+      const res = await fetch(`/api/restaurant/inventory-categories?name=${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        setCategoryError(data?.error || 'Could not remove that category')
+        return
+      }
+      setActiveCategory(null)
+      setConfirmDeleteCategory(null)
+      await Promise.all([loadCategories(), load()])
+    } finally {
+      setCategoryBusy(false)
+    }
+  }
+
   async function loadPurchases() {
     setPurchasesLoading(true)
     const data = await fetch('/api/restaurant/inventory-purchases', FRESH_FETCH_OPTIONS).then(r=>r.json())
@@ -422,6 +549,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     const refreshInventoryData = () => {
       void load()
       void loadPurchases()
+      void loadCategories()
     }
 
     refreshInventoryData()
@@ -1030,7 +1158,14 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       .map(item => item.id)
   )
   const searchQuery = purSearch.trim().toLowerCase()
+  // Which items sit under the selected tab. "All" means no filter at all, so
+  // an item with no category is never hidden from the only view that shows it.
+  const categoryItemIds = activeCategory === null
+    ? null
+    : new Set(items.filter(item => item.category === activeCategory).map(item => item.id))
+
   const matchesPurchaseSearch = (purchase: Purchase) => {
+    if (categoryItemIds && !categoryItemIds.has(purchase.ingredientId)) return false
     const purchaseMeta = getPurchaseDisplayMeta(purchase)
     return !searchQuery
       || purchase.ingredient.name.toLowerCase().includes(searchQuery)
@@ -1096,6 +1231,29 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
     remainder: nameCompletion.remainder,
     summary: formatPurchasePresetSummary(nameCompletion.entry),
   }
+  // Everything filed under the open tab, whether or not it has stock batches.
+  const categoryMembers = activeCategory === null
+    ? []
+    : items
+        .filter(item => item.type !== 'prep' && item.category === activeCategory)
+        .sort((left, right) => left.name.localeCompare(right.name))
+
+  // What the search finds that is NOT in the open tab, so one box both filters
+  // the category and offers what is missing from it.
+  const itemsOutsideCategory = (() => {
+    const needle = normalizeInventoryItemName(purSearch)
+    if (!needle || !activeCategory) return []
+    return items
+      .filter(item => item.type !== 'prep' && item.category !== activeCategory)
+      .filter(item => normalizeInventoryItemName(item.name).includes(needle))
+      .sort((left, right) => {
+        const l = normalizeInventoryItemName(left.name).startsWith(needle) ? 0 : 1
+        const r = normalizeInventoryItemName(right.name).startsWith(needle) ? 0 : 1
+        return l - r || left.name.localeCompare(right.name)
+      })
+      .slice(0, 12)
+  })()
+
   const knownSupplierNames = Array.from(new Set(
     displayPurchases.map(p => (p.supplier ?? '').trim()).filter(Boolean)
   )).sort((a, b) => a.localeCompare(b))
@@ -1262,6 +1420,11 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
                 </span>
               )}
             </div>
+          ) : activeCategory ? (
+            // A category is a lens for organising, not a place to change stock.
+            // Editing and deleting a batch belong in All, where the whole
+            // picture is visible — not behind a filter that hides most of it.
+            <span className="text-xs text-gray-300">—</span>
           ) : (
           <div className="flex items-center gap-2">
             <button
@@ -1314,7 +1477,7 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
           <button onClick={onAskJesse} className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border border-orange-300 text-orange-600 bg-white hover:bg-orange-50 transition-colors">
             <Sparkles className="h-3.5 w-3.5"/> Ask Jesse
           </button>
-          {inventoryView === 'stock' ? (
+          {inventoryView === 'stock' && showStockTab ? (
             <button onClick={openNewPurchaseRow} className="bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
               + Record new Batch
             </button>
@@ -1327,10 +1490,16 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
       </div>
 
       <div className="flex border-b border-gray-200">
-        <button type="button" onClick={() => setInventoryView('stock')}
-          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${inventoryView === 'stock' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-          Stock
-        </button>
+        {/* With one shared pool only the main station holds stock, so a Stock
+            tab on any other station lists a pool it cannot record into and
+            shows an empty batch table underneath — it has nothing to manage.
+            Those stations get Preps alone, which is theirs. */}
+        {showStockTab && (
+          <button type="button" onClick={() => setInventoryView('stock')}
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${inventoryView === 'stock' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            Stock
+          </button>
+        )}
         <button type="button" onClick={() => setInventoryView('preps')}
           className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${inventoryView === 'preps' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
           Preps
@@ -1358,6 +1527,122 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         </div>
       </div>
 
+      {/* Category tabs. "All" is not a stored category — it is simply no filter,
+          so every item always has a home and nothing can be lost behind a tab. */}
+      <div className="bg-white rounded-xl border border-gray-200 px-3 py-2 shadow-sm">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button type="button" onClick={() => setActiveCategory(null)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${activeCategory === null ? 'bg-orange-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
+            All <span className="opacity-70">{items.filter(i => i.type !== 'prep').length}</span>
+          </button>
+          {categories.map(cat => (
+            <button key={cat.id} type="button" onClick={() => setActiveCategory(cat.name)}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${activeCategory === cat.name ? 'bg-orange-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
+              {cat.name} <span className="opacity-70">{cat.itemCount}</span>
+            </button>
+          ))}
+          {newCategoryName === null ? (
+            <button type="button" onClick={() => { setNewCategoryName(''); setCategoryError(null) }} disabled={categoryBusy}
+              className="rounded-lg border border-dashed border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-500 transition-colors hover:border-orange-300 hover:text-orange-600 disabled:opacity-50">
+              + Category
+            </button>
+          ) : (
+            <span className="flex items-center gap-1">
+              <input autoFocus value={newCategoryName}
+                onChange={e => setNewCategoryName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { e.preventDefault(); void createCategory(newCategoryName) }
+                  if (e.key === 'Escape') { e.preventDefault(); setNewCategoryName(null) }
+                }}
+                placeholder="Category name"
+                className="w-40 rounded-lg border border-orange-300 px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-orange-200"/>
+              <button type="button" onClick={() => void createCategory(newCategoryName)} disabled={categoryBusy || !newCategoryName.trim()}
+                className="rounded-lg bg-orange-500 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 disabled:opacity-50">
+                Create
+              </button>
+              <button type="button" onClick={() => setNewCategoryName(null)}
+                className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-semibold text-gray-500 hover:bg-gray-50">
+                Cancel
+              </button>
+            </span>
+          )}
+          {activeCategory && (
+            <span className="ml-auto flex items-center gap-1.5">
+              {renamingCategory?.from === activeCategory ? (
+                <>
+                  <input autoFocus value={renamingCategory.value}
+                    onChange={e => setRenamingCategory({ from: activeCategory, value: e.target.value })}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') { e.preventDefault(); void renameCategory(activeCategory, renamingCategory.value) }
+                      if (e.key === 'Escape') { e.preventDefault(); setRenamingCategory(null) }
+                    }}
+                    className="w-36 rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-orange-200"/>
+                  <button type="button" onClick={() => void renameCategory(activeCategory, renamingCategory.value)} disabled={categoryBusy}
+                    className="rounded-lg bg-gray-800 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-gray-900 disabled:opacity-50">
+                    Save
+                  </button>
+                  <button type="button" onClick={() => setRenamingCategory(null)}
+                    className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-semibold text-gray-500 hover:bg-gray-50">
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button type="button" onClick={() => setRenamingCategory({ from: activeCategory, value: activeCategory })} disabled={categoryBusy}
+                  className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+                  Rename
+                </button>
+              )}
+              {confirmDeleteCategory === activeCategory ? (
+                <>
+                  <span className="text-xs text-gray-500">Remove tab? Items return to All.</span>
+                  <button type="button" onClick={() => void deleteCategory(activeCategory)} disabled={categoryBusy}
+                    className="rounded-lg bg-red-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+                    Yes, remove
+                  </button>
+                  <button type="button" onClick={() => setConfirmDeleteCategory(null)}
+                    className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs font-semibold text-gray-500 hover:bg-gray-50">
+                    Keep
+                  </button>
+                </>
+              ) : (
+                <button type="button" onClick={() => setConfirmDeleteCategory(activeCategory)} disabled={categoryBusy}
+                  className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-100 disabled:opacity-50">
+                  Remove tab
+                </button>
+              )}
+            </span>
+          )}
+        </div>
+        {categoryError && <p className="mt-2 text-xs text-red-600">{categoryError}</p>}
+
+        {/* What is actually in the open tab, with a way out of it. The table
+            below lists purchase batches, so an item with none would otherwise
+            be invisible here — you could add something and see no sign of it. */}
+        {activeCategory && (
+          <div className="mt-2 border-t border-gray-100 pt-2">
+            {categoryMembers.length === 0 ? (
+              <p className="text-xs text-gray-400">
+                Nothing in “{activeCategory}” yet — search above for an item to add it.
+              </p>
+            ) : (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs text-gray-400 mr-1">In this category:</span>
+                {categoryMembers.map(item => (
+                  <span key={item.id} className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 pl-2.5 pr-1 py-0.5 text-xs text-gray-700">
+                    {item.name}
+                    <button type="button" onClick={() => void assignToCategory([item.id], null)} disabled={categoryBusy}
+                      title={`Remove ${item.name} from ${activeCategory}`}
+                      className="rounded-full p-0.5 text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-700 disabled:opacity-50">
+                      <X className="h-3 w-3"/>
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="bg-white rounded-xl border border-gray-200 px-4 py-3 text-sm text-gray-600 shadow-sm">
         {batchCount} batch{batchCount===1?'':'es'} • {purchases.length} inventory row{purchases.length===1?'':'s'} • {fmt(totalPurchaseCost)} RWF recorded
       </div>
@@ -1366,8 +1651,36 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400 pointer-events-none"/>
           <input value={purSearch} onChange={e=>setPurSearch(e.target.value)}
-            placeholder="Search batch ID, item or supplier…"
+            placeholder={activeCategory ? `Search “${activeCategory}” — or any item, to add it here` : 'Search batch ID, item or supplier…'}
             className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-orange-400 bg-gray-50"/>
+        </div>
+      )}
+
+      {/* The same search reaches past the tab. Searching inside a category for
+          something that is not in it used to be a dead end — the row simply did
+          not exist here — when the reason for searching was usually to put it
+          in. Those items are listed underneath with a way to do exactly that. */}
+      {activeCategory && purSearch.trim() && itemsOutsideCategory.length > 0 && (
+        <div className="bg-white rounded-xl border border-emerald-200 shadow-sm overflow-hidden">
+          <p className="px-4 py-2 text-xs font-medium text-emerald-800 bg-emerald-50 border-b border-emerald-100">
+            Not in “{activeCategory}” — add {itemsOutsideCategory.length === 1 ? 'it' : 'any of these'}
+          </p>
+          <ul className="divide-y divide-gray-50">
+            {itemsOutsideCategory.map(item => (
+              <li key={item.id} className="flex items-center justify-between px-4 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-gray-800">{item.name}</p>
+                  <p className="text-xs text-gray-400">
+                    {fmtQty(item.quantity)} {item.unit}{item.category ? ` · currently in ${item.category}` : ' · not in any category'}
+                  </p>
+                </div>
+                <button type="button" onClick={() => void assignToCategory([item.id], activeCategory)} disabled={categoryBusy}
+                  className="ml-3 flex-shrink-0 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50">
+                  Add to {activeCategory}
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

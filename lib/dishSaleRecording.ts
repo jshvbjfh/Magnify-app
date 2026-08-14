@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 
 import { recordJournalEntry } from '@/lib/accounting'
-import { consumeIngredientStock, getRestaurantFifoEnabled, InsufficientFifoStockError, InsufficientInventoryStockError } from '@/lib/inventoryConsumption'
+import { consumeIngredientStock, getRestaurantFifoEnabled, getRestaurantSharedStock, InsufficientFifoStockError, InsufficientInventoryStockError } from '@/lib/inventoryConsumption'
 import { consumePrepAwareIngredient } from '@/lib/mepProduction'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
@@ -51,6 +51,8 @@ export async function recordDishSalesForPaidOrder(
   if (params.items.length === 0) return
 
   const fifoEnabled = getRestaurantFifoEnabled()
+  // Read once for the whole sale rather than per ingredient line.
+  const sharedStock = await getRestaurantSharedStock(db, params.restaurantId)
   const requestedDishIds = Array.from(new Set(params.items.map((item) => item.dishId)))
   // Look up dishes across ALL branches by restaurantId — each dish carries its own branchId.
   // Do NOT filter by params.branchId here: an order can contain dishes from multiple branches.
@@ -181,6 +183,7 @@ export async function recordDishSalesForPaidOrder(
           const prepConsumption = await consumePrepAwareIngredient(db, {
             restaurantId: params.restaurantId,
             branchId: dishBranchId,
+            sharedStock,
             ingredient: row.inventoryItem,
             quantityNeeded: totalNeeded,
             fifoEnabled,
@@ -204,6 +207,7 @@ export async function recordDishSalesForPaidOrder(
           const consumption = await consumeIngredientStock(db, {
             restaurantId: params.restaurantId,
             branchId: dishBranchId,
+            sharedStock,
             ingredientId: row.inventoryItemId,
             quantity: totalNeeded,
             fifoEnabled,
@@ -236,7 +240,16 @@ export async function recordDishSalesForPaidOrder(
         // for this ingredient rather than crashing the entire push transaction.
         const isIngredientNotFound = stockError instanceof Error && stockError.message.startsWith('Ingredient ')
         if (isIngredientNotFound) {
-          console.warn(`[dishSale] ingredient not found on cloud — skipping COGS for ingredient ${row.inventoryItemId} (order: ${params.orderId ?? 'unknown'})`)
+          // Under shared stock this excuse no longer holds: the pool covers the
+          // whole restaurant, so a missing ingredient is a genuine fault, not a
+          // device that has yet to sync. Swallowing it here is what would let a
+          // station sell all night deducting nothing and booking zero cost, so
+          // it is logged as an error loudly enough to be found.
+          console[sharedStock ? 'error' : 'warn'](
+            sharedStock
+              ? `[dishSale] SHARED STOCK: ingredient ${row.inventoryItemId} not found anywhere in restaurant ${params.restaurantId} — no stock deducted and no cost recorded for ${dish.name} (order: ${params.orderId ?? 'unknown'})`
+              : `[dishSale] ingredient not found on cloud — skipping COGS for ingredient ${row.inventoryItemId} (order: ${params.orderId ?? 'unknown'})`
+          )
           continue
         }
 
@@ -299,6 +312,9 @@ export async function recordDishWasteForOrderItems(
   if (params.items.length === 0) return []
 
   const fifoEnabled = getRestaurantFifoEnabled()
+  // Waste draws on the same pool a sale does, so it has to resolve stock the
+  // same way — otherwise writing off a spilled item would silently find nothing.
+  const sharedStock = await getRestaurantSharedStock(db, params.restaurantId)
   const requestedDishIds = Array.from(new Set(params.items.map((item) => item.dishId)))
   const dishes = await db.dish.findMany({
     where: { id: { in: requestedDishIds }, restaurantId: params.restaurantId },
@@ -400,6 +416,7 @@ export async function recordDishWasteForOrderItems(
     const consumption = await consumeIngredientStock(db, {
       restaurantId: params.restaurantId,
       branchId: params.branchId,
+      sharedStock,
       ingredientId: waste.ingredientId,
       quantity: waste.quantityWasted,
       fifoEnabled,

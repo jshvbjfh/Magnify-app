@@ -7,6 +7,7 @@ import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 import { cached } from '@/lib/apiCache'
 import { recalculatePrepUnitCost } from '@/lib/prepCosting'
+import { getRestaurantSharedStock, recipeIngredientScopeWhere } from '@/lib/inventoryConsumption'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
 
@@ -32,8 +33,11 @@ export async function GET() {
 
   if (!restaurantId || !branchId) return NextResponse.json([])
 
+  // This one list feeds both the stock screen and the recipe ingredient picker,
+  // so it scopes itself exactly the way the recipe saves do.
+  const sharedStock = await getRestaurantSharedStock(prisma, restaurantId)
   const ingredients = await prisma.inventoryItem.findMany({
-    where: { restaurantId, branchId },
+    where: recipeIngredientScopeWhere({ restaurantId, branchId, sharedStock }),
     orderBy: { name: 'asc' },
   })
   return cached(ingredients)

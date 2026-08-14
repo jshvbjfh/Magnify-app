@@ -45,12 +45,19 @@ async function getAuthorizedBranchContext() {
       restaurantId: null as null,
       branches: [] as Array<{ id: string; name: string; code: string; type: string; isMain: boolean; isActive: boolean }>,
       activeBranchId: null as string | null,
+      sharedStock: false,
     }
   }
 
   // One DB query — list branches. Auth context comes from JWT (zero extra queries).
   const sessionBranchId = typeof user.branchId === 'string' ? user.branchId : null
-  const branches = await listActiveBranches(restaurantId)
+  const [branches, restaurant] = await Promise.all([
+    listActiveBranches(restaurantId),
+    // Shared stock rides along here rather than costing its own round trip: the
+    // shell already waits on this call before it can render anything, and the
+    // whole workspace needs to know whether stations hold stock of their own.
+    prisma.restaurant.findUnique({ where: { id: restaurantId }, select: { sharedStock: true } }),
+  ])
 
   const activeBranchId = branches.some(b => b.id === sessionBranchId)
     ? sessionBranchId
@@ -61,6 +68,7 @@ async function getAuthorizedBranchContext() {
     restaurantId,
     branches,
     activeBranchId,
+    sharedStock: Boolean(restaurant?.sharedStock),
   }
 }
 
@@ -89,6 +97,7 @@ export async function GET() {
   return withActiveBranchCookie(cached({
     activeBranchId: result.activeBranchId,
     branches: result.branches,
+    sharedStock: result.sharedStock ?? false,
   }, 15, 60), result.restaurantId, result.activeBranchId)
 }
 

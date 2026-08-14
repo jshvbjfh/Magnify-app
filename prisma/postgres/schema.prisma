@@ -48,6 +48,12 @@ model Restaurant {
   licenseActive      Boolean   @default(true)
   fifoEnabled        Boolean   @default(true)
   fifoConfiguredAt   DateTime?
+  // One stock for the whole restaurant, held by the main station, instead of
+  // every station keeping its own. Off by default: it only suits venues whose
+  // stations share a physical store, so a customer whose "stations" are
+  // separate premises keeps stock per station. Flipping it back restores the
+  // per-station behaviour without touching data.
+  sharedStock        Boolean   @default(false)
   // Hides financial history before this date from the Transactions page without
   // deleting anything — the entries stay in the database (so stock, purchase
   // records and audits remain intact) and clearing this field restores them.
@@ -430,6 +436,27 @@ model PrepIngredient {
   @@unique([prepItemId, ingredientItemId])
   @@index([prepItemId])
   @@map("prep_ingredients")
+}
+
+// A user-made tab for grouping stock on the inventory screen. Purely a lens:
+// an item's category never affects costing, consumption or reporting, and an
+// item with none simply lives under "All" like everything else.
+//
+// The tab list is the union of these rows and whatever category names items
+// already carry, so categories typed before this table existed keep working
+// while a freshly created, still-empty tab survives a reload.
+model InventoryCategory {
+  id           String    @id @default(cuid())
+  restaurantId String
+  name         String
+  sortOrder    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId])
+  @@map("inventory_categories")
 }
 
 model InventoryPurchase {

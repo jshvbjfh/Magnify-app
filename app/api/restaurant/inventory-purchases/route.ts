@@ -7,6 +7,7 @@ import { getActiveFifoUnitCost } from '@/lib/fifoCosting'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 import { toUsageQuantity, toUsageUnitCost, normalizeUnitsPerPurchaseUnit, isSameInventoryUnit } from '@/lib/inventoryUnits'
+import { getRestaurantSharedStock } from '@/lib/inventoryConsumption'
 import type { Prisma } from '@prisma/client'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
@@ -73,7 +74,15 @@ async function resolveInventoryIngredient(
   tx: Prisma.TransactionClient,
   params: {
     restaurantId: string
+    // Where the stock is kept. Under shared stock this is the main station
+    // regardless of which station the person recording happens to be signed
+    // into — otherwise recording a purchase would quietly recreate the very
+    // per-station duplicate the merge just removed.
     branchId: string
+    // Search the whole restaurant for an existing item rather than one station,
+    // so a second station buying tomatoes tops up the shared row instead of
+    // starting a rival one.
+    sharedStock?: boolean
     ingredientId?: string | null
     itemName?: string | null
     unit?: string | null
@@ -89,10 +98,14 @@ async function resolveInventoryIngredient(
   }
 ): Promise<ResolvedInventoryIngredient> {
   const select = { id: true, name: true, unit: true, unitCost: true, quantity: true } as const
+  // One pool means one search: look across the restaurant, not one station.
+  const lookupScope = params.sharedStock
+    ? { restaurantId: params.restaurantId }
+    : { restaurantId: params.restaurantId, branchId: params.branchId }
 
   if (params.ingredientId) {
     const found = await tx.inventoryItem.findFirst({
-      where: { id: params.ingredientId, restaurantId: params.restaurantId, branchId: params.branchId },
+      where: { id: params.ingredientId, ...lookupScope },
       select,
     })
     if (!found) throw new Error('Ingredient not found')
@@ -104,7 +117,7 @@ async function resolveInventoryIngredient(
   if (!normalizedItemName) throw new Error('itemName is required')
 
   const existing = await tx.inventoryItem.findMany({
-    where: { restaurantId: params.restaurantId, branchId: params.branchId },
+    where: { ...lookupScope, ...(params.sharedStock ? { type: { not: 'prep' } } : {}) },
     select,
   })
   const matched = existing.find((i) => normalizeInventoryItemName(i.name) === normalizedItemName) ?? null
@@ -116,7 +129,7 @@ async function resolveInventoryIngredient(
     const unitChanged = !isSameInventoryUnit(matched.unit, usageUnit)
     if (unitChanged && !params.allowUsageUnitReDenomination) {
       const ingredientPurchases = await tx.inventoryPurchase.findMany({
-        where: { restaurantId: params.restaurantId, branchId: params.branchId, ingredientId: matched.id },
+        where: { ...lookupScope, ingredientId: matched.id },
         select: { quantityPurchased: true, remainingQuantity: true },
       })
       if (ingredientPurchases.some(hasConsumedPurchaseQuantity)) {
@@ -295,13 +308,30 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Expiry must be a valid date' }, { status: 400 })
     }
 
+    // With one shared pool the stock belongs to the main station whoever records
+    // it, so the row lands in the same place every time and a second station
+    // buying the same thing tops it up instead of forking a rival copy.
+    const sharedStock = await getRestaurantSharedStock(prisma, restaurantId)
+    let stockBranchId = branchId
+    if (sharedStock) {
+      const mainBranch = await prisma.branch.findFirst({
+        where: { restaurantId, isMain: true },
+        select: { id: true },
+      })
+      if (!mainBranch) {
+        return NextResponse.json({ error: 'No main station to hold the shared stock' }, { status: 400 })
+      }
+      stockBranchId = mainBranch.id
+    }
+
     const totalCost = quantityPurchased * unitCost
     const normalizedPaymentMethod = typeof paymentMethod === 'string' && paymentMethod.trim() ? paymentMethod.trim() : 'Cash'
 
     const result = await prisma.$transaction(async (tx) => {
       const ingredient = await resolveInventoryIngredient(tx, {
         restaurantId,
-        branchId,
+        branchId: stockBranchId,
+        sharedStock,
         ingredientId,
         itemName,
         unit,
@@ -311,7 +341,9 @@ export async function POST(req: Request) {
 
       const journalEntry = await recordJournalEntry(tx, {
         restaurantId,
-        branchId,
+        // Books against the station that holds the stock, so the expense sits
+        // where the asset does rather than wherever the buyer was signed in.
+        branchId: stockBranchId,
         date: purchasedAt,
         description: buildInventoryPurchaseDescription({ ingredientName: ingredient.name, ingredientUnit: ingredient.unit, quantityPurchased, supplier: supplier || null }),
         amount: totalCost,
@@ -325,7 +357,7 @@ export async function POST(req: Request) {
         data: {
           ...(clientId ? { id: clientId } : {}),
           restaurantId,
-          branchId,
+          branchId: stockBranchId,
           journalEntryId: journalEntry?.id ?? null,
           ingredientId: ingredient.id,
           batchId: normalizedBatchId,
@@ -349,11 +381,11 @@ export async function POST(req: Request) {
         data: { quantity: { increment: quantityPurchased } },
       })
 
-      const updatedIngredient = await syncIngredientActiveUnitCost(tx, { restaurantId, branchId, ingredientId: ingredient.id, preloadedIngredient: stockedIngredient })
+      const updatedIngredient = await syncIngredientActiveUnitCost(tx, { restaurantId, branchId: stockBranchId, ingredientId: ingredient.id, preloadedIngredient: stockedIngredient })
       if (!updatedIngredient) throw new Error('Ingredient not found after stock entry was created.')
 
-      await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryPurchase', entityId: createdPurchase.id, operation: 'upsert', payload: createdPurchase })
-      await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryItem', entityId: updatedIngredient.id, operation: 'upsert', payload: updatedIngredient })
+      await enqueueSyncChange(tx, { restaurantId, branchId: stockBranchId, entityType: 'inventoryPurchase', entityId: createdPurchase.id, operation: 'upsert', payload: createdPurchase })
+      await enqueueSyncChange(tx, { restaurantId, branchId: stockBranchId, entityType: 'inventoryItem', entityId: updatedIngredient.id, operation: 'upsert', payload: updatedIngredient })
 
       return {
         purchase: { ...createdPurchase, ingredient: { name: updatedIngredient.name, unit: updatedIngredient.unit } },

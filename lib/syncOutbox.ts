@@ -117,12 +117,20 @@ export async function enqueueSyncChange(
   })
 }
 
+// Entities every station must receive regardless of which station owns them.
+// Under shared stock the pool is held by one station, so filtering these by the
+// receiving station would leave every other station's device never hearing that
+// the shared stock exists — it would keep showing its own stale numbers while
+// happily continuing to trade.
+const SHARED_STOCK_ENTITY_TYPES = ['inventoryItem', 'inventoryPurchase'] as const
+
 export async function listPendingSyncOutboxChanges(
   db: PrismaDb,
   params: {
     scopeIds: string[]
     limit?: number
     branchId?: string | null
+    sharedStock?: boolean
   },
 ) {
   return db.syncOutbox.findMany({
@@ -136,6 +144,7 @@ export async function listPendingSyncOutboxChanges(
                   { scopeId: GLOBAL_SYNC_SCOPE_ID },
                   { entityType: 'restaurant' },
                   { entityType: 'branch' },
+                  ...(params.sharedStock ? [{ entityType: { in: [...SHARED_STOCK_ENTITY_TYPES] } }] : []),
                   { branchId: params.branchId ?? null },
                 ],
               },
