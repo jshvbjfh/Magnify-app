@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
   ArrowLeft, Trash2, X, ShieldAlert, WifiOff, AlertCircle, Cloud, Printer, StickyNote,
-  Search, ChevronDown,
+  Search, ChevronDown, Lock,
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
@@ -12,7 +12,8 @@ import {
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline, validateOrderCode, type BranchInfo } from '../services/sync'
 import { getActiveShift } from '../services/shifts'
-import { getPrinterMap, getBillPrinter, resolveStationPrinter, listPrinters, isVirtualPrinter, parseBillTemplate, getBillNetworkPrinter, getBillEscposMode, printBillRaw, type PrinterMap, type PrinterInfo, type NetworkPrinterConfig } from '../services/printing'
+import { getPrinterMap, getBillPrinter, resolveStationPrinter, listPrinters, isVirtualPrinter, parseBillTemplate, getBillNetworkPrinter, getBillEscposMode, printBillRaw, printTicketRaw, type PrinterMap, type PrinterInfo, type NetworkPrinterConfig } from '../services/printing'
+import { hotelCreditLines, hotelBuffetPriceHidden } from '../services/hotelBuffet'
 import { useOnline } from '../hooks/useOnline'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -102,6 +103,7 @@ function calcTotals(items: Array<{ dishPrice: number; qty: number }>) {
   // No VAT: the total is simply the sum of the item prices.
   return { subtotal, vatAmount: 0, totalAmount: subtotal }
 }
+
 
 function getTimeLabel() {
   const h = new Date().getHours()
@@ -706,7 +708,17 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     const rule = '-'.repeat(LINE)
 
     const { topText, bottomText, footer2Text } = parseBillTemplate(billHeaderTpl)
-    const { totalAmount } = calcTotals(items.map(i => ({ dishPrice: i.dish_price, qty: i.qty })))
+    // A buffet sharing the order with the guest's own items prints with no
+    // amount, and the printed total is what the guest actually hands over. A
+    // buffet on its own prints and totals normally — that slip is the record of
+    // the cover the hotel is being charged for.
+    const hidden = hotelBuffetPriceHidden(items.map(i => ({
+      name: i.dish_name, category: dishes.find(d => d.id === i.dish_id)?.category,
+    })))
+    const billLines = items.map((i, idx) => ({ item: i, hidePrice: hidden[idx] }))
+    const { totalAmount } = calcTotals(
+      billLines.map(l => ({ dishPrice: l.hidePrice ? 0 : l.item.dish_price, qty: l.item.qty })),
+    )
     const now = new Date()
     const dt  = now.toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
     const isTakeaway = !order.table_id
@@ -726,7 +738,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
         topText, bottomText, footer2Text, server, station, orderNo, orderType,
         tableName: isTakeaway ? null : (order.table_name ?? 'Table'),
         dt,
-        items: items.map(i => ({ qty: i.qty, name: i.dish_name, unitPrice: i.dish_price, notes: i.notes ?? null })),
+        items: billLines.map(l => ({
+          qty: l.item.qty, name: l.item.dish_name, unitPrice: l.item.dish_price,
+          notes: l.item.notes ?? null,
+          // Suppresses the amount column entirely — a zero would read as a
+          // free item rather than a line the hotel is settling.
+          noPrice: l.hidePrice,
+        })),
         totalAmount,
         columns: LINE,
         ...(billNetworkPrinter?.ip
@@ -758,8 +776,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     for (const s of cols(`Order #: ${orderNo}`, orderType)) divLines.push(ln(s))
     if (!isTakeaway) divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`))
     divLines.push(ln(rule))
-    for (const i of items) {
-      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.dish_price * i.qty))) divLines.push(ln(s))
+    for (const { item: i, hidePrice } of billLines) {
+      // A hidden buffet gets no amount at all — passing '' to cols() drops the
+      // whole right-hand column for that line.
+      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, hidePrice ? '' : fmt2(i.dish_price * i.qty))) divLines.push(ln(s))
       if (i.notes) divLines.push(ln(`  > ${i.notes}`))
     }
     divLines.push(ln(rule))
@@ -859,38 +879,92 @@ ${barcodeEl}
     for (const [bId, group] of byBranch) {
       const deviceName = resolveStationPrinter(printerMap, billPrinter, bId === '__none__' ? null : bId)
       const station = group.branchType === 'bar' ? 'BAR' : 'KITCHEN'
+      const ticketNo = ticketIndex
 
-      const divLines: string[] = []
-      divLines.push(ln(center(`*** ${group.branchName || rName || 'Kitchen'} ***`), true))
-      divLines.push(ln(rule))
-      for (const s of cols(`Server: ${order.created_by_name ?? '—'}`, station)) divLines.push(ln(s, true))
-      divLines.push(ln(center(orderType), true))
-      for (const s of cols(dateStr, timeStr)) divLines.push(ln(s))
-      divLines.push(ln(rule))
-      if (!isTakeaway) {
-        divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`, true))
+      // ESC/POS path — the same raw delivery the bill uses. A thermal printer
+      // on the "Generic / Text Only" driver cannot render the GDI/HTML page
+      // below: it feeds the paper and prints nothing at all. Raw bytes are the
+      // only way any text reaches that hardware, so when thermal styling is on
+      // (or a network thermal printer is configured) tickets go out raw too.
+      const escposTicketPrinter = billEscposMode
+        ? (deviceName || printers.find(p => p.isDefault && !isVirtualPrinter(p.name))?.name || '')
+        : ''
+      // A station with its own local printer keeps it; the network bill printer
+      // is only the target when no local queue was resolved for this station.
+      const useNetwork = !escposTicketPrinter && !deviceName && !!billNetworkPrinter?.ip
+      if (escposTicketPrinter || useNetwork) {
+        const rawTicket = (copy: 'station' | 'waiter') => ({
+          branchName: group.branchName || rName || 'Kitchen',
+          station, copy,
+          server: order.created_by_name ?? '-',
+          orderType,
+          tableName: isTakeaway ? null : (order.table_name ?? 'Table'),
+          dateStr, timeStr,
+          ticketNo,
+          orderNo: order.order_number ?? '',
+          items: group.items.map(i => ({ qty: i.qty, name: i.dishName, note: i.note ?? null })),
+          columns: LINE,
+          ...(useNetwork
+            ? { ip: billNetworkPrinter!.ip, port: billNetworkPrinter!.port }
+            : { printerName: escposTicketPrinter }),
+        })
+        // Chain onto the shared print queue so the station copy fully lands
+        // (and the printer cuts) before the waiter copy starts — two physical
+        // slips, in order, exactly as the HTML path behaves.
+        for (const copy of ['station', 'waiter'] as const) {
+          electronPrintQueue = electronPrintQueue
+            .then(() => printTicketRaw(rawTicket(copy)))
+            .then(result => {
+              if (!result.ok) setSubmitError(`Ticket print failed: ${result.error ?? 'unknown error'}`)
+            })
+            .catch((err: Error) => setSubmitError(`Ticket print failed: ${err.message}`))
+            .then(() => new Promise<void>(res => setTimeout(res, PRINT_GAP_MS)))
+        }
+        ticketIndex += 1
+        continue
+      }
+
+      // Each station's ticket prints twice: the station's own copy, then the
+      // waiter's copy as a delivery checklist. Queued as two separate print
+      // jobs so the printer cuts after the first before the second starts —
+      // two physical slips, not one long one. Both carry the same Ticket #;
+      // only the copy line and the tick boxes differ.
+      const buildTicket = (copy: 'station' | 'waiter'): string => {
+        const isWaiter = copy === 'waiter'
+        const divLines: string[] = []
+        divLines.push(ln(center(`*** ${group.branchName || rName || 'Kitchen'} ***`), true))
+        divLines.push(ln(center(isWaiter ? '--- WAITER CHECKLIST ---' : `--- ${station} COPY ---`), true))
         divLines.push(ln(rule))
-      }
-      for (const i of group.items) {
-        // Explicit spaces between qty and dish name — a flex `gap` collapses to
-        // nothing on text-only drivers and the two run together as one word.
-        for (const s of cols(`${i.qty}x  ${i.dishName.toUpperCase()}`, '')) divLines.push(ln(s, true))
-        if (i.note) divLines.push(ln(`  > ${i.note}`))
-      }
-      divLines.push(ln(rule))
-      divLines.push(ln(center(stars)))
-      divLines.push(ln(center(`Ticket #: ${ticketIndex}`), true))
-      divLines.push(ln(center(`Order #: ${order.order_number ?? ''}`)))
-      divLines.push(ln(center(stars)))
-      // Text-only drivers ignore CSS height entirely — paper only advances on
-      // literal line feeds, and some drivers also trim a fully-blank tail
-      // before cutting, which is why tickets were coming out short/stuck. Blank
-      // lines plus one visible dot at the very end push real paper past the
-      // tear bar and stop the tail from being trimmed away.
-      for (let k = 0; k < 8; k++) divLines.push(ln(' '))
-      divLines.push(ln(center('.')))
+        for (const s of cols(`Server: ${order.created_by_name ?? '—'}`, station)) divLines.push(ln(s, true))
+        divLines.push(ln(center(orderType), true))
+        for (const s of cols(dateStr, timeStr)) divLines.push(ln(s))
+        divLines.push(ln(rule))
+        if (!isTakeaway) {
+          divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`, true))
+          divLines.push(ln(rule))
+        }
+        for (const i of group.items) {
+          // Explicit spaces between qty and dish name — a flex `gap` collapses to
+          // nothing on text-only drivers and the two run together as one word.
+          // The waiter's copy gets a box per line to tick off on delivery.
+          const label = `${isWaiter ? '[ ] ' : ''}${i.qty}x  ${i.dishName.toUpperCase()}`
+          for (const s of cols(label, '')) divLines.push(ln(s, true))
+          if (i.note) divLines.push(ln(`  > ${i.note}`))
+        }
+        divLines.push(ln(rule))
+        divLines.push(ln(center(stars)))
+        divLines.push(ln(center(`Ticket #: ${ticketNo}`), true))
+        divLines.push(ln(center(`Order #: ${order.order_number ?? ''}`)))
+        divLines.push(ln(center(stars)))
+        // Text-only drivers ignore CSS height entirely — paper only advances on
+        // literal line feeds, and some drivers also trim a fully-blank tail
+        // before cutting, which is why tickets were coming out short/stuck. Blank
+        // lines plus one visible dot at the very end push real paper past the
+        // tear bar and stop the tail from being trimmed away.
+        for (let k = 0; k < 8; k++) divLines.push(ln(' '))
+        divLines.push(ln(center('.')))
 
-      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Ticket ${escHtml(order.order_number ?? '')} ${escHtml(station)}</title><style>
+        return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Ticket ${escHtml(order.order_number ?? '')} ${escHtml(isWaiter ? 'WAITER' : station)}</title><style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;width:80mm;padding:20mm 4mm 0;color:#000}
 .line{white-space:pre;line-height:1.35;display:block;min-height:1.35em}
@@ -899,7 +973,10 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
 </style></head><body>
 <div>${divLines.join('')}</div>
 </body></html>`
-      printHtml(html, 0, deviceName)
+      }
+
+      printHtml(buildTicket('station'), 0, deviceName)
+      printHtml(buildTicket('waiter'), 0, deviceName)
       ticketIndex += 1
     }
   }
@@ -1050,6 +1127,9 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       const tableName = selectedTableKey === 'takeaway'
         ? 'Takeaway'
         : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
+      // Items keep their real price even when the hotel buffet is on credit —
+      // that revenue IS earned, it just settles as a receivable from the hotel
+      // instead of cash at the table (see services/hotelBuffet.ts).
       const { subtotal, vatAmount, totalAmount } = calcTotals(cart)
 
       // Covers are optional: a blank or nonsense box stores null, not 0, so the
@@ -1245,8 +1325,44 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
   const cartItems      = localCart[selectedTableKey] ?? []
   const isBuilding     = cartItems.length > 0
   const { totalAmount } = calcTotals(cartItems)
+  // Every hotel buffet is settled by the hotel as a receivable, so it is never
+  // collected at the table. Split out here so the waiter reads the figure they
+  // actually take from the guest.
+  const cartCredits    = hotelCreditLines(cartItems.map(i => ({
+    name: i.dishName, category: dishes.find(d => d.id === i.dishId)?.category,
+  })))
+  const cartCreditAmount = cartItems.reduce((s, i, idx) => s + (cartCredits[idx] ? i.dishPrice * i.qty : 0), 0)
+  const cartDueAtTable   = totalAmount - cartCreditAmount
   const tableNumber        = selectedTableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
   const activeTableKeys    = new Set(pendingOrders.map(o => o.table_id ?? 'takeaway'))
+  // Terminals are shared: waiter A steps away and waiter B signs in with their
+  // own order code. Every active order stays VISIBLE to both — B needs to see
+  // that table 7 is being served — but B cannot act on A's orders: the card
+  // renders read-only, with no Served / Pay / Add / Cancel buttons.
+  //
+  // Ownership is created_by_name, because that is the waiter; the Staff row
+  // behind the terminal is the shared screen account and identifies nobody.
+  // Treated as everyone's (fully actionable): guest QR orders awaiting
+  // confirmation, and orders with no recorded waiter, which would otherwise
+  // be stranded read-only on every terminal with no way to settle them.
+  const ownsOrder = (o: Order): boolean => {
+    if (!waiterName.trim()) return true          // no waiter signed in — full access
+    if (o.status === 'UNCONFIRMED') return true  // unclaimed guest QR order
+    const who = o.created_by_name?.trim().toLowerCase()
+    if (!who) return true
+    const me = waiterName.trim().toLowerCase()
+    if (who === me) return true
+    // A confirmed guest order reads "Guest QR Order · confirmed by <waiter>".
+    // Compare the whole trailing name, so "Sam" does not match "Samuel".
+    const confirmedBy = who.match(/confirmed by (.+)$/)
+    return confirmedBy ? confirmedBy[1].trim() === me : false
+  }
+  // Who to name on a locked card. Confirmed guest orders carry the whole
+  // "Guest QR Order · confirmed by <waiter>" string — show just the waiter.
+  const orderWaiter = (o: Order): string => {
+    const raw = o.created_by_name?.trim() ?? ''
+    return raw.match(/confirmed by (.+)$/)?.[1].trim() || raw || 'Another waiter'
+  }
   // Pending Orders tab: all active orders, newest first, filtered by table-name search.
   const pendingQuery   = pendingSearch.trim().toLowerCase()
   const pendingList    = pendingOrders
@@ -1453,8 +1569,12 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
             {pendingList.map(ord => {
               const oi  = orderItemsMap[ord.id] ?? []
               const tot = oi.reduce((s, i) => s + i.dish_price * i.qty, 0)
+              // Another waiter's order: shown in full, but read-only — the
+              // action row is replaced by a lock line so nobody settles,
+              // edits or cancels a table they are not serving.
+              const mine = ownsOrder(ord)
               return (
-                <div key={ord.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <div key={ord.id} className={`bg-white border rounded-xl overflow-hidden ${mine ? 'border-gray-200' : 'border-gray-200 opacity-60'}`}>
                   <div className="bg-gray-50 px-3 py-2 flex justify-between items-center border-b border-gray-100">
                     <span className="text-xs font-bold text-gray-700">{ord.order_number}</span>
                     <span className="text-xs text-gray-500 truncate ml-2">{ord.table_name ?? 'Takeaway'}</span>
@@ -1477,7 +1597,11 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                   </div>
                   <div className="border-t border-gray-100 px-3 py-2 space-y-1.5">
                     <div className="flex justify-between text-sm font-bold text-gray-900"><span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span></div>
-                    {ord.status === 'UNCONFIRMED' ? (
+                    {!mine ? (
+                      <p className="flex items-center justify-center gap-1 py-2 text-xs font-semibold text-gray-500">
+                        <Lock className="h-3.5 w-3.5 flex-shrink-0" /> {`${orderWaiter(ord)}'s order`}
+                      </p>
+                    ) : ord.status === 'UNCONFIRMED' ? (
                       <button
                         onClick={() => {
                           setSubmitError(null)
@@ -1857,6 +1981,18 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
             <div className="flex justify-between text-base font-bold text-gray-900">
               <span>{editingOrder ? 'New items' : 'Total'}</span><span>{fmtRWF(totalAmount)} RWF</span>
             </div>
+            {/* The hotel settles its buffet as a receivable, so it is not
+                collected here — show the waiter what the guest actually pays. */}
+            {cartCreditAmount > 0 && (
+              <>
+                <div className="flex justify-between text-xs font-semibold text-gray-500">
+                  <span>On hotel credit</span><span>{fmtRWF(cartCreditAmount)} RWF</span>
+                </div>
+                <div className="flex justify-between text-sm font-bold text-green-700">
+                  <span>Due at table</span><span>{fmtRWF(cartDueAtTable)} RWF</span>
+                </div>
+              </>
+            )}
             {editingOrder && (
               <div className="flex justify-between text-xs font-semibold text-gray-500">
                 <span>Order total after update</span>

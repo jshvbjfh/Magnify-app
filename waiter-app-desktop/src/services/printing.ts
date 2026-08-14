@@ -26,6 +26,7 @@ function getElectronPrint() {
       receipt: (html: string, deviceName?: string) => Promise<void>
       listPrinters?: () => Promise<PrinterInfo[]>
       printBillRaw?: (data: object) => Promise<{ ok: boolean; error?: string }>
+      printTicketRaw?: (data: object) => Promise<{ ok: boolean; error?: string }>
     }
   }).electronPrint
 }
@@ -133,6 +134,16 @@ export async function printBillRaw(data: object): Promise<{ ok: boolean; error?:
   const ep = getElectronPrint()
   if (!ep?.printBillRaw) throw new Error('ESC/POS bill printing not available')
   return ep.printBillRaw(data)
+}
+
+// Kitchen/bar tickets as raw ESC/POS bytes. Gated by the same thermal-styling
+// switch as the bill: a "Generic / Text Only" printer prints a blank slip from
+// the GDI/HTML path, so on that hardware this is the only path that produces
+// any text at all.
+export async function printTicketRaw(data: object): Promise<{ ok: boolean; error?: string }> {
+  const ep = getElectronPrint()
+  if (!ep?.printTicketRaw) throw new Error('ESC/POS ticket printing not available')
+  return ep.printTicketRaw(data)
 }
 
 // Resolve the printer for a station: its own mapping, else the bill printer,
