@@ -146,3 +146,85 @@ describe('finalizeRestaurantOrderPayment — per-station journal booking', () =>
     warn.mockRestore()
   })
 })
+
+// The hotel settles its buffet covers itself, later — so that revenue must book
+// to Accounts Receivable ('Credit') and never into the till with the cash the
+// guest handed over for their add-ons.
+describe('finalizeRestaurantOrderPayment — hotel buffet books to Accounts Receivable', () => {
+  const BREAKFAST = 'breakfast-menu'
+
+  /** Order of a hotel buffet plus whatever add-ons are passed. */
+  function makeBuffetDb(addOns: Array<{ id: string; dishId: string; dishName: string; dishPrice: number }>) {
+    const items = [
+      { id: 'it-buffet', dishId: 'dish-buffet', dishName: 'HOTEL BUFFET', dishPrice: 12000, qty: 1, dishVariantId: null, dishVariantName: null, status: 'ACTIVE' },
+      ...addOns.map((a) => ({ ...a, qty: 1, dishVariantId: null, dishVariantName: null, status: 'ACTIVE' })),
+    ]
+    const current = { id: ORDER, restaurantId: REST, branchId: BREAKFAST, status: 'OPEN', tableId: 't-4', tableName: 'T4', paidAt: null, paymentMethod: null, items }
+    const paid = { ...current, status: 'PAID', paidAt: new Date('2026-08-14T07:15:00Z') }
+    return {
+      restaurantOrder: {
+        findFirst: vi.fn().mockResolvedValueOnce(current).mockResolvedValueOnce(paid),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      journalEntry: { count: vi.fn().mockResolvedValue(0) },
+      dishSale: {
+        findMany: vi.fn().mockResolvedValue(
+          items.map((i) => ({ dishId: i.dishId, orderItemId: i.id, branchId: BREAKFAST })),
+        ),
+      },
+      dish: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'dish-buffet', category: 'Breakfast buffet table' }]),
+      },
+      restaurantTable: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    } as any
+  }
+
+  function callsByTender() {
+    const map = new Map<string, number>()
+    for (const call of recordJournalEntryMock.mock.calls) {
+      const arg = call[1] as any
+      map.set(arg.paymentMethod, (map.get(arg.paymentMethod) ?? 0) + arg.amount)
+    }
+    return map
+  }
+
+  it('books the buffet to Credit and the add-ons to the tender the guest paid', async () => {
+    const db = makeBuffetDb([{ id: 'it-egg', dishId: 'dish-egg', dishName: 'Poached egg', dishPrice: 5000 }])
+
+    await finalizeRestaurantOrderPayment(db, { restaurantId: REST, branchId: BREAKFAST, orderId: ORDER, paymentMethod: 'Cash' })
+
+    const byTender = callsByTender()
+    expect(recordJournalEntryMock).toHaveBeenCalledTimes(2)
+    // The hotel owes the buffet; the guest paid only for the egg.
+    expect(byTender.get('Credit')).toBe(grossOf([{ dishPrice: 12000, qty: 1 }]))
+    expect(byTender.get('Cash')).toBe(grossOf([{ dishPrice: 5000, qty: 1 }]))
+  })
+
+  it('books a buffet ordered alone entirely to Credit, never to the till', async () => {
+    const db = makeBuffetDb([])
+
+    await finalizeRestaurantOrderPayment(db, { restaurantId: REST, branchId: BREAKFAST, orderId: ORDER, paymentMethod: 'Cash' })
+
+    const byTender = callsByTender()
+    expect(recordJournalEntryMock).toHaveBeenCalledTimes(1)
+    expect(byTender.get('Credit')).toBe(grossOf([{ dishPrice: 12000, qty: 1 }]))
+    expect(byTender.has('Cash')).toBe(false)
+  })
+
+  it('leaves an ordinary order on a single tender, with no dish lookup at all', async () => {
+    const db = makeDb({
+      dishSales: [
+        { dishId: 'dish-A', orderItemId: 'it-A', branchId: 'parking-bar' },
+        { dishId: 'dish-B', orderItemId: 'it-B', branchId: 'parking-bar' },
+        { dishId: 'dish-C', orderItemId: 'it-C', branchId: 'parking-bar' },
+      ],
+    })
+
+    await finalizeRestaurantOrderPayment(db, { restaurantId: REST, branchId: TILL, orderId: ORDER, paymentMethod: 'Cash' })
+
+    const byTender = callsByTender()
+    expect(recordJournalEntryMock).toHaveBeenCalledTimes(1)
+    expect(byTender.get('Cash')).toBe(grossOf(ITEMS))
+    expect(byTender.has('Credit')).toBe(false)
+  })
+})
