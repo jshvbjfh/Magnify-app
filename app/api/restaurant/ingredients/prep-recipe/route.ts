@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { recalculatePrepUnitCost } from '@/lib/prepCosting'
+import { getRestaurantSharedStock, recipeIngredientScopeWhere } from '@/lib/inventoryConsumption'
 
 async function getContext() {
   const session = await getServerSession(authOptions)
@@ -58,8 +59,15 @@ export async function POST(req: Request) {
   })
   if (!prep) return NextResponse.json({ error: 'Prep not found' }, { status: 404 })
 
+  // The prep stays with this kitchen, but the raw ingredients it is made from
+  // come out of the shared pool at the main station, so they are looked up
+  // restaurant-wide exactly as the picker lists them.
+  const sharedStock = await getRestaurantSharedStock(prisma, ctx.restaurantId)
   const rawItem = await prisma.inventoryItem.findFirst({
-    where: { id: ingredientItemId, restaurantId: ctx.restaurantId, branchId: ctx.branchId },
+    where: {
+      id: ingredientItemId,
+      ...recipeIngredientScopeWhere({ restaurantId: ctx.restaurantId, branchId: ctx.branchId, sharedStock }),
+    },
   })
   if (!rawItem) return NextResponse.json({ error: 'Ingredient not found' }, { status: 404 })
 

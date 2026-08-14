@@ -90,6 +90,18 @@ export async function getRestaurantSharedStock(db: PrismaDb, restaurantId: strin
   return Boolean(restaurant?.sharedStock)
 }
 
+// What a station is allowed to build a recipe on. Under shared stock that is
+// every raw ingredient the restaurant holds — the pool sits at the main station
+// but belongs to all of them — while preps stay with the kitchen that made
+// them, because a sauce one kitchen produced is not stock another can draw on.
+// The picker, the dish recipe and the prep sub-recipe all have to agree on this,
+// or the list offers an ingredient the save then rejects.
+export function recipeIngredientScopeWhere(params: { restaurantId: string; branchId: string; sharedStock?: boolean }) {
+  return params.sharedStock
+    ? { restaurantId: params.restaurantId, OR: [{ type: { not: 'prep' } }, { branchId: params.branchId }] }
+    : { restaurantId: params.restaurantId, branchId: params.branchId }
+}
+
 // Where to look for the stock itself. Shared stock searches the whole
 // restaurant; otherwise only the station that is consuming, which is the
 // behaviour every restaurant has today.

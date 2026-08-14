@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { consumeIngredientStock } from '@/lib/inventoryConsumption'
+import { consumeIngredientStock, recipeIngredientScopeWhere } from '@/lib/inventoryConsumption'
 
 // Where consumption looks for stock is the whole risk of the shared-stock
 // change: search the wrong place and a sale deducts nothing and books no cost,
@@ -84,5 +84,31 @@ describe('consumeIngredientStock scoping', () => {
     await consumeIngredientStock(db as never, baseParams({ sharedStock: true }))
 
     expect(db.inventoryItem.update.mock.calls[0][0].data.quantity).toEqual({ decrement: 100 })
+  })
+})
+
+describe('recipeIngredientScopeWhere', () => {
+  const scope = { restaurantId: 'rest-1', branchId: 'branch-bar' }
+
+  it('keeps a station to its own stock when shared stock is off', () => {
+    expect(recipeIngredientScopeWhere(scope)).toEqual({ restaurantId: 'rest-1', branchId: 'branch-bar' })
+  })
+
+  it('opens the whole restaurants raw stock to a station under shared stock', () => {
+    // The bar builds recipes on ingredients held at the main station — without
+    // this the picker is empty and every recipe save answers "Ingredient not found".
+    expect(recipeIngredientScopeWhere({ ...scope, sharedStock: true })).toEqual({
+      restaurantId: 'rest-1',
+      OR: [{ type: { not: 'prep' } }, { branchId: 'branch-bar' }],
+    })
+  })
+
+  it('leaves preps with the kitchen that made them', () => {
+    // A sauce the lunch kitchen produced is not stock the bar can draw on, so
+    // the prep half of the OR stays pinned to the asking station.
+    const where = recipeIngredientScopeWhere({ ...scope, sharedStock: true }) as {
+      OR: Array<Record<string, unknown>>
+    }
+    expect(where.OR).toContainEqual({ branchId: 'branch-bar' })
   })
 })
