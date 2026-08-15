@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { consumeIngredientStock, recipeIngredientScopeWhere } from '@/lib/inventoryConsumption'
+import { consumeIngredientStock, purchaseScopeWhere, recipeIngredientScopeWhere } from '@/lib/inventoryConsumption'
 
 // Where consumption looks for stock is the whole risk of the shared-stock
 // change: search the wrong place and a sale deducts nothing and books no cost,
@@ -107,6 +107,33 @@ describe('recipeIngredientScopeWhere', () => {
     // A sauce the lunch kitchen produced is not stock the bar can draw on, so
     // the prep half of the OR stays pinned to the asking station.
     const where = recipeIngredientScopeWhere({ ...scope, sharedStock: true }) as {
+      OR: Array<Record<string, unknown>>
+    }
+    expect(where.OR).toContainEqual({ branchId: 'branch-bar' })
+  })
+})
+
+describe('purchaseScopeWhere', () => {
+  const scope = { restaurantId: 'rest-1', branchId: 'branch-bar' }
+
+  it('keeps a station to its own batches when shared stock is off', () => {
+    expect(purchaseScopeWhere(scope)).toEqual({ restaurantId: 'rest-1', branchId: 'branch-bar' })
+  })
+
+  it('shows a station the pools batches under shared stock', () => {
+    // Without this the recipe card finds no FIFO layer behind an ingredient it
+    // can plainly see in stock, and tags a fully-stocked line "Stock
+    // insufficient — est. price".
+    expect(purchaseScopeWhere({ ...scope, sharedStock: true })).toEqual({
+      restaurantId: 'rest-1',
+      OR: [{ ingredient: { type: { not: 'prep' } } }, { branchId: 'branch-bar' }],
+    })
+  })
+
+  it('draws the same prep line as the ingredient scope', () => {
+    // The two have to agree: a batch visible here whose ingredient is invisible
+    // in the picker (or vice versa) is how the scopes drifted apart last time.
+    const where = purchaseScopeWhere({ ...scope, sharedStock: true }) as {
       OR: Array<Record<string, unknown>>
     }
     expect(where.OR).toContainEqual({ branchId: 'branch-bar' })
