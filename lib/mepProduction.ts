@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient, PrepLog } from '@prisma/client'
 
 import { getActiveFifoUnitCost } from '@/lib/fifoCosting'
 import { generateInventoryBatchId } from '@/lib/inventoryBatch'
-import { consumeIngredientStock, getRestaurantFifoEnabled, getRestaurantSharedStock } from '@/lib/inventoryConsumption'
+import { consumeIngredientStock, getRestaurantFifoEnabled, getRestaurantSharedStock, stockScopeWhere } from '@/lib/inventoryConsumption'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
@@ -33,19 +33,25 @@ export type PrepAwareIngredient = {
 
 export type MepConsumptionLine = { ingredientId: string; quantityUsed: number; actualCost: number }
 
+// sharedStock matters here for the same reason it does when consuming: a raw
+// ingredient restored to the pool lives on the main station, so looking it up
+// under the station that logged the prep finds nothing and silently leaves its
+// unit cost on the pre-undo layer. Preps pass false — they are station stock.
 async function syncItemActiveUnitCostAfterChange(
   db: PrismaDb,
-  params: { restaurantId: string; branchId: string; ingredientId: string },
+  params: { restaurantId: string; branchId: string; sharedStock?: boolean; ingredientId: string },
 ) {
   const item = await db.inventoryItem.findFirst({
-    where: { id: params.ingredientId, restaurantId: params.restaurantId, branchId: params.branchId },
+    where: { id: params.ingredientId, ...stockScopeWhere(params) },
   })
   if (!item) return null
 
   const openLayers = await db.inventoryPurchase.findMany({
     where: {
       restaurantId: params.restaurantId,
-      branchId: params.branchId,
+      // Layers sit with the item, which under shared stock is the main station
+      // and not the one that triggered this resync.
+      branchId: item.branchId,
       ingredientId: params.ingredientId,
       remainingQuantity: { gt: LAYER_EPSILON },
     },
@@ -639,6 +645,7 @@ export async function undoPrepLog(
   }
 
   // Restore the raw-material FIFO allocations this log consumed.
+  const sharedStock = await getRestaurantSharedStock(db, params.restaurantId)
   const ledgers = await db.inventoryBatchUsageLedger.findMany({
     where: { restaurantId: params.restaurantId, sourceType: 'prepProduction', sourceId: log.id },
   })
@@ -683,12 +690,15 @@ export async function undoPrepLog(
     const resynced = await syncItemActiveUnitCostAfterChange(db, {
       restaurantId: params.restaurantId,
       branchId: log.branchId,
+      sharedStock,
       ingredientId,
     })
     if (resynced) {
       await enqueueSyncChange(db, {
         restaurantId: params.restaurantId,
-        branchId: log.branchId,
+        // The item's own station, so the change syncs to the devices that hold
+        // it rather than to whichever station undid the prep.
+        branchId: resynced.branchId,
         entityType: 'inventoryItem',
         entityId: resynced.id,
         operation: 'upsert',

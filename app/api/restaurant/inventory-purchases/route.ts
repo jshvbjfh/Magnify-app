@@ -7,7 +7,7 @@ import { getActiveFifoUnitCost } from '@/lib/fifoCosting'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 import { toUsageQuantity, toUsageUnitCost, normalizeUnitsPerPurchaseUnit, isSameInventoryUnit } from '@/lib/inventoryUnits'
-import { getRestaurantSharedStock } from '@/lib/inventoryConsumption'
+import { getRestaurantSharedStock, purchaseScopeWhere } from '@/lib/inventoryConsumption'
 import type { Prisma } from '@prisma/client'
 
 const PURCHASE_USAGE_EPSILON = 0.000001
@@ -225,10 +225,11 @@ export async function GET(req: Request) {
     const from = searchParams.get('from')
     const to = searchParams.get('to')
 
+    const sharedStock = await getRestaurantSharedStock(prisma, restaurantId)
+
     const purchases = await prisma.inventoryPurchase.findMany({
       where: {
-        restaurantId,
-        branchId,
+        ...purchaseScopeWhere({ restaurantId, branchId, sharedStock }),
         ...(ingredientId ? { ingredientId } : {}),
         ...(from && to ? { purchasedAt: { gte: new Date(from), lte: new Date(to + 'T23:59:59') } } : {}),
       },
@@ -466,14 +467,22 @@ export async function PUT(req: Request) {
 
     const totalCost = quantityPurchased * unitCost
 
+    const sharedStock = await getRestaurantSharedStock(prisma, restaurantId)
+
     const existingPurchase = await prisma.inventoryPurchase.findFirst({
-      where: { id, restaurantId, branchId },
+      where: { id, ...purchaseScopeWhere({ restaurantId, branchId, sharedStock }) },
     })
 
     if (!existingPurchase) return NextResponse.json({ error: 'Stock entry not found' }, { status: 404 })
 
+    // Everything downstream is keyed on the station that physically holds the
+    // batch, not the one the editor is signed into — under shared stock those
+    // differ, and using the session branch would look up an item that isn't
+    // there and then quietly create a rival copy of it.
+    const stockBranchId = existingPurchase.branchId
+
     const existingIngredient = await prisma.inventoryItem.findFirst({
-      where: { id: existingPurchase.ingredientId, restaurantId, branchId },
+      where: { id: existingPurchase.ingredientId, restaurantId, branchId: stockBranchId },
     })
     if (!existingIngredient) return NextResponse.json({ error: 'Ingredient not found' }, { status: 404 })
 
@@ -503,7 +512,7 @@ export async function PUT(req: Request) {
     let reDenominationFactor: number | null = null
     if (isSameIngredient && usageUnitIsChanging && hasConsumed && !purchaseUnitIsChanging) {
       const otherBatchCount = await prisma.inventoryPurchase.count({
-        where: { restaurantId, branchId, ingredientId: existingIngredient.id, deletedAt: null, NOT: { id } },
+        where: { restaurantId, branchId: stockBranchId, ingredientId: existingIngredient.id, deletedAt: null, NOT: { id } },
       })
       if (otherBatchCount === 0) {
         const oldUnitsPerPurchaseUnit = normalizeUnitsPerPurchaseUnit(existingPurchase.unitsPerPurchaseUnit, 1)
@@ -525,7 +534,8 @@ export async function PUT(req: Request) {
     const updatedPurchase = await prisma.$transaction(async (tx) => {
       const nextIngredient = await resolveInventoryIngredient(tx, {
         restaurantId,
-        branchId,
+        branchId: stockBranchId,
+        sharedStock,
         ingredientId,
         itemName,
         unit,
@@ -594,13 +604,13 @@ export async function PUT(req: Request) {
       const syncedIngredientIds = new Set([existingPurchase.ingredientId, nextIngredient.id])
       const syncedIngredients: ResolvedInventoryIngredient[] = []
       for (const syncedIngredientId of syncedIngredientIds) {
-        const syncedIngredient = await syncIngredientActiveUnitCost(tx, { restaurantId, branchId, ingredientId: syncedIngredientId })
+        const syncedIngredient = await syncIngredientActiveUnitCost(tx, { restaurantId, branchId: stockBranchId, ingredientId: syncedIngredientId })
         if (!syncedIngredient) continue
-        await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryItem', entityId: syncedIngredient.id, operation: 'upsert', payload: syncedIngredient })
+        await enqueueSyncChange(tx, { restaurantId, branchId: stockBranchId, entityType: 'inventoryItem', entityId: syncedIngredient.id, operation: 'upsert', payload: syncedIngredient })
         syncedIngredients.push(syncedIngredient)
       }
 
-      await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryPurchase', entityId: purchase.id, operation: 'upsert', payload: purchase })
+      await enqueueSyncChange(tx, { restaurantId, branchId: stockBranchId, entityType: 'inventoryPurchase', entityId: purchase.id, operation: 'upsert', payload: purchase })
 
       const hydratedPurchase = await tx.inventoryPurchase.findUnique({
         where: { id: purchase.id },
@@ -634,11 +644,17 @@ export async function DELETE(req: Request) {
     const id = searchParams.get('id')
     if (!id) return NextResponse.json({ error: 'Stock entry id is required' }, { status: 400 })
 
+    const sharedStock = await getRestaurantSharedStock(prisma, restaurantId)
+
     const existingPurchase = await prisma.inventoryPurchase.findFirst({
-      where: { id, restaurantId, branchId },
+      where: { id, ...purchaseScopeWhere({ restaurantId, branchId, sharedStock }) },
     })
 
     if (!existingPurchase) return NextResponse.json({ error: 'Stock entry not found' }, { status: 404 })
+
+    // The batch's own station, which under shared stock is the main one holding
+    // the pool rather than whichever station is doing the deleting.
+    const stockBranchId = existingPurchase.branchId
 
     const updatedIngredient = await prisma.$transaction(async (tx) => {
       const journalEntryId = existingPurchase.journalEntryId
@@ -658,11 +674,11 @@ export async function DELETE(req: Request) {
         await tx.journalEntry.delete({ where: { id: journalEntryId } })
       }
 
-      const updatedIngredient = await syncIngredientActiveUnitCost(tx, { restaurantId, branchId, ingredientId: existingPurchase.ingredientId })
+      const updatedIngredient = await syncIngredientActiveUnitCost(tx, { restaurantId, branchId: stockBranchId, ingredientId: existingPurchase.ingredientId })
       if (!updatedIngredient) throw new Error('Ingredient not found after stock entry was deleted.')
 
-      await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryPurchase', entityId: id, operation: 'delete', payload: { id } })
-      await enqueueSyncChange(tx, { restaurantId, branchId, entityType: 'inventoryItem', entityId: updatedIngredient.id, operation: 'upsert', payload: updatedIngredient })
+      await enqueueSyncChange(tx, { restaurantId, branchId: stockBranchId, entityType: 'inventoryPurchase', entityId: id, operation: 'delete', payload: { id } })
+      await enqueueSyncChange(tx, { restaurantId, branchId: stockBranchId, entityType: 'inventoryItem', entityId: updatedIngredient.id, operation: 'upsert', payload: updatedIngredient })
 
       return updatedIngredient
     }, INVENTORY_TRANSACTION_OPTIONS)

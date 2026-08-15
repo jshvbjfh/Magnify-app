@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { ensureCoreCategories, ensureAccount, resolveSettlementAccount, normalizePaymentMethod } from '@/lib/accounting'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
+import { getRestaurantSharedStock, purchaseScopeWhere } from '@/lib/inventoryConsumption'
 
 export async function POST(req: Request) {
   try {
@@ -19,8 +20,10 @@ export async function POST(req: Request) {
     const { purchaseId, paymentMethod } = body
     if (!purchaseId) return NextResponse.json({ error: 'purchaseId is required' }, { status: 400 })
 
+    const sharedStock = await getRestaurantSharedStock(prisma, restaurantId)
+
     const purchase = await prisma.inventoryPurchase.findFirst({
-      where: { id: purchaseId, restaurantId, branchId },
+      where: { id: purchaseId, ...purchaseScopeWhere({ restaurantId, branchId, sharedStock }) },
       include: { ingredient: { select: { name: true, unit: true } } },
     })
 
@@ -46,7 +49,11 @@ export async function POST(req: Request) {
       await tx.journalEntry.create({
         data: {
           restaurantId,
-          branchId,
+          // Clears the payable where it was raised — the station holding the
+          // stock, which under shared stock is Main and not necessarily the
+          // station paying it off. Booking it elsewhere would leave the A/P
+          // balance standing open on one station and negative on another.
+          branchId: purchase.branchId,
           description: `A/P Payment: ${purchase.ingredient.name}${purchase.supplier ? ` (${purchase.supplier})` : ''} via ${normalizedPayMethod}`,
           reference: `PAY-${purchase.id.slice(-8).toUpperCase()}`,
           entryDate: new Date(),

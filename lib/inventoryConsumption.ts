@@ -102,10 +102,25 @@ export function recipeIngredientScopeWhere(params: { restaurantId: string; branc
     : { restaurantId: params.restaurantId, branchId: params.branchId }
 }
 
+// Which FIFO batches a station may see and edit — the batch-level twin of
+// recipeIngredientScopeWhere, and it has to draw the same line. The shared pool
+// physically sits on the main station, so scoping batches to the signed-in
+// station hides the very layers the recipe is costed against and the screen
+// then reads a real batch as "no stock". Prep batches stay with the kitchen
+// that produced them, same as the ingredients they represent.
+export function purchaseScopeWhere(params: { restaurantId: string; branchId: string; sharedStock?: boolean }) {
+  return params.sharedStock
+    ? {
+        restaurantId: params.restaurantId,
+        OR: [{ ingredient: { type: { not: 'prep' } } }, { branchId: params.branchId }],
+      }
+    : { restaurantId: params.restaurantId, branchId: params.branchId }
+}
+
 // Where to look for the stock itself. Shared stock searches the whole
 // restaurant; otherwise only the station that is consuming, which is the
 // behaviour every restaurant has today.
-function stockScopeWhere(params: { restaurantId: string; branchId: string; sharedStock?: boolean }) {
+export function stockScopeWhere(params: { restaurantId: string; branchId: string; sharedStock?: boolean }) {
   return params.sharedStock
     ? { restaurantId: params.restaurantId }
     : { restaurantId: params.restaurantId, branchId: params.branchId }
