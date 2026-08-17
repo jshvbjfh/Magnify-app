@@ -276,6 +276,16 @@ CREATE TABLE IF NOT EXISTS shifts (
       await addColumnIfMissing(d, 'orders', 'business_date', 'TEXT')
     },
   },
+  {
+    // Credit (Accounts Receivable) settlement: who owes for the tab, and how to
+    // reach them. The phone is optional — a name alone is often enough — so null
+    // here means "not taken", never "no phone".
+    version: 9,
+    run: async (d) => {
+      await addColumnIfMissing(d, 'orders', 'ar_customer_name', 'TEXT')
+      await addColumnIfMissing(d, 'orders', 'ar_customer_phone', 'TEXT')
+    },
+  },
 ]
 
 // ---- db init ---------------------------------------------------------------
@@ -603,6 +613,8 @@ export interface Order {
   paid_at: string | null
   canceled_at: string | null
   cancel_reason: string | null
+  ar_customer_name: string | null
+  ar_customer_phone: string | null
   shift_id: string | null
   business_date: string | null
   synced: number
@@ -673,7 +685,7 @@ export async function getOrderById(orderId: string): Promise<Order | null> {
 
 export async function updateOrder(
   orderId: string,
-  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount' | 'created_by_name'>>,
+  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount' | 'created_by_name' | 'ar_customer_name' | 'ar_customer_phone'>>,
 ): Promise<void> {
   const now = new Date().toISOString()
   const entries = Object.entries({ ...fields, updated_at: now, synced: 0 })

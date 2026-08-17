@@ -319,6 +319,8 @@ export interface Order {
   paid_at: string | null
   canceled_at: string | null
   cancel_reason: string | null
+  ar_customer_name: string | null
+  ar_customer_phone: string | null
   shift_id: string | null
   business_date: string | null
   synced: number
@@ -390,7 +392,7 @@ export async function getOrderById(orderId: string): Promise<Order | null> {
 
 export async function updateOrder(
   orderId: string,
-  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount' | 'created_by_name'>>,
+  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount' | 'created_by_name' | 'ar_customer_name' | 'ar_customer_phone'>>,
 ): Promise<void> {
   const now = new Date().toISOString()
   const entries = Object.entries({ ...fields, updated_at: now, synced: 0 })

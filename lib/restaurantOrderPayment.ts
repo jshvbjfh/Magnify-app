@@ -34,6 +34,7 @@ export async function finalizeRestaurantOrderPayment(
     orderId: string
     paymentMethod?: string | null
     arCustomerName?: string | null
+    arCustomerPhone?: string | null
     paidAt?: Date
   },
 ) {
@@ -95,7 +96,10 @@ export async function finalizeRestaurantOrderPayment(
       status: 'PAID',
       paymentMethod: normalizedPaymentMethod,
       paidAt,
+      // Only written when supplied, so a re-sync from a client that doesn't send
+      // them can never blank out the customer already recorded against the tab.
       ...(params.arCustomerName ? { arCustomerName: params.arCustomerName } : {}),
+      ...(params.arCustomerPhone ? { arCustomerPhone: params.arCustomerPhone } : {}),
       canceledAt: null,
       cancelReason: null,
     },

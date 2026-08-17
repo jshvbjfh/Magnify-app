@@ -44,7 +44,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const branchId = context.branchId
 
   const { id } = await params
-  const { action, cancelReason, paymentMethod, customerName, supervisorPin, actionKey } = await req.json()
+  const { action, cancelReason, paymentMethod, customerName, customerPhone, supervisorPin, actionKey } = await req.json()
   const normalizedActionKey = normalizeRestaurantActionKey(actionKey)
 
   const order = await prisma.restaurantOrder.findFirst({
@@ -113,6 +113,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
           orderId: id,
           paymentMethod: normalizedPaymentMethod,
           arCustomerName: customerName || null,
+          arCustomerPhone: customerPhone || null,
         })
 
         if (normalizedActionKey) {

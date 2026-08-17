@@ -296,6 +296,21 @@ CREATE TABLE IF NOT EXISTS shifts (
     version: 9,
     run: (database) => addColumnIfMissing(database, 'orders', 'guest_count', 'INTEGER'),
   },
+  {
+    // Credit (Accounts Receivable) settlement: who owes for the tab, and how to
+    // reach them. The phone is optional — a name alone is often enough — so null
+    // means "not taken", never "no phone".
+    //
+    // This is version 10 here but version 9 in the Android app: the two keep
+    // their own local databases and their migration lists drifted when
+    // guest_count was added here only. The columns are identical, which is what
+    // the shared sync code actually depends on.
+    version: 10,
+    run: (database) => {
+      addColumnIfMissing(database, 'orders', 'ar_customer_name', 'TEXT')
+      addColumnIfMissing(database, 'orders', 'ar_customer_phone', 'TEXT')
+    },
+  },
 ]
 
 function addColumnIfMissing(database, table, column, definition) {

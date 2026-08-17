@@ -103,7 +103,7 @@ describe('Android schema migrations', () => {
       .all()
       .map((r) => (r as { name: string }).name)
 
-    // Through migration 8 — the tables the desktop gained that Android lacked.
+    // Through migration 9 — the tables the desktop gained that Android lacked.
     expect(names).toEqual(expect.arrayContaining([
       'dishes', 'restaurant_tables', 'orders', 'order_items', 'session',
       'app_logs', 'cancellation_approvers', 'order_code_holders',
@@ -113,7 +113,7 @@ describe('Android schema migrations', () => {
     const applied = fake.db
       .prepare('SELECT MAX(version) AS v FROM schema_migrations')
       .get() as { v: number }
-    expect(applied.v).toBe(8)
+    expect(applied.v).toBe(9)
   })
 
   it('adds the shift and station columns the server push expects', async () => {
@@ -121,7 +121,11 @@ describe('Android schema migrations', () => {
     const cols = (t: string) =>
       fake.db.prepare(`PRAGMA table_info(${t})`).all().map((c) => (c as { name: string }).name)
 
-    expect(cols('orders')).toEqual(expect.arrayContaining(['shift_id', 'business_date']))
+    // ar_customer_* ride on the order through push; without them a credit sale
+    // syncs with no idea who owes the money.
+    expect(cols('orders')).toEqual(expect.arrayContaining([
+      'shift_id', 'business_date', 'ar_customer_name', 'ar_customer_phone',
+    ]))
     expect(cols('order_items')).toEqual(expect.arrayContaining(['notes', 'branch_id']))
   })
 

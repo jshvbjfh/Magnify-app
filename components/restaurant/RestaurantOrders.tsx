@@ -78,6 +78,7 @@ type ArOrder = {
   totalAmount: number
   paidAt: string | null
   arCustomerName: string | null
+  arCustomerPhone: string | null
   arCollectedAt: string | null
 }
 const COLOR_POOL   = [
@@ -157,6 +158,9 @@ export default function RestaurantOrders({
   const [payingTableKey, setPayingTableKey] = useState<string | null>(null)
   const [payMethod,      setPayMethod]      = useState('Cash')
   const [arCustomerName, setArCustomerName] = useState('')
+  // Optional — a credit tab is chaseable with a name alone, so an empty phone
+  // is sent as null rather than an empty string.
+  const [arCustomerPhone, setArCustomerPhone] = useState('')
   const [payingSaving,   setPayingSaving]   = useState(false)
   // A/R state
   const [arOrders,       setArOrders]       = useState<ArOrder[]>([])
@@ -871,7 +875,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
     try {
       const res = await fetch(`/api/restaurant/orders/${orderId}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-        body: JSON.stringify({ action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, actionKey })
+        body: JSON.stringify({ action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, customerPhone: payMethod === 'Credit' ? (arCustomerPhone.trim() || null) : null, actionKey })
       })
       if (!res.ok) {
         const payload = await res.json().catch(() => null)
@@ -886,7 +890,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
       window.dispatchEvent(new CustomEvent('refreshTransactions', {
         detail: { count: 2, source: 'restaurant_order_payment' }
       }))
-      setPayingTableKey(null); setPayMethod('Cash'); setArCustomerName('')
+      setPayingTableKey(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('')
     } catch (error) {
       if ((typeof navigator !== 'undefined' && navigator.onLine === false) || isLikelyOfflineError(error)) {
         await queueLifecycleActionOffline({
@@ -899,7 +903,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
           request: {
             url: `/api/restaurant/orders/${orderId}`,
             method: 'PATCH',
-            body: { action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, actionKey },
+            body: { action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, customerPhone: payMethod === 'Credit' ? (arCustomerPhone.trim() || null) : null, actionKey },
           },
           projection: {
             type: 'remove-order',
@@ -1054,7 +1058,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
             <label className="text-xs font-semibold text-gray-600 mb-2 block">Payment Method</label>
             <div className="grid grid-cols-2 gap-2">
               {PAY_METHODS.map(m => (
-                <button key={m} type="button" onClick={() => { setPayMethod(m); if (m !== 'Credit') setArCustomerName('') }}
+                <button key={m} type="button" onClick={() => { setPayMethod(m); if (m !== 'Credit') { setArCustomerName(''); setArCustomerPhone('') } }}
                   className={`py-2.5 rounded-lg text-sm font-medium border transition-all ${payMethod === m ? (m === 'Credit' ? 'bg-amber-500 text-white border-amber-500' : 'bg-green-500 text-white border-green-500') : 'bg-white text-gray-700 border-gray-300 hover:border-green-400'}`}>
                   {m}
                 </button>
@@ -1069,6 +1073,14 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
                 onChange={e => setArCustomerName(e.target.value)}
                 placeholder="e.g. Acme Corp, John Doe…"
                 className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-amber-300 ${!arCustomerName.trim() ? 'border-red-300' : 'border-gray-300'}`}
+              />
+              <label className="text-xs font-semibold text-gray-600 mb-1.5 mt-3 block">Phone <span className="font-normal text-gray-400">(optional)</span></label>
+              <input
+                value={arCustomerPhone}
+                onChange={e => setArCustomerPhone(e.target.value)}
+                inputMode="tel"
+                placeholder="e.g. 0788123456"
+                className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-amber-300"
               />
               <p className="mt-1 text-xs text-amber-700">Credit sale records as Accounts Receivable. You can collect later.</p>
             </div>
@@ -1173,7 +1185,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
             })}
           </div>
         )}
-        {payingTableKey && <PayModal tableKey={payingTableKey} onClose={() => { setPayingTableKey(null); setPayMethod('Cash'); setArCustomerName('') }} />}
+        {payingTableKey && <PayModal tableKey={payingTableKey} onClose={() => { setPayingTableKey(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') }} />}
 
         {/* ── ACCOUNTS RECEIVABLE PANEL ── */}
         {arOrders.length > 0 && (
@@ -1204,7 +1216,16 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
                 <tbody className="divide-y divide-gray-50">
                   {arOrders.map(order => (
                     <tr key={order.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 font-medium text-gray-900">{order.arCustomerName || '—'}</td>
+                      <td className="px-4 py-3 font-medium text-gray-900">
+                        <p>{order.arCustomerName || '—'}</p>
+                        {/* The phone is here to be dialled — an unpaid tab is chased
+                            by phone, so make it tappable rather than plain text. */}
+                        {order.arCustomerPhone && (
+                          <a href={`tel:${order.arCustomerPhone}`} className="text-xs font-normal text-amber-700 hover:underline">
+                            {order.arCustomerPhone}
+                          </a>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-xs text-gray-500">
                         <p>{order.orderNumber}</p>
                         {order.tableName && <p className="text-gray-400">{order.tableName}</p>}

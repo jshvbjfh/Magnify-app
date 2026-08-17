@@ -271,9 +271,13 @@ model RestaurantOrder {
   updatedAt      DateTime         @updatedAt
   deletedAt      DateTime?
 
-  // Accounts Receivable: customer name when paid on credit, and when the A/R was collected
-  arCustomerName String?
-  arCollectedAt  DateTime?
+  // Accounts Receivable: customer name when paid on credit, and when the A/R was collected.
+  // The phone is optional — staff often know the guest by name alone — so null
+  // means "not taken", never "no phone". It exists so an unpaid tab can actually
+  // be chased without hunting through the order history for who owes what.
+  arCustomerName  String?
+  arCustomerPhone String?
+  arCollectedAt   DateTime?
 
   // Linked to the accounting entry created when this order is paid
   journalEntryId String?
