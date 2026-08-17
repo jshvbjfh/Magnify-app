@@ -185,7 +185,6 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   }, [isOnline])
 
   const isPOS = activeTab === 'menu'
-  const showOfflineBanner = !isOnline || transportOfflineMode
 
   const handleBranchSelect = async (branchId: string) => {
     if (branchId === activeBranchId || branchSwitchingId) return
@@ -259,18 +258,53 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
         </a>
       )}
 
-      {/* ── Offline banner ── */}
-      {showOfflineBanner && (
+      {/* ── Offline banner ──
+          Two different failures used to share this one message, which sent staff
+          to check a router that was working fine. The device having no network is
+          not the same as the server being unreachable, so they now say so
+          separately, and the unreachable case offers a retry instead of just
+          telling the waiter to wait. */}
+      {!isOnline && (
         <div className="flex items-center gap-2 bg-amber-500 text-white text-xs font-semibold px-4 py-2 flex-shrink-0">
           <WifiOff className="h-3.5 w-3.5 flex-shrink-0" />
           <span>You are now working offline! Orders will keep saving locally and sync automatically when connected.</span>
         </div>
       )}
 
-      {/* ── Sync error banner ── */}
-      {isOnline && lastSyncError && (
+      {isOnline && transportOfflineMode && (
+        <div className="flex items-center gap-2 bg-amber-600 text-white text-xs font-semibold px-4 py-2 flex-shrink-0">
+          <WifiOff className="h-3.5 w-3.5 flex-shrink-0" />
+          <span className="flex-1">Can't reach the server — orders are saving locally.</span>
+          <button
+            type="button"
+            onClick={() => { void runSync() }}
+            disabled={syncing}
+            className="flex items-center gap-1 rounded-md bg-white/20 px-2 py-0.5 font-bold hover:bg-white/30 disabled:opacity-60 flex-shrink-0"
+          >
+            <RefreshCw className={`h-3 w-3 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      )}
+
+      {/* ── Sync error banner ──
+          Not gated on isOnline any more: a failure that happened while connected
+          is still the reason orders are stuck, and hiding it the moment the
+          device drops leaves the waiter with no explanation at all. */}
+      {lastSyncError && (
         <div className="flex items-center gap-2 bg-red-500 text-white text-xs font-medium px-4 py-1.5 flex-shrink-0">
-          <span>Sync failed: {lastSyncError}</span>
+          <span className="flex-1">Sync failed: {lastSyncError}</span>
+          {isOnline && (
+            <button
+              type="button"
+              onClick={() => { void runSync() }}
+              disabled={syncing}
+              className="flex items-center gap-1 rounded-md bg-white/20 px-2 py-0.5 font-bold hover:bg-white/30 disabled:opacity-60 flex-shrink-0"
+            >
+              <RefreshCw className={`h-3 w-3 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Retrying…' : 'Retry'}
+            </button>
+          )}
         </div>
       )}
 
