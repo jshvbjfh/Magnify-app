@@ -42,7 +42,7 @@ export interface MepPullSlice {
 export interface PullPayload {
   dishes: Dish[]
   tables: RestaurantTable[]
-  restaurant: { id: string; name: string; billHeader?: string; billPrinterIp?: string | null; billPrinterPort?: number | null }
+  restaurant: { id: string; name: string; billHeader?: string; billPrinterIp?: string | null; billPrinterPort?: number | null; shifts_enabled?: boolean }
   branches?: BranchInfo[]
   cancellationApprovers?: CancellationApprover[]
   openShift?: Shift | null
@@ -203,6 +203,10 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   // Network thermal printer for ESC/POS bill printing (set in manager app → synced here).
   await setConfig('billPrinterIp', payload.restaurant.billPrinterIp ?? '')
   await setConfig('billPrinterPort', payload.restaurant.billPrinterPort != null ? String(payload.restaurant.billPrinterPort) : '')
+  // Whether this venue runs service shifts. Absent on servers older than this
+  // field, so treat only an explicit false as off — a missing value must keep
+  // the shift gate up rather than silently unlock the till.
+  await setConfig('shiftsEnabled', payload.restaurant.shifts_enabled === false ? '0' : '1')
   await setConfig('lastPullAttemptAt', now)
   if (didRefreshLocalSnapshot) {
     await setConfig('lastPulledAt', now)

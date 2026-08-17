@@ -1,19 +1,23 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
-  ArrowLeft, Trash2, X, Receipt, ShieldAlert, WifiOff, AlertCircle, Cloud,
+  ArrowLeft, Trash2, X, ShieldAlert, WifiOff, AlertCircle, Cloud, Printer, StickyNote,
+  Search, ChevronDown, Lock,
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
+  getMepOutDishIds, addOrderItems, getOrderById,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline, validateOrderCode, type BranchInfo } from '../services/sync'
+import { getActiveShift } from '../services/shifts'
+import { getPrinterMap, getBillPrinter, resolveStationPrinter, listPrinters, isVirtualPrinter, parseBillTemplate, getBillNetworkPrinter, getBillEscposMode, printBillRaw, printTicketRaw, type PrinterMap, type PrinterInfo, type NetworkPrinterConfig } from '../services/printing'
 import { useOnline } from '../hooks/useOnline'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: number; notes?: string }
+type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: number; note?: string }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -32,19 +36,71 @@ const COLOR_POOL = [
   ['bg-fuchsia-400', 'text-white', 'bg-fuchsia-700'],
 ] as const
 
-const VAT_RATE = 0.18
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function fmtRWF(n: number) {
   return n.toLocaleString('en-RW', { maximumFractionDigits: 0 })
 }
 
+// Two-decimal amount for the bill's price column (e.g. 13,500.00).
+function fmt2(n: number) {
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+// Code128-B barcode as inline SVG. Self-contained — no font or library needed.
+// Bars generated at 1 unit each, then scaled to 70mm wide via viewBox so the
+// barcode fits the 80mm paper regardless of order-number length.
+const CODE128_PATTERNS = [
+  '212222','222122','222221','121223','121322','131222','122213','122312',
+  '132212','221213','221312','231212','112232','122132','122231','113222',
+  '123122','123221','223211','221132','221231','213212','223112','312131',
+  '311222','321122','321221','312212','322112','322211','212123','212321',
+  '232121','111323','131123','131321','112313','132113','132311','211313',
+  '231113','231311','112133','112331','132131','113123','113321','133121',
+  '313121','211331','231131','213113','213311','213131','311123','311321',
+  '331121','312113','312311','332111','314111','221411','431111','111224',
+  '111422','121124','121421','141122','141221','112214','112412','122114',
+  '122411','142111','241111','134111','111242','121142','121241','114212',
+  '124112','124211','411212','421112','421211','212141','214121','412121',
+  '111143','111341','131141','114113','114311','411113','411311','113141',
+  '114131','311141','411131','211412','211214','211232','2331112',
+]
+function code128svg(text: string): string {
+  const codes = [104]          // START B
+  let sum = 104
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i) - 32
+    codes.push(c)
+    sum += c * (i + 1)
+  }
+  codes.push(sum % 103)        // check digit
+  codes.push(106)              // STOP
+  let x = 0
+  const bars: string[] = []
+  for (const code of codes) {
+    const pat = CODE128_PATTERNS[code] ?? '211312'
+    for (let i = 0; i < pat.length; i++) {
+      const w = parseInt(pat[i])
+      if (i % 2 === 0) bars.push(`<rect x="${x}" y="0" width="${w}" height="48"/>`)
+      x += w
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x} 48" width="70mm" height="14mm" style="display:block;margin:3mm auto 0">${bars.join('')}</svg>`
+}
+
+// Serialise every silent print job. Multiple receipts — a bill plus its kitchen
+// and bar tickets, or several orders confirmed/paid in quick succession — must
+// never print at the same time: concurrent hidden print windows collide on a
+// single thermal printer, which cuts one receipt short and skips to the next.
+// Each job waits for the previous to finish, then a short gap so the cutter and
+// paper feed settle before the next starts.
+let electronPrintQueue: Promise<void> = Promise.resolve()
+const PRINT_GAP_MS = 250
+
 function calcTotals(items: Array<{ dishPrice: number; qty: number }>) {
   const subtotal    = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
-  const vatAmount   = Math.round(subtotal * VAT_RATE)
-  const totalAmount = Math.round(subtotal * (1 + VAT_RATE))
-  return { subtotal, vatAmount, totalAmount }
+  // No VAT: the total is simply the sum of the item prices.
+  return { subtotal, vatAmount: 0, totalAmount: subtotal }
 }
 
 function getTimeLabel() {
@@ -82,6 +138,212 @@ function getDisplayStatus(order: Order) {
   return 'PENDING'
 }
 
+// ─── Modals ──────────────────────────────────────────────────────────────────
+// Defined at module scope (NOT nested inside RestaurantOrders) so their function
+// identity is stable across the parent's frequent re-renders (sync ticks). A
+// component defined inside the parent is re-created every render, which makes
+// React remount the modal and wipe its input state mid-typing — that was the bug
+// where a half-typed PIN / reason / order code kept resetting itself.
+
+function OrderCodeModal({ onClose, onConfirmed }: { onClose: () => void; onConfirmed: (waiterName: string) => void }) {
+  const [code,   setCode]   = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState<string | null>(null)
+
+  async function submit() {
+    if (code.length !== 4) { setError('Code must be exactly 4 digits'); return }
+    setSaving(true)
+    setError(null)
+    try {
+      const { waiterName } = await validateOrderCode(code)
+      onConfirmed(waiterName)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-gray-900">Enter Your Order Code</h3>
+          <button onClick={onClose} disabled={saving}>
+            <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
+          </button>
+        </div>
+        <p className="text-sm text-gray-500">Enter your 4-digit code to confirm this order.</p>
+        {/* readOnly + inputMode none: use the on-screen keypad, never the OS virtual keyboard */}
+        <input
+          type="password"
+          inputMode="none"
+          readOnly
+          maxLength={4}
+          value={code}
+          placeholder="● ● ● ●"
+          className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-orange-400"
+        />
+        {/* On-screen number pad for touch terminals — compact so it never overflows */}
+        <div className="grid grid-cols-3 gap-1.5 max-w-[220px] mx-auto">
+          {['1','2','3','4','5','6','7','8','9'].map(d => (
+            <button key={d} type="button" disabled={saving}
+              onClick={() => { setCode(c => (c + d).slice(0, 4)); setError(null) }}
+              className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+              {d}
+            </button>
+          ))}
+          <button type="button" disabled={saving}
+            onClick={() => { setCode(''); setError(null) }}
+            className="py-2 rounded-lg border border-gray-300 text-xs font-semibold text-gray-500 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+            Clear
+          </button>
+          <button type="button" disabled={saving}
+            onClick={() => { setCode(c => (c + '0').slice(0, 4)); setError(null) }}
+            className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+            0
+          </button>
+          <button type="button" disabled={saving}
+            onClick={() => setCode(c => c.slice(0, -1))}
+            className="py-2 rounded-lg border border-gray-300 text-lg font-semibold text-gray-800 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-50">
+            ⌫
+          </button>
+        </div>
+        {error && (
+          <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
+            {error}
+          </div>
+        )}
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} disabled={saving}
+            className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 disabled:opacity-50">
+            Cancel
+          </button>
+          <button onClick={() => void submit()} disabled={saving || code.length !== 4}
+            className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
+            {saving ? 'Checking…' : 'Confirm Order'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CancelModal({ order, onClose, onCanceled }: {
+  order: Order | undefined
+  onClose: () => void
+  onCanceled: (approvedBy: string, tableKey: string) => void
+}) {
+  const [pin,    setPin]    = useState('')
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState<string | null>(null)
+
+  const tableKey  = order ? (order.table_id ?? 'takeaway') : 'takeaway'
+  const tableName = order?.table_name ?? 'Order'
+
+  async function submit() {
+    if (pin.length !== 5) { setError('PIN must be exactly 5 digits'); return }
+    if (!reason.trim())   { setError('Please enter a reason');        return }
+    if (!order) { setError('Order not found'); return }
+
+    setSaving(true)
+    setError(null)
+    try {
+      let result: { approvedBy: string }
+      try {
+        result = await cancelOrderOnServer({
+          orderId:       order.id,
+          supervisorPin: pin,
+          cancelReason:  reason.trim(),
+        })
+      } catch (serverErr) {
+        const isNetworkErr = (serverErr as Error).name === 'NetworkRequestError'
+        if (!isNetworkErr) throw serverErr
+        // Server unreachable — validate PIN against cached bcrypt hashes
+        result = await validateCancellationPinOffline(pin)
+      }
+      // Mirror cancellation in local DB so POS is consistent offline
+      await updateOrder(order.id, {
+        status:        'CANCELED',
+        canceled_at:   new Date().toISOString(),
+        cancel_reason: reason.trim(),
+      })
+      onCanceled(result.approvedBy, tableKey)
+      onClose()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-gray-900 flex items-center gap-2">
+            <ShieldAlert className="h-5 w-5 text-red-500" />
+            Cancel Order — {tableName}
+          </h3>
+          <button onClick={onClose} disabled={saving}>
+            <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
+          </button>
+        </div>
+
+        <p className="text-sm text-gray-500">
+          A supervisor must enter their 5-digit PIN to approve this cancellation.
+        </p>
+
+        <div>
+          <label className="text-xs font-semibold text-gray-600 mb-1 block">Supervisor PIN</label>
+          <input
+            type="password"
+            inputMode="numeric"
+            maxLength={5}
+            value={pin}
+            onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 5)); setError(null) }}
+            placeholder="● ● ● ● ●"
+            className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-gray-600 mb-1 block">Reason</label>
+          <input
+            type="text"
+            value={reason}
+            onChange={e => { setReason(e.target.value); setError(null) }}
+            placeholder="e.g. Customer changed mind"
+            className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+        </div>
+
+        {error && (
+          <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
+            {error}
+          </div>
+        )}
+
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 disabled:opacity-50">
+            Go Back
+          </button>
+          <button
+            onClick={submit}
+            disabled={saving || pin.length !== 5 || !reason.trim()}
+            className="flex-1 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
+            {saving ? 'Canceling…' : 'Confirm Cancel'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Module-level stale-while-revalidate caches ──────────────────────────────
 // Survive tab switches; cleared only on app restart.
 
@@ -92,7 +354,7 @@ type PosSnapshot = {
   orderItemsMap: Record<string, OrderItem[]>
   restaurantId: string | null
   branchId: string | null
-  restaurantName: string
+  restaurantName: string | null
   branches: BranchInfo[]
 }
 let posCache: PosSnapshot | null = null
@@ -101,14 +363,22 @@ let historyCache: Order[] | null = null
 // ─── Component ───────────────────────────────────────────────────────────────
 
 interface Props {
-  mode?: 'pos' | 'history'
+  mode?: 'pos' | 'history' | 'pending'
   waiterName: string
   activeBranchId?: string | null
   onPendingCountChange?: (count: number) => void
   syncVersion?: number
+  // Selected table is owned by the shell so the Tables tab can drive it.
+  selectedTableKey?: string
+  onSelectTableKey?: (key: string) => void
+  // Edit-pending-order flow: the pending tab requests an edit via onEditOrder;
+  // the shell switches to the POS tab and passes the order id down here.
+  editingOrderId?: string | null
+  onEditOrder?: (orderId: string) => void
+  onEditDone?: () => void
 }
 
-export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName, activeBranchId = null, onPendingCountChange, syncVersion }: Props) {
+export default function RestaurantOrders({ mode = 'pos', waiterName = '', activeBranchId = null, onPendingCountChange, syncVersion, selectedTableKey: controlledTableKey, onSelectTableKey, editingOrderId = null, onEditOrder, onEditDone }: Props) {
   const { isOnline } = useOnline()
   // ── Shared state ──
   const [dishes,        setDishes]        = useState<Dish[]>([])
@@ -116,24 +386,33 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [pendingOrders, setPendingOrders] = useState<Order[]>([])
   const [orderItemsMap, setOrderItemsMap] = useState<Record<string, OrderItem[]>>({})
   const [allOrders,     setAllOrders]     = useState<Order[]>([])
-  const [loading,       setLoading]       = useState(mode === 'pos' ? !posCache : !historyCache)
+  const [loading,       setLoading]       = useState(mode === 'history' ? !historyCache : !posCache)
   const [isRefreshing,  setIsRefreshing]  = useState(false)
   const [restaurantId,  setRestaurantId]  = useState<string | null>(null)
   const [branchId,      setBranchId]      = useState<string | null>(null)
-  const [restaurantName, setRestaurantName] = useState<string>(posCache?.restaurantName ?? '')
+  const [restaurantName, setRestaurantName] = useState<string | null>(posCache?.restaurantName ?? null)
   const [branches,       setBranches]       = useState<BranchInfo[]>(posCache?.branches ?? [])
 
   // ── POS-only state ──
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
-  const [selectedTableKey, setSelectedTableKey] = useState<string>('takeaway')
+  const [internalTableKey, setInternalTableKey] = useState<string>('takeaway')
+  const selectedTableKey = controlledTableKey ?? internalTableKey
+  const setSelectedTableKey = onSelectTableKey ?? setInternalTableKey
+  const [tablePickerOpen,  setTablePickerOpen]  = useState(false)
+  const [tablePickerQuery, setTablePickerQuery] = useState('')
+  const tablePickerRef = useRef<HTMLDivElement>(null)
+  const tablePickerInputRef = useRef<HTMLInputElement>(null)
   const [localCart,        setLocalCart]        = useState<Record<string, CartItem[]>>({})
-  // Covers per table, kept as the raw typed string so an empty box stays empty
-  // rather than snapping to 0. Optional — a blank box records no guest count at
-  // all, which reports read as "unknown" and leave out of the average.
-  const [guestsByTable,    setGuestsByTable]    = useState<Record<string, string>>({})
   const [showPanel,        setShowPanel]        = useState<'dishes' | 'order'>('dishes')
+  // Edit-pending flow: the order being extended + its already-sent items
+  // (shown locked in the cart panel; only NEW items get kitchen tickets).
+  const [editingOrder,     setEditingOrder]     = useState<Order | null>(null)
+  const [editingItems,     setEditingItems]     = useState<OrderItem[]>([])
   const [addedFlash,       setAddedFlash]       = useState(false)
   const [searchQuery,      setSearchQuery]      = useState('')
+  const [pendingSearch,    setPendingSearch]    = useState('')
+  const [noteEditId,       setNoteEditId]       = useState<string | null>(null)
+  const [activeItemId,     setActiveItemId]     = useState<string | null>(null)
   const [confirmingOrder,  setConfirmingOrder]  = useState(false)
   const [submitError,      setSubmitError]      = useState<string | null>(null)
   const [confirmSuccess,   setConfirmSuccess]   = useState<string | null>(null)
@@ -145,8 +424,34 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
   const [payingSaving,      setPayingSaving]      = useState(false)
   const [cancelingOrderId,  setCancelingOrderId]  = useState<string | null>(null)
 
+  // Device-local printer routing (branchId → deviceName) + bill printer.
+  const [printerMap,        setPrinterMap]        = useState<PrinterMap>({})
+  const [billPrinter,       setBillPrinter]       = useState<string>('')
+  const [billNetworkPrinter, setBillNetworkPrinter] = useState<NetworkPrinterConfig | null>(null)
+  const [billEscposMode,    setBillEscposModeOn]   = useState<boolean>(false)
+  const [billColumns,       setBillColumns]       = useState<number>(42)
+  const [printers,          setPrinters]          = useState<PrinterInfo[]>([])
+  // Manager-editable receipt template (raw billHeader; parsed into top/bottom at print time).
+  const [billHeaderTpl, setBillHeaderTpl] = useState<string>('')
+
   const orderSubmitLockRef = useRef(false)
   const paymentLockRef     = useRef(false)
+
+  // MEP "Out" badges: dishes whose prepared portions hit 0 on this station.
+  // Informational only — ordering is never blocked (kitchen can still cook to order).
+  const [outDishIds, setOutDishIds] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    if (mode === 'history') return
+    let cancelled = false
+    void (async () => {
+      try {
+        const activeBranch = await getConfig('activeBranchId')
+        const ids = await getMepOutDishIds(activeBranch)
+        if (!cancelled) setOutDishIds(new Set(ids))
+      } catch { /* DB not ready yet */ }
+    })()
+    return () => { cancelled = true }
+  }, [mode, syncVersion, activeBranchId])
 
   // ── Data loaders ──
 
@@ -159,33 +464,32 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       setOrderItemsMap(posCache.orderItemsMap)
       setRestaurantId(posCache.restaurantId)
       setBranchId(posCache.branchId)
-      setRestaurantName(posCache.restaurantName)
-      setBranches(posCache.branches)
       setLoading(false)
     }
     setIsRefreshing(true)
     try {
-      const [rId, activeBranch, rName, branchesJson] = await Promise.all([
+      const [rId, activeBranch] = await Promise.all([
         getConfig('restaurantId'),
         getConfig('activeBranchId'),
-        getConfig('restaurantName'),
-        getConfig('branches'),
       ])
-      const parsedBranches: BranchInfo[] = (() => {
-        try { return branchesJson ? JSON.parse(branchesJson) : [] } catch { return [] }
-      })()
-      const [d, t, orders, bId] = await Promise.all([
+      const [d, t, orders, bId, rName, branchesJson] = await Promise.all([
         getDishes(activeBranch),
         getTables(),
         getOrders({ statuses: ['PENDING', 'UNCONFIRMED'], restaurantId: rId }),
         getConfig('branchId'),
+        getConfig('restaurantName'),
+        getConfig('branches'),
       ])
+      const parsedBranches: BranchInfo[] = (() => {
+        try { return branchesJson ? (JSON.parse(branchesJson) as BranchInfo[]) : [] }
+        catch { return [] }
+      })()
       setDishes(d)
       setTables(t)
       setPendingOrders(orders)
       setRestaurantId(rId)
       setBranchId(bId)
-      setRestaurantName(rName ?? '')
+      setRestaurantName(rName)
       setBranches(parsedBranches)
 
       if (!rId) {
@@ -202,7 +506,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         itemsMap[o.id] = await getOrderItems(o.id)
       }))
       setOrderItemsMap(itemsMap)
-      posCache = { dishes: d, tables: t, pendingOrders: orders, orderItemsMap: itemsMap, restaurantId: rId, branchId: bId, restaurantName: rName ?? '', branches: parsedBranches }
+      posCache = { dishes: d, tables: t, pendingOrders: orders, orderItemsMap: itemsMap, restaurantId: rId, branchId: bId, restaurantName: rName, branches: parsedBranches }
     } catch { /* DB not ready on first render — will retry */ }
     setLoading(false)
     setIsRefreshing(false)
@@ -234,10 +538,45 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     }
   }, [activeBranchId])
 
+  // Close the table picker on an outside click or Escape.
   useEffect(() => {
-    if (mode === 'pos') loadPOS()
-    else loadHistory()
+    if (!tablePickerOpen) return
+    function handlePointerDown(e: MouseEvent) {
+      if (tablePickerRef.current && !tablePickerRef.current.contains(e.target as Node)) {
+        setTablePickerOpen(false)
+      }
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setTablePickerOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [tablePickerOpen])
+
+  useEffect(() => {
+    if (mode === 'history') loadHistory()
+    else loadPOS()
   }, [mode, loadPOS, loadHistory, syncVersion])
+
+  // Load device-local printer routing for kitchen/bar tickets and bills.
+  useEffect(() => {
+    if (mode === 'history') return
+    void (async () => {
+      const [map, bill, list, tpl, net, colsRaw, escpos] = await Promise.all([getPrinterMap(), getBillPrinter(), listPrinters(), getConfig('billHeader'), getBillNetworkPrinter(), getConfig('billColumns'), getBillEscposMode()])
+      setPrinterMap(map)
+      setBillPrinter(bill)
+      setPrinters(list)
+      setBillHeaderTpl(tpl ?? '')
+      setBillNetworkPrinter(net)
+      setBillEscposModeOn(escpos)
+      const parsedCols = parseInt(colsRaw ?? '', 10)
+      setBillColumns(Number.isFinite(parsedCols) && parsedCols >= 24 && parsedCols <= 64 ? parsedCols : 42)
+    })()
+  }, [mode, syncVersion])
 
   // Notify parent of how many tables have active orders (drives shell badge)
   useEffect(() => {
@@ -268,16 +607,464 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     })
   }
 
-  function updateCartItemNotes(dishId: string, notes: string) {
+  function setCartItemNote(dishId: string, note: string) {
     setLocalCart(prev => {
-      const cart = (prev[selectedTableKey] ?? []).map(i =>
-        i.dishId === dishId ? { ...i, notes: notes || undefined } : i
-      )
-      return { ...prev, [selectedTableKey]: cart }
+      const updated = (prev[selectedTableKey] ?? []).map(i => i.dishId === dishId ? { ...i, note } : i)
+      return { ...prev, [selectedTableKey]: updated }
     })
   }
 
+  // ── Print helpers ──
+
+  function escHtml(s: string) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  }
+
+  function printHtml(html: string, delay = 0, deviceName = '') {
+    const eP = (window as Window & { electronPrint?: { receipt: (h: string, deviceName?: string) => Promise<void> } }).electronPrint
+    if (eP) {
+      // No real printer to target — warn instead of dumping the user into
+      // Windows' "Save as PDF" dialog (the default printer is virtual).
+      if (!deviceName) {
+        const def = printers.find(p => p.isDefault)
+        if (!def || isVirtualPrinter(def.name)) {
+          setSubmitError('No receipt printer set — choose one in the Printers tab.')
+          return
+        }
+      }
+      // Chain onto the shared queue so this job only starts once the previous
+      // one has fully printed — never two hidden print windows at once. The
+      // `delay` arg is now just spacing between staggered jobs (kitchen tickets),
+      // applied before this job rather than as a fixed wall-clock offset.
+      electronPrintQueue = electronPrintQueue
+        .then(() => new Promise<void>(res => setTimeout(res, delay)))
+        .then(() => eP.receipt(html, deviceName || undefined))
+        .catch((err) => {
+          console.error(err)
+          setSubmitError('Print failed — check the printer is on, has paper, and is assigned in the Printers tab.')
+        })
+        .then(() => new Promise<void>(res => setTimeout(res, PRINT_GAP_MS)))
+      return
+    }
+    // Fallback: DOM injection for non-Electron environments
+    setTimeout(() => {
+      const ID = 'pos-receipt-print', SID = 'pos-receipt-print-style'
+      document.getElementById(ID)?.remove(); document.getElementById(SID)?.remove()
+      const parsed = new DOMParser().parseFromString(html, 'text/html')
+      const styleEl = document.createElement('style')
+      styleEl.id = SID
+      styleEl.textContent = Array.from(parsed.querySelectorAll('style')).map(s => s.textContent ?? '').join('\n')
+        + `\n@media screen{#${ID}{position:fixed;left:-9999px;top:0;width:58mm;opacity:0}}`
+        + `\n@media print{body>*:not(#${ID}){display:none!important}#${ID}{display:block!important;position:static!important}}`
+      const div = document.createElement('div')
+      div.id = ID; div.innerHTML = parsed.body.innerHTML
+      document.head.appendChild(styleEl); document.body.appendChild(div)
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        window.print()
+        window.addEventListener('afterprint', () => {
+          document.getElementById(ID)?.remove(); document.getElementById(SID)?.remove()
+        }, { once: true })
+      }))
+    }, delay)
+  }
+
+  function printBill(order: Order, items: OrderItem[]) {
+    // Bill printers are commonly installed with a "Generic / Text Only"-class
+    // driver that discards ALL CSS — no text-align, no flex, no borders, no
+    // bold, no SVG. Only the literal characters print, in the printer's own
+    // built-in font. So the bill is laid out as monospace TEXT: centred with
+    // spaces, columns padded with spaces, dividers drawn with dashes. Because
+    // the HTML font is also monospace, the same layout renders identically on
+    // graphics drivers. Column count is device-configurable in the Printers
+    // tab (58mm paper ≈ 32 cols, 80mm ≈ 42–48 cols).
+    const LINE = billColumns
+    const center = (s: string) =>
+      s.length >= LINE ? s : ' '.repeat(Math.floor((LINE - s.length) / 2)) + s
+    // Left + right on one line when they fit; otherwise keep the left text at
+    // full length (wrapped at LINE) and right-align the value on the last
+    // line — long dish names are never truncated.
+    const cols = (left: string, right: string): string[] => {
+      if (!right) return [left]
+      if (left.length + 1 + right.length <= LINE) {
+        return [left + ' '.repeat(LINE - left.length - right.length) + right]
+      }
+      const lines: string[] = []
+      let rest = left
+      while (rest.length > LINE) { lines.push(rest.slice(0, LINE)); rest = rest.slice(LINE) }
+      if (rest && rest.length + 1 + right.length <= LINE) {
+        lines.push(rest + ' '.repeat(LINE - rest.length - right.length) + right)
+      } else {
+        if (rest) lines.push(rest)
+        lines.push(' '.repeat(Math.max(0, LINE - right.length)) + right)
+      }
+      return lines
+    }
+    const rule = '-'.repeat(LINE)
+
+    const { topText, bottomText, footer2Text } = parseBillTemplate(billHeaderTpl)
+    const { totalAmount } = calcTotals(items.map(i => ({ dishPrice: i.dish_price, qty: i.qty })))
+    const now = new Date()
+    const dt  = now.toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+    const isTakeaway = !order.table_id
+    const orderType  = isTakeaway ? 'Take Away' : 'Dine In'
+    const server     = order.created_by_name ?? '—'
+    const station    = (order.branch_id ? branches.find(b => b.id === order.branch_id)?.name : null) ?? restaurantName ?? ''
+    const orderNo    = order.order_number ?? ''
+
+    // ESC/POS path: raw thermal bytes over TCP (network printer IP) or into
+    // the local Windows queue (thermal styling enabled in the Printers tab).
+    // Falls back to the OS default printer when no bill printer is selected.
+    const escposPrinterName = billEscposMode
+      ? (billPrinter || printers.find(p => p.isDefault && !isVirtualPrinter(p.name))?.name || '')
+      : ''
+    if (billNetworkPrinter?.ip || escposPrinterName) {
+      printBillRaw({
+        topText, bottomText, footer2Text, server, station, orderNo, orderType,
+        tableName: isTakeaway ? null : (order.table_name ?? 'Table'),
+        dt,
+        items: items.map(i => ({ qty: i.qty, name: i.dish_name, unitPrice: i.dish_price, notes: i.notes ?? null })),
+        totalAmount,
+        columns: LINE,
+        ...(billNetworkPrinter?.ip
+          ? { ip: billNetworkPrinter.ip, port: billNetworkPrinter.port }
+          : { printerName: escposPrinterName }),
+      }).then(result => {
+        if (!result.ok) setSubmitError(`Bill print failed: ${result.error ?? 'unknown error'}`)
+      }).catch((err: Error) => setSubmitError(`Bill print failed: ${err.message}`))
+      return
+    }
+
+    // HTML / system-printer path: plain monospace lines (see comment above).
+    const tmpl = (l: string): string => {
+      const display = l.replace(/\*\*(.+?)\*\*/g, '$1').replace(/_(.+?)_/g, '$1')
+      const pad = display.length >= LINE ? '' : ' '.repeat(Math.floor((LINE - display.length) / 2))
+      const inner = escHtml(l)
+        .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+        .replace(/_(.+?)_/g, '<i>$1</i>')
+      return `<div class="line">${pad}${inner || ' '}</div>`
+    }
+    const ln = (s: string, bold = false) =>
+      `<div class="${bold ? 'line bold' : 'line'}">${escHtml(s) || ' '}</div>`
+
+    const divLines: string[] = []
+    for (const l of (topText || 'RECEIPT').split('\n')) divLines.push(tmpl(l.trim()))
+    divLines.push(ln(rule))
+    for (const s of cols(`Server: ${server}`, station ? `Station: ${station}` : '')) divLines.push(ln(s))
+    divLines.push(ln(rule))
+    for (const s of cols(`Order #: ${orderNo}`, orderType)) divLines.push(ln(s))
+    if (!isTakeaway) divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`))
+    divLines.push(ln(rule))
+    for (const i of items) {
+      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.dish_price * i.qty))) divLines.push(ln(s))
+      if (i.notes) divLines.push(ln(`  > ${i.notes}`))
+    }
+    divLines.push(ln(rule))
+    for (const s of cols('TOTAL:', `Rwf ${fmtRWF(totalAmount)}`)) divLines.push(ln(s, true))
+    divLines.push(ln(rule))
+    divLines.push(ln(center(`>> ${orderNo} <<`)))
+    divLines.push(ln(center(dt)))
+    for (const l of (bottomText && bottomText.trim() ? bottomText : 'Thank you for dining with us!').split('\n')) divLines.push(tmpl(l.trim()))
+    divLines.push(ln(center('Powered by Magnify')))
+    // Footer 2 (from the bill editor) prints below "Powered by Magnify" —
+    // typically blank lines the manager adds to push the footer up past the
+    // cutter on printers that need extra feed.
+    if (footer2Text) for (const l of footer2Text.split('\n')) divLines.push(tmpl(l.trim()))
+    // Text-only drivers ignore CSS heights entirely — paper only advances on
+    // literal line feeds, so blank lines are what push the footer past the
+    // cutter. (This is also why manual blank lines in the template used to be
+    // the only way to feed paper.)
+    for (let k = 0; k < 8; k++) divLines.push(ln(' '))
+
+    // Font size scales down as the column count goes up so LINE characters
+    // always fit the 72mm printable width on graphics drivers (Courier's
+    // advance width is 0.6em). Text-only drivers ignore this and use the
+    // printer's own font, where LINE was chosen to match its real columns.
+    const fontPx = Math.max(8, Math.min(14, Math.floor(272 / (LINE * 0.6))))
+    const barcodeEl = orderNo ? code128svg(orderNo) : ''
+    // Whole bill prints bold — thin regular strokes come out grey on thermal
+    // heads (the kitchen tickets read well because their text is bold). And no
+    // custom page-size override (no data-doc): the driver sizes the page from
+    // content exactly like the kitchen tickets, which feed and cut correctly;
+    // forcing an exact page height makes some drivers squeeze the content
+    // vertically (overlapping lines, even thinner strokes).
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Bill ${escHtml(orderNo || '')}</title><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;width:80mm;padding:5mm 4mm 0;color:#000}
+.line{white-space:pre;line-height:1.35;display:block;min-height:1.35em}
+.bold{font-weight:bold}
+b{font-weight:bold}
+i{font-style:italic}
+@media print{@page{margin:0;size:80mm auto}}
+</style></head><body>
+<div id="bill-content">${divLines.join('')}</div>
+${barcodeEl}
+</body></html>`
+    printHtml(html, 0, billPrinter)
+  }
+
+  function printKitchenTickets(order: Order, cart: CartItem[], rName: string) {
+    const byBranch = new Map<string, { branchName: string; branchType: string; items: CartItem[] }>()
+    for (const ci of cart) {
+      const dish = dishes.find(d => d.id === ci.dishId)
+      const bId = dish?.branch_id ?? '__none__'
+      const branch = branches.find(b => b.id === bId)
+      const bName = branch?.name ?? 'Kitchen'
+      const bType = branch?.type ?? 'kitchen'
+      if (!byBranch.has(bId)) byBranch.set(bId, { branchName: bName, branchType: bType, items: [] })
+      byBranch.get(bId)!.items.push(ci)
+    }
+    // Same "Generic / Text Only"-class driver problem as the bill (see printBill
+    // above): flex/gap/height are silently dropped, so the old .row/.item layout
+    // ran qty, dish name and the Server/Station pair together with no space at
+    // all. Laid out as monospace TEXT instead — padded columns, explicit spaces
+    // between fields — so it reads correctly on both text-only and graphics
+    // drivers.
+    const LINE = billColumns
+    const center = (s: string) =>
+      s.length >= LINE ? s : ' '.repeat(Math.floor((LINE - s.length) / 2)) + s
+    const cols = (left: string, right: string): string[] => {
+      if (!right) return [left]
+      if (left.length + 1 + right.length <= LINE) {
+        return [left + ' '.repeat(LINE - left.length - right.length) + right]
+      }
+      const lines: string[] = []
+      let rest = left
+      while (rest.length > LINE) { lines.push(rest.slice(0, LINE)); rest = rest.slice(LINE) }
+      if (rest && rest.length + 1 + right.length <= LINE) {
+        lines.push(rest + ' '.repeat(LINE - rest.length - right.length) + right)
+      } else {
+        if (rest) lines.push(rest)
+        lines.push(' '.repeat(Math.max(0, LINE - right.length)) + right)
+      }
+      return lines
+    }
+    const rule = '-'.repeat(LINE)
+    const ln = (s: string, bold = false) =>
+      `<div class="${bold ? 'line bold' : 'line'}">${escHtml(s) || ' '}</div>`
+
+    const now      = new Date()
+    const dateStr  = `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`
+    const timeStr  = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true })
+    const isTakeaway = !order.table_id
+    const orderType  = isTakeaway ? 'Take Away' : 'Dine In'
+    const stars      = '*'.repeat(LINE)
+    const fontPx = Math.max(8, Math.min(14, Math.floor(272 / (LINE * 0.6))))
+    // The print queue (printHtml) serialises these tickets, so no per-ticket
+    // wall-clock stagger is needed — each just follows the previous in order.
+    let ticketIndex = 1
+    for (const [bId, group] of byBranch) {
+      const deviceName = resolveStationPrinter(printerMap, billPrinter, bId === '__none__' ? null : bId)
+      const station = group.branchType === 'bar' ? 'BAR' : 'KITCHEN'
+      const ticketNo = ticketIndex
+
+      // ESC/POS path — the same raw delivery the bill uses. A thermal printer
+      // on the "Generic / Text Only" driver cannot render the GDI/HTML page
+      // below: it feeds the paper and prints nothing at all. Raw bytes are the
+      // only way any text reaches that hardware, so when thermal styling is on
+      // (or a network thermal printer is configured) tickets go out raw too.
+      // Never taken on Android — both getters report unavailable there.
+      const escposTicketPrinter = billEscposMode
+        ? (deviceName || printers.find(p => p.isDefault && !isVirtualPrinter(p.name))?.name || '')
+        : ''
+      // A station with its own local printer keeps it; the network bill printer
+      // is only the target when no local queue was resolved for this station.
+      const useNetwork = !escposTicketPrinter && !deviceName && !!billNetworkPrinter?.ip
+      if (escposTicketPrinter || useNetwork) {
+        const rawTicket = (copy: 'station' | 'waiter') => ({
+          branchName: group.branchName || rName || 'Kitchen',
+          station, copy,
+          server: order.created_by_name ?? '-',
+          orderType,
+          tableName: isTakeaway ? null : (order.table_name ?? 'Table'),
+          dateStr, timeStr,
+          ticketNo,
+          orderNo: order.order_number ?? '',
+          items: group.items.map(i => ({ qty: i.qty, name: i.dishName, note: i.note ?? null })),
+          columns: LINE,
+          ...(useNetwork
+            ? { ip: billNetworkPrinter!.ip, port: billNetworkPrinter!.port }
+            : { printerName: escposTicketPrinter }),
+        })
+        // Chain onto the shared print queue so the station copy fully lands
+        // (and the printer cuts) before the waiter copy starts — two physical
+        // slips, in order, exactly as the HTML path behaves.
+        for (const copy of ['station', 'waiter'] as const) {
+          electronPrintQueue = electronPrintQueue
+            .then(() => printTicketRaw(rawTicket(copy)))
+            .then(result => {
+              if (!result.ok) setSubmitError(`Ticket print failed: ${result.error ?? 'unknown error'}`)
+            })
+            .catch((err: Error) => setSubmitError(`Ticket print failed: ${err.message}`))
+            .then(() => new Promise<void>(res => setTimeout(res, PRINT_GAP_MS)))
+        }
+        ticketIndex += 1
+        continue
+      }
+
+      // Each station's ticket prints twice: the station's own copy, then the
+      // waiter's copy as a delivery checklist. Queued as two separate print
+      // jobs so the printer cuts after the first before the second starts —
+      // two physical slips, not one long one. Both carry the same Ticket #;
+      // only the copy line and the tick boxes differ.
+      const buildTicket = (copy: 'station' | 'waiter'): string => {
+        const isWaiter = copy === 'waiter'
+        const divLines: string[] = []
+        divLines.push(ln(center(`*** ${group.branchName || rName || 'Kitchen'} ***`), true))
+        divLines.push(ln(center(isWaiter ? '--- WAITER CHECKLIST ---' : `--- ${station} COPY ---`), true))
+        divLines.push(ln(rule))
+        for (const s of cols(`Server: ${order.created_by_name ?? '—'}`, station)) divLines.push(ln(s, true))
+        divLines.push(ln(center(orderType), true))
+        for (const s of cols(dateStr, timeStr)) divLines.push(ln(s))
+        divLines.push(ln(rule))
+        if (!isTakeaway) {
+          divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`, true))
+          divLines.push(ln(rule))
+        }
+        for (const i of group.items) {
+          // Explicit spaces between qty and dish name — a flex `gap` collapses to
+          // nothing on text-only drivers and the two run together as one word.
+          // The waiter's copy gets a box per line to tick off on delivery.
+          const label = `${isWaiter ? '[ ] ' : ''}${i.qty}x  ${i.dishName.toUpperCase()}`
+          for (const s of cols(label, '')) divLines.push(ln(s, true))
+          if (i.note) divLines.push(ln(`  > ${i.note}`))
+        }
+        divLines.push(ln(rule))
+        divLines.push(ln(center(stars)))
+        divLines.push(ln(center(`Ticket #: ${ticketNo}`), true))
+        divLines.push(ln(center(`Order #: ${order.order_number ?? ''}`)))
+        divLines.push(ln(center(stars)))
+        // Text-only drivers ignore CSS height entirely — paper only advances on
+        // literal line feeds, and some drivers also trim a fully-blank tail
+        // before cutting, which is why tickets were coming out short/stuck. Blank
+        // lines plus one visible dot at the very end push real paper past the
+        // tear bar and stop the tail from being trimmed away.
+        for (let k = 0; k < 8; k++) divLines.push(ln(' '))
+        divLines.push(ln(center('.')))
+
+        return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Ticket ${escHtml(order.order_number ?? '')} ${escHtml(isWaiter ? 'WAITER' : station)}</title><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;width:80mm;padding:20mm 4mm 0;color:#000}
+.line{white-space:pre;line-height:1.35;display:block;min-height:1.35em}
+.bold{font-weight:bold}
+@media print{@page{margin:0;size:80mm auto}}
+</style></head><body>
+<div>${divLines.join('')}</div>
+</body></html>`
+      }
+
+      printHtml(buildTicket('station'), 0, deviceName)
+      printHtml(buildTicket('waiter'), 0, deviceName)
+      ticketIndex += 1
+    }
+  }
+
   // ── Order lifecycle ──
+
+  // Load the order being edited (requested from the Pending tab) into the POS:
+  // jump to its table, show its sent items locked, and take new items in the cart.
+  useEffect(() => {
+    if (mode !== 'pos') return
+    if (!editingOrderId) {
+      setEditingOrder(null)
+      setEditingItems([])
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const [order, items] = await Promise.all([getOrderById(editingOrderId), getOrderItems(editingOrderId)])
+      if (cancelled) return
+      if (!order || order.status !== 'PENDING') {
+        setSubmitError('This order can no longer be edited.')
+        onEditDone?.()
+        return
+      }
+      setEditingOrder(order)
+      setEditingItems(items.filter(i => i.status === 'ACTIVE'))
+      setSelectedTableKey(order.table_id ?? 'takeaway')
+      setShowPanel('dishes')
+      setSubmitError(null)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingOrderId, mode])
+
+  function cancelEditOrder() {
+    setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+    setSubmitError(null)
+    onEditDone?.()
+  }
+
+  // Append the cart to the order being edited. Existing items are untouched;
+  // ONLY the new items print kitchen tickets. Totals are recomputed and the
+  // order re-queues for push (updateOrder marks it unsynced).
+  async function appendToOrder() {
+    const cart = localCart[selectedTableKey] ?? []
+    if (!editingOrder) return
+    if (!cart.length) {
+      setSubmitError('No new items yet. Tap a dish to add it first.')
+      return
+    }
+    if (orderSubmitLockRef.current) {
+      setSubmitError('Order is already being updated — please wait.')
+      return
+    }
+
+    setSubmitError(null)
+    setConfirmSuccess(null)
+    orderSubmitLockRef.current = true
+    setConfirmingOrder(true)
+    try {
+      const now = new Date().toISOString()
+      const newItems: OrderItem[] = cart.map((item) => ({
+        id:         createId(),
+        order_id:   editingOrder.id,
+        dish_id:    item.dishId,
+        dish_name:  item.dishName,
+        dish_price: item.dishPrice,
+        qty:        item.qty,
+        status:     'ACTIVE',
+        notes:      item.note ?? null,
+        branch_id:  dishes.find(d => d.id === item.dishId)?.branch_id ?? null,
+        created_at: now,
+        updated_at: now,
+      }))
+      await addOrderItems(newItems)
+
+      const combined = [
+        ...editingItems.map(i => ({ dishPrice: i.dish_price, qty: i.qty })),
+        ...cart.map(i => ({ dishPrice: i.dishPrice, qty: i.qty })),
+      ]
+      const { subtotal, vatAmount, totalAmount } = calcTotals(combined)
+      await updateOrder(editingOrder.id, { subtotal_amount: subtotal, vat_amount: vatAmount, total_amount: totalAmount })
+
+      await logInfo('order', 'Order edited: items appended', {
+        orderId: editingOrder.id,
+        orderNumber: editingOrder.order_number,
+        addedItems: newItems.length,
+        newTotal: totalAmount,
+      })
+
+      // Tickets for the NEW items only — the kitchen already has the rest.
+      printKitchenTickets(editingOrder, cart, restaurantName ?? '')
+
+      await loadPOS()
+      setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
+      setConfirmSuccess(`${editingOrder.order_number} updated — ${newItems.length} new item${newItems.length === 1 ? '' : 's'} sent to kitchen`)
+      setTimeout(() => setConfirmSuccess(null), 4000)
+      onEditDone?.()
+
+      pushSync().catch(() => {})
+    } catch (err) {
+      void logError('order', 'Append to order failed', {
+        orderId: editingOrder.id,
+        error: normalizeErrorForLog(err),
+      })
+      setSubmitError('Could not update the order — try again.')
+    } finally {
+      orderSubmitLockRef.current = false
+      setConfirmingOrder(false)
+    }
+  }
 
   async function confirmOrder(waiterName: string) {
     const cart = localCart[selectedTableKey] ?? []
@@ -319,11 +1106,6 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
       const { subtotal, vatAmount, totalAmount } = calcTotals(cart)
 
-      // Covers are optional: a blank or nonsense box stores null, not 0, so the
-      // manager's average is built only from tables where a real count was given.
-      const rawGuests = Number(guestsByTable[selectedTableKey] ?? '')
-      const parsedGuestCount = Number.isInteger(rawGuests) && rawGuests > 0 ? rawGuests : null
-
       await logInfo('order', 'Confirm order requested', {
         selectedTableKey,
         tableName,
@@ -335,6 +1117,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       })
 
       const orderNumber = `WA-${orderId.replace(/-/g, '').slice(-8).toUpperCase()}`
+
+      // Stamp the order with the open shift so its sale lands on the shift's
+      // business day, whatever time it's eventually paid. Null when this venue
+      // runs without shifts, or as a fallback — such orders report by paidAt.
+      const activeShift = await getActiveShift()
 
       const order: Order = {
         id:                 orderId,
@@ -349,11 +1136,12 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         vat_amount:         vatAmount,
         total_amount:       totalAmount,
         created_by_name:    name,
-        guest_count:        parsedGuestCount,
         served_at:          null,
         paid_at:            null,
         canceled_at:        null,
         cancel_reason:      null,
+        shift_id:           activeShift?.id ?? null,
+        business_date:      activeShift?.business_date ?? null,
         synced:             0,
         sync_error:         null,
         created_at:         now,
@@ -368,14 +1156,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         dish_price: item.dishPrice,
         qty:        item.qty,
         status:     'ACTIVE',
-        notes:      item.notes ?? null,
+        notes:      item.note ?? null,
         branch_id:  dishes.find(d => d.id === item.dishId)?.branch_id ?? null,
         created_at: now,
         updated_at: now,
       }))
 
       await createOrder(order, items)
-      printKitchenTickets(order, items)
       await logInfo('order', 'Order saved locally', {
         orderId,
         selectedTableKey,
@@ -384,10 +1171,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
         totalAmount,
       })
 
+      printKitchenTickets(order, cart, restaurantName ?? '')
+
       // ── Reload BEFORE clearing cart so the panel never flashes empty ──────
       await loadPOS()
       setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
-      setGuestsByTable(prev => ({ ...prev, [selectedTableKey]: '' }))
       setShowPanel('order')
       setConfirmSuccess(`${orderNumber} confirmed for ${tableName}`)
       setTimeout(() => setConfirmSuccess(null), 4000)
@@ -417,7 +1205,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
       const base = order?.created_by_name?.trim() || 'Guest QR Order'
       const createdByName = /confirmed by/i.test(base) ? base : `${base} · confirmed by ${waiterName}`
       await updateOrder(orderId, { status: 'PENDING', created_by_name: createdByName })
-      if (order) printKitchenTickets({ ...order, created_by_name: createdByName }, items)
+      if (order) {
+        printKitchenTickets(
+          { ...order, created_by_name: createdByName },
+          items.map(i => ({ dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price, qty: i.qty })),
+          restaurantName ?? '',
+        )
+      }
       await loadPOS()
       setConfirmSuccess(`${order?.order_number ?? 'Order'} sent to kitchen`)
       setTimeout(() => setConfirmSuccess(null), 4000)
@@ -434,161 +1228,25 @@ export default function RestaurantOrders({ mode = 'pos', waiterName: _waiterName
     pushSync().catch(() => {})
   }
 
-  function escHtml(str: string) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  }
-
-  function printBill(order: Order, items: OrderItem[], rName: string) {
-    const sub = items.reduce((s, i) => s + i.dish_price * i.qty, 0)
-    const vat = Math.round(sub * VAT_RATE)
-    const tot = Math.round(sub * (1 + VAT_RATE))
-    const _d  = new Date(order.paid_at ?? order.updated_at ?? order.created_at)
-    const dt  = `${String(_d.getDate()).padStart(2,'0')}/${String(_d.getMonth()+1).padStart(2,'0')}/${_d.getFullYear()} ${String(_d.getHours()).padStart(2,'0')}:${String(_d.getMinutes()).padStart(2,'0')}`
-    const itemRows = items.map(i =>
-      `<tr><td>${escHtml(i.dish_name)}${i.qty > 1 ? ` ×${i.qty}` : ''}</td>` +
-      `<td class="r">${fmtRWF(i.dish_price * i.qty)} RWF</td></tr>`
-    ).join('')
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:monospace;font-size:13px;padding:8px;width:80mm}
-h1{text-align:center;font-size:15px;font-weight:bold;margin-bottom:6px}
-.c{text-align:center;margin:2px 0}
-hr{border:none;border-top:1px dashed #000;margin:6px 0}
-table{width:100%;border-collapse:collapse}
-td{padding:2px 0;vertical-align:top}
-.r{text-align:right;white-space:nowrap;padding-left:8px}
-.tot td{font-weight:bold;font-size:14px}
-@media print{@page{margin:0;size:80mm auto}}
-</style></head><body>
-<h1>${escHtml(rName || 'RECEIPT')}</h1>
-<p class="c">${escHtml(order.table_name ?? 'Takeaway')}</p>
-<p class="c">${escHtml(order.order_number ?? '')}</p>
-<p class="c">${dt}</p>
-${order.created_by_name ? `<p class="c">Waiter: ${escHtml(order.created_by_name)}</p>` : ''}
-<hr>
-<table>${itemRows}</table>
-<hr>
-<table>
-<tr><td>Subtotal</td><td class="r">${fmtRWF(sub)} RWF</td></tr>
-<tr><td>VAT 18%</td><td class="r">+${fmtRWF(vat)} RWF</td></tr>
-<tr class="tot"><td>TOTAL</td><td class="r">${fmtRWF(tot)} RWF</td></tr>
-</table>
-<hr>
-<p class="c">Paid: ${escHtml(order.payment_method ?? 'Cash')}</p>
-<p class="c" style="margin-top:8px;font-size:11px">Thank you for dining with us!</p>
-<p class="c" style="margin-top:6px;font-size:9px;color:#888">Powered by Magnify</p>
-</body></html>`
-
-    const iframe = document.createElement('iframe')
-    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:0;height:0;border:none'
-    document.body.appendChild(iframe)
-    const doc = iframe.contentDocument || iframe.contentWindow?.document
-    if (doc) {
-      doc.open()
-      doc.write(html)
-      doc.close()
-      setTimeout(() => {
-        iframe.contentWindow?.print()
-        setTimeout(() => { try { document.body.removeChild(iframe) } catch {} }, 1000)
-      }, 200)
-    } else {
-      try { document.body.removeChild(iframe) } catch {}
-    }
-  }
-
-  function printSingleKitchenTicket(order: Order, items: OrderItem[], branchLabel: string) {
-    const _d = new Date()
-    const dt = `${String(_d.getDate()).padStart(2,'0')}/${String(_d.getMonth()+1).padStart(2,'0')}/${_d.getFullYear()} ${String(_d.getHours()).padStart(2,'0')}:${String(_d.getMinutes()).padStart(2,'0')}`
-    const itemRows = items.map(i =>
-      `<div class="item"><span class="qty">${i.qty}x</span><span class="name">${escHtml(i.dish_name)}</span></div>` +
-      (i.notes ? `<div class="note">&gt; ${escHtml(i.notes)}</div>` : '')
-    ).join('')
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Courier New',monospace;font-size:14px;width:280px;margin:0 auto;padding:8px}
-.center{text-align:center}
-.title{font-size:22px;font-weight:bold;margin-bottom:4px}
-.sub{font-size:12px;margin-bottom:2px}
-.divider{border-top:1px dashed #000;margin:6px 0}
-.meta{font-size:12px;margin:2px 0}
-.item{display:flex;gap:8px;margin:4px 0;font-weight:bold;font-size:15px}
-.qty{min-width:26px}
-.note{margin-left:32px;font-style:italic;font-size:12px;margin-bottom:4px}
-@media print{@page{margin:0;size:80mm auto}}
-</style></head><body>
-<div class="center">
-<div class="title">${escHtml(branchLabel)}</div>
-<div class="sub">${escHtml(restaurantName)}</div>
-</div>
-<div class="meta">Order ID: ${escHtml(order.order_number ?? '')}</div>
-<div class="divider"></div>
-${itemRows}
-<div class="divider"></div>
-<div class="meta">Table : ${escHtml(order.table_name ?? 'Takeaway')}</div>
-<div class="meta">Date  : ${dt}</div>
-<div class="meta">Waiter: ${escHtml(order.created_by_name ?? '')}</div>
-</body></html>`
-    const iframe = document.createElement('iframe')
-    iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:0;height:0;border:none'
-    document.body.appendChild(iframe)
-    const doc = iframe.contentDocument || iframe.contentWindow?.document
-    if (doc) {
-      doc.open()
-      doc.write(html)
-      doc.close()
-      setTimeout(() => {
-        iframe.contentWindow?.print()
-        setTimeout(() => { try { document.body.removeChild(iframe) } catch {} }, 1000)
-      }, 200)
-    } else {
-      try { document.body.removeChild(iframe) } catch {}
-    }
-  }
-
-  function printKitchenTickets(order: Order, items: OrderItem[]) {
-    // Group items by the dish's mother branch, print one ticket per branch.
-    const groups = new Map<string, { label: string; items: OrderItem[] }>()
-    for (const item of items) {
-      const dish    = dishes.find(d => d.id === item.dish_id)
-      const bId     = dish?.branch_id ?? '__unassigned__'
-      if (!groups.has(bId)) {
-        const branch = branches.find(b => b.id === bId)
-        const label  = branch
-          ? (branch.type === 'bar' ? 'BAR' : 'KITCHEN') + ` – ${branch.name}`
-          : 'KITCHEN'
-        groups.set(bId, { label, items: [] })
-      }
-      groups.get(bId)!.items.push(item)
-    }
-    for (const [, group] of groups) {
-      printSingleKitchenTicket(order, group.items, group.label)
-    }
-  }
-
   async function collectPayment(orderId: string) {
     const order = pendingOrders.find(o => o.id === orderId)
     if (!order || paymentLockRef.current) return
     paymentLockRef.current = true
     setPayingSaving(true)
     try {
-      const paidAt = new Date().toISOString()
       await updateOrder(order.id, {
         status:         'PAID',
         payment_method: payMethod,
-        paid_at:        paidAt,
+        paid_at:        new Date().toISOString(),
       })
+      // The bill is printed on demand via the "Print Bill" button when the
+      // guest asks for it. Confirming payment must NOT re-print it — that
+      // wasted a second slip of paper on every settled order.
       await logInfo('order', 'Payment collected — queuing push', {
         orderId: order.id,
         orderNumber: order.order_number,
         paymentMethod: payMethod,
       })
-      printBill(
-        { ...order, payment_method: payMethod, paid_at: paidAt },
-        orderItemsMap[order.id] ?? [],
-        restaurantName,
-      )
       await loadPOS()
       pushSync().then(n => {
         void logInfo('sync', 'Post-payment push completed', { syncedOrders: n })
@@ -604,11 +1262,25 @@ ${itemRows}
     }
   }
 
-  // cancelOrder is now handled by CancelModal — this stub kept for reference only
+  // CancelModal (module-scope) handles the PIN/reason entry and the DB write;
+  // this runs the POS-side side effects once a cancellation is approved.
+  function handleOrderCanceled(approvedBy: string, tableKey: string) {
+    setLocalCart(prev => ({ ...prev, [tableKey]: [] }))
+    setSelectedTableKey('takeaway')
+    setShowPanel('dishes')
+    setConfirmSuccess(`Order canceled · approved by ${approvedBy}`)
+    setTimeout(() => setConfirmSuccess(null), 5000)
+    loadPOS()
+    pushSync().catch(() => {})
+  }
 
   // ── Derived values ──
 
-  const categories = Array.from(new Set(dishes.map(d => d.category).filter(Boolean))) as string[]
+  // Tab order: "add-ons" categories always last, everything else alphabetical
+  // (e.g. Tiamo → Pasta, Sauces, Add-ons).
+  const isAddonCat = (c: string) => /add[\s-]?ons?/i.test(c)
+  const categories = (Array.from(new Set(dishes.map(d => d.category).filter(Boolean))) as string[])
+    .sort((a, b) => (isAddonCat(a) !== isAddonCat(b) ? (isAddonCat(a) ? 1 : -1) : a.localeCompare(b)))
 
   const filteredDishes = dishes.filter(d => {
     if (selectedCategory && d.category !== selectedCategory) return false
@@ -616,31 +1288,52 @@ ${itemRows}
     return true
   })
 
+  // The Menu panel is a build-only cart; confirmed orders live in the Pending Orders tab.
   const cartItems      = localCart[selectedTableKey] ?? []
-  const currentOrders  = pendingOrders
-    .filter(o => (o.table_id ?? 'takeaway') === selectedTableKey)
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-  const currentOrder   = currentOrders[0] ?? null
-  const confirmedItems = currentOrder ? (orderItemsMap[currentOrder.id] ?? []) : []
   const isBuilding     = cartItems.length > 0
-  const isMultiOrder   = !isBuilding && currentOrders.length > 1
-  const rightItems     = isBuilding
-    ? cartItems
-    : confirmedItems.map(i => ({ dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price, qty: i.qty }))
-  const { subtotal, vatAmount, totalAmount } = calcTotals(rightItems)
+  const { totalAmount } = calcTotals(cartItems)
   const tableNumber        = selectedTableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === selectedTableKey)?.name ?? 'Table')
-  const currentOrderServed = Boolean(currentOrder?.served_at)
-  const currentOrderIsNew  = currentOrder?.status === 'UNCONFIRMED'
   const activeTableKeys    = new Set(pendingOrders.map(o => o.table_id ?? 'takeaway'))
+  // Terminals are shared: waiter A steps away and waiter B signs in with their
+  // own order code. Every active order stays VISIBLE to both — B needs to see
+  // that table 7 is being served — but B cannot act on A's orders: the card
+  // renders read-only, with no Served / Pay / Add / Cancel buttons.
+  //
+  // Ownership is created_by_name, because that is the waiter; the Staff row
+  // behind the terminal is the shared screen account and identifies nobody.
+  // Treated as everyone's (fully actionable): guest QR orders awaiting
+  // confirmation, and orders with no recorded waiter, which would otherwise
+  // be stranded read-only on every terminal with no way to settle them.
+  const ownsOrder = (o: Order): boolean => {
+    if (!waiterName.trim()) return true          // no waiter signed in — full access
+    if (o.status === 'UNCONFIRMED') return true  // unclaimed guest QR order
+    const who = o.created_by_name?.trim().toLowerCase()
+    if (!who) return true
+    const me = waiterName.trim().toLowerCase()
+    if (who === me) return true
+    // A confirmed guest order reads "Guest QR Order · confirmed by <waiter>".
+    // Compare the whole trailing name, so "Sam" does not match "Samuel".
+    const confirmedBy = who.match(/confirmed by (.+)$/)
+    return confirmedBy ? confirmedBy[1].trim() === me : false
+  }
+  // Who to name on a locked card. Confirmed guest orders carry the whole
+  // "Guest QR Order · confirmed by <waiter>" string — show just the waiter.
+  const orderWaiter = (o: Order): string => {
+    const raw = o.created_by_name?.trim() ?? ''
+    return raw.match(/confirmed by (.+)$/)?.[1].trim() || raw || 'Another waiter'
+  }
+  // Pending Orders tab: all active orders, newest first, filtered by table-name search.
+  const pendingQuery   = pendingSearch.trim().toLowerCase()
+  const pendingList    = pendingOrders
+    .filter(o => !pendingQuery || (o.table_name ?? 'Takeaway').toLowerCase().includes(pendingQuery))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
   // ── Pay modal ──
 
   function PayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
     const order   = pendingOrders.find(o => o.id === orderId)
     const items   = order ? (orderItemsMap[order.id] ?? []) : []
-    const sub     = items.reduce((s, i) => s + i.dish_price * i.qty, 0)
-    const vat     = Math.round(sub * VAT_RATE)
-    const tot     = Math.round(sub * (1 + VAT_RATE))
+    const tot     = items.reduce((s, i) => s + i.dish_price * i.qty, 0)
     const name    = order?.table_name ?? (order?.table_id ? (tables.find(t => t.id === order.table_id)?.name ?? 'Table') : 'Takeaway')
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -656,10 +1349,8 @@ ${itemRows}
                 <span className="font-medium text-gray-900">{fmtRWF(item.dish_price * item.qty)} RWF</span>
               </div>
             ))}
-            <div className="border-t border-gray-200 pt-2 space-y-1">
-              <div className="flex justify-between text-sm text-gray-500"><span>Subtotal</span><span>{fmtRWF(sub)} RWF</span></div>
-              <div className="flex justify-between text-sm text-orange-600 font-medium"><span>VAT 18%</span><span>+{fmtRWF(vat)} RWF</span></div>
-              <div className="flex justify-between font-bold text-base pt-1 border-t border-gray-200">
+            <div className="border-t border-gray-200 pt-2">
+              <div className="flex justify-between font-bold text-base">
                 <span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span>
               </div>
             </div>
@@ -792,6 +1483,158 @@ ${itemRows}
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // PENDING ORDERS MODE — every active order as a card, searchable by table
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  if (mode === 'pending') {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-lg font-bold text-gray-800">Pending Orders</h2>
+            <p className="text-sm text-gray-500">{pendingOrders.length} active</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="text" value={pendingSearch}
+              onChange={e => setPendingSearch(e.target.value)}
+              placeholder="Search table…"
+              className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-orange-400 w-40"
+            />
+            <button onClick={loadPOS} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" title="Refresh">
+              <RefreshCw className={`h-4 w-4 text-gray-500 ${isRefreshing ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        {confirmSuccess && (
+          <div className="rounded-xl border border-green-300 bg-green-50 px-3 py-2.5 text-sm font-semibold text-green-800 flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-600" /> {confirmSuccess}
+          </div>
+        )}
+        {submitError && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">{submitError}</div>
+        )}
+
+        {loading ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">Loading…</div>
+        ) : pendingList.length === 0 ? (
+          <div className="bg-white rounded-xl border-2 border-dashed border-gray-200 p-12 text-center">
+            <ShoppingBag className="h-8 w-8 text-gray-300 mx-auto mb-2" />
+            <p className="text-sm text-gray-500">{pendingSearch ? 'No matching tables' : 'No pending orders'}</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {pendingList.map(ord => {
+              const oi  = orderItemsMap[ord.id] ?? []
+              const tot = oi.reduce((s, i) => s + i.dish_price * i.qty, 0)
+              // Another waiter's order: shown in full, but read-only — the
+              // action row is replaced by a lock line so nobody settles,
+              // edits or cancels a table they are not serving.
+              const mine = ownsOrder(ord)
+              return (
+                <div key={ord.id} className={`bg-white border rounded-xl overflow-hidden ${mine ? 'border-gray-200' : 'border-gray-200 opacity-60'}`}>
+                  <div className="bg-gray-50 px-3 py-2 flex justify-between items-center border-b border-gray-100">
+                    <span className="text-xs font-bold text-gray-700">{ord.order_number}</span>
+                    <span className="text-xs text-gray-500 truncate ml-2">{ord.table_name ?? 'Takeaway'}</span>
+                  </div>
+                  <div className="px-3 py-2 space-y-1.5">
+                    {oi.map(item => (
+                      <div key={item.id}>
+                        <div className="flex items-start justify-between">
+                          <span className="text-sm text-gray-800 font-medium flex-1 min-w-0 leading-snug">
+                            {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                          </span>
+                          <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)} RWF</span>
+                        </div>
+                        {/* Modifiers ("no sauce", "extra pickles") — same style as the cart */}
+                        {item.notes && (
+                          <p className="text-xs text-orange-600 italic leading-snug">&gt; {item.notes}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border-t border-gray-100 px-3 py-2 space-y-1.5">
+                    <div className="flex justify-between text-sm font-bold text-gray-900"><span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span></div>
+                    {!mine ? (
+                      <p className="flex items-center justify-center gap-1 py-2 text-xs font-semibold text-gray-500">
+                        <Lock className="h-3.5 w-3.5 flex-shrink-0" /> {`${orderWaiter(ord)}'s order`}
+                      </p>
+                    ) : ord.status === 'UNCONFIRMED' ? (
+                      <button
+                        onClick={() => {
+                          setSubmitError(null)
+                          // Waiter identity already established on the opening
+                          // page — no need to ask for the code again.
+                          if (waiterName) { void confirmIncomingOrder(ord.id, waiterName); return }
+                          setIncomingConfirmId(ord.id); setShowCodeModal(true)
+                        }}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Confirm & send to kitchen
+                      </button>
+                    ) : (
+                      <>
+                        <div className="flex gap-1.5 pt-0.5">
+                          {!ord.served_at && (
+                            <button onClick={() => markOrderServed(ord.id)}
+                              className="flex-1 flex items-center justify-center gap-1 border border-green-300 hover:bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-xl transition-colors">
+                              <CheckCircle2 className="h-3.5 w-3.5" /> Served
+                            </button>
+                          )}
+                          <button onClick={() => setPayingOrderId(ord.id)}
+                            className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
+                            <CreditCard className="h-3.5 w-3.5" /> Pay
+                          </button>
+                        </div>
+                        <button onClick={() => onEditOrder?.(ord.id)}
+                          className="w-full flex items-center justify-center gap-1 border border-blue-300 hover:bg-blue-50 text-blue-700 text-xs font-semibold py-2 rounded-xl transition-colors">
+                          <StickyNote className="h-3.5 w-3.5" /> Edit / Add items
+                        </button>
+                        <button onClick={() => printBill(ord, oi)}
+                          className="w-full flex items-center justify-center gap-1 border border-gray-300 hover:bg-gray-50 text-gray-700 text-xs font-semibold py-2 rounded-xl transition-colors">
+                          <Printer className="h-3.5 w-3.5" /> Print Bill
+                        </button>
+                        <button onClick={() => setCancelingOrderId(ord.id)}
+                          className="w-full flex items-center justify-center gap-1 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
+                          <ShieldAlert className="h-3 w-3" /> Cancel
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {payingOrderId && (
+          <PayModal orderId={payingOrderId} onClose={() => { setPayingOrderId(null); setPayMethod('Cash') }} />
+        )}
+        {cancelingOrderId && (
+          <CancelModal
+            order={pendingOrders.find(o => o.id === cancelingOrderId)}
+            onClose={() => setCancelingOrderId(null)}
+            onCanceled={handleOrderCanceled}
+          />
+        )}
+        {showCodeModal && (
+          <OrderCodeModal
+            onClose={() => { setShowCodeModal(false); setIncomingConfirmId(null) }}
+            onConfirmed={(name) => {
+              setShowCodeModal(false)
+              if (incomingConfirmId) {
+                const id = incomingConfirmId
+                setIncomingConfirmId(null)
+                void confirmIncomingOrder(id, name)
+              }
+            }}
+          />
+        )}
+      </div>
+    )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // POS MODE
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -816,12 +1659,12 @@ ${itemRows}
             )}
             <div className="flex items-center gap-2 flex-shrink-0">
               {/* Mobile: jump to order panel */}
-              {(cartItems.length > 0 || confirmedItems.length > 0) && (
+              {cartItems.length > 0 && (
                 <button
                   onClick={() => setShowPanel('order')}
                   className="md:hidden flex items-center gap-1 bg-orange-500 text-white px-2.5 py-1 rounded-full text-xs font-bold">
                   <ShoppingBag className="h-3.5 w-3.5" />
-                  <span>{cartItems.length > 0 ? cartItems.length : confirmedItems.length}</span>
+                  <span>{cartItems.length}</span>
                 </button>
               )}
               <input
@@ -836,55 +1679,6 @@ ${itemRows}
               </button>
             </div>
           </div>
-
-          {/* Row 2: compact table chips directly under Afternoon */}
-          {tables.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 pb-2">
-              {tables.map(table => {
-                const key      = table.id
-                const order    = pendingOrders.find(o => o.table_id === key)
-                const hasOrder = Boolean(order)
-                const isNew    = order?.status === 'UNCONFIRMED'
-                const isServed = Boolean(order?.served_at)
-                const isSelected = key === selectedTableKey
-                return (
-                  <button key={key}
-                    onClick={() => { setSelectedTableKey(key); setShowPanel('order') }}
-                    className={`relative flex-shrink-0 flex flex-col items-start px-4 py-2.5 rounded-xl text-left transition-all border ${
-                      isSelected && isNew     ? 'bg-blue-600   text-white border-blue-600   shadow-sm' :
-                      isSelected && isServed  ? 'bg-green-500  text-white border-green-500  shadow-sm' :
-                      isSelected && hasOrder  ? 'bg-orange-500 text-white border-orange-500 shadow-sm' :
-                      isSelected              ? 'bg-gray-900   text-white border-gray-900   shadow-sm' :
-                      isNew                   ? 'bg-blue-50    text-blue-800   border-blue-400   hover:border-blue-500'   :
-                      isServed                ? 'bg-green-50   text-green-800  border-green-400  hover:border-green-500'  :
-                      hasOrder                ? 'bg-orange-50  text-orange-800 border-orange-300 hover:border-orange-400' :
-                                                'bg-gray-900   text-white border-gray-900 hover:bg-gray-700'
-                    }`}>
-                    {isNew && (
-                      <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-blue-500 border-2 border-white animate-pulse" />
-                    )}
-                    {isServed && (
-                      <span className="absolute -top-1.5 -right-1.5 h-4 w-4 rounded-full bg-green-600 border-2 border-white flex items-center justify-center">
-                        <CheckCircle2 className="h-2.5 w-2.5 text-white" />
-                      </span>
-                    )}
-                    {hasOrder && !isServed && !isNew && (
-                      <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white" />
-                    )}
-                    <span className="text-[18px] font-bold leading-tight">{table.name}</span>
-                    {isNew
-                      ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-blue-100' : 'text-blue-600'}`}>New order</span>
-                      : isServed
-                        ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-green-100' : 'text-green-600'}`}>Served</span>
-                        : hasOrder
-                          ? <span className={`text-[14px] font-semibold ${isSelected ? 'text-orange-100' : 'text-orange-500'}`}>Pending…</span>
-                          : <span className="text-[14px] font-medium text-gray-400">Free</span>
-                    }
-                  </button>
-                )
-              })}
-            </div>
-          )}
         </div>
 
         {/* Category strip */}
@@ -942,14 +1736,19 @@ ${itemRows}
                       <span className="text-white font-black text-3xl tracking-tight select-none drop-shadow">{initials}</span>
                     </div>
                     <div className={`${bgBottom} px-3 py-2 flex-1 w-full`}>
-                      <p className="text-white text-[16px] font-semibold leading-tight line-clamp-2">{dish.name}</p>
-                      <p className="text-white/70 font-medium text-[14px] mt-0.5">
+                      <p className="text-white text-[13px] font-semibold leading-tight line-clamp-3">{dish.name}</p>
+                      <p className="text-white/70 font-medium text-[13px] mt-0.5">
                         {fmtRWF(dish.selling_price)} RWF
                       </p>
                     </div>
                     {qtyInCart > 0 && (
                       <span className="absolute top-1.5 right-1.5 h-7 min-w-[28px] bg-gray-900 border-2 border-white text-white text-xs font-bold rounded-full flex items-center justify-center px-1 shadow-sm">
                         {qtyInCart}
+                      </span>
+                    )}
+                    {outDishIds.has(dish.id) && (
+                      <span className="absolute top-1.5 left-1.5 bg-red-600 text-white text-[10px] font-bold rounded px-1.5 py-0.5 shadow-sm select-none">
+                        Out
                       </span>
                     )}
                   </button>
@@ -972,259 +1771,178 @@ ${itemRows}
             <ArrowLeft className="h-5 w-5 text-gray-600" />
           </button>
           <span className="text-2xl font-black text-gray-900">{tableNumber}</span>
-          <select value={selectedTableKey} onChange={e => setSelectedTableKey(e.target.value)}
-            className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-white text-gray-600">
-            <option value="takeaway">Takeaway</option>
-            {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
+          <div className="relative" ref={tablePickerRef}>
+            <button
+              type="button"
+              onClick={() => {
+                setTablePickerOpen(o => !o)
+                setTablePickerQuery('')
+                requestAnimationFrame(() => tablePickerInputRef.current?.focus())
+              }}
+              className="flex items-center gap-1.5 text-sm border border-gray-200 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-white text-gray-600 hover:bg-gray-50"
+            >
+              {tableNumber}
+              <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+            </button>
+            {tablePickerOpen && (
+              <div className="absolute right-0 top-full mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-20 overflow-hidden">
+                <div className="flex items-center gap-1.5 border-b border-gray-100 px-2.5 py-2">
+                  <Search className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                  <input
+                    ref={tablePickerInputRef}
+                    type="text"
+                    value={tablePickerQuery}
+                    onChange={e => setTablePickerQuery(e.target.value)}
+                    placeholder="Search table…"
+                    className="flex-1 text-sm outline-none text-gray-700 placeholder:text-gray-400"
+                  />
+                </div>
+                <div className="max-h-56 overflow-y-auto py-1">
+                  {(() => {
+                    const q = tablePickerQuery.trim().toLowerCase()
+                    const rows: Array<{ key: string; label: string }> = [
+                      { key: 'takeaway', label: 'Takeaway' },
+                      ...tables.map(t => ({ key: t.id, label: t.name })),
+                    ].filter(row => !q || row.label.toLowerCase().includes(q))
+
+                    if (rows.length === 0) {
+                      return <div className="px-3 py-4 text-center text-sm text-gray-400">No tables found</div>
+                    }
+
+                    return rows.map(row => (
+                      <button
+                        key={row.key}
+                        type="button"
+                        onClick={() => { setSelectedTableKey(row.key); setTablePickerOpen(false); setTablePickerQuery('') }}
+                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-orange-50 ${
+                          row.key === selectedTableKey ? 'bg-orange-50 text-orange-600 font-semibold' : 'text-gray-700'
+                        }`}
+                      >
+                        {row.label}
+                      </button>
+                    ))
+                  })()}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Mode label strip */}
-        <div className={`flex-shrink-0 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-widest ${
-          isBuilding             ? 'bg-orange-50 text-orange-600' :
-          isMultiOrder           ? 'bg-amber-50  text-amber-700'  :
-          confirmedItems.length  ? 'bg-amber-50  text-amber-700'  :
-                                   'bg-gray-50   text-gray-400'
-        }`}>
-          {isBuilding
-            ? 'Building order — not sent yet'
-            : isMultiOrder
-              ? `${currentOrders.length} active orders`
-              : confirmedItems.length
-                ? `Order · ${currentOrder?.order_number ?? ''}`
-                : 'No items'}
-        </div>
+        {/* Mode label strip / editing banner */}
+        {editingOrder ? (
+          <div className="flex-shrink-0 px-4 py-1.5 bg-blue-50 border-b border-blue-100 flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-blue-700">
+              Editing {editingOrder.order_number} — new items only
+            </span>
+            <button onClick={cancelEditOrder} title="Stop editing" className="p-0.5 rounded hover:bg-blue-100">
+              <X className="h-3.5 w-3.5 text-blue-500" />
+            </button>
+          </div>
+        ) : (
+          <div className={`flex-shrink-0 px-4 py-1 text-[11px] font-semibold uppercase tracking-widest ${
+            isBuilding ? 'bg-orange-50 text-orange-600' : 'bg-gray-50 text-gray-400'
+          }`}>
+            {isBuilding ? 'Building order — not sent yet' : 'No items'}
+          </div>
+        )}
 
-        {/* Items list */}
-        <div className="flex-1 overflow-y-auto px-4 py-3">
-          {isMultiOrder ? (
-            <div className="space-y-3">
-              {currentOrders.map(ord => {
-                const oi  = orderItemsMap[ord.id] ?? []
-                const sub = oi.reduce((s, i) => s + i.dish_price * i.qty, 0)
-                const vat = Math.round(sub * VAT_RATE)
-                const tot = Math.round(sub * (1 + VAT_RATE))
-                return (
-                  <div key={ord.id} className="border border-gray-200 rounded-xl overflow-hidden">
-                    <div className="bg-gray-50 px-3 py-2 flex justify-between items-center border-b border-gray-100">
-                      <span className="text-xs font-bold text-gray-700">{ord.order_number}</span>
-                      <span className="text-xs text-gray-500 truncate ml-2">{ord.created_by_name}</span>
-                    </div>
-                    <div className="px-3 py-2 space-y-1.5">
-                      {oi.map(item => (
-                        <div key={item.id} className="flex items-start justify-between">
-                          <span className="text-sm text-gray-800 font-medium flex-1 min-w-0 leading-snug">
-                            {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
-                          </span>
-                          <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
-                            {fmtRWF(item.dish_price * item.qty)} RWF
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="border-t border-gray-100 px-3 py-2 space-y-1.5">
-                      <div className="flex justify-between text-xs text-gray-500">
-                        <span>Subtotal</span><span>{fmtRWF(sub)} RWF</span>
-                      </div>
-                      <div className="flex justify-between text-xs text-orange-600 font-medium">
-                        <span>VAT 18%</span><span>+{fmtRWF(vat)} RWF</span>
-                      </div>
-                      <div className="flex justify-between text-sm font-bold text-gray-900 border-t border-gray-100 pt-1.5">
-                        <span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span>
-                      </div>
-                      {ord.status === 'UNCONFIRMED' ? (
-                        <button
-                          onClick={() => { setSubmitError(null); setIncomingConfirmId(ord.id); setShowCodeModal(true) }}
-                          className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
-                          <CheckCircle2 className="h-3.5 w-3.5" /> Confirm & send to kitchen
-                        </button>
-                      ) : (
-                        <>
-                          <div className="flex gap-1.5 pt-0.5">
-                            {!ord.served_at && (
-                              <button onClick={() => markOrderServed(ord.id)}
-                                className="flex-1 flex items-center justify-center gap-1 border border-green-300 hover:bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-xl transition-colors">
-                                <CheckCircle2 className="h-3.5 w-3.5" /> Served
-                              </button>
-                            )}
-                            <button onClick={() => setPayingOrderId(ord.id)}
-                              className="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-2 rounded-xl flex items-center justify-center gap-1 transition-colors">
-                              <CreditCard className="h-3.5 w-3.5" /> Pay
-                            </button>
-                          </div>
-                          <button onClick={() => setCancelingOrderId(ord.id)}
-                            className="w-full flex items-center justify-center gap-1 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
-                            <ShieldAlert className="h-3 w-3" /> Cancel
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
+        {/* Items list — cart only (confirmed orders live in the Pending Orders tab) */}
+        <div className="flex-1 overflow-y-auto px-4 py-2">
+          {/* Already-sent items of the order being edited — locked, no re-tickets */}
+          {editingOrder && editingItems.length > 0 && (
+            <div className="mb-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Already sent to kitchen</p>
+              {editingItems.map(item => (
+                <div key={item.id} className="flex items-start justify-between">
+                  <span className="text-xs text-gray-500 leading-snug flex-1 min-w-0">
+                    {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                    {item.notes ? <span className="italic text-orange-400"> &gt; {item.notes}</span> : null}
+                  </span>
+                  <span className="text-xs text-gray-500 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)}</span>
+                </div>
+              ))}
             </div>
-          ) : rightItems.length === 0 ? (
+          )}
+          {cartItems.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full py-12 text-gray-400">
               <ShoppingBag className="h-8 w-8 mb-3 text-gray-300" />
               <p className="text-sm">No items yet</p>
               <p className="text-xs mt-1">Tap a dish to add it</p>
+              {confirmSuccess && (
+                <div className="mt-4 rounded-xl border border-green-300 bg-green-50 px-3 py-2 text-xs font-semibold text-green-800 flex items-center gap-2">
+                  <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-600" /> {confirmSuccess}
+                </div>
+              )}
             </div>
           ) : (
-            <div className="space-y-4">
-              {isBuilding
-                ? cartItems.map(item => (
-                    <div key={item.dishId} className="group">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0 flex items-center gap-1">
-                          <button onClick={() => removeLocalCartItem(item.dishId)}
-                            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 transition-opacity flex-shrink-0">
-                            <Trash2 className="h-3.5 w-3.5 text-red-400" />
-                          </button>
-                          <span className="text-sm text-gray-800 font-medium leading-snug">
-                            {item.dishName}{item.qty > 1 ? ` ×${item.qty}` : ''}
-                          </span>
-                        </div>
-                        <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
-                          {fmtRWF(item.dishPrice * item.qty)} RWF
-                        </span>
-                      </div>
-                      <input
-                        type="text"
-                        placeholder="Note for kitchen…"
-                        value={item.notes ?? ''}
-                        onChange={e => updateCartItemNotes(item.dishId, e.target.value)}
-                        className="mt-1 w-full text-xs border border-gray-200 rounded-lg px-2 py-1 text-gray-600 placeholder-gray-400 outline-none focus:ring-1 focus:ring-orange-300"
-                      />
-                    </div>
-                  ))
-                : confirmedItems.map(item => (
-                    <div key={item.id} className="flex items-start justify-between">
-                      <span className="text-sm text-gray-800 font-medium leading-snug flex-1 min-w-0">
-                        {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
-                      </span>
-                      <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
-                        {fmtRWF(item.dish_price * item.qty)} RWF
-                      </span>
-                    </div>
-                  ))
-              }
+            <div className="space-y-2.5">
+              {cartItems.map(item => (
+                <div key={item.dishId}>
+                  <button onClick={() => setActiveItemId(item.dishId)}
+                    className="w-full flex items-start justify-between text-left rounded-lg px-1 py-1 hover:bg-gray-50 transition-colors">
+                    <span className="text-sm text-gray-800 font-medium leading-snug flex-1 min-w-0">
+                      {item.dishName}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                    </span>
+                    <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">
+                      {fmtRWF(item.dishPrice * item.qty)} RWF
+                    </span>
+                  </button>
+                  {noteEditId === item.dishId ? (
+                    <input
+                      autoFocus
+                      value={item.note ?? ''}
+                      onChange={e => setCartItemNote(item.dishId, e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') setNoteEditId(null) }}
+                      onBlur={() => setNoteEditId(null)}
+                      placeholder="Modifiers — e.g. extra pickles"
+                      className="ml-2 mt-1 w-[calc(100%-0.5rem)] border border-orange-200 rounded-lg px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-orange-400"
+                    />
+                  ) : item.note ? (
+                    <p className="ml-2 mt-0.5 text-xs text-orange-600 italic leading-snug">&gt; {item.note}</p>
+                  ) : null}
+                </div>
+              ))}
             </div>
           )}
         </div>
 
-        {/* Totals + action buttons */}
-        {!isMultiOrder && rightItems.length > 0 && (
-          <div className="flex-shrink-0 border-t border-gray-200 px-4 py-4 space-y-2">
-
-            {/* ── Success banner ── */}
-            {confirmSuccess && (
-              <div className="rounded-xl border border-green-300 bg-green-50 px-3 py-2.5 text-sm font-semibold text-green-800 flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-600" />
-                {confirmSuccess}
-              </div>
-            )}
-
-            {/* ── Error banner ── */}
+        {/* Totals + confirm — only while building a cart */}
+        {isBuilding && (
+          <div className="flex-shrink-0 border-t border-gray-200 px-4 py-2 space-y-1.5">
             {submitError && (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700">
                 {submitError}
               </div>
             )}
-
-            <div className="flex justify-between text-sm text-gray-600">
-              <span>Price before VAT</span><span>{fmtRWF(subtotal)} RWF</span>
+            <div className="flex justify-between text-base font-bold text-gray-900">
+              <span>{editingOrder ? 'New items' : 'Total'}</span><span>{fmtRWF(totalAmount)} RWF</span>
             </div>
-            <div className="flex justify-between text-sm text-gray-600">
-              <span>Tax (18%)</span><span>{fmtRWF(vatAmount)} RWF</span>
-            </div>
-            <div className="flex justify-between text-base font-bold text-gray-900 border-t border-gray-100 pt-2">
-              <span>Total</span><span>{fmtRWF(totalAmount)} RWF</span>
-            </div>
-
-            {/* Covers — optional. Blank is fine; it just leaves this table out
-                of the manager's average spend per guest. */}
-            {isBuilding && (
-              <div className="flex items-center justify-between gap-2 border-t border-gray-100 pt-2">
-                <label htmlFor="guest-count" className="text-xs font-medium text-gray-500">
-                  Guests at table <span className="text-gray-400">(optional)</span>
-                </label>
-                <input
-                  id="guest-count"
-                  type="number"
-                  min={1}
-                  step={1}
-                  inputMode="numeric"
-                  value={guestsByTable[selectedTableKey] ?? ''}
-                  onChange={e => {
-                    const next = e.target.value
-                    setGuestsByTable(prev => ({ ...prev, [selectedTableKey]: next }))
-                  }}
-                  placeholder="—"
-                  className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-sm text-center outline-none focus:ring-2 focus:ring-orange-400"
-                />
+            {editingOrder && (
+              <div className="flex justify-between text-xs font-semibold text-gray-500">
+                <span>Order total after update</span>
+                <span>{fmtRWF(editingItems.reduce((s, i) => s + i.dish_price * i.qty, 0) + totalAmount)} RWF</span>
               </div>
             )}
-
-            {isBuilding ? (
-              <>
-                <button onClick={() => { setSubmitError(null); setShowCodeModal(true) }} disabled={confirmingOrder}
-                  className="w-full bg-orange-500 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm">
-                  {confirmingOrder ? 'Confirming…' : 'Confirm Order'}
-                </button>
-                <button
-                  onClick={() => {
-                    setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
-                    setGuestsByTable(prev => ({ ...prev, [selectedTableKey]: '' }))
-                    setSubmitError(null)
-                  }}
-                  disabled={confirmingOrder}
-                  className="w-full text-xs text-gray-400 hover:text-red-500 py-1 transition-colors">
-                  Clear cart
-                </button>
-              </>
-            ) : currentOrderIsNew ? (
-              <>
-                <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">
-                  New guest order — confirm to send it to the kitchen.
-                </div>
-                <button
-                  onClick={() => { if (currentOrder) { setSubmitError(null); setIncomingConfirmId(currentOrder.id); setShowCodeModal(true) } }}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-4 rounded-2xl text-base transition-colors mt-1 shadow-sm flex items-center justify-center gap-2">
-                  <CheckCircle2 className="h-5 w-5" /> Confirm & send to kitchen
-                </button>
-                {currentOrder && (
-                  <button
-                    onClick={() => setCancelingOrderId(currentOrder.id)}
-                    className="w-full flex items-center justify-center gap-1.5 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
-                    <ShieldAlert className="h-3.5 w-3.5" /> Reject order
-                  </button>
-                )}
-              </>
-            ) : (
-              <>
-                {currentOrder && !currentOrderServed && (
-                  <button onClick={() => markOrderServed(currentOrder.id)}
-                    className="w-full flex items-center justify-center gap-2 bg-white border border-green-300 hover:bg-green-50 text-green-700 font-semibold py-3 rounded-2xl text-sm transition-colors mt-1 shadow-sm">
-                    <CheckCircle2 className="h-4 w-4" /> Mark Served
-                  </button>
-                )}
-                <button onClick={() => currentOrder && setPayingOrderId(currentOrder.id)}
-                  className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-2xl text-base transition-colors shadow-sm flex items-center justify-center gap-2">
-                  <CreditCard className="h-4 w-4" /> Collect Payment
-                </button>
-                <button onClick={() => { loadPOS() }}
-                  className="w-full flex items-center justify-center gap-2 text-xs text-gray-500 hover:text-gray-800 border border-gray-200 hover:bg-gray-50 py-2.5 rounded-xl transition-colors">
-                  <Receipt className="h-3.5 w-3.5" /> Refresh order
-                </button>
-                {currentOrder && (
-                  <button
-                    onClick={() => setCancelingOrderId(currentOrder.id)}
-                    className="w-full flex items-center justify-center gap-1.5 text-xs text-red-400 hover:text-red-600 py-1 transition-colors">
-                    <ShieldAlert className="h-3.5 w-3.5" /> Cancel order
-                  </button>
-                )}
-              </>
-            )}
+            <button
+              onClick={() => {
+                setSubmitError(null)
+                if (editingOrder) { void appendToOrder(); return }
+                // Waiter identity already established on the opening page.
+                if (waiterName) { void confirmOrder(waiterName); return }
+                setShowCodeModal(true)
+              }}
+              disabled={confirmingOrder}
+              className={`w-full disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-3 rounded-2xl text-base transition-colors shadow-sm ${
+                editingOrder ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-500 hover:bg-orange-600'
+              }`}>
+              {confirmingOrder ? (editingOrder ? 'Updating…' : 'Confirming…') : (editingOrder ? 'Add to Order' : 'Confirm Order')}
+            </button>
+            <button
+              onClick={() => { setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] })); setSubmitError(null) }}
+              disabled={confirmingOrder}
+              className="w-full text-xs text-gray-400 hover:text-red-500 py-0.5 transition-colors">
+              Clear cart
+            </button>
           </div>
         )}
       </div>
@@ -1238,8 +1956,9 @@ ${itemRows}
 
       {cancelingOrderId && (
         <CancelModal
-          orderId={cancelingOrderId}
+          order={pendingOrders.find(o => o.id === cancelingOrderId)}
           onClose={() => setCancelingOrderId(null)}
+          onCanceled={handleOrderCanceled}
         />
       )}
 
@@ -1258,187 +1977,32 @@ ${itemRows}
           }}
         />
       )}
+
+      {/* Item actions popup — tap a cart item to add modifiers (a note) or delete it */}
+      {activeItemId && (() => {
+        const it = cartItems.find(i => i.dishId === activeItemId)
+        if (!it) return null
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setActiveItemId(null)}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-4 space-y-3" onClick={e => e.stopPropagation()}>
+              <p className="text-sm font-bold text-gray-900 text-center leading-snug">
+                {it.dishName}{it.qty > 1 ? ` ×${it.qty}` : ''}
+              </p>
+              <button onClick={() => { setNoteEditId(activeItemId); setActiveItemId(null) }}
+                className="w-full flex items-center justify-center gap-2 border border-orange-300 text-orange-700 font-semibold py-3 rounded-xl hover:bg-orange-50 transition-colors">
+                <StickyNote className="h-4 w-4" /> Modifiers
+              </button>
+              <button onClick={() => { removeLocalCartItem(activeItemId); setActiveItemId(null) }}
+                className="w-full flex items-center justify-center gap-2 border border-red-300 text-red-600 font-semibold py-3 rounded-xl hover:bg-red-50 transition-colors">
+                <Trash2 className="h-4 w-4" /> Delete item
+              </button>
+              <button onClick={() => setActiveItemId(null)}
+                className="w-full text-xs text-gray-400 hover:text-gray-600 py-1">Cancel</button>
+            </div>
+          </div>
+        )
+      })()}
+
     </div>
   )
-
-  // ── Order Code Modal ── waiter enters their 4-digit code to confirm an order
-  function OrderCodeModal({ onClose, onConfirmed }: { onClose: () => void; onConfirmed: (waiterName: string) => void }) {
-    const [code,    setCode]    = useState('')
-    const [saving,  setSaving]  = useState(false)
-    const [error,   setError]   = useState<string | null>(null)
-
-    async function submit() {
-      if (code.length !== 4) { setError('Code must be exactly 4 digits'); return }
-      setSaving(true)
-      setError(null)
-      try {
-        const { waiterName } = await validateOrderCode(code)
-        onConfirmed(waiterName)
-      } catch (err) {
-        setError((err as Error).message)
-      } finally {
-        setSaving(false)
-      }
-    }
-
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-gray-900">Enter Your Order Code</h3>
-            <button onClick={onClose} disabled={saving}>
-              <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
-            </button>
-          </div>
-          <p className="text-sm text-gray-500">Enter your 4-digit code to confirm this order.</p>
-          <input
-            type="password"
-            inputMode="numeric"
-            maxLength={4}
-            value={code}
-            autoFocus
-            onChange={e => { setCode(e.target.value.replace(/\D/g, '').slice(0, 4)); setError(null) }}
-            onKeyDown={e => { if (e.key === 'Enter' && code.length === 4) void submit() }}
-            placeholder="● ● ● ●"
-            className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-orange-400"
-          />
-          {error && (
-            <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
-              {error}
-            </div>
-          )}
-          <div className="flex gap-2 pt-1">
-            <button onClick={onClose} disabled={saving}
-              className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 disabled:opacity-50">
-              Cancel
-            </button>
-            <button onClick={() => void submit()} disabled={saving || code.length !== 4}
-              className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
-              {saving ? 'Checking…' : 'Confirm Order'}
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // ── Cancel Modal ── (defined inside component to access closure state)
-  function CancelModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
-    const [pin,    setPin]    = useState('')
-    const [reason, setReason] = useState('')
-    const [saving, setSaving] = useState(false)
-    const [error,  setError]  = useState<string | null>(null)
-
-    const order     = pendingOrders.find(o => o.id === orderId)
-    const tableKey  = order ? (order.table_id ?? 'takeaway') : 'takeaway'
-    const tableName = order?.table_name ?? 'Order'
-
-    async function submit() {
-      if (pin.length !== 5) { setError('PIN must be exactly 5 digits'); return }
-      if (!reason.trim())   { setError('Please enter a reason');        return }
-
-      if (!order) { setError('Order not found'); return }
-
-      setSaving(true)
-      setError(null)
-      try {
-        let result: { approvedBy: string }
-        try {
-          result = await cancelOrderOnServer({
-            orderId:       order.id,
-            supervisorPin: pin,
-            cancelReason:  reason.trim(),
-          })
-        } catch (serverErr) {
-          const isNetworkErr = (serverErr as Error).name === 'NetworkRequestError'
-          if (!isNetworkErr) throw serverErr
-          // Server unreachable — validate PIN against cached bcrypt hashes
-          result = await validateCancellationPinOffline(pin)
-        }
-        // Mirror cancellation in local DB so POS is consistent offline
-        await updateOrder(order.id, {
-          status:        'CANCELED',
-          canceled_at:   new Date().toISOString(),
-          cancel_reason: reason.trim(),
-        })
-        setLocalCart(prev => ({ ...prev, [tableKey]: [] }))
-        setSelectedTableKey('takeaway')
-        setShowPanel('dishes')
-        setConfirmSuccess(`Order canceled · approved by ${result.approvedBy}`)
-        setTimeout(() => setConfirmSuccess(null), 5000)
-        await loadPOS()
-        pushSync().catch(() => {})
-        onClose()
-      } catch (err) {
-        setError((err as Error).message)
-      } finally {
-        setSaving(false)
-      }
-    }
-
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-gray-900 flex items-center gap-2">
-              <ShieldAlert className="h-5 w-5 text-red-500" />
-              Cancel Order — {tableName}
-            </h3>
-            <button onClick={onClose} disabled={saving}>
-              <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
-            </button>
-          </div>
-
-          <p className="text-sm text-gray-500">
-            A supervisor must enter their 5-digit PIN to approve this cancellation.
-          </p>
-
-          <div>
-            <label className="text-xs font-semibold text-gray-600 mb-1 block">Supervisor PIN</label>
-            <input
-              type="password"
-              inputMode="numeric"
-              maxLength={5}
-              value={pin}
-              onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 5)); setError(null) }}
-              placeholder="● ● ● ● ●"
-              className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-red-400"
-            />
-          </div>
-
-          <div>
-            <label className="text-xs font-semibold text-gray-600 mb-1 block">Reason</label>
-            <input
-              type="text"
-              value={reason}
-              onChange={e => { setReason(e.target.value); setError(null) }}
-              placeholder="e.g. Customer changed mind"
-              className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-            />
-          </div>
-
-          {error && (
-            <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
-              {error}
-            </div>
-          )}
-
-          <div className="flex gap-2 pt-1">
-            <button
-              onClick={onClose}
-              disabled={saving}
-              className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 disabled:opacity-50">
-              Go Back
-            </button>
-            <button
-              onClick={submit}
-              disabled={saving || pin.length !== 5 || !reason.trim()}
-              className="flex-1 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
-              {saving ? 'Canceling…' : 'Confirm Cancel'}
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
 }

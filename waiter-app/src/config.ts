@@ -86,8 +86,13 @@ export const API = {
   push: buildApiUrl('/api/mobile/push'),
   /** POST — cancel a confirmed order with supervisor PIN */
   cancelOrder: buildApiUrl('/api/mobile/cancel-order'),
+  /** POST — MEP list management + "qty prepared" logging */
+  mep: buildApiUrl('/api/mobile/mep'),
   /** GET  — check for app updates */
   version: buildApiUrl('/api/version'),
 }
 
-export const APP_VERSION = '1.0.3'
+// Bumped to 1.1.0 for the desktop-parity release (shifts, MEP, waiter gate,
+// bill template, server-side order deletes). Set WAITER_ANDROID_VERSION on
+// Vercel to match when the APK is published, or devices see no update prompt.
+export const APP_VERSION = '1.1.0'

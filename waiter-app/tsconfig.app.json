@@ -21,5 +21,9 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests run under the root vitest config (node env, vitest globals) and never
+  // ship in the APK bundle — compiling them here would demand node types the
+  // app itself has no use for.
+  "exclude": ["src/**/__tests__/**"]
 }

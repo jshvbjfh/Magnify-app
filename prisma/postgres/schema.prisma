@@ -54,6 +54,13 @@ model Restaurant {
   // separate premises keeps stock per station. Flipping it back restores the
   // per-station behaviour without touching data.
   sharedStock        Boolean   @default(false)
+  // Whether this venue runs service shifts. On by default, so every existing
+  // restaurant keeps the supervisor-opens-the-day flow. Switched off, the
+  // waiter app stops gating on a shift and stops stamping orders with one —
+  // those orders fall back to paidAt for reporting, exactly as the nullable
+  // shiftId/businessDate columns were always designed to allow. Orders already
+  // stamped keep their shift, so history stays intact either way.
+  shiftsEnabled      Boolean   @default(true)
   // Hides financial history before this date from the Transactions page without
   // deleting anything — the entries stay in the database (so stock, purchase
   // records and audits remain intact) and clearing this field restores them.

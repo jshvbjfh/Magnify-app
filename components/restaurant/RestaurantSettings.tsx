@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Cloud, RefreshCw, Download, Upload, ShieldCheck, ChevronDown, Briefcase, AlertTriangle } from 'lucide-react'
+import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Cloud, RefreshCw, Download, Upload, ShieldCheck, ChevronDown, Briefcase, AlertTriangle, Clock } from 'lucide-react'
 import { FIFO_FEATURE_AVAILABLE } from '@/lib/fifoFeature'
 import { getOwnerSyncRetryDelayMs, loadOwnerSyncConfig, loadOwnerSyncStatus, loadServerOwnerSyncConfig, loadSyncConflicts, resolveSyncConflict, retryStalledSyncOutbox, saveOwnerSyncConfig, syncOwnerCloud, type OwnerSyncConfig, type OwnerSyncStatus, type ServerOwnerSyncConfig, type SyncConflictEntry } from '@/lib/ownerSyncBrowser'
 import { composeRestaurantBillTemplate, parseRestaurantBillTemplate } from '@/lib/restaurantBillTemplate'
@@ -175,6 +175,9 @@ export default function RestaurantSettings() {
   const [billPrinterPort, setBillPrinterPort] = useState('9100')
   const [restaurantName, setRestaurantName] = useState('')
   const [qrOrderingMode, setQrOrderingMode] = useState<'order' | 'view_only' | 'disabled'>('disabled')
+  // Whether this venue runs service shifts. On by default; the server refuses to
+  // switch it off while any order is still unsettled.
+  const [shiftsEnabled, setShiftsEnabled] = useState(true)
   const [trackingMode, setTrackingMode] = useState<'simple' | 'dish_tracking'>('simple')
   const [restaurantIdValue, setRestaurantIdValue] = useState<string | null>(null)
   const [fifoEnabled, setFifoEnabled] = useState(true)
@@ -405,6 +408,7 @@ export default function RestaurantSettings() {
           if (setupData.restaurant?.qrOrderingMode === 'view_only') setQrOrderingMode('view_only')
           else if (setupData.restaurant?.qrOrderingMode === 'order') setQrOrderingMode('order')
           else setQrOrderingMode('disabled')
+          setShiftsEnabled(setupData.restaurant?.shiftsEnabled !== false)
         }
 
         if (profileData) {
@@ -519,7 +523,7 @@ export default function RestaurantSettings() {
       // fifoConfiguredAt is set, re-sending it on every unrelated settings save (name, bill
       // header, printer IP, QR mode) would re-trigger the strict FIFO integrity gate and block
       // saving anything else until a full inventory reconciliation is done.
-      const body: Record<string, unknown> = { name: restaurantName, billHeader, billPrinterIp: billPrinterIp.trim() || null, billPrinterPort: billPrinterPort.trim() ? parseInt(billPrinterPort) || 9100 : null, qrOrderingMode }
+      const body: Record<string, unknown> = { name: restaurantName, billHeader, billPrinterIp: billPrinterIp.trim() || null, billPrinterPort: billPrinterPort.trim() ? parseInt(billPrinterPort) || 9100 : null, qrOrderingMode, shiftsEnabled }
       if (!fifoConfiguredAt) body.fifoEnabled = true
       const response = await fetch('/api/restaurant/setup', {
         method: 'POST',
@@ -547,6 +551,7 @@ export default function RestaurantSettings() {
         if (savedRestaurant.qrOrderingMode === 'view_only') setQrOrderingMode('view_only')
         else if (savedRestaurant.qrOrderingMode === 'order') setQrOrderingMode('order')
         else setQrOrderingMode('disabled')
+        setShiftsEnabled(savedRestaurant.shiftsEnabled !== false)
         setFifoEnabled(true)
         setFifoConfiguredAt(typeof savedRestaurant.fifoConfiguredAt === 'string' ? savedRestaurant.fifoConfiguredAt : null)
         setFifoCutoverAt(typeof savedRestaurant.fifoCutoverAt === 'string' ? savedRestaurant.fifoCutoverAt : null)
@@ -1326,6 +1331,60 @@ export default function RestaurantSettings() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* ── Service shifts ─────────────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-5">
+        <div>
+          <h2 className="text-base font-bold text-gray-900">Service Shifts</h2>
+          <p className="text-sm text-gray-500 mt-1">Choose whether a supervisor opens and closes the day on the waiter app, or whether staff can take orders at any time.</p>
+        </div>
+
+        <div className="space-y-3">
+          <button type="button" onClick={() => setShiftsEnabled(true)}
+            className={`w-full text-left rounded-xl border-2 p-4 transition-all ${
+              shiftsEnabled ? 'border-orange-500 bg-orange-50' : 'border-gray-200 bg-white hover:border-gray-300'
+            }`}>
+            <div className="flex items-start gap-3">
+              <div className={`p-2 rounded-lg flex-shrink-0 ${shiftsEnabled ? 'bg-orange-100' : 'bg-gray-100'}`}>
+                <Clock className={`h-5 w-5 ${shiftsEnabled ? 'text-orange-600' : 'text-gray-500'}`} />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className={`text-sm font-bold ${shiftsEnabled ? 'text-orange-700' : 'text-gray-800'}`}>We use shifts</p>
+                  {shiftsEnabled && <span className="text-[10px] font-bold bg-orange-500 text-white px-2 py-0.5 rounded-full">Active</span>}
+                </div>
+                <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                  A supervisor opens the day with their PIN before any order can be taken, and closes it once every bill is settled. Sales count on the day the shift opened — a table opened at 11pm and paid at 1am still belongs to the night it started.
+                </p>
+              </div>
+            </div>
+          </button>
+
+          <button type="button" onClick={() => setShiftsEnabled(false)}
+            className={`w-full text-left rounded-xl border-2 p-4 transition-all ${
+              !shiftsEnabled ? 'border-orange-500 bg-orange-50' : 'border-gray-200 bg-white hover:border-gray-300'
+            }`}>
+            <div className="flex items-start gap-3">
+              <div className={`p-2 rounded-lg flex-shrink-0 ${!shiftsEnabled ? 'bg-orange-100' : 'bg-gray-100'}`}>
+                <Briefcase className={`h-5 w-5 ${!shiftsEnabled ? 'text-orange-600' : 'text-gray-500'}`} />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className={`text-sm font-bold ${!shiftsEnabled ? 'text-orange-700' : 'text-gray-800'}`}>We do not use shifts</p>
+                  {!shiftsEnabled && <span className="text-[10px] font-bold bg-orange-500 text-white px-2 py-0.5 rounded-full">Active</span>}
+                </div>
+                <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                  Waiters go straight to their code and start serving — no start or end shift screen. Sales count on the calendar day they were paid.
+                </p>
+              </div>
+            </div>
+          </button>
+        </div>
+
+        <p className="text-xs text-gray-400 leading-relaxed">
+          Orders already taken inside a shift keep that shift and its business day, so past reports never change. Switching shifts off is only allowed once every open order is settled.
+        </p>
       </div>
 
       <div className="xl:col-span-2">

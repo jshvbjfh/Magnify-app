@@ -103,15 +103,15 @@ export async function getValidatedSession(): Promise<StoredSession | null> {
   }
 }
 
-export async function login(email: string, password: string): Promise<WaiterUser> {
+export async function login(username: string, password: string): Promise<WaiterUser> {
   if (!API.login) throw new Error('API base URL is not configured. Set VITE_API_BASE_URL in your build.')
-  const normalizedEmail = email.trim().toLowerCase()
+  const normalizedUsername = username.trim().toLowerCase()
   const method = 'POST'
 
   await logInfo('auth', 'Submitting login request', {
     endpoint: API.login,
     method,
-    email: normalizedEmail,
+    username: normalizedUsername,
   })
 
   const response = await sendRequest({
@@ -119,7 +119,7 @@ export async function login(email: string, password: string): Promise<WaiterUser
     method,
     url: API.login,
     headers: { 'Content-Type': 'application/json' },
-    data: { username: normalizedEmail, password },
+    data: { username: normalizedUsername, password },
   })
 
   const rawBody = responseDataToText(response.data)
@@ -148,7 +148,7 @@ export async function login(email: string, password: string): Promise<WaiterUser
     }
 
     const fallbackError = response.status === 401
-      ? 'Invalid email or password.'
+      ? 'Invalid username or password.'
       : 'Login failed. Please try again.'
 
     throw new Error(typeof body.error === 'string' ? body.error : fallbackError)

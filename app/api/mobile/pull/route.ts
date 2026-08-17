@@ -111,7 +111,7 @@ export async function GET(req: Request) {
 
       prisma.restaurant.findUnique({
         where: { id: restaurantId },
-        select: { id: true, name: true, billHeader: true, billPrinterIp: true, billPrinterPort: true },
+        select: { id: true, name: true, billHeader: true, billPrinterIp: true, billPrinterPort: true, shiftsEnabled: true },
       }),
 
       // Staff with a stored order code (pin) can confirm orders offline.
@@ -312,9 +312,12 @@ export async function GET(req: Request) {
     return jsonNoStore({
       dishes: normalisedDishes,
       tables: normalisedTables,
+      // shiftsEnabled tells the till whether to gate on a service shift at all.
+      // It defaults to true when the restaurant row is missing so a lookup blip
+      // can never silently drop a venue out of its shift discipline.
       restaurant: restaurant
-        ? { id: restaurant.id, name: restaurant.name, billHeader: restaurant.billHeader ?? '', billPrinterIp: restaurant.billPrinterIp ?? '', billPrinterPort: restaurant.billPrinterPort ?? null }
-        : { id: restaurantId, name: 'Restaurant', billHeader: '', billPrinterIp: '', billPrinterPort: null },
+        ? { id: restaurant.id, name: restaurant.name, billHeader: restaurant.billHeader ?? '', billPrinterIp: restaurant.billPrinterIp ?? '', billPrinterPort: restaurant.billPrinterPort ?? null, shifts_enabled: restaurant.shiftsEnabled }
+        : { id: restaurantId, name: 'Restaurant', billHeader: '', billPrinterIp: '', billPrinterPort: null, shifts_enabled: true },
       branches: allBranches,
       cancellationApprovers: approverEmployees
         .filter(e => e.cancellationPin != null)

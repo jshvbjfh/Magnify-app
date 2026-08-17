@@ -5,7 +5,7 @@ import { isOfflineLikeErrorMessage } from '../services/http'
 import { getConfig, setConfig, getOrders } from '../services/db'
 import { logInfo } from '../services/logger'
 import { syncAll, type BranchInfo } from '../services/sync'
-import { getActiveShift } from '../services/shifts'
+import { getActiveShift, areShiftsEnabled } from '../services/shifts'
 import type { WaiterUser } from '../services/auth'
 import RestaurantOrders from './RestaurantOrders'
 import RestaurantTables from './RestaurantTables'
@@ -14,6 +14,7 @@ import PrinterSettings from './PrinterSettings'
 import StartupLogPage from './StartupLogPage'
 import WaiterGatePage from './WaiterGatePage'
 import ShiftGatePage from './ShiftGatePage'
+import SupervisorPinDialog from './SupervisorPinDialog'
 
 type TabId = 'menu' | 'pending' | 'tables' | 'mep' | 'printers' | 'logs'
 
@@ -52,6 +53,11 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   // Whether a shift is currently open (null = still checking). No open shift →
   // the start-shift screen gates everything; opening one reveals the waiter gate.
   const [shiftOpen, setShiftOpen] = useState<boolean | null>(null)
+  // Whether this venue runs shifts at all. Off → no start/end-shift screens.
+  const [shiftsOn, setShiftsOn] = useState(true)
+  // Supervisor PIN prompt guarding Sign Out — signing out unregisters the
+  // device, so it takes the same approval as cancelling an order.
+  const [confirmSignOut, setConfirmSignOut] = useState(false)
   const [restaurantName, setRestaurantName] = useState<string>('')
   // Edit-pending flow: set from the Pending tab, consumed by the POS tab.
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
@@ -140,12 +146,14 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   }, [syncVersion, activeTab])
 
   // Track whether a shift is open — re-checked on every sync so a shift opened
-  // or closed on another terminal reflects here too.
+  // or closed on another terminal reflects here too. A venue with shifts switched
+  // off has no gate to pass, so it counts as permanently open here.
   const refreshShift = useCallback(async () => {
     try {
-      const [shift, name] = await Promise.all([getActiveShift(), getConfig('restaurantName')])
-      setShiftOpen(Boolean(shift))
+      const [enabled, name] = await Promise.all([areShiftsEnabled(), getConfig('restaurantName')])
+      setShiftsOn(enabled)
       setRestaurantName(name?.trim() || '')
+      setShiftOpen(enabled ? Boolean(await getActiveShift()) : true)
     } catch {
       setShiftOpen(false)
     }
@@ -223,6 +231,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
       <WaiterGatePage
         accountName={user?.name ?? ''}
         syncVersion={syncVersion}
+        shiftsEnabled={shiftsOn}
         onUnlock={(name) => setActiveWaiter(name)}
         onShiftEnded={() => { setActiveWaiter(null); setShiftOpen(false); void runSync() }}
       />
@@ -296,13 +305,16 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
 
           {/* Right side: exit-to-gate + sync indicator + sign out */}
           <div className="flex items-center gap-1 flex-shrink-0">
+            {/* Exit (switch waiter) is the button staff hit every handover, so it
+                is the wide, solid one. Sign Out sits beside it as a quiet outline
+                — same neighbourhood, unmistakably not the same action. */}
             <button
               onClick={() => setActiveWaiter(null)}
               title="Exit to the waiter code page"
-              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors flex-shrink-0"
+              className="flex items-center justify-center gap-2 min-w-[104px] text-sm font-bold px-5 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 shadow-sm transition-colors flex-shrink-0"
             >
-              <Power className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Exit</span>
+              <Power className="h-4 w-4" />
+              <span>Exit</span>
             </button>
             {isOnline ? (
               <button
@@ -318,8 +330,9 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             )}
             {isOnline && <Wifi className="h-3 w-3 text-green-400 mr-1" />}
             <button
-              onClick={onLogout}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors flex-shrink-0"
+              onClick={() => setConfirmSignOut(true)}
+              title="Sign this device out (supervisor PIN required)"
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-white/15 text-gray-400 hover:text-white hover:bg-white/5 transition-colors flex-shrink-0"
             >
               <LogOut className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Sign Out</span>
@@ -408,6 +421,17 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
           </div>
         )}
       </main>
+
+      {confirmSignOut && (
+        <SupervisorPinDialog
+          title="Sign out device"
+          prompt="Signing out unregisters this till. Enter the supervisor PIN to confirm."
+          confirmLabel="Sign out"
+          busyLabel="Signing out…"
+          onClose={() => setConfirmSignOut(false)}
+          onApproved={async () => { await onLogout() }}
+        />
+      )}
     </div>
   )
 }

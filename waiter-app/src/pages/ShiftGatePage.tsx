@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Loader2, Power, Lock } from 'lucide-react'
 import { startShift } from '../services/shifts'
 import { quitApp } from './WaiterGatePage'
+import { APP_VERSION } from '../config'
 
 // Supervisor PINs exist in both 4-digit (legacy) and 5-digit (current) form.
 // PIN_BOXES is display only — the row rests at 5 empty boxes because that is
@@ -74,7 +75,7 @@ export default function ShiftGatePage({ restaurantName, onShiftStarted }: ShiftG
           <img src="./icon.png" alt="Magnify" className="w-9 h-9 rounded-xl object-contain shadow-lg shadow-orange-500/30 select-none" />
           <span className="text-white font-extrabold text-lg tracking-tight select-none">Magnify</span>
           <span className="text-[10px] font-mono text-gray-300/70 leading-none select-none mt-1">
-            v{(window as Window & { electronConfig?: { appVersion?: string } }).electronConfig?.appVersion || '?'}
+            v{APP_VERSION}
           </span>
         </div>
         <button type="button" onClick={quitApp}
