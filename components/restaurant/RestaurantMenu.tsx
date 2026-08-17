@@ -1,5 +1,5 @@
 ﻿'use client'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useSession } from 'next-auth/react'
 import { Plus, Trash2, ChefHat, X, Edit2, ToggleLeft, ToggleRight, Sparkles, Search, ChevronDown, BookOpen } from 'lucide-react'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
@@ -44,6 +44,9 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<MenuWorkspaceTab>('items')
   const [showFullMenu, setShowFullMenu] = useState(false)
   const [dishes, setDishes] = useState<Dish[]>([])
+  // Memoised: a fresh array on every render would re-fire the QR studio's effects
+  // and keep resetting its preview back to this branch's dishes only.
+  const activeDishesForQrStudio = useMemo(() => dishes.filter((dish) => dish.isActive), [dishes])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
   const [purchases, setPurchases] = useState<PurchaseLayer[]>([])
   const [loading, setLoading] = useState(true)
@@ -779,7 +782,7 @@ export default function RestaurantMenu({ onAskJesse }: { onAskJesse?: () => void
           </div>
         </div>
         ) : (
-          <RestaurantQrMenuStudio menuItems={dishes.filter((dish) => dish.isActive)} />
+          <RestaurantQrMenuStudio menuItems={activeDishesForQrStudio} />
         )
       )}
     </div>
