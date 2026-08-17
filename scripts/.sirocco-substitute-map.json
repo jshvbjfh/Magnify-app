@@ -1,0 +1,56 @@
+{
+  "note": "Sirocco Y Sol substitute decisions, 2026-08-15. The kitchen chose to use existing stock for all six rather than buy the exact ingredient. When wiring DishIngredient / PrepIngredient rows, any recipe line naming `recipeIngredient` must point at `inventoryItemId` instead of creating a new item.",
+  "decidedAt": "2026-08-15",
+  "decision": "use-what-we-have (all six, nothing purchased)",
+  "restaurant": "SIROCCO Y SOL",
+  "mappings": [
+    {
+      "recipeIngredient": "black pepper",
+      "stockItem": "boni poivre vert",
+      "inventoryItemId": "cmssw8sul00157b42b5mh3fma",
+      "unit": "g", "onHand": 190, "unitCost": 30.526,
+      "usedBy": "grilled Mediterranean vegetables, chicken souvlaki, Spanish paprika chicken, lamb kefta, lemon-oregano dressing",
+      "caveat": "Green peppercorn standing in for black. 190 g is the lowest-cover item on this list."
+    },
+    {
+      "recipeIngredient": "mixed olives",
+      "stockItem": "figalo black olive",
+      "inventoryItemId": "cmsswzq1z003m7b42l7876k55",
+      "unit": "g", "onHand": 500, "unitCost": 15.4,
+      "usedBy": "Mezze Board 50 g, Feta Salad Cup 35 g, Chicken Salad 30 g, Sirocco Bowl 25 g, Tuna Panini 25 g",
+      "caveat": "Plain black olives for a mix. ~165 g per one-of-each round, so 500 g is about three rounds."
+    },
+    {
+      "recipeIngredient": "red wine vinegar",
+      "stockItem": "boni neto balsamico",
+      "inventoryItemId": "cmssy2fbt005d7b4208zv1bzn",
+      "unit": "ml", "onHand": 1000, "unitCost": 15.4,
+      "usedBy": "quick pickled red onion, Spanish bravas sauce",
+      "caveat": "Balsamic is sweeter and darker; the pickle will read differently."
+    },
+    {
+      "recipeIngredient": "dried chickpeas",
+      "stockItem": "Vgg chick peas",
+      "inventoryItemId": "cmst0am3b000qzzq2jzbelhr8",
+      "unit": "g", "onHand": 20000, "unitCost": 6.25,
+      "usedBy": "falafel mix",
+      "caveat": "Still unverified whether this 20 kg is dried or canned. The falafel method requires dried and soaked. If canned, the falafel will not bind."
+    },
+    {
+      "recipeIngredient": "smoked paprika",
+      "stockItem": "paprika",
+      "inventoryItemId": "cmsszohwy00028djag4rz3c4n",
+      "unit": "g", "onHand": 400, "unitCost": 30,
+      "usedBy": "Spanish bravas sauce, Spanish paprika chicken, Patatas Bravas raw dusting",
+      "caveat": "COLLISION: `Spanish paprika chicken` lists sweet paprika 1.8 g AND smoked paprika 0.7 g as separate lines. Both now resolve to this one item, but PrepIngredient is unique on (prepItemId, ingredientItemId) — so they must be merged into a single 2.5 g line, not two rows."
+    },
+    {
+      "recipeIngredient": "dijon mustard",
+      "stockItem": "everyday classique moutard",
+      "inventoryItemId": "cmsswupol003zjorm6ufz3kao",
+      "unit": "g", "onHand": 700, "unitCost": 16.571,
+      "usedBy": "lemon-oregano dressing",
+      "caveat": "At 1.5-1.9 g per portion the difference is negligible."
+    }
+  ]
+}

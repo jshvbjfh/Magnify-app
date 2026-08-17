@@ -1,0 +1,157 @@
+{
+  "movedAt": "2026-08-14T08:44:42.215Z",
+  "fromBranchId": "cmssn2wkn000410rc5509vs7v",
+  "toBranchId": "cmssorj59001qeab2zd2w07bo",
+  "dishes": [
+    {
+      "id": "cmssnhvl800071zggnlhpbbc2",
+      "name": "americano",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssnrso0000ykwncr5vsrptp",
+      "name": "cafe latte",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssnqmm2000tkwncht487o80",
+      "name": "cappuccino",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssnvofr001dkwncy8mfnn1c",
+      "name": "caramel macchiato ",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssnm26l000ckwncxpf9h6cy",
+      "name": "cortado",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssnsxxu0013kwncarkwlnlq",
+      "name": "dark mocha latte",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssngd5z00021zgg63la5p1e",
+      "name": "double espresso",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssnk42q0002kwnc7rr34c8i",
+      "name": "espresso macchiato",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssnovvo000jkwnc89ov95bp",
+      "name": "flat white",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssnpoh8000okwnc8pnuz7y3",
+      "name": "piccolo",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssnuhuo0018kwnc7mc8r1ta",
+      "name": "vanilla latte",
+      "category": "Hot Drinks",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssoldkv000c5jejqdybm0sa",
+      "name": "Affogato",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssokkvd00075jej71ned4bh",
+      "name": "Cold brew",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssomvkl001leab2xta98kjy",
+      "name": "Frappuccino",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssobnb0000meab2ccnb7yjv",
+      "name": "Iced Americano",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssoduxc000weab2m4o3mvhe",
+      "name": "Iced cafe latte",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssocyqd000reab2fo5z611u",
+      "name": "Iced cappucino",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssojxeq00025jej1ach92xw",
+      "name": "Iced caramel macchiato",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssog3ik0016eab2t0brqex4",
+      "name": "Iced dark mocha latte",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmsso9yrc000heab2inogtwwu",
+      "name": "Iced double Espresso",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssoiwxo001geab2vl2e41w5",
+      "name": "Iced french press",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssof0ok0011eab2s736aciv",
+      "name": "Iced spanish latte",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssoh5i1001beab29fkuibdu",
+      "name": "Iced vanilla latte",
+      "category": "Iced coffee",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmsso7f8y000ceab2hdd1kwik",
+      "name": "Extra Espresso Shot",
+      "category": "specialty brews",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    },
+    {
+      "id": "cmssny1wp001ikwncx5wd0u98",
+      "name": "French press",
+      "category": "specialty brews",
+      "originalBranchId": "cmssn2wkn000410rc5509vs7v"
+    }
+  ]
+}
