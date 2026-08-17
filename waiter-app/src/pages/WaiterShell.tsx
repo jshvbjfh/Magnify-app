@@ -1,23 +1,32 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { UtensilsCrossed, ArrowLeftRight, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Download } from 'lucide-react'
+import { UtensilsCrossed, ClipboardList, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Printer, ChefHat, Power, Download } from 'lucide-react'
 import { useOnline } from '../hooks/useOnline'
 import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { isOfflineLikeErrorMessage } from '../services/http'
-import { getConfig, setConfig } from '../services/db'
+import { getConfig, setConfig, getOrders } from '../services/db'
 import { logInfo } from '../services/logger'
 import { syncAll, type BranchInfo } from '../services/sync'
+import { getActiveShift, areShiftsEnabled } from '../services/shifts'
+import { APP_VERSION } from '../config'
 import type { WaiterUser } from '../services/auth'
 import RestaurantOrders from './RestaurantOrders'
 import RestaurantTables from './RestaurantTables'
+import MepPage from './MepPage'
+import PrinterSettings from './PrinterSettings'
 import StartupLogPage from './StartupLogPage'
+import WaiterGatePage from './WaiterGatePage'
+import ShiftGatePage from './ShiftGatePage'
+import SupervisorPinDialog from './SupervisorPinDialog'
 
-type TabId = 'menu' | 'transactions' | 'tables' | 'logs'
+type TabId = 'menu' | 'pending' | 'tables' | 'mep' | 'printers' | 'logs'
 
 const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
-  { id: 'menu',         label: 'Menu',         icon: <UtensilsCrossed className="h-4 w-4" /> },
-  { id: 'transactions', label: 'Transactions', icon: <ArrowLeftRight className="h-4 w-4" /> },
-  { id: 'tables',       label: 'Tables',       icon: <Layout className="h-4 w-4" /> },
-  { id: 'logs',         label: 'Logs',         icon: <ScrollText className="h-4 w-4" /> },
+  { id: 'menu',     label: 'Menu',           icon: <UtensilsCrossed className="h-4 w-4" /> },
+  { id: 'tables',   label: 'Tables',         icon: <Layout className="h-4 w-4" /> },
+  { id: 'pending',  label: 'Pending Orders', icon: <ClipboardList className="h-4 w-4" /> },
+  { id: 'mep',      label: 'MEP',            icon: <ChefHat className="h-4 w-4" /> },
+  { id: 'printers', label: 'Printers',       icon: <Printer className="h-4 w-4" /> },
+  { id: 'logs',     label: 'Logs',           icon: <ScrollText className="h-4 w-4" /> },
 ]
 
 interface WaiterShellProps {
@@ -27,8 +36,12 @@ interface WaiterShellProps {
 
 export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   const { isOnline } = useOnline()
+  // Android-only: the desktop self-updates via electron-updater, but an APK has
+  // to tell the waiter a new build exists and link them to the download.
   const availableUpdate = useUpdateCheck()
   const [activeTab, setActiveTab] = useState<TabId>('menu')
+  // Selected table is shared: waiters pick it on the Tables tab, serve it on the Menu tab.
+  const [selectedTableKey, setSelectedTableKey] = useState<string>('takeaway')
   const [branches, setBranches] = useState<BranchInfo[]>([])
   const [activeBranchId, setActiveBranchId] = useState<string | null>(user?.branchId ?? null)
   const [branchSwitchingId, setBranchSwitchingId] = useState<string | null>(null)
@@ -39,8 +52,22 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   const [lastSyncWarning, setLastSyncWarning] = useState<string | null>(null)
   const [syncVersion, setSyncVersion] = useState(0)
   const syncingRef = useRef(false)
+  // Opening-page identity: the waiter who entered their code. Null = locked,
+  // shows the gate page. Deliberately not persisted — every app start asks.
+  const [activeWaiter, setActiveWaiter] = useState<string | null>(null)
+  // Whether a shift is currently open (null = still checking). No open shift →
+  // the start-shift screen gates everything; opening one reveals the waiter gate.
+  const [shiftOpen, setShiftOpen] = useState<boolean | null>(null)
+  // Whether this venue runs shifts at all. Off → no start/end-shift screens.
+  const [shiftsOn, setShiftsOn] = useState(true)
+  // Supervisor PIN prompt guarding Sign Out — signing out unregisters the
+  // device, so it takes the same approval as cancelling an order.
+  const [confirmSignOut, setConfirmSignOut] = useState(false)
+  const [restaurantName, setRestaurantName] = useState<string>('')
+  // Edit-pending flow: set from the Pending tab, consumed by the POS tab.
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
 
-  const waiterName = user?.name ?? ''
+  const waiterName = activeWaiter ?? user?.name ?? ''
   const initials = waiterName
     ? waiterName.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
     : 'W'
@@ -110,6 +137,37 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
     void loadStoredBranchState()
   }, [loadStoredBranchState])
 
+  // Keep the Pending Orders badge current regardless of which tab is open.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const restaurantId = await getConfig('restaurantId')
+        const orders = await getOrders({ statuses: ['PENDING', 'UNCONFIRMED'], restaurantId })
+        if (!cancelled) setPendingCount(orders.length)
+      } catch { /* DB not ready yet */ }
+    })()
+    return () => { cancelled = true }
+  }, [syncVersion, activeTab])
+
+  // Track whether a shift is open — re-checked on every sync so a shift opened
+  // or closed on another terminal reflects here too. A venue with shifts switched
+  // off has no gate to pass, so it counts as permanently open here.
+  const refreshShift = useCallback(async () => {
+    try {
+      const [enabled, name] = await Promise.all([areShiftsEnabled(), getConfig('restaurantName')])
+      setShiftsOn(enabled)
+      setRestaurantName(name?.trim() || '')
+      setShiftOpen(enabled ? Boolean(await getActiveShift()) : true)
+    } catch {
+      setShiftOpen(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshShift()
+  }, [refreshShift, syncVersion])
+
   // Auto-sync when app comes online
   useEffect(() => {
     if (isOnline) void runSync()
@@ -155,6 +213,36 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
     }
   }
 
+  // Gate order: a shift must be open before any orders can be taken, then a
+  // waiter must identify themselves. Both are rendered in place of the shell but
+  // sync keeps running behind them (a fresh install pulls codes + the open shift
+  // while the gate shows). While the first shift check is still pending, show
+  // nothing rather than flashing the start-shift screen over an open shift.
+  if (shiftOpen === null) {
+    return <div className="h-screen bg-gray-900" />
+  }
+
+  if (!shiftOpen) {
+    return (
+      <ShiftGatePage
+        restaurantName={restaurantName}
+        onShiftStarted={() => { setShiftOpen(true); void runSync() }}
+      />
+    )
+  }
+
+  if (!activeWaiter) {
+    return (
+      <WaiterGatePage
+        accountName={user?.name ?? ''}
+        syncVersion={syncVersion}
+        shiftsEnabled={shiftsOn}
+        onUnlock={(name) => setActiveWaiter(name)}
+        onShiftEnded={() => { setActiveWaiter(null); setShiftOpen(false); void runSync() }}
+      />
+    )
+  }
+
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
 
@@ -193,7 +281,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
       )}
 
       {/* ── Top navigation bar ── */}
-      <header className="bg-gray-900 text-white shadow-md flex-shrink-0 z-30">
+      <header className="bg-gray-900 text-white shadow-md flex-shrink-0 z-30 pt-12">
         <div className="px-4 flex items-center justify-between h-14">
 
           {/* Brand / waiter name */}
@@ -204,6 +292,10 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             {waiterName && (
               <span className="text-sm font-bold text-white leading-none hidden sm:block">{waiterName}</span>
             )}
+            {/* Build version — so any terminal's installed version is visible at a glance. */}
+            <span className="text-[10px] font-mono text-gray-400 leading-none select-none">
+              v{APP_VERSION}
+            </span>
           </div>
 
           {/* Tab navigation */}
@@ -220,7 +312,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
               >
                 {t.icon}
                 <span className="hidden sm:inline">{t.label}</span>
-                {t.id === 'menu' && pendingCount > 0 && (
+                {t.id === 'pending' && pendingCount > 0 && (
                   <span className="absolute -top-0.5 -right-0.5 h-4 min-w-[16px] bg-orange-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1">
                     {pendingCount}
                   </span>
@@ -229,8 +321,19 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             ))}
           </nav>
 
-          {/* Right side: sync indicator + sign out */}
+          {/* Right side: exit-to-gate + sync indicator + sign out */}
           <div className="flex items-center gap-1 flex-shrink-0">
+            {/* Exit (switch waiter) is the button staff hit every handover, so it
+                is the wide, solid one. Sign Out sits beside it as a quiet outline
+                — same neighbourhood, unmistakably not the same action. */}
+            <button
+              onClick={() => setActiveWaiter(null)}
+              title="Exit to the waiter code page"
+              className="flex items-center justify-center gap-2 min-w-[104px] text-sm font-bold px-5 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 shadow-sm transition-colors flex-shrink-0"
+            >
+              <Power className="h-4 w-4" />
+              <span>Exit</span>
+            </button>
             {isOnline ? (
               <button
                 onClick={() => { void runSync() }}
@@ -245,8 +348,9 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             )}
             {isOnline && <Wifi className="h-3 w-3 text-green-400 mr-1" />}
             <button
-              onClick={onLogout}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors flex-shrink-0"
+              onClick={() => setConfirmSignOut(true)}
+              title="Sign this device out (supervisor PIN required)"
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-white/15 text-gray-400 hover:text-white hover:bg-white/5 transition-colors flex-shrink-0"
             >
               <LogOut className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Sign Out</span>
@@ -286,18 +390,47 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             mode="pos"
             waiterName={waiterName}
             activeBranchId={activeBranchId}
-            onPendingCountChange={setPendingCount}
             syncVersion={syncVersion}
+            selectedTableKey={selectedTableKey}
+            onSelectTableKey={setSelectedTableKey}
+            editingOrderId={editingOrderId}
+            onEditDone={() => setEditingOrderId(null)}
           />
         )}
-        {activeTab === 'transactions' && (
+        {activeTab === 'pending' && (
           <div className="max-w-5xl mx-auto px-4 py-6">
-            <RestaurantOrders mode="history" waiterName={waiterName} activeBranchId={activeBranchId} />
+            <RestaurantOrders
+              mode="pending"
+              waiterName={waiterName}
+              activeBranchId={activeBranchId}
+              syncVersion={syncVersion}
+              onEditOrder={(orderId) => { setEditingOrderId(orderId); setActiveTab('menu') }}
+            />
           </div>
         )}
         {activeTab === 'tables' && (
           <div className="max-w-5xl mx-auto px-4 py-6">
-            <RestaurantTables waiterName={waiterName} activeBranchId={activeBranchId} />
+            <RestaurantTables
+              waiterName={waiterName}
+              activeBranchId={activeBranchId}
+              onSelectTable={(key) => { setSelectedTableKey(key); setActiveTab('menu') }}
+            />
+          </div>
+        )}
+        {activeTab === 'mep' && (
+          <div className="max-w-5xl mx-auto px-4 py-6">
+            <MepPage
+              waiterName={waiterName}
+              activeBranchId={activeBranchId}
+              syncVersion={syncVersion}
+              isOnline={isOnline && !transportOfflineMode}
+              requestSync={() => { void runSync() }}
+            />
+          </div>
+        )}
+        {activeTab === 'printers' && (
+          <div className="max-w-5xl mx-auto px-4 py-6">
+            <PrinterSettings />
           </div>
         )}
         {activeTab === 'logs' && (
@@ -306,6 +439,17 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
           </div>
         )}
       </main>
+
+      {confirmSignOut && (
+        <SupervisorPinDialog
+          title="Sign out device"
+          prompt="Signing out unregisters this till. Enter the supervisor PIN to confirm."
+          confirmLabel="Sign out"
+          busyLabel="Signing out…"
+          onClose={() => setConfirmSignOut(false)}
+          onApproved={async () => { await onLogout() }}
+        />
+      )}
     </div>
   )
 }

@@ -1070,8 +1070,8 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       const orderNumber = `WA-${orderId.replace(/-/g, '').slice(-8).toUpperCase()}`
 
       // Stamp the order with the open shift so its sale lands on the shift's
-      // business day, whatever time it's eventually paid. The gate guarantees a
-      // shift is open before orders can be taken; null is a safe fallback.
+      // business day, whatever time it's eventually paid. Null when this venue
+      // runs without shifts, or as a fallback — such orders report by paidAt.
       const activeShift = await getActiveShift()
 
       const order: Order = {

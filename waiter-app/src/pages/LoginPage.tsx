@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Loader2, Lock, Mail, Eye, EyeOff, WifiOff } from 'lucide-react'
+import { Loader2, Lock, User, Eye, EyeOff, WifiOff } from 'lucide-react'
 import { login } from '../services/auth'
 import { useOnline } from '../hooks/useOnline'
 
@@ -10,7 +10,7 @@ interface LoginPageProps {
 
 export default function LoginPage({ onLogin, onOpenLogs }: LoginPageProps) {
   const { isOnline } = useOnline()
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [stage, setStage] = useState<{ label: string; progress: number } | null>(null)
@@ -24,7 +24,7 @@ export default function LoginPage({ onLogin, onOpenLogs }: LoginPageProps) {
     setStage({ label: 'Verifying credentials…', progress: 20 })
 
     try {
-      const user = await login(email, password)
+      const user = await login(username, password)
 
       if (user.role !== 'waiter' && user.role !== 'admin' && user.role !== 'kitchen') {
         setError('This app is for waiter accounts only.')
@@ -44,16 +44,19 @@ export default function LoginPage({ onLogin, onOpenLogs }: LoginPageProps) {
 
   return (
     <main className="min-h-screen flex items-center justify-center px-4 py-12 relative">
-      <div className="absolute inset-0 bg-gradient-to-br from-orange-50 via-white to-rose-100" />
-      <div className="absolute inset-x-0 top-0 h-72 bg-[radial-gradient(circle_at_top,_rgba(249,115,22,0.16),_transparent_60%)]" />
-      <div className="absolute -top-16 right-[-72px] h-56 w-56 rounded-full bg-orange-200/30 blur-3xl" />
-      <div className="absolute bottom-0 left-[-72px] h-64 w-64 rounded-full bg-red-200/30 blur-3xl" />
+      {/* Background photo */}
+      <div
+        className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+        style={{ backgroundImage: "url('./pic/restaurant-bg.jpg')" }}
+      >
+        <div className="absolute inset-0 bg-gradient-to-br from-black/50 via-black/40 to-black/50" />
+      </div>
 
       <div className="relative z-10 w-full max-w-[440px] space-y-4">
-        <div className="bg-white/95 backdrop-blur-md border border-white/70 rounded-2xl shadow-2xl p-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="bg-white backdrop-blur-md border border-white/20 rounded-2xl shadow-2xl p-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
           <div className="text-center mb-10">
             <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl mb-5 shadow-lg shadow-orange-500/30 overflow-hidden">
-              <img src="/icon.svg" alt="Magnify" className="h-20 w-20 rounded-2xl object-cover" />
+              <img src="./icon.png" alt="Magnify" className="h-20 w-20 rounded-2xl object-cover" />
             </div>
             <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-700 bg-clip-text text-transparent mb-2">
               Magnify
@@ -81,20 +84,20 @@ export default function LoginPage({ onLogin, onOpenLogs }: LoginPageProps) {
             )}
             {/* Fields + submit — hidden when offline */}
             {isOnline && (<>
-            {/* Email */}
+            {/* Username */}
             <div className="space-y-2">
-              <label htmlFor="email" className="block text-sm font-semibold text-gray-700">Email</label>
+              <label htmlFor="username" className="block text-sm font-semibold text-gray-700">Username</label>
               <div className="relative group">
-                <Mail className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 group-focus-within:text-orange-500 transition-colors" />
+                <User className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 group-focus-within:text-orange-500 transition-colors" />
                 <input
-                  id="email"
+                  id="username"
                   className="h-12 w-full border border-gray-300 rounded-xl pl-12 pr-4 text-sm bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all duration-200 placeholder:text-gray-400"
-                  type="email"
-                  placeholder="your@email.com"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
+                  type="text"
+                  placeholder="e.g. john"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
                   required
-                  autoComplete="email"
+                  autoComplete="username"
                 />
               </div>
             </div>

@@ -187,8 +187,12 @@ export async function sendRequest({
       headers,
       data,
       responseType: 'text',
-      connectTimeout: 15_000,
-      readTimeout: 15_000,
+      // 30s tolerates Neon serverless cold starts (the DB scales to zero and a
+      // reconnect can take ~15s). The old 15s budget expired mid-cold-start and
+      // surfaced as a sync failure on exactly the pulls that needed to succeed.
+      // Must stay >= the server's maxDuration for /api/mobile/*.
+      connectTimeout: 30_000,
+      readTimeout: 30_000,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

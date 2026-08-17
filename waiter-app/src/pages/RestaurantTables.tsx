@@ -40,9 +40,11 @@ function fmtRWF(n: number) {
 interface Props {
   waiterName: string
   activeBranchId?: string | null
+  // Picking a table here selects it and jumps to the Menu tab to take the order.
+  onSelectTable?: (key: string) => void
 }
 
-export default function RestaurantTables({ waiterName: _waiterName, activeBranchId: _activeBranchId = null }: Props) {
+export default function RestaurantTables({ waiterName: _waiterName, activeBranchId: _activeBranchId = null, onSelectTable }: Props) {
   const [tables,        setTables]        = useState<RestaurantTable[]>(tablesCache?.tables ?? [])
   const [pendingOrders, setPendingOrders] = useState<Order[]>(tablesCache?.pendingOrders ?? [])
   const [loading,       setLoading]       = useState(!tablesCache)
@@ -176,7 +178,9 @@ export default function RestaurantTables({ waiterName: _waiterName, activeBranch
             const cfg     = STATUS_CONFIG[status]
             const pending = pendingByTable[table.id]
             return (
-              <div key={table.id} className={`rounded-2xl border-2 p-4 transition-all ${cfg.bg}`}>
+              <button key={table.id} type="button"
+                onClick={() => onSelectTable?.(table.id)}
+                className={`text-left rounded-2xl border-2 p-4 transition-all hover:shadow-md hover:scale-[1.02] active:scale-[0.98] ${cfg.bg}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-base font-bold text-gray-900 truncate">{table.name}</p>
@@ -203,7 +207,7 @@ export default function RestaurantTables({ waiterName: _waiterName, activeBranch
                     </div>
                   )}
                 </div>
-              </div>
+              </button>
             )
           })}
         </div>
@@ -215,13 +219,14 @@ export default function RestaurantTables({ waiterName: _waiterName, activeBranch
         if (!takeaway.length) return null
         const total = takeaway.reduce((s, o) => s + o.total_amount, 0)
         return (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-center justify-between">
+          <button type="button" onClick={() => onSelectTable?.('takeaway')}
+            className="w-full text-left rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-center justify-between hover:shadow-md transition-all">
             <div>
               <p className="text-sm font-semibold text-amber-800">Takeaway orders</p>
               <p className="text-xs text-amber-600 mt-0.5">{takeaway.length} active</p>
             </div>
             <p className="text-sm font-bold text-amber-800">{fmtRWF(total)} RWF</p>
-          </div>
+          </button>
         )
       })()}
     </div>

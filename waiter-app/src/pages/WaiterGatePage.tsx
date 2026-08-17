@@ -1,13 +1,18 @@
 import { useState, useEffect } from 'react'
+import { App as CapacitorApp } from '@capacitor/app'
 import { Loader2, ArrowRight, LogOut } from 'lucide-react'
 import { getConfig, getOrderCodeHolders } from '../services/db'
 import { validateOrderCode } from '../services/sync'
 import EndShiftDialog from './EndShiftDialog'
+import { APP_VERSION } from '../config'
 
+// Android has no window.close() for a WebView, so exit through the Capacitor
+// App plugin. Kept async-safe: on the web preview build there is nothing to
+// exit to, and minimizing is the closest honest equivalent.
 export function quitApp() {
-  const bridge = (window as Window & { electronApp?: { quit: () => void } }).electronApp
-  if (bridge?.quit) bridge.quit()
-  else window.close()
+  void CapacitorApp.exitApp().catch(() => {
+    window.close()
+  })
 }
 
 function greeting() {
@@ -103,7 +108,7 @@ export default function WaiterGatePage({ accountName, syncVersion, shiftsEnabled
           <img src="./icon.png" alt="Magnify" className="w-9 h-9 rounded-xl object-contain shadow-lg shadow-orange-500/30 select-none" />
           <span className="text-white font-extrabold text-lg tracking-tight select-none">Magnify</span>
           <span className="text-[10px] font-mono text-gray-300/70 leading-none select-none mt-1">
-            v{(window as Window & { electronConfig?: { appVersion?: string } }).electronConfig?.appVersion || '?'}
+            v{APP_VERSION}
           </span>
         </div>
         {shiftsEnabled ? (

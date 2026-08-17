@@ -14,10 +14,15 @@ const settingsRestaurantSelect = {
   billPrinterIp: true,
   billPrinterPort: true,
   qrOrderingMode: true,
+  shiftsEnabled: true,
   fifoEnabled: true,
   fifoConfiguredAt: true,
   joinCode: true,
 } as const
+
+// An order in any of these states still owes money or food, so the venue is
+// mid-service and the shift model cannot be switched underneath it.
+const UNSETTLED_ORDER_STATUSES = ['PENDING', 'OPEN', 'UNCONFIRMED'] as const
 
 const branchPresentationSelect = {
   id: true,
@@ -102,7 +107,7 @@ export async function POST(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const userId = session.user.id
   const body = await req.json()
-  const { name, billHeader, billPrinterIp, billPrinterPort, qrOrderingMode, fifoEnabled } = body
+  const { name, billHeader, billPrinterIp, billPrinterPort, qrOrderingMode, shiftsEnabled, fifoEnabled } = body
   const qrMenuHeroImageUrl = body?.qrMenuHeroImageUrl === null
     ? null
     : typeof body?.qrMenuHeroImageUrl === 'string'
@@ -135,6 +140,7 @@ export async function POST(req: Request) {
     billPrinterIp?: string | null
     billPrinterPort?: number | null
     qrOrderingMode?: 'order' | 'view_only' | 'disabled'
+    shiftsEnabled?: boolean
     fifoEnabled?: boolean
     fifoConfiguredAt?: Date
   } = {}
@@ -146,6 +152,49 @@ export async function POST(req: Request) {
   if (qrOrderingMode === 'order' || qrOrderingMode === 'view_only' || qrOrderingMode === 'disabled') {
     restaurantUpdateData.qrOrderingMode = qrOrderingMode
   }
+  // Turning shifts off mid-service would strand the open orders: they are already
+  // stamped with the shift, but the till would stop offering End Shift, leaving
+  // them attributed to a session nobody can close. So the switch is only allowed
+  // once the floor is clear, and the open shift is then closed as part of the same
+  // save. Turning shifts back on is always safe and needs no such check.
+  //
+  // The check is scoped to the on→off *transition*, not to every save carrying
+  // shiftsEnabled: false. The settings form posts the whole payload each time,
+  // so a venue already running without shifts would otherwise be unable to save
+  // its name or printer IP for as long as a single order sat open.
+  let shiftToCloseId: string | null = null
+  if (typeof shiftsEnabled === 'boolean') {
+    const previous = await prisma.restaurant.findUnique({
+      where: { id: targetRestaurantId },
+      select: { shiftsEnabled: true },
+    })
+    const turningOff = previous?.shiftsEnabled !== false && !shiftsEnabled
+
+    if (turningOff) {
+      const unsettled = await prisma.restaurantOrder.count({
+        where: {
+          restaurantId: targetRestaurantId,
+          status: { in: [...UNSETTLED_ORDER_STATUSES] },
+          deletedAt: null,
+        },
+      })
+      if (unsettled > 0) {
+        return NextResponse.json(
+          { error: `Settle ${unsettled} open order${unsettled === 1 ? '' : 's'} before turning shifts off.` },
+          { status: 409 },
+        )
+      }
+
+      const openShift = await prisma.shift.findFirst({
+        where: { restaurantId: targetRestaurantId, status: 'OPEN', deletedAt: null },
+        orderBy: { openedAt: 'asc' },
+        select: { id: true },
+      })
+      shiftToCloseId = openShift?.id ?? null
+    }
+    restaurantUpdateData.shiftsEnabled = shiftsEnabled
+  }
+
   if (typeof fifoEnabled === 'boolean') {
     if (!fifoEnabled) {
       return NextResponse.json({ error: 'This app now enforces strict FIFO. Average Cost is no longer supported.' }, { status: 409 })
@@ -174,6 +223,20 @@ export async function POST(req: Request) {
     data: restaurantUpdateData,
     select: settingsRestaurantSelect,
   })
+
+  // Close the shift the venue was running, now that shifts are off. Its orders
+  // keep their shiftId and businessDate — only the session ends, so past service
+  // stays reportable exactly as it was.
+  if (shiftToCloseId) {
+    await prisma.shift.update({
+      where: { id: shiftToCloseId },
+      data: {
+        status: 'CLOSED',
+        closedAt: new Date(),
+        closedByName: session.user.name ?? 'Manager',
+      },
+    })
+  }
 
   // QR menu artwork remains branch-level; the bill template is saved on the restaurant above.
   const activeBranchId = context?.branchId ?? null
