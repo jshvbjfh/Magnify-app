@@ -4,12 +4,35 @@ import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
 
-type TotalsInput = Array<{ dishPrice: number; qty: number }>
+type TotalsInput = Array<{ dishPrice: number; qty: number; discountPercent?: number | null }>
 
 export const ACTIVE_RESTAURANT_ORDER_STATUSES = ['PENDING', 'OPEN'] as const
 
+/**
+ * What one line is actually worth after its discount — the ONLY definition of
+ * that in the app, on purpose.
+ *
+ * Three separate places used to turn a line into money: the order totals below,
+ * the journal entry raised at payment, and DishSale.totalSaleAmount. If any one
+ * of them applied a discount the others did not, the till would collect one
+ * figure and the books would record another, and nothing would surface it until
+ * a reconciliation failed weeks later. They all call this now.
+ *
+ * A discount outside 0–100, or one that is not a finite number, is treated as no
+ * discount at all. Refusing loudly would block a waiter mid-service over a
+ * mistyped field; charging full price is the safe direction to fail, because it
+ * is visible on the bill immediately and nobody is short-changed.
+ */
+export function calculateLineNetAmount(item: { dishPrice: number; qty: number; discountPercent?: number | null }) {
+  const gross = Number(item.dishPrice) * Number(item.qty)
+  if (!Number.isFinite(gross)) return 0
+  const raw = Number(item.discountPercent)
+  const pct = Number.isFinite(raw) && raw > 0 && raw <= 100 ? raw : 0
+  return gross * (1 - pct / 100)
+}
+
 export function calculateRestaurantOrderTotals(items: TotalsInput) {
-  const subtotalAmount = items.reduce((sum, item) => sum + Number(item.dishPrice) * Number(item.qty), 0)
+  const subtotalAmount = items.reduce((sum, item) => sum + calculateLineNetAmount(item), 0)
   const vatAmount = calculateVatFromNet(subtotalAmount)
   const totalAmount = calculateGrossFromNet(subtotalAmount)
 

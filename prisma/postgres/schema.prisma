@@ -262,6 +262,13 @@ model RestaurantOrder {
   // as zero, and exclude those orders from average-per-cover entirely.
   guestCount     Int?
   createdByName  String?
+  // Set when this order was merged into another one. The row is kept, its
+  // status moved to MERGED and its items reassigned, so the join is auditable
+  // and the order number a guest may already have been quoted still resolves.
+  // MERGED is deliberately not in ACTIVE_RESTAURANT_ORDER_STATUSES or the
+  // unsettled set: a merged order must not sit on the pending list, block an
+  // end-of-shift, or be payable a second time.
+  mergedIntoId   String?
   // Which app took the order: 'tablet' (the Android APK) or 'desktop' (the
   // Windows till). Null on everything taken before this existed, and on guest
   // QR orders, which arrive through the web route rather than a waiter app.
@@ -331,6 +338,15 @@ model OrderItem {
   dishName        String
   dishPrice       Float
   qty             Int             @default(1)
+  // Per-line discount, 0-100. Null on every line taken before this existed and
+  // on every undiscounted line since — read that as "no discount". Applied by a
+  // waiter at the till against a supervisor PIN, and printed on the bill so the
+  // guest can see what came off.
+  //
+  // Money is derived from this in three places (order totals, the journal entry
+  // at payment, DishSale.totalSaleAmount) and all three go through
+  // calculateLineNetAmount, so a discounted line is worth exactly one thing.
+  discountPercent Float?
   totalPrice      Float           @default(0)
   kitchenStatus   String          @default("new")
   status          String          @default("ACTIVE")

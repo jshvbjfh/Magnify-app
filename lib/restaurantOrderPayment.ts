@@ -220,8 +220,15 @@ export async function finalizeRestaurantOrderPayment(
       ] as const) {
         if (!tenderItems.length) continue
 
+        // discountPercent must ride along: without it the books would record the
+        // full menu price while the till collected the discounted one, and the
+        // gap would only surface when a reconciliation failed.
         const branchAmount = calculateRestaurantOrderTotals(
-          tenderItems.map((item) => ({ dishPrice: Number(item.dishPrice), qty: Number(item.qty) }))
+          tenderItems.map((item) => ({
+            dishPrice: Number(item.dishPrice),
+            qty: Number(item.qty),
+            discountPercent: item.discountPercent,
+          }))
         ).totalAmount
 
         await recordJournalEntry(db, {

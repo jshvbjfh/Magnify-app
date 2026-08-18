@@ -42,6 +42,17 @@ function normalizeNumber(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+// A discount only counts when it is a real percentage inside 0-100. Anything
+// else — absent, null, NaN, negative, over 100 — stores null, which every money
+// path reads as "no discount". A device must not be able to invent revenue, or
+// take a bill below zero, by pushing a malformed number.
+function normalizeDiscountPercent(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) return null
+  return parsed
+}
+
 function normalizeInteger(value: unknown, fallback = 1) {
   const parsed = Math.trunc(Number(value))
   return Number.isFinite(parsed) ? parsed : fallback
@@ -124,6 +135,8 @@ interface MobileOrderItem {
   status: string
   notes?: string | null
   branch_id?: string | null
+  // Per-line discount, 0-100, set at the till against a supervisor PIN.
+  discount_percent?: number | null
   created_at: string
   updated_at: string
 }
@@ -373,6 +386,7 @@ export async function POST(req: Request) {
                 // was rung up must never drift on update (matches how nothing else
                 // touches it either).
                 branchId: resolvedItemBranchId,
+                discountPercent: normalizeDiscountPercent(item.discount_percent),
                 createdAt: normalizedItemCreatedAt,
                 updatedAt: normalizedItemUpdatedAt,
               },
@@ -382,6 +396,7 @@ export async function POST(req: Request) {
                 qty: Math.max(1, normalizeInteger(item.qty, 1)),
                 status: normalizeRequiredText(item.status, 'ACTIVE'),
                 notes: item.notes ?? null,
+                discountPercent: normalizeDiscountPercent(item.discount_percent),
                 updatedAt: normalizedItemUpdatedAt,
               },
             })

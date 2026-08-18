@@ -199,6 +199,8 @@ export async function GET(req: Request) {
               qty: true,
               status: true,
               notes: true,
+              branchId: true,
+              discountPercent: true,
               createdAt: true,
               updatedAt: true,
             },
@@ -378,6 +380,11 @@ export async function GET(req: Request) {
           qty: item.qty,
           status: item.status,
           notes: item.notes,
+          // The station the line was rung up on. Without it the till groups a
+          // pushed ticket by its own dish list, which only holds its own
+          // station, and every slip lands on the bill printer.
+          branch_id: item.branchId ?? null,
+          discount_percent: item.discountPercent ?? null,
           created_at: item.createdAt.toISOString(),
           updated_at: item.updatedAt.toISOString(),
         })),

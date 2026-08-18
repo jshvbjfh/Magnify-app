@@ -4,6 +4,7 @@ import { recordJournalEntry } from '@/lib/accounting'
 import { isHotelBuffetLine } from '@/lib/hotelBuffet'
 import { consumeIngredientStock, getRestaurantFifoEnabled, getRestaurantSharedStock, InsufficientFifoStockError, InsufficientInventoryStockError } from '@/lib/inventoryConsumption'
 import { consumePrepAwareIngredient } from '@/lib/mepProduction'
+import { calculateLineNetAmount } from '@/lib/restaurantOrders'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
@@ -20,6 +21,9 @@ type SaleLineInput = {
   // Preferred over the dish's live branchId so a mid-order station reassignment
   // can't retroactively misattribute an already-open order's sale.
   branchId?: string | null
+  // Per-line discount, 0–100. The revenue booked for this sale must match what
+  // the guest was actually charged, or DishSale and the journal entry disagree.
+  discountPercent?: number | null
 }
 
 type WasteLineInput = {
@@ -114,7 +118,13 @@ export async function recordDishSalesForPaidOrder(
     // no snapshot.
     const dishBranchId = item.branchId ?? dish.branchId ?? params.branchId
 
-    const totalSaleAmount = Number(item.dishPrice) * quantitySold
+    // Same helper the order totals and the journal entry use, so a discounted
+    // line is worth exactly one thing across the whole app.
+    const totalSaleAmount = calculateLineNetAmount({
+      dishPrice: Number(item.dishPrice),
+      qty: quantitySold,
+      discountPercent: item.discountPercent,
+    })
     const dishSale = await db.dishSale.create({
       data: {
         restaurantId: params.restaurantId,
