@@ -77,11 +77,17 @@ export async function startShift(supervisorPin: string): Promise<Shift> {
   return shift
 }
 
-// Count orders that still need settling before a shift can close.
-export async function getUnsettledOrderCount(): Promise<number> {
+// Count orders that still need settling before the open shift can close, scoped
+// to that shift's OWN orders. An order taken outside it — before it was opened,
+// or while the venue had shifts switched off — was never part of it and must not
+// block it. Counting the whole floor made the dialog impossible to satisfy: a
+// till with seven unstamped orders could never end a shift holding one.
+export async function getUnsettledOrderCount(shiftId?: string | null): Promise<number> {
   const restaurantId = (await getConfig('restaurantId'))?.trim() || null
-  const open = await getOrders({ statuses: UNSETTLED_STATUSES, restaurantId })
-  return open.length
+  const scopeId = shiftId ?? (await getOpenShift(restaurantId))?.id ?? null
+  if (!scopeId) return 0
+  const unsettled = await getOrders({ statuses: UNSETTLED_STATUSES, restaurantId })
+  return unsettled.filter((order) => order.shift_id === scopeId).length
 }
 
 // Close the open shift. Blocks while any order is still open/unpaid — everything
@@ -91,7 +97,7 @@ export async function endShift(supervisorPin: string): Promise<{ unsettled: numb
   const open = await getOpenShift(restaurantId)
   if (!open) throw new Error('No shift is currently open.')
 
-  const unsettled = await getUnsettledOrderCount()
+  const unsettled = await getUnsettledOrderCount(open.id)
   if (unsettled > 0) return { unsettled }
 
   const { approvedBy } = await validateCancellationPinOffline(supervisorPin)

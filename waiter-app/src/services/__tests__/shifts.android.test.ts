@@ -141,3 +141,113 @@ describe('getActiveShift', () => {
     expect(await getActiveShift()).toBeNull()
   })
 })
+
+// The end-of-shift settle gate. Both waiter apps ship this file byte-identical,
+// so these cover the desktop till too.
+describe('getUnsettledOrderCount', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const orderRow = (id: string, shiftId: string | null, status = 'PENDING') => ({
+    id,
+    restaurant_id: 'rest-1',
+    branch_id: 'branch-1',
+    table_id: null,
+    table_name: 'Takeaway',
+    order_number: id,
+    status,
+    payment_method: null,
+    subtotal_amount: 1000,
+    vat_amount: 0,
+    total_amount: 1000,
+    created_by_name: 'Waiter',
+    served_at: null,
+    paid_at: null,
+    canceled_at: null,
+    cancel_reason: null,
+    shift_id: shiftId,
+    business_date: null,
+    synced: 1,
+    sync_error: null,
+    created_at: T0,
+    updated_at: T0,
+  }) as never
+
+  it('ignores open orders that were never part of the shift', async () => {
+    const { getUnsettledOrderCount, createOrder, saveShiftLocal, setConfig } = await fresh()
+    await setConfig('restaurantId', 'rest-1')
+    await saveShiftLocal(openShiftRow)
+
+    // One order taken inside the shift, three taken outside it — the shape seen
+    // at a venue that ran with shifts off and then had one opened by mistake.
+    await createOrder(orderRow('in-1', 'shift-1'), [])
+    await createOrder(orderRow('out-1', null), [])
+    await createOrder(orderRow('out-2', null), [])
+    await createOrder(orderRow('out-3', 'shift-old'), [])
+
+    expect(await getUnsettledOrderCount()).toBe(1)
+  })
+
+  it('counts only unsettled statuses within the shift', async () => {
+    const { getUnsettledOrderCount, createOrder, saveShiftLocal, setConfig } = await fresh()
+    await setConfig('restaurantId', 'rest-1')
+    await saveShiftLocal(openShiftRow)
+
+    await createOrder(orderRow('paid', 'shift-1', 'PAID'), [])
+    await createOrder(orderRow('cancelled', 'shift-1', 'CANCELED'), [])
+    await createOrder(orderRow('still-open', 'shift-1', 'PENDING'), [])
+
+    expect(await getUnsettledOrderCount()).toBe(1)
+  })
+
+  it('reports nothing blocking when no shift is open', async () => {
+    const { getUnsettledOrderCount, createOrder, setConfig } = await fresh()
+    await setConfig('restaurantId', 'rest-1')
+    await createOrder(orderRow('out-1', null), [])
+
+    expect(await getUnsettledOrderCount()).toBe(0)
+  })
+})
+
+describe('endShift', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('closes a shift whose own orders are settled, ignoring the rest of the floor', async () => {
+    const { endShift, createOrder, saveShiftLocal, setConfig, getOpenShift } = await fresh()
+    await setConfig('restaurantId', 'rest-1')
+    await saveShiftLocal(openShiftRow)
+
+    // Seven unstamped orders open on the floor. Before the fix these blocked the
+    // close forever, because none of them could ever belong to this shift.
+    for (let i = 0; i < 7; i += 1) {
+      await createOrder({
+        id: `loose-${i}`, restaurant_id: 'rest-1', branch_id: 'branch-1', table_id: null,
+        table_name: 'Takeaway', order_number: `loose-${i}`, status: 'PENDING', payment_method: null,
+        subtotal_amount: 1000, vat_amount: 0, total_amount: 1000, created_by_name: 'Waiter',
+        served_at: null, paid_at: null, canceled_at: null, cancel_reason: null,
+        shift_id: null, business_date: null, synced: 1, sync_error: null,
+        created_at: T0, updated_at: T0,
+      } as never, [])
+    }
+
+    const result = await endShift('12345')
+    expect((result as { status?: string }).status).toBe('CLOSED')
+    expect(await getOpenShift('rest-1')).toBeNull()
+  })
+
+  it('still refuses while the shift has an unsettled order of its own', async () => {
+    const { endShift, createOrder, saveShiftLocal, setConfig } = await fresh()
+    await setConfig('restaurantId', 'rest-1')
+    await saveShiftLocal(openShiftRow)
+
+    await createOrder({
+      id: 'mine', restaurant_id: 'rest-1', branch_id: 'branch-1', table_id: null,
+      table_name: 'Takeaway', order_number: 'mine', status: 'PENDING', payment_method: null,
+      subtotal_amount: 1000, vat_amount: 0, total_amount: 1000, created_by_name: 'Waiter',
+      served_at: null, paid_at: null, canceled_at: null, cancel_reason: null,
+      shift_id: 'shift-1', business_date: null, synced: 1, sync_error: null,
+      created_at: T0, updated_at: T0,
+    } as never, [])
+
+    expect(await endShift('12345')).toEqual({ unsettled: 1 })
+  })
+})
