@@ -312,7 +312,16 @@ CREATE TABLE IF NOT EXISTS shifts (
     // that this terminal's printers produced the slips. Two tills at one venue
     // each keep their own answer, because paper coming out of one says nothing
     // about the other.
-    version: 10,
+    //
+    // Numbered 11, NOT 10. Tills in the field already applied a version 10 on
+    // 2026-08-17 — the Credit/AR customer columns, which live on the unmerged
+    // feature branch and never reached main. The runner skips anything at or
+    // below the highest version already recorded, so a second migration
+    // claiming 10 is silently ignored, and the app then writes a column that
+    // was never created: "table orders has no column named source", and sync
+    // stops. Numbers here are install history, not branch history, and can
+    // never be reused even if this branch has no 10 of its own.
+    version: 11,
     run: (database) => {
       addColumnIfMissing(database, 'orders', 'source', 'TEXT')
       addColumnIfMissing(database, 'orders', 'tickets_pushed_at', 'TEXT')
