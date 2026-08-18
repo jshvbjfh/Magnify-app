@@ -359,8 +359,14 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
         </div>
       </header>
 
+      {/* justify-center must NOT sit on the scrolling box: once the tabs are wider
+          than the screen, centring splits the overflow across both edges and the
+          leading tabs can never be scrolled back to. The inner w-max + mx-auto
+          centres them while they fit and scrolls cleanly from the first tab once
+          they do not. */}
       {branches.length > 0 && (
-        <div className="border-b border-orange-100 bg-white px-4 py-2 flex justify-center items-center gap-2 overflow-x-auto no-scrollbar flex-shrink-0">
+        <div className="border-b border-orange-100 bg-white px-4 py-2 overflow-x-auto no-scrollbar flex-shrink-0">
+          <div className="flex w-max mx-auto items-center gap-2">
           {branches.map((branch) => {
             const isActive = branch.id === activeBranchId
             const isSwitching = branch.id === branchSwitchingId
@@ -380,6 +386,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
               </button>
             )
           })}
+          </div>
         </div>
       )}
 

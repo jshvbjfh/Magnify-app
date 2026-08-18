@@ -623,7 +623,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
   }
 
-  function printHtml(html: string, delay = 0, deviceName = '') {
+  // `notify` is for prints the waiter asked for by name (the bill). Kitchen
+  // tickets stay quiet: the tablet is order-entry only and the desktop till
+  // prints them, so a warning on every confirmed order would be pure noise.
+  function printHtml(html: string, delay = 0, deviceName = '', notify = false) {
     const eP = (window as Window & { electronPrint?: { receipt: (h: string, deviceName?: string) => Promise<void> } }).electronPrint
     if (eP) {
       // No real printer to target — warn instead of dumping the user into
@@ -649,26 +652,21 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
         .then(() => new Promise<void>(res => setTimeout(res, PRINT_GAP_MS)))
       return
     }
-    // Fallback: DOM injection for non-Electron environments
-    setTimeout(() => {
-      const ID = 'pos-receipt-print', SID = 'pos-receipt-print-style'
-      document.getElementById(ID)?.remove(); document.getElementById(SID)?.remove()
-      const parsed = new DOMParser().parseFromString(html, 'text/html')
-      const styleEl = document.createElement('style')
-      styleEl.id = SID
-      styleEl.textContent = Array.from(parsed.querySelectorAll('style')).map(s => s.textContent ?? '').join('\n')
-        + `\n@media screen{#${ID}{position:fixed;left:-9999px;top:0;width:58mm;opacity:0}}`
-        + `\n@media print{body>*:not(#${ID}){display:none!important}#${ID}{display:block!important;position:static!important}}`
-      const div = document.createElement('div')
-      div.id = ID; div.innerHTML = parsed.body.innerHTML
-      document.head.appendChild(styleEl); document.body.appendChild(div)
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        window.print()
-        window.addEventListener('afterprint', () => {
-          document.getElementById(ID)?.remove(); document.getElementById(SID)?.remove()
-        }, { once: true })
-      }))
-    }, delay)
+    // No Electron bridge — this is the tablet, and there is nothing to print to.
+    //
+    // What used to happen here corrupted the app. The slip's <style> block was
+    // copied verbatim into the LIVE document head, and it carries an unscoped
+    // `body{font-family:'Courier New';font-weight:bold;width:80mm}` rule, so the
+    // whole POS reformatted itself into a narrow bold receipt. Cleanup was
+    // hung off the `afterprint` event, which never fires here because Android
+    // System WebView's window.print() is a documented no-op — so the mangled
+    // layout stayed until the app was restarted. Every confirmed order did it.
+    //
+    // Nothing is injected now. Printing from the tablet was never possible (see
+    // the file header in services/printing.ts); the desktop till owns paper.
+    if (notify) {
+      setSubmitError('Printing is not available on the tablet — print from the desktop till.')
+    }
   }
 
   function printBill(order: Order, items: OrderItem[]) {
@@ -802,7 +800,8 @@ i{font-style:italic}
 <div id="bill-content">${divLines.join('')}</div>
 ${barcodeEl}
 </body></html>`
-    printHtml(html, 0, billPrinter)
+    // The waiter tapped Print Bill, so say plainly that it cannot happen here.
+    printHtml(html, 0, billPrinter, true)
   }
 
   function printKitchenTickets(order: Order, cart: CartItem[], rName: string) {
@@ -1179,7 +1178,12 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       // ── Reload BEFORE clearing cart so the panel never flashes empty ──────
       await loadPOS()
       setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
-      setShowPanel('order')
+      // Back to the dishes, not the order panel. The cart has just been emptied,
+      // and on a tablet that panel is the whole screen — so landing there shows
+      // "No items yet" and the waiter has to tap back before serving anyone
+      // else. On a desktop-width screen both panels are visible side by side, so
+      // this changes nothing there.
+      setShowPanel('dishes')
       setConfirmSuccess(`${orderNumber} confirmed for ${tableName}`)
       setTimeout(() => setConfirmSuccess(null), 4000)
 
