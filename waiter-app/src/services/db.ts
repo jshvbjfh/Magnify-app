@@ -276,6 +276,32 @@ CREATE TABLE IF NOT EXISTS shifts (
       await addColumnIfMissing(d, 'orders', 'business_date', 'TEXT')
     },
   },
+  {
+    // Which app took the order, and whether its kitchen tickets have been sent
+    // to paper yet.
+    //
+    // `source` is 'tablet' or 'desktop', stamped at creation and synced. The
+    // tablet cannot print, so a ticket for an order it took never reaches the
+    // kitchen by itself; the till uses this to find the orders that still need
+    // pushing. Null on every order taken before this existed, which reads as
+    // "not from a tablet" — correct for history, and it stops the feature
+    // offering to reprint the past.
+    //
+    // `tickets_pushed_at` is deliberately LOCAL and never synced: it records
+    // that THIS terminal's printers have already produced the slips. Two tills
+    // at one venue each keep their own answer, because paper coming out of one
+    // says nothing about the other.
+    // Numbered 10, not 9, on purpose: the desktop already used 9 for
+    // orders.guest_count, which Android has never had. Taking 10 in both apps
+    // keeps this migration meaning the same thing on each, instead of stacking
+    // a second meaning onto a number that has already diverged. The gap at 9 is
+    // harmless — the runner applies anything above the highest applied version.
+    version: 10,
+    run: async (d) => {
+      await addColumnIfMissing(d, 'orders', 'source', 'TEXT')
+      await addColumnIfMissing(d, 'orders', 'tickets_pushed_at', 'TEXT')
+    },
+  },
 ]
 
 // ---- db init ---------------------------------------------------------------
@@ -586,6 +612,12 @@ export async function updateTableStatus(tableId: string, status: string): Promis
 
 // ---- orders ----------------------------------------------------------------
 
+// Which app this build is, stamped onto every order it creates. This is the
+// one thing the two waiter apps must genuinely disagree about: the till can
+// print and the Android tablet cannot, so the pending list uses it to show a Push
+// button only for orders whose tickets no printer has ever seen.
+export const ORDER_SOURCE = 'tablet'
+
 export interface Order {
   id: string
   restaurant_id: string
@@ -605,6 +637,12 @@ export interface Order {
   cancel_reason: string | null
   shift_id: string | null
   business_date: string | null
+  // Which app took the order: 'tablet' or 'desktop'. Null on orders taken
+  // before this existed and on guest QR orders — read that as 'not a tablet'.
+  source: string | null
+  // LOCAL ONLY, never synced: when THIS terminal's printers produced the
+  // kitchen slips for this order. See migration 10.
+  tickets_pushed_at: string | null
   synced: number
   sync_error: string | null
   created_at: string
@@ -632,14 +670,14 @@ export async function createOrder(order: Order, items: OrderItem[]): Promise<voi
       statement: `INSERT INTO orders
         (id, restaurant_id, branch_id, table_id, table_name, order_number, status,
          payment_method, subtotal_amount, vat_amount, total_amount, created_by_name,
-         served_at, paid_at, canceled_at, cancel_reason, shift_id, business_date, synced, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+         served_at, paid_at, canceled_at, cancel_reason, shift_id, business_date, source, synced, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       values: [
         order.id, order.restaurant_id, order.branch_id, order.table_id, order.table_name,
         order.order_number, order.status, order.payment_method, order.subtotal_amount,
         order.vat_amount, order.total_amount, order.created_by_name,
         order.served_at, order.paid_at, order.canceled_at, order.cancel_reason,
-        order.shift_id ?? null, order.business_date ?? null,
+        order.shift_id ?? null, order.business_date ?? null, order.source ?? null,
         order.created_at, order.updated_at,
       ],
     },
@@ -681,6 +719,20 @@ export async function updateOrder(
   const values = entries.map(([, v]) => v)
   const db = getDB()
   await db.run(`UPDATE orders SET ${setClauses} WHERE id = ?`, [...values, orderId])
+}
+
+// Record that THIS terminal's printers produced the kitchen slips for an order.
+//
+// Deliberately not routed through updateOrder: that stamps updated_at and sets
+// synced = 0, which would push the row back to the server as if the order had
+// changed. Nothing about the order did change — only this machine's knowledge of
+// what it has printed, which is local and never leaves the device.
+export async function markTicketsPushed(orderId: string): Promise<void> {
+  const db = getDB()
+  await db.run(
+    'UPDATE orders SET tickets_pushed_at = ? WHERE id = ?',
+    [new Date().toISOString(), orderId],
+  )
 }
 
 export async function getOrders(filter?: { status?: string; statuses?: string[]; branchId?: string | null; restaurantId?: string | null }): Promise<Order[]> {
@@ -812,6 +864,9 @@ export interface IncomingOrder {
   table_name: string | null; order_number: string; status: string; payment_method: string | null
   subtotal_amount: number; vat_amount: number; total_amount: number; created_by_name: string | null
   paid_at: string | null; canceled_at: string | null; cancel_reason: string | null
+  // 'tablet' | 'desktop' | null. Null covers guest QR orders and anything from
+  // a client too old to send it.
+  source?: string | null
   created_at: string; updated_at: string; items: IncomingOrderItem[]
 }
 export async function upsertIncomingOrders(orders: IncomingOrder[]): Promise<void> {
@@ -823,13 +878,13 @@ export async function upsertIncomingOrders(orders: IncomingOrder[]): Promise<voi
         statement: `INSERT OR IGNORE INTO orders
           (id, restaurant_id, branch_id, table_id, table_name, order_number, status,
            payment_method, subtotal_amount, vat_amount, total_amount, created_by_name,
-           served_at, paid_at, canceled_at, cancel_reason, synced, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, ?)`,
+           served_at, paid_at, canceled_at, cancel_reason, source, synced, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 1, ?, ?)`,
         values: [
           order.id, order.restaurant_id, order.branch_id, order.table_id, order.table_name,
           order.order_number, order.status, order.payment_method, order.subtotal_amount,
           order.vat_amount, order.total_amount, order.created_by_name,
-          order.paid_at, order.canceled_at, order.cancel_reason,
+          order.paid_at, order.canceled_at, order.cancel_reason, order.source ?? null,
           order.created_at, order.updated_at,
         ],
       },

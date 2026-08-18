@@ -113,7 +113,19 @@ describe('Android schema migrations', () => {
     const applied = fake.db
       .prepare('SELECT MAX(version) AS v FROM schema_migrations')
       .get() as { v: number }
-    expect(applied.v).toBe(8)
+    // 10, not 9: the desktop already spent 9 on orders.guest_count, which
+    // Android has never had, so this migration took the next free number in
+    // both apps rather than stacking a second meaning onto a diverged one.
+    expect(applied.v).toBe(10)
+
+    // Migration 10 — order origin, and whether this device has printed its
+    // kitchen slips. Without `source` the till cannot tell which pending orders
+    // came from a tablet and so still need pushing to paper by hand.
+    const orderCols = fake.db
+      .prepare('PRAGMA table_info(orders)')
+      .all()
+      .map((c) => (c as { name: string }).name)
+    expect(orderCols).toEqual(expect.arrayContaining(['source', 'tickets_pushed_at']))
   })
 
   it('adds the shift and station columns the server push expects', async () => {

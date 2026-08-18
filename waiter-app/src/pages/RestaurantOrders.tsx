@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
-  getMepOutDishIds, addOrderItems, getOrderById,
+  getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
@@ -1144,6 +1144,10 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         cancel_reason:      null,
         shift_id:           activeShift?.id ?? null,
         business_date:      activeShift?.business_date ?? null,
+        // Which app took it. The till reads this to decide whether the kitchen
+        // tickets still need pushing to paper by hand.
+        source:             ORDER_SOURCE,
+        tickets_pushed_at:  null,
         synced:             0,
         sync_error:         null,
         created_at:         now,

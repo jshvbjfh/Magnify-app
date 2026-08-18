@@ -296,6 +296,28 @@ CREATE TABLE IF NOT EXISTS shifts (
     version: 9,
     run: (database) => addColumnIfMissing(database, 'orders', 'guest_count', 'INTEGER'),
   },
+  {
+    // Which app took the order, and whether its kitchen tickets have reached
+    // paper from THIS terminal.
+    //
+    // `source` is 'tablet' or 'desktop', stamped at creation and synced. The
+    // tablet cannot print — no spooler, no raw socket, no print plugin — so a
+    // ticket for an order it took never reaches the kitchen on its own. The
+    // till uses this to find the pending orders that still need pushing. Null
+    // on every order taken before this existed, which reads as "not from a
+    // tablet": correct for history, and it stops the feature offering to
+    // reprint the past.
+    //
+    // `tickets_pushed_at` is deliberately LOCAL and never synced — it records
+    // that this terminal's printers produced the slips. Two tills at one venue
+    // each keep their own answer, because paper coming out of one says nothing
+    // about the other.
+    version: 10,
+    run: (database) => {
+      addColumnIfMissing(database, 'orders', 'source', 'TEXT')
+      addColumnIfMissing(database, 'orders', 'tickets_pushed_at', 'TEXT')
+    },
+  },
 ]
 
 function addColumnIfMissing(database, table, column, definition) {

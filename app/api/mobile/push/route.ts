@@ -84,6 +84,12 @@ interface MobileOrder {
   // orders from app versions before shifts existed, simply carry neither.
   shift_id?: string | null
   business_date?: string | null
+  // Which waiter app took the order: 'tablet' or 'desktop'. Optional — clients
+  // older than this field omit it, and those orders stay null, which the till
+  // reads as "not from a tablet". Anything unrecognised is discarded rather
+  // than stored, so a stray value can never make the till offer a Push button
+  // for an order that already printed.
+  source?: string | null
   created_at: string
   updated_at: string
 }
@@ -247,6 +253,12 @@ export async function POST(req: Request) {
       const normalizedGuestCount =
         Number.isInteger(rawGuestCount) && rawGuestCount > 0 ? rawGuestCount : null
 
+      // Only these two values mean anything. Anything else is dropped rather
+      // than stored, so a stray string can never make the till offer to push
+      // tickets for an order whose slips already printed.
+      const normalizedSource =
+        order.source === 'tablet' || order.source === 'desktop' ? order.source : null
+
       let needsPostTxEnqueue = false
 
       try {
@@ -293,6 +305,7 @@ export async function POST(req: Request) {
               guestCount: normalizedGuestCount,
               shiftId: resolvedShiftId,
               businessDate: normalizedBusinessDate,
+              source: normalizedSource,
               paidAt: shouldFinalizePaidOrder ? null : normalizedPaidAt,
               canceledAt: shouldFinalizePaidOrder ? null : normalizedCanceledAt,
               cancelReason: shouldFinalizePaidOrder ? null : order.cancel_reason,
@@ -321,6 +334,10 @@ export async function POST(req: Request) {
               // client that omits these must not wipe attribution).
               ...(resolvedShiftId ? { shiftId: resolvedShiftId } : {}),
               ...(normalizedBusinessDate ? { businessDate: normalizedBusinessDate } : {}),
+              // Same rule: set it if we were told, never clear what is already
+              // stored. A re-sync from a client too old to send it must not
+              // erase the origin of an order the till still has to push.
+              ...(normalizedSource ? { source: normalizedSource } : {}),
               paidAt: shouldFinalizePaidOrder ? null : normalizedPaidAt,
               canceledAt: shouldFinalizePaidOrder ? null : normalizedCanceledAt,
               cancelReason: shouldFinalizePaidOrder ? null : order.cancel_reason,

@@ -180,6 +180,9 @@ export async function GET(req: Request) {
           vatAmount: true,
           totalAmount: true,
           createdByName: true,
+          // Which app took it — the till shows a Push button only for orders a
+          // tablet rang up, since nothing has printed their tickets.
+          source: true,
           paidAt: true,
           canceledAt: true,
           cancelReason: true,
@@ -360,6 +363,7 @@ export async function GET(req: Request) {
         vat_amount: Number(o.vatAmount),
         total_amount: Number(o.totalAmount),
         created_by_name: o.createdByName ?? null,
+        source: o.source ?? null,
         paid_at: o.paidAt?.toISOString() ?? null,
         canceled_at: o.canceledAt?.toISOString() ?? null,
         cancel_reason: o.cancelReason ?? null,

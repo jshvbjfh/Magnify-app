@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
-  getMepOutDishIds, addOrderItems, getOrderById,
+  getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, markTicketsPushed,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
@@ -1094,6 +1094,10 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         cancel_reason:      null,
         shift_id:           activeShift?.id ?? null,
         business_date:      activeShift?.business_date ?? null,
+        // Which app took it. The till reads this to decide whether the kitchen
+        // tickets still need pushing to paper by hand.
+        source:             ORDER_SOURCE,
+        tickets_pushed_at:  null,
         synced:             0,
         sync_error:         null,
         created_at:         now,
@@ -1147,6 +1151,57 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       orderSubmitLockRef.current = false
       setConfirmingOrder(false)
     }
+  }
+
+  // Who to name when a card is locked. Confirmed guest orders carry the whole
+  // "Guest QR Order · confirmed by <waiter>" string — show just the waiter.
+  const orderWaiter = (o: Order): string => {
+    const raw = o.created_by_name?.trim() ?? ''
+    return raw.match(/confirmed by (.+)$/)?.[1].trim() || raw || 'another waiter'
+  }
+
+  // Whether the waiter signed in here is the one who took this order.
+  //
+  // Ported from the tablet, which already locks another waiter's orders on a
+  // shared terminal. Ownership is created_by_name, because that is the waiter —
+  // the Staff row behind the till is a shared screen account and identifies
+  // nobody. Orders with no recorded waiter, and unconfirmed guest QR orders,
+  // count as everyone's, or they would sit unpushable on every terminal.
+  const ownsOrder = (o: Order): boolean => {
+    if (!waiterName.trim()) return true          // no waiter signed in — full access
+    if (o.status === 'UNCONFIRMED') return true  // unclaimed guest QR order
+    const who = o.created_by_name?.trim().toLowerCase()
+    if (!who) return true
+    const me = waiterName.trim().toLowerCase()
+    if (who === me) return true
+    // A confirmed guest order reads "Guest QR Order · confirmed by <waiter>".
+    // Compare the whole trailing name, so "Sam" does not match "Samuel".
+    const confirmedBy = who.match(/confirmed by (.+)$/)
+    return confirmedBy ? confirmedBy[1].trim() === me : false
+  }
+
+  // Send a tablet-taken order's tickets to the kitchen printers.
+  //
+  // The tablet has no way to print — no spooler, no raw socket, no print plugin
+  // — so an order it rang up reaches the kitchen only when someone here pushes
+  // it. Identical to what confirming an order does on this till: the same
+  // grouping by each dish's own station, so every kitchen and the bar get only
+  // their own lines.
+  //
+  // The pushed stamp is local. It records that THIS terminal's printers ran, and
+  // deliberately does not sync: paper coming out here says nothing about a
+  // second till, and it must never re-push the order to the server.
+  async function pushToKitchen(order: Order, items: OrderItem[]) {
+    printKitchenTickets(
+      order,
+      items.map(i => ({
+        dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price,
+        qty: i.qty, note: i.notes ?? undefined,
+      })),
+      restaurantName ?? '',
+    )
+    await markTicketsPushed(order.id)
+    await loadPOS()
   }
 
   // Confirm a guest QR order (status UNCONFIRMED) → PENDING so it reaches the kitchen.
@@ -1503,6 +1558,25 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                             <CreditCard className="h-3.5 w-3.5" /> Pay
                           </button>
                         </div>
+                        {ord.source === 'tablet' && (
+                          ord.tickets_pushed_at ? (
+                            <div className="w-full flex items-center justify-center gap-1 border border-green-200 bg-green-50 text-green-700 text-xs font-semibold py-2 rounded-xl">
+                              <Printer className="h-3.5 w-3.5" /> Pushed to kitchen
+                            </div>
+                          ) : ownsOrder(ord) ? (
+                            <button onClick={() => { void pushToKitchen(ord, oi) }}
+                              className="w-full flex items-center justify-center gap-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold py-2 rounded-xl transition-colors">
+                              <Printer className="h-3.5 w-3.5" /> Push to kitchen
+                            </button>
+                          ) : (
+                            // Someone else's table. Shown, not hidden, so this waiter
+                            // can see the food has not gone in yet and tell them —
+                            // but they cannot fire another waiter's order themselves.
+                            <div className="w-full flex items-center justify-center gap-1 border border-gray-200 bg-gray-50 text-gray-400 text-xs font-semibold py-2 rounded-xl">
+                              <Printer className="h-3.5 w-3.5" /> Push — {orderWaiter(ord)} only
+                            </div>
+                          )
+                        )}
                         <button onClick={() => onEditOrder?.(ord.id)}
                           className="w-full flex items-center justify-center gap-1 border border-blue-300 hover:bg-blue-50 text-blue-700 text-xs font-semibold py-2 rounded-xl transition-colors">
                           <StickyNote className="h-3.5 w-3.5" /> Edit / Add items

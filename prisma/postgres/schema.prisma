@@ -262,6 +262,16 @@ model RestaurantOrder {
   // as zero, and exclude those orders from average-per-cover entirely.
   guestCount     Int?
   createdByName  String?
+  // Which app took the order: 'tablet' (the Android APK) or 'desktop' (the
+  // Windows till). Null on everything taken before this existed, and on guest
+  // QR orders, which arrive through the web route rather than a waiter app.
+  //
+  // The tablet cannot print — no spooler, no raw socket, no print plugin — so a
+  // ticket for an order it took never reaches the kitchen on its own. The till
+  // reads this to decide which pending orders still need pushing to the
+  // printers by hand. Treat null as "not from a tablet": for old orders that is
+  // correct, and it means enabling the feature never offers to reprint history.
+  source         String?
   cancelReason   String?
   notes          String?
   paidAt         DateTime?
