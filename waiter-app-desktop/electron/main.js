@@ -297,6 +297,21 @@ CREATE TABLE IF NOT EXISTS shifts (
     run: (database) => addColumnIfMissing(database, 'orders', 'guest_count', 'INTEGER'),
   },
   {
+    // Credit (Accounts Receivable) settlement: who owes for the tab, and how to
+    // reach them. The phone is optional — a name alone is often enough — so null
+    // means "not taken", never "no phone".
+    //
+    // This is version 10 here but version 9 in the Android app: the two keep
+    // their own local databases and their migration lists drifted when
+    // guest_count was added here only. The columns are identical, which is what
+    // the shared sync code actually depends on.
+    version: 10,
+    run: (database) => {
+      addColumnIfMissing(database, 'orders', 'ar_customer_name', 'TEXT')
+      addColumnIfMissing(database, 'orders', 'ar_customer_phone', 'TEXT')
+    },
+  },
+  {
     // Which app took the order, and whether its kitchen tickets have reached
     // paper from THIS terminal.
     //
@@ -313,14 +328,13 @@ CREATE TABLE IF NOT EXISTS shifts (
     // each keep their own answer, because paper coming out of one says nothing
     // about the other.
     //
-    // Numbered 11, NOT 10. Tills in the field already applied a version 10 on
-    // 2026-08-17 — the Credit/AR customer columns, which live on the unmerged
-    // feature branch and never reached main. The runner skips anything at or
-    // below the highest version already recorded, so a second migration
-    // claiming 10 is silently ignored, and the app then writes a column that
-    // was never created: "table orders has no column named source", and sync
-    // stops. Numbers here are install history, not branch history, and can
-    // never be reused even if this branch has no 10 of its own.
+    // Numbered 11, and it must stay above the AR migration for ever. Tills in
+    // the field applied that 10 on 2026-08-17, before these branches met. The
+    // runner skips anything at or below the highest version already recorded,
+    // so a second migration claiming 10 is silently ignored and the app then
+    // writes a column nothing created: "table orders has no column named
+    // source", and sync stops. Numbers here are install history, not branch
+    // history, and a number spent on any device can never be reused.
     version: 11,
     run: (database) => {
       addColumnIfMissing(database, 'orders', 'source', 'TEXT')
@@ -398,7 +412,7 @@ function printViaRawTcp(host, port, buffer) {
 // barcodes, auto-cut) works exactly as it does over TCP. Delivery goes through
 // a small PowerShell helper that P/Invokes winspool.drv — no native Node
 // module, so nothing extra to rebuild or install with the app.
-const RAW_PRINT_PS1 = `param([string]$PrinterName, [string]$DataFile)
+const RAW_PRINT_PS1 = `param([string]$PrinterName, [string]$DataFile, [string]$DocName = 'Magnify Receipt')
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @"
 using System;
@@ -425,14 +439,14 @@ public class MagnifyRawPrint {
   public static extern bool EndPagePrinter(IntPtr hPrinter);
   [DllImport("winspool.Drv", SetLastError=true)]
   public static extern bool WritePrinter(IntPtr hPrinter, byte[] pBytes, int dwCount, out int dwWritten);
-  public static void Send(string printer, string file) {
+  public static void Send(string printer, string file, string docName) {
     byte[] bytes = File.ReadAllBytes(file);
     IntPtr h;
     if (!OpenPrinter(printer, out h, IntPtr.Zero))
       throw new Exception("Printer not found: " + printer);
     try {
       DOCINFOA di = new DOCINFOA();
-      di.pDocName = "Magnify Bill";
+      di.pDocName = docName;
       di.pDataType = "RAW";
       if (!StartDocPrinter(h, 1, di)) throw new Exception("StartDocPrinter failed (" + Marshal.GetLastWin32Error() + ")");
       try {
@@ -446,10 +460,10 @@ public class MagnifyRawPrint {
   }
 }
 "@
-[MagnifyRawPrint]::Send($PrinterName, $DataFile)
+[MagnifyRawPrint]::Send($PrinterName, $DataFile, $DocName)
 `
 
-function printRawToWindowsQueue(printerName, buffer) {
+function printRawToWindowsQueue(printerName, buffer, docName = 'Magnify Bill') {
   return new Promise((resolve, reject) => {
     const os = require('os')
     const { execFile } = require('child_process')
@@ -470,7 +484,8 @@ function printRawToWindowsQueue(printerName, buffer) {
     execFile(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-       '-File', scriptPath, '-PrinterName', printerName, '-DataFile', dataPath],
+       '-File', scriptPath, '-PrinterName', printerName, '-DataFile', dataPath,
+       '-DocName', docName],
       { timeout: 20000, windowsHide: true },
       (err, _stdout, stderr) => {
         cleanup()
@@ -485,22 +500,30 @@ function printRawToWindowsQueue(printerName, buffer) {
   })
 }
 
-// Build a full ESC/POS byte sequence for a customer bill.
-// data: { topText, bottomText, server, station, orderNo, orderType,
-//         tableName, dt, items[{qty,name,unitPrice,notes}], totalAmount }
-function buildBillEscPos(data) {
-  // Column count comes from the device's Printers-tab setting (falls back to
-  // 32, the classic 58mm width) so alignment matches the physical printer.
+// Bill layout lives in its own module so the exact paper output can be
+// rendered and checked with plain node — the doubled-character column math
+// and the ASCII folding both had to be verified against real 58mm output.
+const { buildBillEscPos, buildWidthRuler } = require('./billEscpos')
+// Build a full ESC/POS byte sequence for one kitchen/bar ticket.
+//
+// Why this exists: tickets used to print only through Electron's GDI path
+// (webContents.print of an HTML slip). A thermal printer installed on the
+// "Generic / Text Only" driver — the same setup the bill already needed raw
+// ESC/POS for — cannot render a GDI page at all: it feeds the paper and prints
+// nothing. That is the blank-ticket bug. Kitchen tickets now take the identical
+// raw path the bill takes, so the characters reach the printer directly.
+//
+// data: { branchName, station ('KITCHEN'|'BAR'), copy ('station'|'waiter'),
+//         server, orderType, tableName, dateStr, timeStr, ticketNo, orderNo,
+//         items[{qty,name,note}], columns }
+function buildTicketEscPos(data) {
   const cfgCols = Number(data.columns)
   const LINE = Number.isFinite(cfgCols) && cfgCols >= 24 && cfgCols <= 64 ? cfgCols : 32
   const ESC = 0x1B, GS = 0x1D
   const parts = []
   const b = bytes => Buffer.from(bytes)
   const t = s => Buffer.from(s + '\n', 'utf8')
-  const fmtNum = n => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 
-  // Left + right on one line when they fit; otherwise wrap the left text at
-  // `width` and right-align the value on the last line — names never truncate.
   const cols = (left, right, width = LINE) => {
     if (!right) return [left]
     if (left.length + 1 + right.length <= width) {
@@ -518,110 +541,61 @@ function buildBillEscPos(data) {
     return lines
   }
   const rule = '-'.repeat(LINE)
-  const parse = line => ({
-    text: line.replace(/\*\*(.+?)\*\*/g, '$1').replace(/_(.+?)_/g, '$1').trim(),
-    hasBold: /\*\*/.test(line),
-  })
   const bold = on => b([ESC, 0x45, on ? 0x01 : 0x00])
-  // GS ! n — high nibble width multiplier, low nibble height multiplier.
   const size = n => b([GS, 0x21, n])
+  const isWaiter = data.copy === 'waiter'
+  const station = data.station === 'BAR' ? 'BAR' : 'KITCHEN'
 
-  // Init + center align. Centered sections rely on ESC a 1 (printer-side
-  // centering) rather than space padding, so it stays correct when the
-  // character size doubles.
-  parts.push(b([ESC, 0x40]))
-  parts.push(b([ESC, 0x61, 0x01]))
+  parts.push(b([ESC, 0x40]))          // init
+  parts.push(b([ESC, 0x61, 0x01]))    // centre
 
-  // Top template text (supports **bold** markers). The first non-empty line —
-  // the restaurant name — prints double width + height like a till header.
-  let headerDone = false
-  for (const line of (data.topText || 'RECEIPT').split('\n')) {
-    const { text, hasBold } = parse(line)
-    if (!headerDone && text) {
-      headerDone = true
-      parts.push(size(0x11), bold(true))
-      parts.push(t(text))
-      parts.push(size(0x00), bold(false))
-      continue
-    }
-    if (hasBold) parts.push(bold(true))
-    parts.push(t(text || ''))
-    if (hasBold) parts.push(bold(false))
-  }
+  // Station name, double size — a cook reads this from across the pass.
+  parts.push(size(0x11), bold(true))
+  parts.push(t(String(data.branchName || 'KITCHEN').toUpperCase()))
+  parts.push(size(0x00))
+  parts.push(t(isWaiter ? '--- WAITER CHECKLIST ---' : `--- ${station} COPY ---`))
+  parts.push(bold(false))
 
-  // Left-align body
+  // Body, left aligned
   parts.push(b([ESC, 0x61, 0x00]))
   parts.push(t(rule))
-  for (const s of cols(`Server: ${data.server || ''}`, data.station ? `Station: ${data.station}` : '')) parts.push(t(s))
-  parts.push(t(rule))
-  for (const s of cols(`Order #: ${data.orderNo || ''}`, data.orderType || '')) parts.push(t(s))
-  if (data.tableName) parts.push(t(`Table: ${data.tableName}`))
-  parts.push(t(rule))
-
-  // Items
-  for (const item of (data.items || [])) {
-    for (const s of cols(`${item.qty} ${(item.name || '').toUpperCase()}`, fmtNum(item.unitPrice * item.qty))) parts.push(t(s))
-    if (item.notes) parts.push(t(`  > ${item.notes}`))
-  }
-  parts.push(t(rule))
-
-  // Total — double width + height bold. Doubled characters take two columns,
-  // so the line is laid out at half the configured width.
-  parts.push(bold(true), size(0x11))
-  for (const s of cols('TOTAL:', `Rwf ${fmtNum(data.totalAmount || 0)}`, Math.floor(LINE / 2))) parts.push(t(s))
-  parts.push(size(0x00), bold(false))
-  parts.push(t(rule))
-
-  // Center for order ref + datetime — the order ref doubles in height so the
-  // ticket number reads at a glance.
+  parts.push(bold(true))
+  for (const s of cols(`Server: ${data.server || '-'}`, station)) parts.push(t(s))
+  parts.push(bold(false))
   parts.push(b([ESC, 0x61, 0x01]))
-  if (data.orderNo) {
+  parts.push(bold(true), t(data.orderType || 'Dine In'), bold(false))
+  parts.push(b([ESC, 0x61, 0x00]))
+  for (const s of cols(data.dateStr || '', data.timeStr || '')) parts.push(t(s))
+  parts.push(t(rule))
+  if (data.tableName) {
+    // Table doubles in height: it is the one field that decides where the food goes.
     parts.push(bold(true), size(0x01))
-    parts.push(t(`>> ${data.orderNo} <<`))
+    parts.push(t(`Table: ${data.tableName}`))
     parts.push(size(0x00), bold(false))
-  }
-  if (data.dt) parts.push(t(data.dt))
-
-  // Bottom template text (supports **bold** markers)
-  const bottomRaw = (data.bottomText && data.bottomText.trim())
-    ? data.bottomText
-    : 'Thank you for dining with us!'
-  for (const line of bottomRaw.split('\n')) {
-    const { text, hasBold } = parse(line)
-    if (hasBold) parts.push(bold(true))
-    parts.push(t(text || ''))
-    if (hasBold) parts.push(bold(false))
-  }
-  parts.push(t('Powered by Magnify'))
-
-  // Footer 2 — prints below "Powered by Magnify"; usually blank lines the
-  // manager adds in the bill editor to push the footer past the cutter.
-  if (data.footer2Text) {
-    for (const line of String(data.footer2Text).split('\n')) {
-      const { text, hasBold } = parse(line)
-      if (hasBold) parts.push(bold(true))
-      parts.push(t(text || ''))
-      if (hasBold) parts.push(bold(false))
-    }
+    parts.push(t(rule))
   }
 
-  // Barcode — CODE39 of the order number so bills scan at the till. CODE39
-  // only covers 0-9 A-Z space $ % + - . / — anything else is stripped, and
-  // the barcode is skipped entirely when nothing scannable remains.
-  const bcData = String(data.orderNo || '').toUpperCase().replace(/[^0-9A-Z\-\. \$\/\+\%]/g, '')
-  if (bcData && data.barcode !== false) {
-    parts.push(b([GS, 0x48, 0x00]))               // no HRI text under the bars
-    parts.push(b([GS, 0x68, 70]))                 // height: 70 dots
-    parts.push(b([GS, 0x77, 0x02]))               // module width 2
-    parts.push(b([GS, 0x6B, 69, bcData.length]))  // GS k CODE39, length-prefixed
-    parts.push(Buffer.from(bcData, 'ascii'))
-    parts.push(b([0x0A]))
+  // Items — double height so they read at a glance on a busy pass. Doubled
+  // characters occupy two columns, hence the halved wrap width.
+  for (const item of (data.items || [])) {
+    parts.push(bold(true), size(0x01))
+    const label = `${isWaiter ? '[ ] ' : ''}${item.qty}x ${String(item.name || '').toUpperCase()}`
+    for (const s of cols(label, '', Math.floor(LINE / 2))) parts.push(t(s))
+    parts.push(size(0x00), bold(false))
+    if (item.note) parts.push(t(`  > ${item.note}`))
   }
+  parts.push(t(rule))
 
-  // Feed + full cut.
-  // 6 line feeds — was 4, but that left the last printed line (this footer) sitting right at the
-  // cutter blade on some printers, so it got cut off and reappeared at the top of the next bill
-  // instead of the bottom of this one. Extra feed gives it clearance to fully pass the blade first.
+  // Ticket + order reference, centred.
+  parts.push(b([ESC, 0x61, 0x01]))
+  parts.push(t('*'.repeat(LINE)))
+  parts.push(bold(true), size(0x01))
+  parts.push(t(`Ticket #: ${data.ticketNo ?? ''}`))
+  parts.push(size(0x00), bold(false))
+  if (data.orderNo) parts.push(t(`Order #: ${data.orderNo}`))
+  parts.push(t('*'.repeat(LINE)))
+
+  // Feed past the tear bar, then full cut — same clearance the bill uses.
   parts.push(b([ESC, 0x61, 0x00]))
   parts.push(b([0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A]))
   parts.push(b([GS, 0x56, 0x00]))
@@ -815,12 +789,30 @@ function registerIpcHandlers() {
   // data: { ip?, port?, printerName?, topText, bottomText, server, station,
   //         orderNo, orderType, tableName, dt,
   //         items[{qty,name,unitPrice,notes}], totalAmount }
+  // widthTest: true prints the column ruler instead — same transport, so staff
+  // can find the printer's real character width from the Printers tab.
   ipcMain.handle('print:bill-raw', async (_event, data) => {
     try {
       const { ip, port, printerName, ...billData } = data || {}
-      const buffer = buildBillEscPos(billData)
+      const buffer = billData.widthTest ? buildWidthRuler() : buildBillEscPos(billData)
       if (ip) await printViaRawTcp(ip, parseInt(port) || 9100, buffer)
-      else if (printerName) await printRawToWindowsQueue(printerName, buffer)
+      else if (printerName) await printRawToWindowsQueue(printerName, buffer, 'Magnify Bill')
+      else return { ok: false, error: 'No printer configured' }
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: String(err?.message || err) }
+    }
+  })
+
+  // print:ticket-raw — same raw delivery as the bill, for one kitchen/bar
+  // ticket. Required on "Generic / Text Only" thermal printers, which print a
+  // blank slip when handed a GDI-rendered page.
+  ipcMain.handle('print:ticket-raw', async (_event, data) => {
+    try {
+      const { ip, port, printerName, ...ticketData } = data || {}
+      const buffer = buildTicketEscPos(ticketData)
+      if (ip) await printViaRawTcp(ip, parseInt(port) || 9100, buffer)
+      else if (printerName) await printRawToWindowsQueue(printerName, buffer, 'Magnify Ticket')
       else return { ok: false, error: 'No printer configured' }
       return { ok: true }
     } catch (err) {

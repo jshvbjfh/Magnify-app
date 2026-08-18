@@ -79,6 +79,10 @@ interface MobileOrder {
   paid_at: string | null
   canceled_at: string | null
   cancel_reason: string | null
+  // Credit (A/R) settlement: who owes for this tab. Both optional — only a
+  // Credit payment carries them, and the phone is optional even then.
+  ar_customer_name?: string | null
+  ar_customer_phone?: string | null
   // Service session this order was rung up in, and the business day it belongs
   // to (from that shift). Both optional — orders taken with no open shift, and
   // orders from app versions before shifts existed, simply carry neither.
@@ -390,6 +394,10 @@ export async function POST(req: Request) {
               sourceDeviceId: mobileSourceDeviceId,
               orderId: order.id,
               paymentMethod: order.payment_method,
+              // Only meaningful on a Credit settlement; the finalizer ignores
+              // blanks, so a normal cash order passes nulls harmlessly.
+              arCustomerName: order.ar_customer_name?.trim() || null,
+              arCustomerPhone: order.ar_customer_phone?.trim() || null,
               paidAt: normalizedPaidAt ?? undefined,
             })
             return

@@ -1,0 +1,88 @@
+{
+  "note": "Prep shells created for Sirocco Y Sol LUNCH MENU. Delete these ids to undo.",
+  "createdAt": "2026-08-15T18:33:04.822Z",
+  "restaurantId": "cmssn2wif000210rcxlzs1jny",
+  "branchId": "cmssu9q830002hqeqk4tw9msr",
+  "items": [
+    {
+      "id": "cmsupr9xn0001f59iqke6xzdx",
+      "name": "Classic hummus"
+    },
+    {
+      "id": "cmsupratv0003f59i9j4ymxav",
+      "name": "Tzatziki"
+    },
+    {
+      "id": "cmsuprbnh0005f59imvlsemy7",
+      "name": "Chicken souvlaki"
+    },
+    {
+      "id": "cmsuprchs0007f59i5royij4n",
+      "name": "Grilled Mediterranean vegetables"
+    },
+    {
+      "id": "cmsuprdas0009f59iweacnxzx",
+      "name": "Moroccan couscous"
+    },
+    {
+      "id": "cmsupre3x000bf59iwf4upeah",
+      "name": "Harissa yogurt"
+    },
+    {
+      "id": "cmsuprewv000df59ija5stzut",
+      "name": "Falafel mix"
+    },
+    {
+      "id": "cmsuprfpc000ff59izzstrmws",
+      "name": "Saffron-style rice"
+    },
+    {
+      "id": "cmsuprgil000hf59ieqkww3hn",
+      "name": "Quick pickled red onion"
+    },
+    {
+      "id": "cmsuprhd2000jf59idgij3koi",
+      "name": "Lemon-oregano dressing"
+    },
+    {
+      "id": "cmsupri5i000lf59iez80uciy",
+      "name": "Moroccan lamb kefta"
+    },
+    {
+      "id": "cmsuprixy000nf59igcy44wo7",
+      "name": "Tahini sauce"
+    },
+    {
+      "id": "cmsuprjw2000pf59ip9g3weau",
+      "name": "Spanish bravas sauce"
+    },
+    {
+      "id": "cmsuprkoj000rf59imhey1bbg",
+      "name": "Garlic aioli"
+    },
+    {
+      "id": "cmsuprlem000tf59i441lrrk6",
+      "name": "Moroccan carrot salad base"
+    },
+    {
+      "id": "cmsuprm9f000vf59i5oo2nqed",
+      "name": "Garlic yogurt sauce"
+    },
+    {
+      "id": "cmsuprn1v000xf59ibsehzeh4",
+      "name": "Spanish paprika chicken"
+    },
+    {
+      "id": "cmsuprnud000zf59i4gacr2ro",
+      "name": "Lemon herb sauce"
+    },
+    {
+      "id": "cmsupron70011f59ixo5c4tzm",
+      "name": "Basil herb sauce"
+    },
+    {
+      "id": "cmsuprpe70013f59ip8o0rujo",
+      "name": "Garlic paste"
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 
 import { recordJournalEntry } from '@/lib/accounting'
+import { isHotelBuffetLine } from '@/lib/hotelBuffet'
 import { consumeIngredientStock, getRestaurantFifoEnabled, getRestaurantSharedStock, InsufficientFifoStockError, InsufficientInventoryStockError } from '@/lib/inventoryConsumption'
 import { consumePrepAwareIngredient } from '@/lib/mepProduction'
 import { enqueueSyncChange } from '@/lib/syncOutbox'
@@ -127,7 +128,14 @@ export async function recordDishSalesForPaidOrder(
         quantitySold,
         saleDate: params.saleDate,
         businessDate: params.businessDate ?? null,
-        paymentMethod: params.paymentMethod || 'Cash',
+        // The hotel buffet is owed by the hotel, not tendered at the table, so
+        // its sale row carries 'Credit' whatever the guest paid their add-ons
+        // with — otherwise sales-by-tender reports would count the receivable
+        // as cash in the drawer. Matches the journal split in
+        // finalizeRestaurantOrderPayment.
+        paymentMethod: isHotelBuffetLine(params.restaurantId, item.dishName ?? dish.name, dish.category)
+          ? 'Credit'
+          : (params.paymentMethod || 'Cash'),
         totalSaleAmount,
         calculatedFoodCost: 0,
       },

@@ -3,7 +3,7 @@ import { Printer, RefreshCw, CheckCircle2 } from 'lucide-react'
 import { getConfig, setConfig } from '../services/db'
 import {
   listPrinters, getPrinterMap, setPrinterMap, getBillPrinter, setBillPrinter, testPrint,
-  getBillEscposMode, setBillEscposMode, printBillRaw, isVirtualPrinter,
+  getBillEscposMode, setBillEscposMode, printBillRaw, printTicketRaw, isVirtualPrinter,
   type PrinterInfo, type PrinterMap,
 } from '../services/printing'
 import type { BranchInfo } from '../services/sync'
@@ -88,15 +88,50 @@ export default function PrinterSettings() {
     setTimeout(() => setTestMsg(null), 6000)
   }
 
+  // Prints a ruler of candidate widths. Nothing in software can measure the
+  // paper, and a bill laid out wider than the printer wraps every rule and
+  // splits the total across two lines — so staff read the width off the paper.
+  const runWidthTest = async () => {
+    setTestMsg(null)
+    const target = bill || printers.find(p => p.isDefault && !isVirtualPrinter(p.name))?.name
+    if (!target) { setTestMsg('Select a main printer first.'); return }
+    try {
+      const result = await printBillRaw({ printerName: target, widthTest: true })
+      setTestMsg(result.ok ? 'Width ruler sent — set the width it shows.' : `Width test failed: ${result.error ?? 'unknown error'}`)
+    } catch (err) {
+      setTestMsg(`Width test failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+    }
+    setTimeout(() => setTestMsg(null), 6000)
+  }
+
+  // Test a station printer the way tickets will actually reach it. With thermal
+  // styling on, the HTML test slip would come out blank on a Generic / Text Only
+  // printer while real tickets print fine — a test that lies about the setup.
   const runTest = async (deviceName: string, label: string) => {
     setTestMsg(null)
     try {
-      await testPrint(deviceName, label)
-      setTestMsg(`Test slip sent to ${label}`)
+      if (escposOn) {
+        const target = deviceName || bill || printers.find(p => p.isDefault && !isVirtualPrinter(p.name))?.name
+        if (!target) { setTestMsg('Select a main printer first.'); return }
+        const result = await printTicketRaw({
+          printerName: target,
+          branchName: label, station: 'KITCHEN', copy: 'station',
+          server: 'Test', orderType: 'Dine In', tableName: 'T1',
+          dateStr: new Date().toLocaleDateString(),
+          timeStr: new Date().toLocaleTimeString(),
+          ticketNo: 1, orderNo: 'TEST-1234',
+          items: [{ qty: 2, name: 'Sample Dish', note: null }],
+          columns: parseInt(billCols) || 42,
+        })
+        setTestMsg(result.ok ? `Test ticket sent to ${label}` : `Test failed: ${result.error ?? 'unknown error'}`)
+      } else {
+        await testPrint(deviceName, label)
+        setTestMsg(`Test slip sent to ${label}`)
+      }
     } catch {
       setTestMsg('Test failed — check the printer is on and connected.')
     }
-    setTimeout(() => setTestMsg(null), 4000)
+    setTimeout(() => setTestMsg(null), 5000)
   }
 
   function PrinterSelect({ value, onChange, emptyLabel }: { value: string; onChange: (v: string) => void; emptyLabel: string }) {
@@ -160,8 +195,8 @@ export default function PrinterSettings() {
           bold total, barcode. Off = plain-text bills (works on any printer). */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center justify-between gap-3 flex-wrap">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-gray-900">Thermal bill styling</p>
-          <p className="text-xs text-gray-500">Big header, bold total and a barcode on bills. Needs a thermal receipt printer (e.g. Generic / Text Only). Turn off if bills print strange symbols.</p>
+          <p className="text-sm font-semibold text-gray-900">Thermal styling</p>
+          <p className="text-xs text-gray-500">Bills and kitchen tickets print as thermal text — big header, bold total, barcode. Required on a Generic / Text Only printer, which prints blank slips without it. Turn off if slips print strange symbols.</p>
         </div>
         <div className="flex items-center gap-2">
           {escposOn && (
@@ -179,15 +214,21 @@ export default function PrinterSettings() {
       <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center justify-between gap-3 flex-wrap">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-gray-900">Bill width</p>
-          <p className="text-xs text-gray-500">Characters per line on the bill printer. 80mm paper is usually 42 or 48; 58mm paper is 32. If bill text sits too far left or lines wrap, change this.</p>
+          <p className="text-xs text-gray-500">Characters per line on the bill printer. 58mm paper is 32; 80mm is 42 or 48. Set too wide and every line wraps — the total splits across two lines and reads like the wrong amount. Print the ruler if unsure.</p>
         </div>
-        <select value={billCols} onChange={e => void assignBillCols(e.target.value)}
-          className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-white text-gray-700">
-          <option value="32">32 — 58mm paper</option>
-          <option value="40">40 — 80mm (narrow font)</option>
-          <option value="42">42 — 80mm (standard)</option>
-          <option value="48">48 — 80mm (wide)</option>
-        </select>
+        <div className="flex items-center gap-2">
+          {escposOn && (
+            <button onClick={() => void runWidthTest()}
+              className="text-xs font-semibold border border-gray-300 rounded-lg px-3 py-1.5 hover:bg-gray-50">Print width ruler</button>
+          )}
+          <select value={billCols} onChange={e => void assignBillCols(e.target.value)}
+            className="text-sm border border-gray-300 rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-orange-400 bg-white text-gray-700">
+            <option value="32">32 — 58mm paper</option>
+            <option value="40">40 — 80mm (narrow font)</option>
+            <option value="42">42 — 80mm (standard)</option>
+            <option value="48">48 — 80mm (wide)</option>
+          </select>
+        </div>
       </div>
 
       {/* Per-station printers — optional, only for separate kitchen/bar printers */}

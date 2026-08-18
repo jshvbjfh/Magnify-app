@@ -21,7 +21,10 @@ type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: numb
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const PAY_METHODS = ['Cash', 'MoMo', 'Card', 'Bank Transfer'] as const
+// 'Credit' settles the tab on account rather than at the till: the server books
+// it to Accounts Receivable (1200) instead of cash, and it needs the customer's
+// name so the debt can be chased and collected later.
+const PAY_METHODS = ['Cash', 'MoMo', 'Card', 'Bank Transfer', 'Credit'] as const
 
 const COLOR_POOL = [
   ['bg-rose-400',    'text-white', 'bg-rose-700'],
@@ -424,6 +427,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
   const [confirmPrompt,     setConfirmPrompt]     = useState(false)
   const [payingOrderId,     setPayingOrderId]     = useState<string | null>(null)
   const [payMethod,         setPayMethod]         = useState('Cash')
+  // Credit sales only: who owes for the tab. Name is required, phone optional.
+  const [arCustomerName,    setArCustomerName]    = useState('')
+  const [arCustomerPhone,   setArCustomerPhone]   = useState('')
   const [payingSaving,      setPayingSaving]      = useState(false)
   const [cancelingOrderId,  setCancelingOrderId]  = useState<string | null>(null)
 
@@ -1142,6 +1148,9 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         paid_at:            null,
         canceled_at:        null,
         cancel_reason:      null,
+        // Set only if the order is later settled on credit.
+        ar_customer_name:   null,
+        ar_customer_phone:  null,
         shift_id:           activeShift?.id ?? null,
         business_date:      activeShift?.business_date ?? null,
         // Which app took it. The till reads this to decide whether the kitchen
@@ -1245,10 +1254,16 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
     paymentLockRef.current = true
     setPayingSaving(true)
     try {
+      const onCredit = payMethod === 'Credit'
       await updateOrder(order.id, {
         status:         'PAID',
         payment_method: payMethod,
         paid_at:        new Date().toISOString(),
+        // Stored on the order so the debt survives offline and syncs with it.
+        // Cleared on any non-credit tender so a mistyped name can't cling to a
+        // tab that was ultimately settled in cash.
+        ar_customer_name:  onCredit ? arCustomerName.trim() : null,
+        ar_customer_phone: onCredit ? (arCustomerPhone.trim() || null) : null,
       })
       // The bill is printed on demand via the "Print Bill" button when the
       // guest asks for it. Confirming payment must NOT re-print it — that
@@ -1266,6 +1281,8 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       })
       setPayingOrderId(null)
       setPayMethod('Cash')
+      setArCustomerName('')
+      setArCustomerPhone('')
     } catch {}
     finally {
       paymentLockRef.current = false
@@ -1370,10 +1387,13 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
             <label className="text-xs font-semibold text-gray-600 mb-2 block">Payment Method</label>
             <div className="grid grid-cols-2 gap-2">
               {PAY_METHODS.map(m => (
-                <button key={m} type="button" onClick={() => setPayMethod(m)}
+                <button key={m} type="button"
+                  onClick={() => { setPayMethod(m); if (m !== 'Credit') { setArCustomerName(''); setArCustomerPhone('') } }}
                   className={`py-2.5 rounded-lg text-sm font-medium border transition-all ${
                     payMethod === m
-                      ? 'bg-green-500 text-white border-green-500'
+                      ? m === 'Credit'
+                        ? 'bg-amber-500 text-white border-amber-500'
+                        : 'bg-green-500 text-white border-green-500'
                       : 'bg-white text-gray-700 border-gray-300 hover:border-green-400'
                   }`}>
                   {m}
@@ -1381,12 +1401,48 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
               ))}
             </div>
           </div>
+
+          {/* Credit takes no money now, so the tab is only collectable if we know
+              whose it is — the name is required. Amber throughout, to keep it
+              visually distinct from the tenders that actually put cash in the till. */}
+          {payMethod === 'Credit' && (
+            <div>
+              <label className="text-xs font-semibold text-gray-600 mb-1.5 block">
+                Customer name <span className="text-red-500">*</span>
+              </label>
+              <input
+                value={arCustomerName}
+                onChange={e => setArCustomerName(e.target.value)}
+                placeholder="Who is this tab for?"
+                className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-amber-300 ${
+                  arCustomerName.trim() ? 'border-gray-300' : 'border-red-300'
+                }`}
+              />
+              <label className="text-xs font-semibold text-gray-600 mb-1.5 mt-3 block">
+                Phone <span className="font-normal text-gray-400">(optional)</span>
+              </label>
+              <input
+                value={arCustomerPhone}
+                onChange={e => setArCustomerPhone(e.target.value)}
+                inputMode="tel"
+                placeholder="e.g. 0788123456"
+                className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+              />
+              <p className="mt-1 text-xs text-amber-700">
+                No money is taken now — this is recorded as money owed, and collected later.
+              </p>
+            </div>
+          )}
+
           <div className="flex gap-2 pt-1">
             <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2.5 rounded-xl hover:bg-gray-50">
               Cancel
             </button>
-            <button onClick={() => collectPayment(orderId)} disabled={payingSaving}
-              className="flex-1 bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl">
+            <button onClick={() => collectPayment(orderId)}
+              disabled={payingSaving || (payMethod === 'Credit' && !arCustomerName.trim())}
+              className={`flex-1 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl ${
+                payMethod === 'Credit' ? 'bg-amber-500 hover:bg-amber-600' : 'bg-green-500 hover:bg-green-600'
+              }`}>
               {payingSaving ? 'Processing…' : `Confirm ${payMethod}`}
             </button>
           </div>
@@ -1619,7 +1675,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         )}
 
         {payingOrderId && (
-          <PayModal orderId={payingOrderId} onClose={() => { setPayingOrderId(null); setPayMethod('Cash') }} />
+          <PayModal orderId={payingOrderId} onClose={() => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') }} />
         )}
         {cancelingOrderId && (
           <CancelModal
@@ -1993,7 +2049,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       {payingOrderId && (
         <PayModal
           orderId={payingOrderId}
-          onClose={() => { setPayingOrderId(null); setPayMethod('Cash') }}
+          onClose={() => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') }}
         />
       )}
 

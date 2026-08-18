@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 
 import { recordJournalEntry } from '@/lib/accounting'
 import { recordDishSalesForPaidOrder } from '@/lib/dishSaleRecording'
+import { isHotelBuffetLine } from '@/lib/hotelBuffet'
 import { ACTIVE_RESTAURANT_ORDER_STATUSES, calculateRestaurantOrderTotals, enqueueOrderSync, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
 
@@ -33,6 +34,7 @@ export async function finalizeRestaurantOrderPayment(
     orderId: string
     paymentMethod?: string | null
     arCustomerName?: string | null
+    arCustomerPhone?: string | null
     paidAt?: Date
   },
 ) {
@@ -94,7 +96,10 @@ export async function finalizeRestaurantOrderPayment(
       status: 'PAID',
       paymentMethod: normalizedPaymentMethod,
       paidAt,
+      // Only written when supplied, so a re-sync from a client that doesn't send
+      // them can never blank out the customer already recorded against the tab.
       ...(params.arCustomerName ? { arCustomerName: params.arCustomerName } : {}),
+      ...(params.arCustomerPhone ? { arCustomerPhone: params.arCustomerPhone } : {}),
       canceledAt: null,
       cancelReason: null,
     },
@@ -178,28 +183,65 @@ export async function finalizeRestaurantOrderPayment(
       else itemsByBranch.set(itemBranchId, [item])
     }
 
-    for (const [itemsBranchId, branchItems] of itemsByBranch) {
-      const branchAmount = calculateRestaurantOrderTotals(
-        branchItems.map((item) => ({ dishPrice: Number(item.dishPrice), qty: Number(item.qty) }))
-      ).totalAmount
+    // The hotel buffet is settled by the hotel, not by the guest at the table,
+    // so its revenue must not land in the till alongside the cash. Splitting the
+    // station's lines by settlement books the buffet as 'Credit' — which
+    // resolveSettlementAccountSpec turns into Accounts Receivable (1200) — while
+    // whatever the guest actually paid for keeps the order's real tender. An
+    // order of buffet plus add-ons therefore books two entries per station:
+    // the receivable, and the add-ons at Cash/MoMo.
+    //
+    // The category is only a guard confirming a name match really is the buffet
+    // dish, so the lookup is skipped entirely unless a line already matches by
+    // name — which keeps the ordinary order at zero extra queries.
+    const buffetDishIds = [...new Set(
+      currentOrder.items
+        .filter((item) => isHotelBuffetLine(params.restaurantId, item.dishName))
+        .map((item) => item.dishId),
+    )]
+    const dishCategories = new Map<string, string | null>(
+      buffetDishIds.length
+        ? (await db.dish.findMany({
+            where: { id: { in: buffetDishIds } },
+            select: { id: true, category: true },
+          })).map((dish) => [dish.id, dish.category])
+        : [],
+    )
+    const settlesOnCredit = (item: { dishId: string; dishName: string }) =>
+      isHotelBuffetLine(params.restaurantId, item.dishName, dishCategories.get(item.dishId))
 
-      await recordJournalEntry(db, {
-        restaurantId: params.restaurantId,
-        branchId: itemsBranchId,
-        date: paidOrder.paidAt ?? paidAt,
-        businessDate: currentOrder.businessDate ?? null,
-        description: buildDishSaleTransactionDescription({
-          items: branchItems.map((item) => ({ dishId: item.dishId, dishName: item.dishName, qty: item.qty })),
-          tableId: currentOrder.tableId,
-          tableName: currentOrder.tableName,
-        }),
-        reference: orderRef,
-        amount: branchAmount,
-        direction: 'in',
-        accountName: 'DishSale',
-        categoryType: 'income',
-        paymentMethod: normalizedPaymentMethod,
-      })
+    for (const [itemsBranchId, branchItems] of itemsByBranch) {
+      const onCredit = branchItems.filter(settlesOnCredit)
+      const atTheTill = branchItems.filter((item) => !settlesOnCredit(item))
+
+      for (const [tender, tenderItems] of [
+        [normalizedPaymentMethod, atTheTill],
+        ['Credit', onCredit],
+      ] as const) {
+        if (!tenderItems.length) continue
+
+        const branchAmount = calculateRestaurantOrderTotals(
+          tenderItems.map((item) => ({ dishPrice: Number(item.dishPrice), qty: Number(item.qty) }))
+        ).totalAmount
+
+        await recordJournalEntry(db, {
+          restaurantId: params.restaurantId,
+          branchId: itemsBranchId,
+          date: paidOrder.paidAt ?? paidAt,
+          businessDate: currentOrder.businessDate ?? null,
+          description: buildDishSaleTransactionDescription({
+            items: tenderItems.map((item) => ({ dishId: item.dishId, dishName: item.dishName, qty: item.qty })),
+            tableId: currentOrder.tableId,
+            tableName: currentOrder.tableName,
+          }),
+          reference: orderRef,
+          amount: branchAmount,
+          direction: 'in',
+          accountName: 'DishSale',
+          categoryType: 'income',
+          paymentMethod: tender,
+        })
+      }
     }
   }
 

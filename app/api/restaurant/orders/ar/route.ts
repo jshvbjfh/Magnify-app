@@ -31,6 +31,7 @@ export async function GET() {
         totalAmount: true,
         paidAt: true,
         arCustomerName: true,
+        arCustomerPhone: true,
         arCollectedAt: true,
       },
       orderBy: { paidAt: 'asc' },

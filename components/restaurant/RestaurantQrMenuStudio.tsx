@@ -32,10 +32,19 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [previewWarning, setPreviewWarning] = useState<string | null>(null)
+
+  // The QR menu is restaurant-wide, but `menuItems` only holds the branch the
+  // manager is currently viewing. It seeds the preview so something renders
+  // immediately, then the restaurant-wide fetch below takes over as the source
+  // of truth — and must not be overwritten by it afterwards, or switching branch
+  // (or any re-render) silently shrinks the preview back to one station.
+  const [loadedRestaurantWide, setLoadedRestaurantWide] = useState(false)
 
   useEffect(() => {
+    if (loadedRestaurantWide) return
     setQrMenuItems(menuItems)
-  }, [menuItems])
+  }, [menuItems, loadedRestaurantWide])
 
   useEffect(() => {
     let cancelled = false
@@ -97,13 +106,23 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
         })
         const payload: MenuItem[] | { error?: string } | null = await response.json().catch(() => null)
 
-        if (!response.ok || !Array.isArray(payload) || cancelled) {
+        if (cancelled) return
+
+        if (!response.ok || !Array.isArray(payload)) {
+          // Falling back to the branch-scoped list means the preview shows only
+          // part of the menu. Say so — silently showing a short menu is what
+          // makes this look like dishes have gone missing.
+          setPreviewWarning('Showing this station\'s dishes only — the full restaurant menu could not be loaded. Refresh to try again.')
           return
         }
 
         setQrMenuItems(payload.filter((item) => item?.isActive !== false))
+        setLoadedRestaurantWide(true)
+        setPreviewWarning(null)
       } catch {
-        // Keep the current branch preview items as a fallback if the global QR menu fetch fails.
+        if (!cancelled) {
+          setPreviewWarning('Showing this station\'s dishes only — the full restaurant menu could not be loaded. Refresh to try again.')
+        }
       }
     }
 
@@ -112,6 +131,9 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
     return () => {
       cancelled = true
     }
+    // `menuItems` is memoised upstream, so this now re-runs only when the dish
+    // set genuinely changed (a dish added, edited or toggled) — which is exactly
+    // when the preview needs refreshing — rather than on every parent render.
   }, [menuItems, restaurantBranch?.restaurantId])
 
   async function persistQrMenuHeroImage(nextPath: string | null) {
@@ -240,6 +262,13 @@ export default function RestaurantQrMenuStudio({ menuItems }: { menuItems: MenuI
           {message ? (
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
               {message}
+            </div>
+          ) : null}
+
+          {previewWarning ? (
+            <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <p>{previewWarning}</p>
             </div>
           ) : null}
 

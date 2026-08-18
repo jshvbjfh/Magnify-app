@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Sirocco y Sol — Stock Gap Report</title>
+<style>
+  :root{
+    --emerald-50:#ecfdf5; --emerald-100:#d1fae5; --emerald-200:#a7f3d0; --emerald-300:#6ee7b7;
+    --emerald-600:#059669; --emerald-700:#047857; --emerald-800:#065f46;
+    --amber-50:#fffbeb; --amber-200:#fde68a; --amber-700:#b45309; --amber-800:#92400e;
+    --red-50:#fef2f2; --red-100:#fee2e2; --red-200:#fecaca; --red-700:#b91c1c; --red-800:#991b1b;
+    --indigo-100:#e0e7ff; --indigo-800:#3730a3;
+    --gray-50:#f9fafb; --gray-100:#f3f4f6; --gray-200:#e5e7eb; --gray-300:#d1d5db;
+    --gray-400:#9ca3af; --gray-500:#6b7280; --gray-600:#4b5563; --gray-800:#1f2937; --gray-900:#111827;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:32px 24px 64px;
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--gray-50); color:var(--gray-900); font-size:14px; line-height:1.6;
+  }
+  .wrap{max-width:1080px;margin:0 auto}
+
+  header.doc{border-bottom:2px solid var(--gray-200);padding-bottom:20px;margin-bottom:28px}
+  h1{font-size:26px;font-weight:700;margin:0;letter-spacing:-.01em}
+  .lede{color:var(--gray-600);font-size:14px;margin-top:8px;max-width:760px}
+  .meta{color:var(--gray-400);font-size:12px;margin-top:12px}
+
+  h2{font-size:17px;font-weight:700;margin:36px 0 6px;letter-spacing:-.01em}
+  h2:first-of-type{margin-top:28px}
+  .sec-note{color:var(--gray-500);font-size:13px;margin:0 0 14px;max-width:820px}
+
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:8px}
+  .tile{background:#fff;border:1px solid var(--gray-200);border-radius:10px;padding:14px 16px}
+  .tile .n{font-size:24px;font-weight:700;line-height:1.1;letter-spacing:-.02em}
+  .tile .l{font-size:11px;color:var(--gray-500);margin-top:4px;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+  .tile.bad .n{color:var(--red-700)}
+  .tile.warn .n{color:var(--amber-700)}
+  .tile.good .n{color:var(--emerald-700)}
+
+  .card{background:#fff;border:1px solid var(--gray-200);border-radius:10px;overflow:hidden;margin-bottom:8px}
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%}
+  th{padding:10px 14px;text-align:left;font-size:11px;font-weight:600;color:var(--gray-600);
+     background:var(--gray-50);border-bottom:1px solid var(--gray-200);white-space:nowrap;
+     text-transform:uppercase;letter-spacing:.04em}
+  td{padding:10px 14px;border-bottom:1px solid var(--gray-100);vertical-align:top;font-size:13px}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:var(--gray-50)}
+  td.item{font-weight:600;white-space:nowrap}
+  td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--gray-600)}
+  td.have{color:var(--amber-800)}
+  .muted{color:var(--gray-500)}
+
+  .tag{display:inline-block;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:600;white-space:nowrap}
+  .t-manual{background:var(--indigo-100);color:var(--indigo-800)}
+  .t-book{background:var(--gray-100);color:var(--gray-600)}
+  .t-both{background:var(--emerald-100);color:var(--emerald-800)}
+  .t-hi{background:var(--red-100);color:var(--red-800)}
+  .t-opt{background:var(--gray-100);color:var(--gray-500)}
+
+  .callout{border-radius:10px;padding:14px 18px;margin:14px 0;font-size:13px;border:1px solid}
+  .c-amber{background:var(--amber-50);border-color:var(--amber-200);color:var(--amber-800)}
+  .c-emerald{background:var(--emerald-50);border-color:var(--emerald-200);color:var(--emerald-800)}
+  .c-red{background:var(--red-50);border-color:var(--red-200);color:var(--red-800)}
+  .callout strong{font-weight:700}
+  .callout ul{margin:8px 0 0;padding-left:20px}
+  .callout li{margin:4px 0}
+
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+  .chip{background:#fff;border:1px solid var(--gray-200);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--gray-600)}
+
+  ol.steps{counter-reset:s;list-style:none;padding:0;margin:14px 0 0}
+  ol.steps li{counter-increment:s;position:relative;padding:12px 0 12px 44px;border-bottom:1px solid var(--gray-200)}
+  ol.steps li:last-child{border-bottom:0}
+  ol.steps li::before{
+    content:counter(s);position:absolute;left:0;top:12px;width:28px;height:28px;border-radius:50%;
+    background:var(--emerald-600);color:#fff;font-size:13px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+  }
+  ol.steps li.done::before{content:'✓';background:var(--emerald-700)}
+  ol.steps b{display:block;font-size:14px}
+  ol.steps span{color:var(--gray-500);font-size:13px}
+
+  code{background:var(--gray-100);border-radius:4px;padding:1px 5px;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--gray-200);color:var(--gray-400);font-size:12px}
+  a{color:var(--emerald-700)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <h1>Sirocco y Sol — Stock vs Menu Gap Report</h1>
+  <p class="lede">
+    What the kitchen needs to cook the menu, measured against what the account actually holds.
+    Built by diffing two recipe documents against all 97 inventory items on the live account.
+  </p>
+  <p class="meta">
+    Sources: <em>One-Portion Recipe Book</em> and <em>Opening Lunch Kitchen Manual (July 2026)</em> ·
+    Stock read 15 Aug 2026 · Companion to <code>sirocco-missing-stock.html</code>, which is the entry sheet for these gaps.
+  </p>
+</header>
+
+<div class="tiles">
+  <div class="tile"><div class="n">97</div><div class="l">Items in stock</div></div>
+  <div class="tile bad"><div class="n">28</div><div class="l">Missing entirely</div></div>
+  <div class="tile warn"><div class="n">6</div><div class="l">Wrong substitute</div></div>
+  <div class="tile good"><div class="n">20</div><div class="l">Preps created</div></div>
+  <div class="tile bad"><div class="n">0</div><div class="l">Dishes with recipes</div></div>
+</div>
+
+<h2>The headline</h2>
+<p class="sec-note">
+  The account is well stocked on proteins, vegetables, dairy and oils. Where it falls short is
+  <strong>spices, pantry staples and bread</strong> — the cheap things, which is what makes the gap awkward:
+  a 400 RWF bag of cumin is currently blocking eight dishes.
+</p>
+
+<div class="callout c-red">
+  <strong>None of the 96 dishes has a recipe attached.</strong> Only the "Falafel" add-on carries a single ingredient link.
+  Until <code>DishIngredient</code> rows exist, no sale depletes stock and no food cost is recorded — the recipes are paper only.
+  Closing the ingredient gap below is step one of fixing that.
+</div>
+
+<h2>Missing entirely — 28 items</h2>
+<p class="sec-note">
+  Nothing among the 97 items covers these. Ordered by how many menu dishes each gap blocks, so the list doubles as a buying priority.
+  Badges mark which document asked for it.
+</p>
+<div class="card"><div class="scroll">
+<table>
+  <thead><tr><th>Item</th><th class="num">Dishes</th><th>Source</th><th>Why it is needed</th></tr></thead>
+  <tbody id="missing"></tbody>
+</table>
+</div></div>
+
+<h2>Stocked, but not the right thing — 6 items</h2>
+<p class="sec-note">
+  For each of these something close already sits in stock. That makes them a judgment call rather than a straight purchase:
+  buy the real thing, or keep the substitute and have the recipe point at it instead. Both are valid — what is not valid is
+  assuming the recipe and the shelf agree when they do not.
+</p>
+<div class="card"><div class="scroll">
+<table>
+  <thead><tr><th>Menu wants</th><th class="num">Dishes</th><th>Stock actually has</th><th>Why they are not the same</th></tr></thead>
+  <tbody id="subs"></tbody>
+</table>
+</div></div>
+
+<h2>Needs a human to confirm</h2>
+<p class="sec-note">Four calls I made by reading item names. Each could move an item off the buying list.</p>
+
+<div class="callout c-amber">
+  <strong>1 · <code>BONI GROEN VERTES</code> — 3350 g, no category</strong><br/>
+  The name reads as "green vegetables" but nothing labels it. I counted <strong>lettuce</strong> as missing on that basis.
+  If this is salad leaf, three dishes stop being blocked and the row can be dropped.
+</div>
+
+<div class="callout c-amber">
+  <strong>2 · The four breads — buy or bake?</strong><br/>
+  Pita, large wrap, panini and ciabatta are all absent as items. But stock holds
+  <code>azam cake flour</code> (6 kg), <code>angel instant dry yeast</code> (900 g) and <code>Samolina</code> (2 kg).
+  If the kitchen bakes its own, these become <strong>preps</strong>, not purchases — which changes both the buying list and the costing.
+  Pita alone appears in 8 dishes, so this is the single biggest decision on the page.
+</div>
+
+<div class="callout c-amber">
+  <strong>3 · <code>Vgg chick peas</code> — 20 kg, dried or canned?</strong><br/>
+  The falafel method says explicitly: <em>do not use cooked chickpeas</em>. Hummus needs them cooked; falafel needs them dried and soaked.
+  If the 20 kg is canned, dried chickpeas must be bought separately. If it is dried, hummus needs a cooking step and no purchase is needed.
+</div>
+
+<div class="callout c-amber">
+  <strong>4 · <code>everyday classique moutard</code> — 700 g, is it Dijon?</strong><br/>
+  The lemon–oregano dressing calls for Dijon specifically. "Classique" suggests a plain table mustard, but the label will settle it.
+</div>
+
+<h2>Already covered</h2>
+<p class="sec-note">Confirmed present and adequate — no action needed on any of these.</p>
+<div class="chips" id="covered"></div>
+
+<h2>Low enough to run out</h2>
+<p class="sec-note">In stock, but not in useful quantity against the recipes that draw on them.</p>
+<div class="card"><div class="scroll">
+<table>
+  <thead><tr><th>Item</th><th class="num">On hand</th><th>Problem</th></tr></thead>
+  <tbody>
+    <tr><td class="item">boni oregano</td><td class="num">36 g</td><td>Used by grilled vegetables, souvlaki marinade, lemon–oregano dressing and Greek salad. A handful of covers.</td></tr>
+    <tr><td class="item">baking powder</td><td class="num">100 g</td><td>Falafel mix. Small per-portion draw, but there is no second bag behind it.</td></tr>
+    <tr><td class="item">chick peas</td><td class="num">820 g</td><td>Separate from the 20 kg <code>Vgg chick peas</code>. Hummus alone runs 51–115 g per portion.</td></tr>
+    <tr><td class="item">ricotta</td><td class="num">2.11 g</td><td class="have">Almost certainly a data-entry error rather than real stock — worth correcting or writing off.</td></tr>
+  </tbody>
+</table>
+</div></div>
+
+<h2>Preps — done</h2>
+<div class="callout c-emerald">
+  <strong>20 prep shells now exist on the LUNCH MENU station.</strong>
+  In Magnify a prep is stock the kitchen <em>makes</em>, not stock it buys, so none of these appear on the buying list.
+  They were created empty — <code>quantity 0</code>, no sub-recipes — because a prep's sub-recipe points at raw inventory items,
+  which have to exist first.
+  <ul>
+    <li>They sit on LUNCH MENU, not Main, because under shared stock <strong>preps stay with the kitchen that made them</strong> while raws pool restaurant-wide.</li>
+    <li>Producing one consumes its raws and creates a kitchen-made cost layer — <strong>no expense entry</strong>, since the raws were expensed when bought.</li>
+    <li>Reversible via <code>scripts/.sirocco-preps-created-2026-08-15.json</code>.</li>
+  </ul>
+</div>
+<div class="chips" id="preps"></div>
+
+<h2>Order of operations</h2>
+<p class="sec-note">The dependency runs bottom-up — each step needs the one above it to exist.</p>
+<ol class="steps">
+  <li><b>Buy and enter the raw ingredients</b><span>Use <code>sirocco-missing-stock.html</code>. Entering a new name creates the inventory item and its first stock batch together.</span></li>
+  <li class="done"><b>Create the prep shells</b><span>Done — 20 items on LUNCH MENU, 15 Aug 2026.</span></li>
+  <li><b>Wire the prep sub-recipes</b><span>Needs the raws to exist, plus the batch yields — the manual gives per-dish scaled amounts, not batch recipes.</span></li>
+  <li><b>Wire the dish recipes</b><span>Link each of the 23 lunch dishes to its preps and raws. Only then does a sale deplete stock and record food cost.</span></li>
+</ol>
+
+<footer>
+  Sirocco y Sol · stock gap analysis · generated 15 Aug 2026 · figures reflect the live account at time of reading.
+</footer>
+
+</div>
+
+<script>
+const MISSING = [
+  ['pita bread',8,'manual','Warm pita on Hummus Plate, Tzatziki Plate, Mezze Board, Sirocco Bowl, Falafel Bowl, Souvlaki Plate, Kefta Plate and Veg Mezze — 60–160 g each. See the buy-or-bake question above.'],
+  ['tahini',8,'both','Base of Classic hummus (6 dishes) and Tahini sauce (2). Nothing substitutes — <code>zima sesane</code> is whole sesame seed, not paste.'],
+  ['ground cumin',8,'both','Hummus, carrot salad base, falafel, lamb kefta, Spanish paprika chicken, tahini sauce.'],
+  ['honey',6,'both','Lemon–oregano dressing (2), harissa yogurt (3), plus Yogurt Honey &amp; Nuts and Mini Baklava.'],
+  ['ground coriander',5,'both','Falafel (3 dishes), lamb kefta (2), carrot salad.'],
+  ['basmati rice',4,'manual','Saffron-style rice on Souvlaki Plate, Spanish Chicken &amp; Rice and Fish Plate — plus the standalone Rice side. <strong>No rice of any kind is in stock.</strong>'],
+  ['fresh coriander',4,'both','Falafel mix (3 dishes) and lemon herb sauce. The herb, not the ground spice — both are missing, separately.'],
+  ['ground cinnamon',4,'both','Lamb kefta (2 dishes), Yogurt Honey &amp; Nuts, Mini Baklava.'],
+  ['harissa paste',3,'manual','Harissa yogurt on Couscous Bowl, Kefta Plate and Kefta Wrap. <code>kazuri chili sauce</code> is not harissa.'],
+  ['couscous',3,'both','Couscous Bowl (93.6 g), Kefta Plate (85.1 g), Sirocco Bowl (76.6 g). <code>Samolina</code> is the raw material, not the finished product.'],
+  ['lettuce',3,'manual','Greek Chicken Salad (110 g), Souvlaki Wrap, Falafel Wrap. Depends on what <code>BONI GROEN VERTES</code> turns out to be.'],
+  ['large pita wrap',3,'manual','Souvlaki Wrap, Falafel Wrap, Kefta Wrap — 90 g each. Bigger than plate pita, so a separate line.'],
+  ['turmeric',3,'manual','Saffron-style rice, and the turmeric/saffron infusion in Spanish paprika chicken.'],
+  ['saffron',3,'manual','Saffron-style rice, 0.02 g/portion. Marked <em>optional</em> in the manual — turmeric alone will carry the colour.'],
+  ['fresh basil',2,'both','Basil herb sauce on the Caprese Sandwich (8.1 g) and Penne Arrabbiata.'],
+  ['orange',2,'book','Zest for Yogurt Honey &amp; Nuts. Also backs the Fresh orange juice dish, which currently has no source ingredient.'],
+  ['chili powder',1,'both','Spanish bravas sauce, 0.3 g/portion. <code>fresh chilli</code> is not a dried powder.'],
+  ['capers',1,'manual','Lemon herb sauce on the Grilled Fish Plate, 2.1 g/portion.'],
+  ['panini bread',1,'manual','Mediterranean Tuna Panini, 120 g.'],
+  ['ciabatta bread',1,'manual','Caprese Chicken Sandwich, 120 g.'],
+  ['penne pasta',1,'book','Penne Arrabbiata, 100 g/portion.'],
+  ['dried chili flakes',1,'book','Penne Arrabbiata, 1–1.5 g/portion. Distinct from the chili powder above.'],
+  ['almonds',1,'book','Mini Baklava, 19 g. Walnuts are stocked; almonds are not.'],
+  ['phyllo pastry',1,'book','Mini Baklava, 63 g/portion.'],
+  ['vanilla ice cream',1,'book','Affogato — 120 g / 2 scoops.'],
+  ['coffee beans',20,'book','Affogato, plus every Hot Drinks and Iced coffee dish on the menu. <strong>Nothing coffee-related is in stock at all.</strong>'],
+  ['wooden skewers',1,'book','Greek Chicken Souvlaki, 2 per portion. Non-food, but still consumed per cover.'],
+  ['fresh dill',0,'book','Only the generic recipe book uses dill in tzatziki. The house manual uses <strong>mint</strong>, which is in stock — so this is optional.'],
+];
+
+const SUBS = [
+  ['black pepper',9,'boni poivre vert — 190 g','Green peppercorn, not black. Different pepper, different flavour. Called for by grilled vegetables, chicken souvlaki, Spanish paprika chicken, lamb kefta and lemon–oregano dressing.'],
+  ['mixed olives',5,'figalo black olive — 500 g','Plain black olives against a menu asking for a mix. Also a volume problem: 500 g covers roughly five portions of Mezze Board, Feta Salad Cup, Chicken Salad, Sirocco Bowl and Tuna Panini combined.'],
+  ['red wine vinegar',3,'boni neto balsamico — 1000 ml','Balsamic is sweeter and darker. Quick pickled red onion and bravas sauce both depend on the sharper, cleaner acid.'],
+  ['dried chickpeas',3,'Vgg chick peas — 20 kg','Falafel must use dried and soaked, never cooked. Whether this is a real gap depends on what the 20 kg actually is — see the confirmation list above.'],
+  ['smoked paprika',2,'paprika — 400 g','Plain paprika only. Bravas sauce wants smoked on top of the raw dusting, and Spanish paprika chicken calls for sweet <em>and</em> smoked as separate ingredients.'],
+  ['dijon mustard',2,'everyday classique moutard — 700 g','Lemon–oregano dressing specifies Dijon. Possibly already fine — the label will settle it.'],
+];
+
+const COVERED = ['chickpeas','lemon','garlic','extra-virgin olive oil ×3','iodized salt','greek yogurt','cucumber','potato 30 kg','tomato passata','tomato','white onion','red onion','feta','carrot','dried oregano','parsley','mint','chicken breast','lamb mince','butter','raisins','bouillon stock','baking powder','cake flour','sunflower frying oil','sugar','walnuts','zucchini','eggplant','bell peppers ×3','mayonnaise','sesame seeds','grana padano','tuna','mozzarella','tilapia &amp; capitaine fillet'];
+
+const PREPS = ['Classic hummus','Tzatziki','Chicken souvlaki','Grilled Mediterranean vegetables','Moroccan couscous','Harissa yogurt','Falafel mix','Saffron-style rice','Quick pickled red onion','Lemon-oregano dressing','Moroccan lamb kefta','Tahini sauce','Spanish bravas sauce','Garlic aioli','Moroccan carrot salad base','Garlic yogurt sauce','Spanish paprika chicken','Lemon herb sauce','Basil herb sauce','Garlic paste'];
+
+const SRC = { manual:['t-manual','kitchen manual'], book:['t-book','recipe book'], both:['t-both','both docs'] };
+
+document.getElementById('missing').innerHTML = MISSING.map(([n,h,s,w]) => {
+  const [cls,label] = SRC[s];
+  const hits = h === 0
+    ? '<span class="tag t-opt">optional</span>'
+    : (h >= 4 ? `<span class="tag t-hi">${h}</span>` : h);
+  return `<tr><td class="item">${n}</td><td class="num">${hits}</td>` +
+         `<td><span class="tag ${cls}">${label}</span></td><td class="muted">${w}</td></tr>`;
+}).join('');
+
+document.getElementById('subs').innerHTML = SUBS.map(([n,h,have,w]) =>
+  `<tr><td class="item">${n}</td><td class="num">${h}</td>` +
+  `<td class="have">${have}</td><td class="muted">${w}</td></tr>`
+).join('');
+
+document.getElementById('covered').innerHTML = COVERED.map(c => `<span class="chip">${c}</span>`).join('');
+document.getElementById('preps').innerHTML = PREPS.map(p => `<span class="chip">${p}</span>`).join('');
+</script>
+</body>
+</html>

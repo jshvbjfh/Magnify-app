@@ -103,7 +103,7 @@ describe('Android schema migrations', () => {
       .all()
       .map((r) => (r as { name: string }).name)
 
-    // Through migration 8 — the tables the desktop gained that Android lacked.
+    // Through migration 10 — the tables the desktop gained that Android lacked.
     expect(names).toEqual(expect.arrayContaining([
       'dishes', 'restaurant_tables', 'orders', 'order_items', 'session',
       'app_logs', 'cancellation_approvers', 'order_code_holders',
@@ -113,9 +113,11 @@ describe('Android schema migrations', () => {
     const applied = fake.db
       .prepare('SELECT MAX(version) AS v FROM schema_migrations')
       .get() as { v: number }
-    // 10, not 9: the desktop already spent 9 on orders.guest_count, which
-    // Android has never had, so this migration took the next free number in
-    // both apps rather than stacking a second meaning onto a diverged one.
+    // 9 is the Credit/AR columns, 10 the order origin. The numbers differ from
+    // the desktop's for the same migrations, because that app spent 9 on
+    // guest_count, which Android has never had. What must hold is that a number
+    // recorded on a device is never reused — reusing one means the migration
+    // silently never runs.
     expect(applied.v).toBe(10)
 
     // Migration 10 — order origin, and whether this device has printed its
@@ -133,7 +135,11 @@ describe('Android schema migrations', () => {
     const cols = (t: string) =>
       fake.db.prepare(`PRAGMA table_info(${t})`).all().map((c) => (c as { name: string }).name)
 
-    expect(cols('orders')).toEqual(expect.arrayContaining(['shift_id', 'business_date']))
+    // ar_customer_* ride on the order through push; without them a credit sale
+    // syncs with no idea who owes the money.
+    expect(cols('orders')).toEqual(expect.arrayContaining([
+      'shift_id', 'business_date', 'ar_customer_name', 'ar_customer_phone',
+    ]))
     expect(cols('order_items')).toEqual(expect.arrayContaining(['notes', 'branch_id']))
   })
 
