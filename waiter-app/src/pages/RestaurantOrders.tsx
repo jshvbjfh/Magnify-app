@@ -419,6 +419,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
   const [showCodeModal,    setShowCodeModal]    = useState(false)
   // When set, the order-code modal confirms this incoming (guest QR) order instead of submitting a new cart.
   const [incomingConfirmId, setIncomingConfirmId] = useState<string | null>(null)
+  // Confirming sends the order to the kitchen and there is no undo from the cart,
+  // so the tablet asks first. A tap on a crowded screen otherwise fires food.
+  const [confirmPrompt,     setConfirmPrompt]     = useState(false)
   const [payingOrderId,     setPayingOrderId]     = useState<string | null>(null)
   const [payMethod,         setPayMethod]         = useState('Cash')
   const [payingSaving,      setPayingSaving]      = useState(false)
@@ -1927,9 +1930,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
               onClick={() => {
                 setSubmitError(null)
                 if (editingOrder) { void appendToOrder(); return }
-                // Waiter identity already established on the opening page.
-                if (waiterName) { void confirmOrder(waiterName); return }
-                setShowCodeModal(true)
+                setConfirmPrompt(true)
               }}
               disabled={confirmingOrder}
               className={`w-full disabled:cursor-not-allowed disabled:opacity-60 text-white font-semibold py-3 rounded-2xl text-base transition-colors shadow-sm ${
@@ -1946,6 +1947,40 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
           </div>
         )}
       </div>
+
+      {/* Are you sure? — tablet only. The desktop till keeps its one-tap confirm:
+          it is a fixed station with a mouse, not a screen carried through service. */}
+      {confirmPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+            <h3 className="font-bold text-gray-900">Confirm this order?</h3>
+            <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3">
+              <p className="text-sm font-semibold text-gray-900">{tableNumber}</p>
+              <p className="text-sm text-gray-600 mt-0.5">
+                {cartItems.length} item{cartItems.length === 1 ? '' : 's'} · {fmtRWF(totalAmount)} RWF
+              </p>
+            </div>
+            <p className="text-xs text-gray-500">This sends it to the kitchen.</p>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setConfirmPrompt(false)}
+                className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50">
+                Go back
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmPrompt(false)
+                  // Waiter identity already established on the opening page.
+                  if (waiterName) { void confirmOrder(waiterName); return }
+                  setShowCodeModal(true)
+                }}
+                className="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
+                Yes, confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {payingOrderId && (
         <PayModal
