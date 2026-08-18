@@ -363,6 +363,18 @@ export interface OrderItem {
   updated_at: string
 }
 
+// What a line is actually worth after its discount. Mirrors
+// calculateLineNetAmount on the server deliberately — the bill a guest is shown
+// here and the journal entry raised there must agree to the franc, and both
+// treat a percentage outside 0-100 as no discount at all.
+export function lineNetAmount(item: { dish_price: number; qty: number; discount_percent?: number | null }): number {
+  const gross = Number(item.dish_price) * Number(item.qty)
+  if (!Number.isFinite(gross)) return 0
+  const raw = Number(item.discount_percent)
+  const pct = Number.isFinite(raw) && raw > 0 && raw <= 100 ? raw : 0
+  return gross * (1 - pct / 100)
+}
+
 export async function createOrder(order: Order, items: OrderItem[]): Promise<void> {
   const db = getDB()
   const statements: StatementSet = [

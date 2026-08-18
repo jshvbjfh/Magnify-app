@@ -7,8 +7,10 @@ import {
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
   getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, markTicketsPushed,
+  setItemDiscount, mergeOrdersLocal, lineNetAmount,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
+import SupervisorPinDialog from './SupervisorPinDialog'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline, validateOrderCode, type BranchInfo } from '../services/sync'
 import { getActiveShift } from '../services/shifts'
@@ -439,6 +441,18 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
   const [arCustomerPhone,   setArCustomerPhone]   = useState('')
   const [payingSaving,      setPayingSaving]      = useState(false)
   const [cancelingOrderId,  setCancelingOrderId]  = useState<string | null>(null)
+  // Discount being entered on one line. Held until a supervisor approves it —
+  // the percentage is typed first, the PIN second, and nothing is written until
+  // both are in.
+  const [discountTarget,    setDiscountTarget]    = useState<{ orderId: string; item: OrderItem } | null>(null)
+  const [discountPct,       setDiscountPct]       = useState('')
+  const [discountAwaitingPin, setDiscountAwaitingPin] = useState(false)
+  // Joining orders: a selection mode over the pending list. Off by default so
+  // the list behaves exactly as before until a waiter asks to combine bills.
+  const [joinMode,          setJoinMode]          = useState(false)
+  const [joinIds,           setJoinIds]           = useState<string[]>([])
+  const [joinAwaitingPin,   setJoinAwaitingPin]   = useState(false)
+  const [joinError,         setJoinError]         = useState<string | null>(null)
 
   // Device-local printer routing (branchId → deviceName) + bill printer.
   const [printerMap,        setPrinterMap]        = useState<PrinterMap>({})
@@ -789,7 +803,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     for (const { item: i, hidePrice } of billLines) {
       // A hidden buffet gets no amount at all — passing '' to cols() drops the
       // whole right-hand column for that line.
-      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, hidePrice ? '' : fmt2(i.dish_price * i.qty))) divLines.push(ln(s))
+      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, hidePrice ? '' : fmt2(lineNetAmount(i)))) divLines.push(ln(s))
+      // The discount prints under its line so the guest can see what came off
+      // and why the figure is not the menu price. Suppressed on a hidden buffet
+      // line, which shows no amount at all.
+      if (i.discount_percent && !hidePrice) {
+        for (const s of cols(`  less ${i.discount_percent}%`, `-${fmt2(i.dish_price * i.qty - lineNetAmount(i))}`)) divLines.push(ln(s))
+      }
       if (i.notes) divLines.push(ln(`  > ${i.notes}`))
     }
     divLines.push(ln(rule))
@@ -993,6 +1013,93 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       printHtml(buildTicket('station'), 0, deviceName)
       printHtml(buildTicket('waiter'), 0, deviceName)
       ticketIndex += 1
+    }
+  }
+
+  // ── Discounts ──────────────────────────────────────────────────────────────
+
+  // Write the discount a supervisor has just approved. The percentage was typed
+  // before the PIN, so by the time this runs both halves are in hand.
+  async function applyApprovedDiscount(approvedBy: string) {
+    if (!discountTarget) return
+    const raw = Number(discountPct)
+    // Blank or 0 clears the discount — that is how a mistake gets undone, and it
+    // needs the same approval as setting one.
+    const pct = Number.isFinite(raw) && raw > 0 && raw <= 100 ? raw : null
+    try {
+      await setItemDiscount(discountTarget.orderId, discountTarget.item.id, pct)
+      await recomputeOrderTotals(discountTarget.orderId)
+      await loadPOS()
+      setConfirmSuccess(
+        pct === null
+          ? `Discount removed · approved by ${approvedBy}`
+          : `${pct}% off ${discountTarget.item.dish_name} · approved by ${approvedBy}`,
+      )
+      setTimeout(() => setConfirmSuccess(null), 4000)
+      pushSync().catch(() => {})
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Could not apply the discount')
+    } finally {
+      setDiscountTarget(null)
+      setDiscountAwaitingPin(false)
+      setDiscountPct('')
+    }
+  }
+
+  // Re-derive an order's stored totals from its lines, discounts included, so
+  // the pending card, the bill and the payment all quote the same figure. The
+  // server recomputes independently from the same percentages on push.
+  async function recomputeOrderTotals(orderId: string) {
+    const items = await getOrderItems(orderId)
+    const active = items.filter(i => i.status === 'ACTIVE')
+    const subtotal = active.reduce((sum, i) => sum + lineNetAmount(i), 0)
+    await updateOrder(orderId, {
+      subtotal_amount: subtotal,
+      vat_amount: 0,
+      total_amount: subtotal,
+    })
+  }
+
+  // ── Joining orders ─────────────────────────────────────────────────────────
+
+  // Whether the chosen orders were all taken by the same waiter. Combining one
+  // waiter's own bills is routine; pulling another waiter's table into yours
+  // moves who gets credited for the sale, so that takes a supervisor.
+  function joinNeedsApproval(ids: string[]): boolean {
+    const waiters = new Set(
+      ids.map(id => (pendingOrders.find(o => o.id === id)?.created_by_name ?? '').trim().toLowerCase()),
+    )
+    return waiters.size > 1
+  }
+
+  async function performJoin(approvedBy?: string) {
+    const ids = [...joinIds]
+    if (ids.length < 2) return
+    // The oldest order survives: it carries the number the guest was quoted
+    // first, and its shift and business day are the ones the sale belongs to.
+    const chosen = ids
+      .map(id => pendingOrders.find(o => o.id === id))
+      .filter((o): o is Order => Boolean(o))
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    const target = chosen[0]
+    const sources = chosen.slice(1)
+    if (!target || !sources.length) return
+    try {
+      await mergeOrdersLocal(target.id, sources.map(o => o.id))
+      await recomputeOrderTotals(target.id)
+      await loadPOS()
+      setJoinMode(false)
+      setJoinIds([])
+      setConfirmSuccess(
+        `${chosen.length} orders joined into ${target.order_number}` +
+        (approvedBy ? ` · approved by ${approvedBy}` : ''),
+      )
+      setTimeout(() => setConfirmSuccess(null), 4000)
+      pushSync().catch(() => {})
+    } catch (err) {
+      setJoinError(err instanceof Error ? err.message : 'Could not join those orders')
+    } finally {
+      setJoinAwaitingPin(false)
     }
   }
 
@@ -1442,7 +1549,8 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
   function PayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
     const order   = pendingOrders.find(o => o.id === orderId)
     const items   = order ? (orderItemsMap[order.id] ?? []) : []
-    const tot     = items.reduce((s, i) => s + i.dish_price * i.qty, 0)
+    // Discounts included — the figure collected here must be the one on the bill.
+    const tot     = items.reduce((s, i) => s + lineNetAmount(i), 0)
     const name    = order?.table_name ?? (order?.table_id ? (tables.find(t => t.id === order.table_id)?.name ?? 'Table') : 'Takeaway')
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -1454,8 +1562,11 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
           <div className="bg-gray-50 rounded-xl p-3 space-y-2">
             {items.map(item => (
               <div key={item.id} className="flex justify-between text-sm">
-                <span className="text-gray-700">{item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}</span>
-                <span className="font-medium text-gray-900">{fmtRWF(item.dish_price * item.qty)} RWF</span>
+                <span className="text-gray-700">
+                  {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                  {item.discount_percent ? <span className="text-green-700 font-semibold"> −{item.discount_percent}%</span> : null}
+                </span>
+                <span className="font-medium text-gray-900">{fmtRWF(lineNetAmount(item))} RWF</span>
               </div>
             ))}
             <div className="border-t border-gray-200 pt-2">
@@ -1649,11 +1760,47 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
               placeholder="Search table…"
               className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-orange-400 w-40"
             />
+            <button
+              onClick={() => { setJoinMode(m => !m); setJoinIds([]); setJoinError(null) }}
+              title="Combine several bills into one"
+              className={`rounded-lg border px-3 py-1.5 text-sm font-semibold transition-colors ${
+                joinMode
+                  ? 'border-orange-500 bg-orange-500 text-white'
+                  : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}>
+              {joinMode ? 'Cancel join' : 'Join orders'}
+            </button>
             <button onClick={loadPOS} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" title="Refresh">
               <RefreshCw className={`h-4 w-4 text-gray-500 ${isRefreshing ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
+
+        {joinMode && (
+          <div className="rounded-xl border border-orange-300 bg-orange-50 px-4 py-3 space-y-2">
+            <p className="text-sm font-semibold text-orange-900">
+              Pick the orders to combine{joinIds.length ? ` — ${joinIds.length} selected` : ''}
+            </p>
+            <p className="text-xs text-orange-800 leading-relaxed">
+              They become one bill under the oldest order number. Nothing is
+              re-priced, and nothing is sent to the kitchen again.
+              {joinIds.length >= 2 && joinNeedsApproval(joinIds) && ' These belong to different waiters, so a supervisor PIN is needed.'}
+            </p>
+            {joinError && (
+              <p className="text-xs font-semibold text-red-700">{joinError}</p>
+            )}
+            <button
+              disabled={joinIds.length < 2}
+              onClick={() => {
+                setJoinError(null)
+                if (joinNeedsApproval(joinIds)) setJoinAwaitingPin(true)
+                else void performJoin()
+              }}
+              className="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold py-2.5 rounded-xl transition-colors">
+              {joinIds.length < 2 ? 'Select at least two orders' : `Join ${joinIds.length} orders`}
+            </button>
+          </div>
+        )}
 
         {confirmSuccess && (
           <div className="rounded-xl border border-green-300 bg-green-50 px-3 py-2.5 text-sm font-semibold text-green-800 flex items-center gap-2">
@@ -1675,25 +1822,63 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {pendingList.map(ord => {
               const oi  = orderItemsMap[ord.id] ?? []
-              const tot = oi.reduce((s, i) => s + i.dish_price * i.qty, 0)
+              // Discounts included, so the card, the bill and the payment all
+              // quote the guest the same figure.
+              const tot = oi.reduce((s, i) => s + lineNetAmount(i), 0)
               // Another waiter's order: shown in full, but read-only — the
               // action row is replaced by a lock line so nobody settles,
               // edits or cancels a table they are not serving.
               const mine = ownsOrder(ord)
               return (
                 <div key={ord.id} className={`bg-white border rounded-xl overflow-hidden ${mine ? 'border-gray-200' : 'border-gray-200 opacity-60'}`}>
-                  <div className="bg-gray-50 px-3 py-2 flex justify-between items-center border-b border-gray-100">
-                    <span className="text-xs font-bold text-gray-700">{ord.order_number}</span>
-                    <span className="text-xs text-gray-500 truncate ml-2">{ord.table_name ?? 'Takeaway'}</span>
+                  <div className="bg-gray-50 px-3 py-2 flex justify-between items-center border-b border-gray-100 gap-2">
+                    {joinMode && (
+                      <input
+                        type="checkbox"
+                        checked={joinIds.includes(ord.id)}
+                        onChange={e => setJoinIds(ids => e.target.checked ? [...ids, ord.id] : ids.filter(i => i !== ord.id))}
+                        className="h-4 w-4 flex-shrink-0 accent-orange-500"
+                      />
+                    )}
+                    <span className="text-xs font-bold text-gray-700 truncate">{ord.order_number}</span>
+                    <span className="text-xs text-gray-500 truncate ml-auto">{ord.table_name ?? 'Takeaway'}</span>
                   </div>
                   <div className="px-3 py-2 space-y-1.5">
                     {oi.map(item => (
                       <div key={item.id}>
-                        <div className="flex items-start justify-between">
+                        <div className="flex items-start justify-between gap-2">
                           <span className="text-sm text-gray-800 font-medium flex-1 min-w-0 leading-snug">
                             {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
                           </span>
-                          <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)} RWF</span>
+                          {/* A discounted line shows both numbers: the guest can
+                              see what came off, and so can whoever checks the
+                              till at the end of the night. */}
+                          <span className="text-sm font-semibold text-gray-900 flex-shrink-0 text-right">
+                            {item.discount_percent ? (
+                              <>
+                                <span className="block text-[11px] font-normal text-gray-400 line-through leading-tight">
+                                  {fmtRWF(item.dish_price * item.qty)}
+                                </span>
+                                <span className="block text-green-700 leading-tight">
+                                  {fmtRWF(lineNetAmount(item))} RWF
+                                </span>
+                              </>
+                            ) : (
+                              <>{fmtRWF(item.dish_price * item.qty)} RWF</>
+                            )}
+                          </span>
+                          {mine && !joinMode && (
+                            <button
+                              onClick={() => { setDiscountTarget({ orderId: ord.id, item }); setDiscountPct(item.discount_percent ? String(item.discount_percent) : '') }}
+                              title={item.discount_percent ? `${item.discount_percent}% off — tap to change` : 'Add a discount'}
+                              className={`flex-shrink-0 rounded-lg border px-2 py-0.5 text-[11px] font-bold transition-colors ${
+                                item.discount_percent
+                                  ? 'border-green-300 bg-green-50 text-green-700 hover:bg-green-100'
+                                  : 'border-gray-200 text-gray-400 hover:border-orange-300 hover:text-orange-600'
+                              }`}>
+                              {item.discount_percent ? `-${item.discount_percent}%` : '[ … ]%'}
+                            </button>
+                          )}
                         </div>
                         {/* Modifiers ("no sauce", "extra pickles") — same style as the cart */}
                         {item.notes && (
@@ -1772,6 +1957,85 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
               )
             })}
           </div>
+        )}
+
+        {/* Discount: the percentage is typed first, then a supervisor approves
+            it. Nothing is written until both are in, so an unapproved discount
+            never reaches a bill. */}
+        {discountTarget && !discountAwaitingPin && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+              <h3 className="font-bold text-gray-900">Discount this line</h3>
+              <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3">
+                <p className="text-sm font-semibold text-gray-900">{discountTarget.item.dish_name}</p>
+                <p className="text-sm text-gray-600 mt-0.5">
+                  {discountTarget.item.qty} × {fmtRWF(discountTarget.item.dish_price)} = {fmtRWF(discountTarget.item.dish_price * discountTarget.item.qty)} RWF
+                </p>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-1 block">Discount %</label>
+                <input
+                  autoFocus
+                  type="text"
+                  inputMode="decimal"
+                  value={discountPct}
+                  onChange={e => setDiscountPct(e.target.value.replace(/[^0-9.]/g, '').slice(0, 5))}
+                  placeholder="e.g. 10"
+                  className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl font-bold outline-none focus:ring-2 focus:ring-orange-400"
+                />
+                <p className="mt-1.5 text-xs text-gray-500">
+                  {(() => {
+                    const n = Number(discountPct)
+                    if (!discountPct.trim()) return 'Leave empty to remove the discount.'
+                    if (!Number.isFinite(n) || n <= 0 || n > 100) return 'Enter a number between 1 and 100.'
+                    const net = discountTarget.item.dish_price * discountTarget.item.qty * (1 - n / 100)
+                    return `Guest pays ${fmtRWF(net)} RWF`
+                  })()}
+                </p>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => { setDiscountTarget(null); setDiscountPct('') }}
+                  className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-3 rounded-xl hover:bg-gray-50">
+                  Go back
+                </button>
+                <button
+                  onClick={() => setDiscountAwaitingPin(true)}
+                  disabled={Boolean(discountPct.trim()) && !(Number(discountPct) > 0 && Number(discountPct) <= 100)}
+                  className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
+                  Get approval
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {discountTarget && discountAwaitingPin && (
+          <SupervisorPinDialog
+            title="Approve discount"
+            prompt={
+              discountPct.trim()
+                ? `${Number(discountPct)}% off ${discountTarget.item.dish_name}. Enter the supervisor PIN to approve.`
+                : `Remove the discount on ${discountTarget.item.dish_name}. Enter the supervisor PIN to approve.`
+            }
+            confirmLabel="Approve"
+            busyLabel="Approving…"
+            onClose={() => setDiscountAwaitingPin(false)}
+            onApproved={applyApprovedDiscount}
+          />
+        )}
+
+        {/* Joining another waiter's table into yours moves who gets credited
+            for the sale, so it takes the same approval a cancellation does. */}
+        {joinAwaitingPin && (
+          <SupervisorPinDialog
+            title="Approve join"
+            prompt={`These ${joinIds.length} orders belong to different waiters. Enter the supervisor PIN to combine them.`}
+            confirmLabel="Approve"
+            busyLabel="Joining…"
+            onClose={() => setJoinAwaitingPin(false)}
+            onApproved={(approvedBy) => performJoin(approvedBy)}
+          />
         )}
 
         {payingOrderId && (

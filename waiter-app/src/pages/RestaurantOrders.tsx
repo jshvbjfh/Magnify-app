@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
-  getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE,
+  getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, lineNetAmount,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
@@ -766,7 +766,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     if (!isTakeaway) divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`))
     divLines.push(ln(rule))
     for (const i of items) {
-      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.dish_price * i.qty))) divLines.push(ln(s))
+      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(lineNetAmount(i)))) divLines.push(ln(s))
+      if (i.discount_percent) {
+        for (const s of cols(`  less ${i.discount_percent}%`, `-${fmt2(i.dish_price * i.qty - lineNetAmount(i))}`)) divLines.push(ln(s))
+      }
       if (i.notes) divLines.push(ln(`  > ${i.notes}`))
     }
     divLines.push(ln(rule))
@@ -1380,7 +1383,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
   function PayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
     const order   = pendingOrders.find(o => o.id === orderId)
     const items   = order ? (orderItemsMap[order.id] ?? []) : []
-    const tot     = items.reduce((s, i) => s + i.dish_price * i.qty, 0)
+    const tot     = items.reduce((s, i) => s + lineNetAmount(i), 0)
     const name    = order?.table_name ?? (order?.table_id ? (tables.find(t => t.id === order.table_id)?.name ?? 'Table') : 'Takeaway')
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -1393,7 +1396,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
             {items.map(item => (
               <div key={item.id} className="flex justify-between text-sm">
                 <span className="text-gray-700">{item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}</span>
-                <span className="font-medium text-gray-900">{fmtRWF(item.dish_price * item.qty)} RWF</span>
+                <span className="font-medium text-gray-900">{fmtRWF(lineNetAmount(item))} RWF</span>
               </div>
             ))}
             <div className="border-t border-gray-200 pt-2">
@@ -1613,7 +1616,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {pendingList.map(ord => {
               const oi  = orderItemsMap[ord.id] ?? []
-              const tot = oi.reduce((s, i) => s + i.dish_price * i.qty, 0)
+              const tot = oi.reduce((s, i) => s + lineNetAmount(i), 0)
               // Another waiter's order: shown in full, but read-only — the
               // action row is replaced by a lock line so nobody settles,
               // edits or cancels a table they are not serving.
@@ -1631,7 +1634,16 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                           <span className="text-sm text-gray-800 font-medium flex-1 min-w-0 leading-snug">
                             {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
                           </span>
-                          <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)} RWF</span>
+                          <span className="text-sm font-semibold text-gray-900 ml-3 flex-shrink-0 text-right">
+                            {item.discount_percent ? (
+                              <>
+                                <span className="block text-[11px] font-normal text-gray-400 line-through leading-tight">{fmtRWF(item.dish_price * item.qty)}</span>
+                                <span className="block text-green-700 leading-tight">{fmtRWF(lineNetAmount(item))} RWF</span>
+                              </>
+                            ) : (
+                              <>{fmtRWF(item.dish_price * item.qty)} RWF</>
+                            )}
+                          </span>
                         </div>
                         {/* Modifiers ("no sauce", "extra pickles") — same style as the cart */}
                         {item.notes && (
