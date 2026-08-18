@@ -312,6 +312,27 @@ CREATE TABLE IF NOT EXISTS shifts (
       await addColumnIfMissing(d, 'orders', 'tickets_pushed_at', 'TEXT')
     },
   },
+  {
+    // Per-line discount, and the pointer left behind when one order is joined
+    // into another.
+    //
+    // discount_percent is 0-100, set at the till against a supervisor PIN and
+    // printed on the bill. Null everywhere it was never set, which every money
+    // path reads as "no discount".
+    //
+    // merged_into_id names the order this one was absorbed into. The row stays,
+    // its status becomes MERGED and its items move across, so the join is
+    // auditable and an order number a guest was already quoted still resolves.
+    //
+    // 11 is the next free number on THIS app. The desktop numbers the same
+    // migration 12, because its list gained guest_count that Android never had.
+    // What matters is never reusing a number a device has already recorded.
+    version: 11,
+    run: async (d) => {
+      await addColumnIfMissing(d, 'order_items', 'discount_percent', 'REAL')
+      await addColumnIfMissing(d, 'orders', 'merged_into_id', 'TEXT')
+    },
+  },
 ]
 
 // ---- db init ---------------------------------------------------------------
@@ -653,6 +674,10 @@ export interface Order {
   // Which app took the order: 'tablet' or 'desktop'. Null on orders taken
   // before this existed and on guest QR orders — read that as 'not a tablet'.
   source: string | null
+  // Set when this order was joined into another. The row stays so the join is
+  // auditable and an order number already quoted to a guest still resolves; its
+  // status becomes MERGED and its items move to the survivor.
+  merged_into_id: string | null
   // LOCAL ONLY, never synced: when THIS terminal's printers produced the
   // kitchen slips for this order. See migration 10.
   tickets_pushed_at: string | null
@@ -672,6 +697,10 @@ export interface OrderItem {
   status: string
   notes: string | null
   branch_id: string | null
+  // Per-line discount, 0-100, approved by a supervisor and printed on the bill.
+  // Null means no discount — which is what every line taken before this existed
+  // reads as, so no past bill changes value.
+  discount_percent: number | null
   created_at: string
   updated_at: string
 }
@@ -714,6 +743,59 @@ export async function addOrderItems(items: OrderItem[]): Promise<void> {
       'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.branch_id ?? null, item.created_at, item.updated_at],
   })))
+}
+
+// Set or clear a line's discount. Marks the order unsynced so the next push
+// carries the new price to the server, where the same percentage drives the
+// journal entry and the dish sale — the till and the books must never disagree
+// about what a line was worth.
+//
+// The caller is responsible for having taken a supervisor PIN first; this is
+// only the write.
+export async function setItemDiscount(orderId: string, itemId: string, percent: number | null): Promise<void> {
+  const db = getDB()
+  const now = new Date().toISOString()
+  // Anything outside 0-100 is stored as no discount at all, matching
+  // calculateLineNetAmount on the server. A bill must never grow because of a
+  // discount, nor go below zero.
+  const clean = percent !== null && Number.isFinite(percent) && percent > 0 && percent <= 100 ? percent : null
+  await db.run('UPDATE order_items SET discount_percent = ?, updated_at = ? WHERE id = ?', [clean, now, itemId])
+  await db.run('UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?', [now, orderId])
+}
+
+// Join orders: every source order's items move to the target, and each source
+// row stays behind as MERGED pointing at the target.
+//
+// The rows are kept rather than deleted so the join is auditable and an order
+// number a guest was already quoted still resolves to something. MERGED is
+// outside both the active and the unsettled sets, so a merged order leaves the
+// pending list, stops blocking an end-of-shift, and can never be paid a second
+// time.
+//
+// Totals are deliberately NOT recomputed here: joining changes which bill the
+// lines sit on, never what they cost. The target's totals are refreshed from
+// its full item list by the caller, exactly as adding items to an order does.
+export async function mergeOrdersLocal(targetId: string, sourceIds: string[]): Promise<void> {
+  if (!sourceIds.length) return
+  const db = getDB()
+  const now = new Date().toISOString()
+  const statements: StatementSet = []
+  for (const sourceId of sourceIds) {
+    if (sourceId === targetId) continue   // never absorb an order into itself
+    statements.push({
+      statement: 'UPDATE order_items SET order_id = ?, updated_at = ? WHERE order_id = ?',
+      values: [targetId, now, sourceId],
+    })
+    statements.push({
+      statement: 'UPDATE orders SET status = ?, merged_into_id = ?, updated_at = ?, synced = 0 WHERE id = ?',
+      values: ['MERGED', targetId, now, sourceId],
+    })
+  }
+  statements.push({
+    statement: 'UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?',
+    values: [now, targetId],
+  })
+  await db.executeSet(statements)
 }
 
 export async function getOrderById(orderId: string): Promise<Order | null> {
@@ -870,7 +952,10 @@ export async function reconcileOrderStatuses(remoteOrders: RemoteOrderStatus[]):
 // synced=1 so these are never re-pushed to the server.
 export interface IncomingOrderItem {
   id: string; order_id: string; dish_id: string; dish_name: string
-  dish_price: number; qty: number; status: string; notes?: string | null; created_at: string; updated_at: string
+  dish_price: number; qty: number; status: string; notes?: string | null
+  // Station that owns the line, and its discount — both come from the server.
+  branch_id?: string | null; discount_percent?: number | null
+  created_at: string; updated_at: string
 }
 export interface IncomingOrder {
   id: string; restaurant_id: string; branch_id: string | null; table_id: string | null
@@ -902,10 +987,14 @@ export async function upsertIncomingOrders(orders: IncomingOrder[]): Promise<voi
         ],
       },
       ...order.items.map((item) => ({
+        // branch_id and discount_percent come down with the line: the first
+        // routes its kitchen ticket to the station that has to cook it, the
+        // second is what the guest is actually charged. Dropping either here
+        // would silently reprice or misroute a synced order.
         statement: `INSERT OR IGNORE INTO order_items
-          (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.created_at, item.updated_at],
+          (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, branch_id, discount_percent, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        values: [item.id, item.order_id, item.dish_id, item.dish_name, item.dish_price, item.qty, item.status, item.notes ?? null, item.branch_id ?? null, item.discount_percent ?? null, item.created_at, item.updated_at],
       })),
     ]
     await db.executeSet(statements)

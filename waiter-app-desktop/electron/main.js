@@ -341,6 +341,28 @@ CREATE TABLE IF NOT EXISTS shifts (
       addColumnIfMissing(database, 'orders', 'tickets_pushed_at', 'TEXT')
     },
   },
+  {
+    // Per-line discount, and the pointer left behind when one order is joined
+    // into another.
+    //
+    // discount_percent is 0-100, set here against a supervisor PIN and printed
+    // on the bill. Null everywhere it was never set, which every money path
+    // reads as "no discount".
+    //
+    // merged_into_id names the order this one was absorbed into. The row stays,
+    // its status becomes MERGED and its items move across, so the join is
+    // auditable and an order number a guest was already quoted still resolves.
+    //
+    // 12 is the next free number on THIS app; Android numbers the same
+    // migration 11, because this list gained guest_count that Android never
+    // had. Never reuse a number a device has already recorded — doing so is
+    // silently skipped, and the app then writes a column nothing created.
+    version: 12,
+    run: (database) => {
+      addColumnIfMissing(database, 'order_items', 'discount_percent', 'REAL')
+      addColumnIfMissing(database, 'orders', 'merged_into_id', 'TEXT')
+    },
+  },
 ]
 
 function addColumnIfMissing(database, table, column, definition) {

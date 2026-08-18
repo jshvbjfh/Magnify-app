@@ -1042,6 +1042,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         status:     'ACTIVE',
         notes:      item.note ?? null,
         branch_id:  dishes.find(d => d.id === item.dishId)?.branch_id ?? null,
+        discount_percent: null,
         created_at: now,
         updated_at: now,
       }))
@@ -1165,6 +1166,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         // Which app took it. The till reads this to decide whether the kitchen
         // tickets still need pushing to paper by hand.
         source:             ORDER_SOURCE,
+        merged_into_id:     null,
         tickets_pushed_at:  null,
         synced:             0,
         sync_error:         null,
@@ -1182,6 +1184,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         status:     'ACTIVE',
         notes:      item.note ?? null,
         branch_id:  dishes.find(d => d.id === item.dishId)?.branch_id ?? null,
+        discount_percent: null,
         created_at: now,
         updated_at: now,
       }))
