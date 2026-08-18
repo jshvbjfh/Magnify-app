@@ -178,6 +178,12 @@ export default function RestaurantSettings() {
   // Whether this venue runs service shifts. On by default; the server refuses to
   // switch it off while any order is still unsettled.
   const [shiftsEnabled, setShiftsEnabled] = useState(true)
+  // What the server last told us. The card marks a choice "Active", so it must
+  // never show a selection the server rejected — on a failed save we snap back
+  // to this and say why, rather than leaving the UI claiming a setting that
+  // silently reverts on the next page load.
+  const [savedShiftsEnabled, setSavedShiftsEnabled] = useState(true)
+  const [shiftsError, setShiftsError] = useState<string | null>(null)
   const [trackingMode, setTrackingMode] = useState<'simple' | 'dish_tracking'>('simple')
   const [restaurantIdValue, setRestaurantIdValue] = useState<string | null>(null)
   const [fifoEnabled, setFifoEnabled] = useState(true)
@@ -409,6 +415,7 @@ export default function RestaurantSettings() {
           else if (setupData.restaurant?.qrOrderingMode === 'order') setQrOrderingMode('order')
           else setQrOrderingMode('disabled')
           setShiftsEnabled(setupData.restaurant?.shiftsEnabled !== false)
+          setSavedShiftsEnabled(setupData.restaurant?.shiftsEnabled !== false)
         }
 
         if (profileData) {
@@ -517,6 +524,7 @@ export default function RestaurantSettings() {
   async function save() {
     setSaving(true)
     setSaveError(null)
+    setShiftsError(null)
     try {
       const billHeader = composeRestaurantBillTemplate(billTopText, billBottomText, billFooter2Text)
       // Only send fifoEnabled when FIFO hasn't been activated yet for this restaurant — once
@@ -534,7 +542,16 @@ export default function RestaurantSettings() {
 
       const data = await response.json().catch(() => null)
       if (!response.ok) {
-        setSaveError(data?.error || 'Failed to save settings.')
+        const message = data?.error || 'Failed to save settings.'
+        setSaveError(message)
+        // The Save button sits in the left column while the shifts card is in the
+        // right one, so a refusal shown only next to the button is missed — the
+        // choice then appears to accept and quietly flips back on reload. Repeat
+        // it on the card and restore the server's value there and then.
+        if (shiftsEnabled !== savedShiftsEnabled) {
+          setShiftsError(message)
+          setShiftsEnabled(savedShiftsEnabled)
+        }
         return
       }
 
@@ -552,6 +569,7 @@ export default function RestaurantSettings() {
         else if (savedRestaurant.qrOrderingMode === 'order') setQrOrderingMode('order')
         else setQrOrderingMode('disabled')
         setShiftsEnabled(savedRestaurant.shiftsEnabled !== false)
+        setSavedShiftsEnabled(savedRestaurant.shiftsEnabled !== false)
         setFifoEnabled(true)
         setFifoConfiguredAt(typeof savedRestaurant.fifoConfiguredAt === 'string' ? savedRestaurant.fifoConfiguredAt : null)
         setFifoCutoverAt(typeof savedRestaurant.fifoCutoverAt === 'string' ? savedRestaurant.fifoCutoverAt : null)
@@ -1341,7 +1359,7 @@ export default function RestaurantSettings() {
         </div>
 
         <div className="space-y-3">
-          <button type="button" onClick={() => setShiftsEnabled(true)}
+          <button type="button" onClick={() => { setShiftsEnabled(true); setShiftsError(null) }}
             className={`w-full text-left rounded-xl border-2 p-4 transition-all ${
               shiftsEnabled ? 'border-orange-500 bg-orange-50' : 'border-gray-200 bg-white hover:border-gray-300'
             }`}>
@@ -1361,7 +1379,7 @@ export default function RestaurantSettings() {
             </div>
           </button>
 
-          <button type="button" onClick={() => setShiftsEnabled(false)}
+          <button type="button" onClick={() => { setShiftsEnabled(false); setShiftsError(null) }}
             className={`w-full text-left rounded-xl border-2 p-4 transition-all ${
               !shiftsEnabled ? 'border-orange-500 bg-orange-50' : 'border-gray-200 bg-white hover:border-gray-300'
             }`}>
@@ -1381,6 +1399,12 @@ export default function RestaurantSettings() {
             </div>
           </button>
         </div>
+
+        {shiftsError ? (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+            {shiftsError}
+          </div>
+        ) : null}
 
         <p className="text-xs text-gray-400 leading-relaxed">
           Orders already taken inside a shift keep that shift and its business day, so past reports never change. Switching shifts off is only allowed once every open order is settled.
