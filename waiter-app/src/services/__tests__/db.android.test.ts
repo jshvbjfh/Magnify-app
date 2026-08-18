@@ -118,16 +118,28 @@ describe('Android schema migrations', () => {
     // guest_count, which Android has never had. What must hold is that a number
     // recorded on a device is never reused — reusing one means the migration
     // silently never runs.
-    expect(applied.v).toBe(10)
+    expect(applied.v).toBe(11)
 
     // Migration 10 — order origin, and whether this device has printed its
     // kitchen slips. Without `source` the till cannot tell which pending orders
     // came from a tablet and so still need pushing to paper by hand.
+    // Migration 11 — the joined-order pointer, and the per-line discount.
     const orderCols = fake.db
       .prepare('PRAGMA table_info(orders)')
       .all()
       .map((c) => (c as { name: string }).name)
-    expect(orderCols).toEqual(expect.arrayContaining(['source', 'tickets_pushed_at']))
+    expect(orderCols).toEqual(expect.arrayContaining([
+      'source', 'tickets_pushed_at', 'merged_into_id',
+    ]))
+
+    // discount_percent drives what the guest is charged, and the same value
+    // drives the journal entry and the dish sale on the server. If the column
+    // is missing the app writes a price nothing recorded a discount against.
+    const itemCols = fake.db
+      .prepare('PRAGMA table_info(order_items)')
+      .all()
+      .map((c) => (c as { name: string }).name)
+    expect(itemCols).toEqual(expect.arrayContaining(['discount_percent']))
   })
 
   it('adds the shift and station columns the server push expects', async () => {
