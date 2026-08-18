@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { jwtVerify } from 'jose'
 import { prisma } from '@/lib/prisma'
-import { getRestaurantContextForUser } from '@/lib/restaurantAccess'
+import { resolveActiveStaffAccess } from '@/lib/mobileStaffAccess'
 import { resolveCancellationApprover } from '@/lib/cancelApproval'
 import { enqueueOrderSync } from '@/lib/restaurantOrders'
 
@@ -34,26 +34,26 @@ async function verifyToken(req: Request) {
  *  Body: { orderId, supervisorPin, cancelReason }
  *
  *  Validates a 5-digit supervisor PIN server-side before canceling.
- *  branchId=null is refused — every cancellation must be branch-scoped.
+ *
+ *  Scoped to the restaurant, NOT to one branch. An order is stamped with the
+ *  branch the POS was on when it was taken — /api/mobile/push accepts any valid
+ *  branch of the restaurant — so the terminal's own branch assignment says
+ *  nothing about which branch owns the order. Narrowing this lookup to a single
+ *  server-resolved branch made every cancellation at a multi-station venue fail
+ *  with "Order not found"; the restaurant check is what actually keeps a waiter
+ *  from touching another venue's orders.
  */
 export async function POST(req: Request) {
   try {
     const claims = await verifyToken(req)
     const { restaurantId } = claims
 
-    const context = await getRestaurantContextForUser(claims.sub)
-    if (!context?.restaurantId || context.restaurantId !== restaurantId) {
+    // Same helper every other /api/mobile route uses: the staff record's CURRENT
+    // binding, so deactivated or deleted staff lose access immediately rather
+    // than living on inside a still-valid JWT.
+    const staffAccess = await resolveActiveStaffAccess(claims.sub)
+    if (!staffAccess || staffAccess.restaurantId !== restaurantId) {
       return jsonNoStore({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const effectiveBranchId = context.branchId ?? null
-
-    // branchId=null is a critical security gap — reject hard
-    if (!effectiveBranchId) {
-      return jsonNoStore(
-        { error: 'Station assignment required to cancel orders. Contact your manager.' },
-        { status: 403 },
-      )
     }
 
     const body = await req.json() as {
@@ -71,7 +71,7 @@ export async function POST(req: Request) {
     }
 
     const order = await prisma.restaurantOrder.findFirst({
-      where: { id: orderId, restaurantId, branchId: effectiveBranchId },
+      where: { id: orderId, restaurantId },
     })
 
     if (!order) {
@@ -87,10 +87,11 @@ export async function POST(req: Request) {
       return jsonNoStore({ ok: true, alreadyCanceled: true, approvedBy: 'Supervisor' })
     }
 
-    // Validate PIN against all employees who can approve cancellations in this branch
+    // Validate PIN against every employee who can approve cancellations. Approval
+    // PINs are restaurant-wide by design, so no branch is passed — supplying one
+    // only implied a station scope that resolveCancellationApprover never applied.
     const approver = await resolveCancellationApprover({
       restaurantId,
-      branchId: effectiveBranchId,
       pin: supervisorPin,
     })
 
@@ -120,7 +121,10 @@ export async function POST(req: Request) {
 
     // Enqueue AFTER the transaction commits — non-fatal if this fails
     try {
-      await enqueueOrderSync(prisma, orderId, restaurantId, effectiveBranchId)
+      // The order's OWN branch, not the terminal's: the sync change has to land on
+      // the branch feed that actually holds this order, or the cancellation never
+      // reaches the station that took it.
+      await enqueueOrderSync(prisma, orderId, restaurantId, order.branchId)
     } catch (enqueueErr) {
       console.error('[cancel-order] enqueueOrderSync failed for order', orderId, enqueueErr)
     }
