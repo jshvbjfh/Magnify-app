@@ -17,7 +17,11 @@ import { useOnline } from '../hooks/useOnline'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: number; note?: string }
+type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: number; note?: string;
+  // Station that owns this line, stamped on the order item when it was rung
+  // up. Set for lines replayed from a saved order; absent while building a
+  // fresh cart, where the dish lookup below is authoritative.
+  branchId?: string | null }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -813,8 +817,13 @@ ${barcodeEl}
   function printKitchenTickets(order: Order, cart: CartItem[], rName: string) {
     const byBranch = new Map<string, { branchName: string; branchType: string; items: CartItem[] }>()
     for (const ci of cart) {
+      // The line's OWN station first, then the dish lookup. `dishes` only holds
+      // the station this terminal is signed in to (getDishes(activeBranch)), so
+      // a line rung up elsewhere — every tablet order pushed from here — finds
+      // no dish, falls to '__none__', and every ticket lands on the bill
+      // printer instead of the kitchen that has to cook it.
       const dish = dishes.find(d => d.id === ci.dishId)
-      const bId = dish?.branch_id ?? '__none__'
+      const bId = ci.branchId ?? dish?.branch_id ?? '__none__'
       const branch = branches.find(b => b.id === bId)
       const bName = branch?.name ?? 'Kitchen'
       const bType = branch?.type ?? 'kitchen'
@@ -1228,7 +1237,14 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       if (order) {
         printKitchenTickets(
           { ...order, created_by_name: createdByName },
-          items.map(i => ({ dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price, qty: i.qty })),
+          // branchId: the station the line was rung up on. A guest QR order can
+          // hold dishes from several stations, and this terminal only has its
+          // own station's dishes loaded, so without it those tickets all land
+          // on the bill printer.
+          items.map(i => ({
+            dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price,
+            qty: i.qty, note: i.notes ?? undefined, branchId: i.branch_id,
+          })),
           restaurantName ?? '',
         )
       }
