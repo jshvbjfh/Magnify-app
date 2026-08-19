@@ -1381,15 +1381,31 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
   // deliberately does not sync: paper coming out here says nothing about a
   // second till, and it must never re-push the order to the server.
   async function pushToKitchen(order: Order, items: OrderItem[]) {
+    // Recover the station for any line that arrived without one.
+    //
+    // Until today the sync wrote incoming order items WITHOUT branch_id — the
+    // server sent it and the till dropped it — so every order that reached this
+    // terminal from a tablet has null there and grouped under '__none__', which
+    // resolves to the bill printer. That is why an order rung up here printed to
+    // the right kitchens and the same order rung up on a tablet did not.
+    //
+    // Storing the column is fixed, but INSERT OR IGNORE never revisits a row, so
+    // orders already synced would stay wrong for ever. The dish itself knows
+    // which station it belongs to, and this device holds every station's dishes
+    // — getDishes() without a branch returns the lot, the branch filter is only
+    // applied when the menu is displayed. So the answer is already here.
+    const allDishes = await getDishes()
+    const stationOfDish = new Map(allDishes.map(d => [d.id, d.branch_id]))
+
     printKitchenTickets(
       order,
       items.map(i => ({
         dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price,
         qty: i.qty, note: i.notes ?? undefined,
-        // Carries the station the line was rung up on. Without it the ticket
-        // for a tablet order goes to this till's bill printer instead of the
-        // kitchen that owns the dish.
-        branchId: i.branch_id,
+        // The line's own stamp first — it is the station as it was when the
+        // order was rung up, and survives a dish being moved since. The dish's
+        // current station is the fallback for lines that never got one.
+        branchId: i.branch_id ?? stationOfDish.get(i.dish_id) ?? null,
       })),
       restaurantName ?? '',
     )
@@ -1406,6 +1422,10 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       const base = order?.created_by_name?.trim() || 'Guest QR Order'
       const createdByName = /confirmed by/i.test(base) ? base : `${base} · confirmed by ${waiterName}`
       await updateOrder(orderId, { status: 'PENDING', created_by_name: createdByName })
+      // Same station recovery as pushToKitchen: a guest QR order reaches this
+      // till by sync, and older syncs stored no branch_id on its lines.
+      const allDishes = await getDishes()
+      const stationOfDish = new Map(allDishes.map(d => [d.id, d.branch_id]))
       if (order) {
         printKitchenTickets(
           { ...order, created_by_name: createdByName },
@@ -1415,7 +1435,8 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
           // on the bill printer.
           items.map(i => ({
             dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price,
-            qty: i.qty, note: i.notes ?? undefined, branchId: i.branch_id,
+            qty: i.qty, note: i.notes ?? undefined,
+            branchId: i.branch_id ?? stationOfDish.get(i.dish_id) ?? null,
           })),
           restaurantName ?? '',
         )
