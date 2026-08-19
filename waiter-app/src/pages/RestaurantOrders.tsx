@@ -104,8 +104,11 @@ function code128svg(text: string): string {
 let electronPrintQueue: Promise<void> = Promise.resolve()
 const PRINT_GAP_MS = 250
 
-function calcTotals(items: Array<{ dishPrice: number; qty: number }>) {
-  const subtotal    = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
+function calcTotals(items: Array<{ dishPrice: number; qty: number; discountPercent?: number | null }>) {
+  // Discounts are part of the price, not decoration. Without this the bill
+  // printed the full menu total under discounted lines and the guest was asked
+  // for money the till was not going to collect.
+  const subtotal    = items.reduce((s, i) => s + lineNetAmount({ dish_price: i.dishPrice, qty: i.qty, discount_percent: i.discountPercent }), 0)
   // No VAT: the total is simply the sum of the item prices.
   return { subtotal, vatAmount: 0, totalAmount: subtotal }
 }
@@ -713,7 +716,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     const rule = '-'.repeat(LINE)
 
     const { topText, bottomText, footer2Text } = parseBillTemplate(billHeaderTpl)
-    const { totalAmount } = calcTotals(items.map(i => ({ dishPrice: i.dish_price, qty: i.qty })))
+    const { totalAmount } = calcTotals(items.map(i => ({
+      dishPrice: i.dish_price, qty: i.qty, discountPercent: i.discount_percent,
+    })))
     const now = new Date()
     const dt  = now.toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
     const isTakeaway = !order.table_id

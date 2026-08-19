@@ -1,3 +1,5 @@
+import { calculateLineNetAmount } from '@/lib/restaurantOrders'
+
 // Upsell & attachments — which product pairings make money, and which waiters
 // reproduce them.
 //
@@ -37,6 +39,7 @@ export type UpsellLineItem = {
   category: string | null
   qty: number
   dishPrice: number
+  discountPercent?: number | null
   /** Actual FIFO food cost for this line, from DishSale. Null when never costed. */
   foodCost: number | null
 }
@@ -341,7 +344,13 @@ export function buildUpsellingReport(checks: UpsellCheck[]): UpsellReport {
 
     for (const item of check.items) {
       const qty = Number(item.qty ?? 0)
-      const lineRevenue = qty * Number(item.dishPrice ?? 0)
+      // Net of any discount: attach revenue is money actually taken, and
+      // counting the menu price would flatter every upsell that was discounted.
+      const lineRevenue = calculateLineNetAmount({
+        dishPrice: Number(item.dishPrice ?? 0),
+        qty,
+        discountPercent: item.discountPercent,
+      })
       const group = classifyCategory(item.category)
       lineCount += qty
       if (group === 'food') { hasFood = true; foodOnCheck.set(item.dishId, item.dishName) }

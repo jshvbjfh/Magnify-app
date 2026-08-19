@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { calculateLineNetAmount } from '@/lib/restaurantOrders'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
@@ -73,7 +74,7 @@ export async function GET(req: Request) {
     orderIds.length > 0
       ? prisma.orderItem.findMany({
           where: { orderId: { in: orderIds }, status: 'ACTIVE' },
-          select: { id: true, orderId: true, dishId: true, qty: true, dishPrice: true },
+          select: { id: true, orderId: true, dishId: true, qty: true, dishPrice: true, discountPercent: true },
         })
       : Promise.resolve([]),
   ])
@@ -117,7 +118,16 @@ export async function GET(req: Request) {
     const branchId = sale?.branchId ?? dishById.get(item.dishId)?.branchId ?? orderBranchById.get(item.orderId) ?? null
     if (!branchId) continue
 
-    const saleAmount = sale ? Number(sale.totalSaleAmount ?? 0) : Number(item.dishPrice ?? 0) * Number(item.qty ?? 0)
+    // DishSale.totalSaleAmount is already net of any discount. The fallback —
+    // used where no dish sale was recorded — has to match it, or a discounted
+    // line reports at its menu price and the station's revenue is overstated.
+    const saleAmount = sale
+      ? Number(sale.totalSaleAmount ?? 0)
+      : calculateLineNetAmount({
+          dishPrice: Number(item.dishPrice ?? 0),
+          qty: Number(item.qty ?? 0),
+          discountPercent: item.discountPercent,
+        })
     const cost = sale
       ? Number(sale.calculatedFoodCost ?? 0)
       : Number(item.qty ?? 0) * (estimatedUnitCostByDishId.get(item.dishId) ?? 0)

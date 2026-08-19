@@ -107,8 +107,11 @@ function code128svg(text: string): string {
 let electronPrintQueue: Promise<void> = Promise.resolve()
 const PRINT_GAP_MS = 250
 
-function calcTotals(items: Array<{ dishPrice: number; qty: number }>) {
-  const subtotal    = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
+function calcTotals(items: Array<{ dishPrice: number; qty: number; discountPercent?: number | null }>) {
+  // Discounts are part of the price, not decoration. Without this the bill
+  // printed the full menu total under discounted lines and the guest was asked
+  // for money the till was not going to collect.
+  const subtotal    = items.reduce((s, i) => s + lineNetAmount({ dish_price: i.dishPrice, qty: i.qty, discount_percent: i.discountPercent }), 0)
   // No VAT: the total is simply the sum of the item prices.
   return { subtotal, vatAmount: 0, totalAmount: subtotal }
 }
@@ -741,7 +744,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     })))
     const billLines = items.map((i, idx) => ({ item: i, hidePrice: hidden[idx] }))
     const { totalAmount } = calcTotals(
-      billLines.map(l => ({ dishPrice: l.hidePrice ? 0 : l.item.dish_price, qty: l.item.qty })),
+      billLines.map(l => ({
+        dishPrice: l.hidePrice ? 0 : l.item.dish_price,
+        qty: l.item.qty,
+        discountPercent: l.item.discount_percent,
+      })),
     )
     const now = new Date()
     const dt  = now.toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
@@ -764,6 +771,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
         dt,
         items: billLines.map(l => ({
           qty: l.item.qty, name: l.item.dish_name, unitPrice: l.item.dish_price,
+          // The raw thermal bill is a wholly separate renderer from the HTML
+          // one, and it was never told about discounts — so a venue printing
+          // ESC/POS (which is every venue with a thermal printer) handed the
+          // guest a bill at full price while the screen showed the discount.
+          discountPercent: l.item.discount_percent ?? null,
           notes: l.item.notes ?? null,
           // Suppresses the amount column entirely — a zero would read as a
           // free item rather than a line the hotel is settling.

@@ -79,7 +79,7 @@ export async function GET(req: Request) {
       staff: { select: { name: true } },
       items: {
         where: { status: 'ACTIVE', deletedAt: null },
-        select: { id: true, dishId: true, dishName: true, qty: true, dishPrice: true },
+        select: { id: true, dishId: true, dishName: true, qty: true, dishPrice: true, discountPercent: true },
       },
     },
   })
@@ -131,6 +131,7 @@ export async function GET(req: Request) {
       category: categoryByDishId.get(item.dishId) ?? null,
       qty: Number(item.qty ?? 0),
       dishPrice: Number(item.dishPrice ?? 0),
+      discountPercent: item.discountPercent,
       // Null, not 0, when a line was never costed — the report counts those
       // separately instead of silently reporting them as pure profit.
       foodCost: costByOrderItemId.has(item.id) ? (costByOrderItemId.get(item.id) as number) : null,

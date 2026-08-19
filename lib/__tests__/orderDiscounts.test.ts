@@ -77,3 +77,27 @@ describe('calculateRestaurantOrderTotals with discounts', () => {
     expect(half.totalAmount).toBeCloseTo(full.totalAmount / 2, 6)
   })
 })
+
+// Everywhere a discounted line turns into money. Each of these was computing
+// qty * dishPrice independently, so a discount honoured in one and ignored in
+// another meant the guest, the printed bill and the manager's report each saw a
+// different number. They all reduce to calculateLineNetAmount now; this pins
+// down the shape they share rather than re-testing the helper.
+describe('every revenue path prices a line the same way', () => {
+  const line = { dishPrice: 10000, qty: 3, discountPercent: 10 }
+  const expected = 27000
+
+  it('agrees on a discounted line', () => {
+    // Order totals (also the journal entry amount, which is derived from these)
+    expect(calculateRestaurantOrderTotals([line]).subtotalAmount).toBe(expected)
+    // DishSale.totalSaleAmount, dish profitability, branch-summary's fallback
+    // and upselling attach revenue all call the helper directly with this shape.
+    expect(calculateLineNetAmount(line)).toBe(expected)
+  })
+
+  it('agrees that an undiscounted line is unchanged', () => {
+    const plain = { dishPrice: 10000, qty: 3 }
+    expect(calculateRestaurantOrderTotals([plain]).subtotalAmount).toBe(30000)
+    expect(calculateLineNetAmount(plain)).toBe(30000)
+  })
+})

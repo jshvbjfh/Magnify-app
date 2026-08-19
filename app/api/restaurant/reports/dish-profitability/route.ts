@@ -1,5 +1,6 @@
 ﻿import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
+import { calculateLineNetAmount } from '@/lib/restaurantOrders'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
@@ -152,9 +153,16 @@ export async function GET(req: Request) {
 
     const qtySold = stationItems.reduce((sum, item) => sum + Number(item.qty ?? 0), 0)
     // OrderItem.totalPrice is only populated by the QR-order submit path and
-    // is 0 for items created elsewhere (desktop/waiter order-taking) — qty *
-    // dishPrice is the reliably-populated line-item revenue.
-    const totalPrice = stationItems.reduce((sum, item) => sum + Number(item.qty ?? 0) * Number(item.dishPrice ?? 0), 0)
+    // is 0 for items created elsewhere (desktop/waiter order-taking), so the
+    // line is priced from qty and dishPrice — through calculateLineNetAmount,
+    // so a discounted line reports what the guest actually paid. Counting the
+    // menu price here would overstate both revenue and profit, and the margin
+    // on a discounted dish is exactly the number this report exists to show.
+    const totalPrice = stationItems.reduce((sum, item) => sum + calculateLineNetAmount({
+      dishPrice: Number(item.dishPrice ?? 0),
+      qty: Number(item.qty ?? 0),
+      discountPercent: item.discountPercent,
+    }), 0)
     const totalCost = stationItems.reduce((sum, item) => {
       const actual = actualCostByOrderItemId.get(item.id)
       if (actual !== undefined) return sum + actual

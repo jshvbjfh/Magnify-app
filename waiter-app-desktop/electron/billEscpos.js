@@ -152,8 +152,20 @@ function buildBillEscPos(data) {
       if (item.notes) parts.push(t(`  > ${ascii(item.notes)}`))
       continue
     }
-    for (const s of cols(`${qty} ${ascii(item.name).toUpperCase()}`, fmtNum(unit * qty))) parts.push(t(s))
+    // Discounts are printed, never silently applied. A guest handed a bill for
+    // less than the menu price is owed the reason in writing, and so is whoever
+    // reconciles the till at closing. Anything outside 0-100 counts as no
+    // discount, matching lineNetAmount on the client and the server — a bill
+    // must never grow because of one, nor go below zero.
+    const rawPct = Number(item.discountPercent)
+    const pct = Number.isFinite(rawPct) && rawPct > 0 && rawPct <= 100 ? rawPct : 0
+    const gross = unit * qty
+    const net = gross * (1 - pct / 100)
+    for (const s of cols(`${qty} ${ascii(item.name).toUpperCase()}`, fmtNum(net))) parts.push(t(s))
     if (qty > 1) parts.push(t(`  @ ${fmtNum(unit)} each`))
+    if (pct) {
+      for (const s of cols(`  less ${pct}%`, `-${fmtNum(gross - net)}`)) parts.push(t(s))
+    }
     if (item.notes) parts.push(t(`  > ${ascii(item.notes)}`))
   }
   parts.push(t(rule))
