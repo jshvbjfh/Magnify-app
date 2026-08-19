@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
-import { enqueueOrderSync } from '@/lib/restaurantOrders'
+import { calculateRestaurantOrderTotals, enqueueOrderSync } from '@/lib/restaurantOrders'
 import { finalizeRestaurantOrderPayment } from '@/lib/restaurantOrderPayment'
 import { resolveActiveStaffAccess } from '@/lib/mobileStaffAccess'
 
@@ -260,9 +260,31 @@ export async function POST(req: Request) {
       const normalizedUpdatedAt = parseRequiredDate(order.updated_at, normalizedCreatedAt)
       const normalizedPaidAt = parseOptionalDate(order.paid_at)
       const normalizedCanceledAt = parseOptionalDate(order.canceled_at)
-      const normalizedSubtotalAmount = normalizeNumber(order.subtotal_amount)
-      const normalizedVatAmount = normalizeNumber(order.vat_amount)
-      const normalizedTotalAmount = normalizeNumber(order.total_amount)
+      // Totals are DERIVED from the lines this push carries, not taken on trust
+      // from the device.
+      //
+      // A till was seen storing an order at its undiscounted gross while its own
+      // lines carried a 20% discount — the guest was quoted one figure on screen
+      // and the order row held another. Whatever caused that on the client, the
+      // server should not be able to record the disagreement: the lines are the
+      // thing a guest is actually charged for, and the journal entry raised at
+      // payment is computed from them too, so deriving the total here keeps the
+      // order row, the bill and the books telling one story.
+      //
+      // Only when this push actually carries the order's lines. A payload with
+      // none (a status-only update, say) keeps the device's figures rather than
+      // zeroing a real bill.
+      const pushedItems = orderItems.filter((i) => i.order_id === order.id)
+      const derived = pushedItems.length
+        ? calculateRestaurantOrderTotals(pushedItems.map((i) => ({
+            dishPrice: normalizeNumber(i.dish_price),
+            qty: Math.max(1, normalizeInteger(i.qty, 1)),
+            discountPercent: normalizeDiscountPercent(i.discount_percent),
+          })))
+        : null
+      const normalizedSubtotalAmount = derived ? derived.subtotalAmount : normalizeNumber(order.subtotal_amount)
+      const normalizedVatAmount = derived ? derived.vatAmount : normalizeNumber(order.vat_amount)
+      const normalizedTotalAmount = derived ? derived.totalAmount : normalizeNumber(order.total_amount)
       // Covers: keep null when absent or nonsensical rather than coercing to 0,
       // so a table with no recorded count is excluded from average-per-cover
       // instead of dragging it down as a zero-guest sale.

@@ -140,6 +140,11 @@ export async function GET(req: Request) {
       prisma.restaurantOrder.findMany({
         where: {
           restaurantId,
+          // Soft-deleted orders must not come back down. The waiter apps purge
+          // any local order the server stops listing, so leaving these in kept a
+          // removed order alive on every till for ever — an owner deleting a
+          // mistake order watched it reappear on the floor.
+          deletedAt: null,
           updatedAt: { gte: recentOrderSince },
         },
         select: {
@@ -160,6 +165,7 @@ export async function GET(req: Request) {
       prisma.restaurantOrder.findMany({
         where: {
           restaurantId,
+          deletedAt: null,
           OR: [
             // UNCONFIRMED = guest QR orders awaiting a waiter's confirmation.
             // They must reach the waiter device so the waiter can confirm them.
