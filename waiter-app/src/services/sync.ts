@@ -71,10 +71,19 @@ async function requireValidToken(): Promise<string> {
   return token
 }
 
-// How often a device re-reads the catalog. Five minutes: a menu edit reaches the
-// floor well inside a service, while the steady-state poll drops from twelve
-// queries to four.
-const CATALOG_PULL_INTERVAL_MS = 5 * 60 * 1000
+// How often a device re-reads the catalog.
+//
+// One minute, not five. Almost the entire saving comes from splitting the pull
+// at all, not from stretching the gap: at a 10-second poll the catalog costs
+// twelve queries a minute at this interval and the average lands at ~5.3 per
+// poll against 12 today — 56%. Going to five minutes would reach 64%, eight
+// points more, for data five times staler.
+//
+// Those eight points are not worth it. Stock counts, prep lists and a dish
+// being marked out all live in this half, so the interval is how long a waiter
+// can keep selling something the kitchen has just run out of. A minute is
+// invisible on the floor; five is a wrong order.
+const CATALOG_PULL_INTERVAL_MS = 60 * 1000
 // Zero, not Date.now(), so the first sync after launch always fetches the
 // catalog — a device that has just started may have nothing cached at all.
 let lastCatalogPullAt = 0
