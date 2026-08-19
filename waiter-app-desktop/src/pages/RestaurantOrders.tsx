@@ -913,6 +913,14 @@ ${barcodeEl}
     let ticketIndex = 1
     for (const [bId, group] of byBranch) {
       const deviceName = resolveStationPrinter(printerMap, billPrinter, bId === '__none__' ? null : bId)
+      // resolveStationPrinter falls back to the bill printer when a station has
+      // no printer of its own, and that fallback used to be silent: every
+      // ticket came out of the one machine and the station mapping looked
+      // broken when it was simply empty. Say which station is unmapped, so it
+      // can be fixed in Printers instead of guessed at.
+      if (bId !== '__none__' && !printerMap[bId]) {
+        setSubmitError(`No printer set for ${group.branchName} — printed on the bill printer. Assign one in Printers.`)
+      }
       const station = group.branchType === 'bar' ? 'BAR' : 'KITCHEN'
       const ticketNo = ticketIndex
 

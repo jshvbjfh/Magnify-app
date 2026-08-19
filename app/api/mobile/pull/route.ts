@@ -89,8 +89,25 @@ export async function GET(req: Request) {
     const startOfToday = new Date()
     startOfToday.setHours(0, 0, 0, 0)
 
+    // Catalog data — the menu, tables, staff, stations, MEP and stock — changes
+    // a few times a week. Orders change every minute. Both were being fetched
+    // together every 10 seconds by every device, which is what put the database
+    // under load: twelve queries a poll, six polls a minute, per till and per
+    // tablet, almost all of it re-reading rows nobody had touched.
+    //
+    // ?catalog=0 asks for the order half only. A client that knows to send it
+    // pulls the catalog on startup and every few minutes after; the rest of the
+    // time it costs four queries instead of twelve.
+    //
+    // Opt-in from the client on purpose. Devices in the field run older builds
+    // that read payload.dishes.length unguarded and warn — or throw — on an
+    // empty menu. They never send the flag, so they keep the full payload and
+    // behave exactly as before.
+    const catalogRequested = url.searchParams.get('catalog') !== '0'
+    const skip = <T,>(value: T) => Promise.resolve(value)
+
     const [dishes, tables, restaurant, approverEmployees, allBranches, recentOrders, incomingOrders, mepItems, mepTodayLogs, prepCatalog, openShift] = await Promise.all([
-      prisma.dish.findMany({
+      catalogRequested ? prisma.dish.findMany({
         where: dishWhere,
         select: {
           id: true, name: true, sellingPrice: true,
@@ -98,16 +115,16 @@ export async function GET(req: Request) {
           preparedPortions: true,
         },
         orderBy: { name: 'asc' },
-      }),
+      }) : Promise.resolve([]),
 
-      prisma.restaurantTable.findMany({
+      catalogRequested ? prisma.restaurantTable.findMany({
         where: tableWhere,
         select: {
           id: true, name: true, seats: true, status: true,
           branchId: true, restaurantId: true,
         },
         orderBy: { name: 'asc' },
-      }),
+      }) : Promise.resolve([]),
 
       prisma.restaurant.findUnique({
         where: { id: restaurantId },
@@ -120,7 +137,7 @@ export async function GET(req: Request) {
       // cancellation PINs identify a *person*, not a station, so anyone on
       // staff can confirm/cancel regardless of which station tab is active.
       // Hashes are sent, never plaintext.
-      prisma.staff.findMany({
+      catalogRequested ? prisma.staff.findMany({
         where: {
           restaurantId,
           isActive: true,
@@ -128,13 +145,13 @@ export async function GET(req: Request) {
           OR: [{ pin: { not: null } }, { cancellationPin: { not: null } }],
         },
         select: { id: true, name: true, pin: true, cancellationPin: true },
-      }),
+      }) : Promise.resolve([]),
 
-      prisma.branch.findMany({
+      catalogRequested ? prisma.branch.findMany({
         where: { restaurantId, isActive: true },
         select: { id: true, name: true, code: true, isMain: true, type: true },
         orderBy: { name: 'asc' },
-      }),
+      }) : Promise.resolve([]),
 
       // Recent order status updates — restaurant-wide so any branch's changes reconcile locally.
       prisma.restaurantOrder.findMany({
@@ -217,24 +234,24 @@ export async function GET(req: Request) {
       }),
 
       // MEP list for this station — persists until removed by staff.
-      prisma.mepListItem.findMany({
+      catalogRequested ? prisma.mepListItem.findMany({
         where: { restaurantId, branchId: effectiveBranchId, deletedAt: null },
         orderBy: { createdAt: 'asc' },
-      }),
+      }) : Promise.resolve([]),
 
       // Today's prep logs for offline reconciliation on the device.
-      prisma.prepLog.findMany({
+      catalogRequested ? prisma.prepLog.findMany({
         where: { restaurantId, branchId: effectiveBranchId, madeAt: { gte: startOfToday } },
         orderBy: { madeAt: 'desc' },
         take: 200,
-      }),
+      }) : Promise.resolve([]),
 
       // Prep catalog for the MEP search box (dishes come from the dishes array).
-      prisma.inventoryItem.findMany({
+      catalogRequested ? prisma.inventoryItem.findMany({
         where: { restaurantId, branchId: effectiveBranchId, type: 'prep', deletedAt: null },
         select: { id: true, name: true, unit: true, quantity: true },
         orderBy: { name: 'asc' },
-      }),
+      }) : Promise.resolve([]),
 
       // Current open service session (whole-venue). Earliest-opened wins if two
       // ever exist (concurrent offline opens), so every terminal converges on the
@@ -329,6 +346,10 @@ export async function GET(req: Request) {
       restaurant: restaurant
         ? { id: restaurant.id, name: restaurant.name, billHeader: restaurant.billHeader ?? '', billPrinterIp: restaurant.billPrinterIp ?? '', billPrinterPort: restaurant.billPrinterPort ?? null, shifts_enabled: restaurant.shiftsEnabled }
         : { id: restaurantId, name: 'Restaurant', billHeader: '', billPrinterIp: '', billPrinterPort: null, shifts_enabled: true },
+      // Tells the client which half it received. Without it a light pull looks
+      // identical to a restaurant whose menu really is empty, and the client
+      // warns the waiter their station has no menu.
+      catalogIncluded: catalogRequested,
       branches: allBranches,
       cancellationApprovers: approverEmployees
         .filter(e => e.cancellationPin != null)

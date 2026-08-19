@@ -40,6 +40,10 @@ export interface MepPullSlice {
 }
 
 export interface PullPayload {
+  // False when this was a light pull — the order half only. The catalog fields
+  // below are then empty because they were not asked for, NOT because the
+  // restaurant has no menu, and must be left alone rather than acted on.
+  catalogIncluded?: boolean
   dishes: Dish[]
   tables: RestaurantTable[]
   restaurant: { id: string; name: string; billHeader?: string; billPrinterIp?: string | null; billPrinterPort?: number | null; shifts_enabled?: boolean }
@@ -67,6 +71,14 @@ async function requireValidToken(): Promise<string> {
   return token
 }
 
+// How often a device re-reads the catalog. Five minutes: a menu edit reaches the
+// floor well inside a service, while the steady-state poll drops from twelve
+// queries to four.
+const CATALOG_PULL_INTERVAL_MS = 5 * 60 * 1000
+// Zero, not Date.now(), so the first sync after launch always fetches the
+// catalog — a device that has just started may have nothing cached at all.
+let lastCatalogPullAt = 0
+
 export async function pullSync(branchId?: string): Promise<PullResult> {
   if (!API.pull) throw new Error('API base URL is not configured. Set VITE_API_BASE_URL in your build.')
   const token = await requireValidToken()
@@ -76,7 +88,21 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   const assignedBranchId = normalizeConfigId(await getConfig('branchId'))
   const activeBranchId = normalizeConfigId(await getConfig('activeBranchId'))
   const effectiveBranchId = requestedBranchId ?? activeBranchId ?? assignedBranchId
-  const pullUrl = effectiveBranchId ? `${API.pull}?branchId=${encodeURIComponent(effectiveBranchId)}` : API.pull
+  // The menu, tables, staff, stations, MEP and stock change a few times a week;
+  // orders change every minute. Pulling both every 10 seconds on every device is
+  // what put the database under load — twelve queries a poll, almost all of it
+  // re-reading rows nobody had touched. Ask for the catalog on the first sync
+  // after launch, then every few minutes; the rest of the time take the orders
+  // alone and leave the cached catalog in place.
+  //
+  // Always asked for when a branch is explicitly requested: switching station
+  // changes the whole menu, and waiting minutes for it would be wrong.
+  const wantCatalog = Boolean(requestedBranchId) || Date.now() - lastCatalogPullAt > CATALOG_PULL_INTERVAL_MS
+  const params = new URLSearchParams()
+  if (effectiveBranchId) params.set('branchId', effectiveBranchId)
+  if (!wantCatalog) params.set('catalog', '0')
+  const query = params.toString()
+  const pullUrl = query ? `${API.pull}?${query}` : API.pull
 
   const response = await sendRequest({
     scope: 'sync',
@@ -166,28 +192,36 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   const now = new Date().toISOString()
   let didRefreshLocalSnapshot = false
 
-  if (payload.dishes.length === 0) {
+  // A light pull carries no catalog, so none of the checks below apply: empty
+  // here means "not asked for", not "this station has no menu". Acting on it
+  // would warn the waiter their menu is gone, or throw outright.
+  const hasCatalog = payload.catalogIncluded !== false
+
+  if (hasCatalog && payload.dishes.length === 0) {
     // Don't wipe the local cache on an empty response — a transient server error
     // or misconfiguration could cause 0 dishes, and clearing would break offline use.
     if (existingDishes.length > 0) {
       warnings.push('This station currently has no menu. Showing your cached menu.')
     }
-  } else {
+  } else if (hasCatalog) {
     await replaceDishes(payload.dishes, dishReplaceScope)
     didRefreshLocalSnapshot = true
+    // Only a pull that actually carried the catalog resets the clock, so a
+    // failed or light one does not postpone the next real refresh.
+    lastCatalogPullAt = Date.now()
   }
 
-  if (payload.tables.length === 0) {
+  if (hasCatalog && payload.tables.length === 0) {
     // Same defensive approach for tables — preserve local cache on empty pull.
     if (existingTables.length > 0) {
       warnings.push('This station currently has no tables.')
     }
-  } else {
+  } else if (hasCatalog) {
     await replaceTables(payload.tables, replaceScope)
     didRefreshLocalSnapshot = true
   }
 
-  if (payload.dishes.length === 0 && existingDishes.length === 0) {
+  if (hasCatalog && payload.dishes.length === 0 && existingDishes.length === 0) {
     await logError('sync', 'Pull returned no menu for assigned branch', {
       restaurantId: payload.restaurant.id,
       branchId: effectiveBranchId ?? null,
@@ -267,7 +301,10 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   // MEP: replace this station's list + prep catalog with the server-authoritative
   // snapshot, reconcile today's logs, then re-apply the deltas of local logs the
   // server hasn't seen yet so their optimistic "remaining" isn't wiped by the pull.
-  if (payload.mep && effectiveBranchId) {
+  // hasCatalog matters here more than anywhere: on a light pull payload.mep is
+  // still an object, just an empty one, and replaceMepItems([]) would wipe the
+  // station's whole prep list rather than leave it alone.
+  if (hasCatalog && payload.mep && effectiveBranchId) {
     await replaceMepItems(Array.isArray(payload.mep.items) ? payload.mep.items : [], effectiveBranchId)
     await replaceMepCatalog(Array.isArray(payload.mep.preps) ? payload.mep.preps : [], effectiveBranchId)
     if (Array.isArray(payload.mep.todayLogs) && payload.mep.todayLogs.length > 0) {

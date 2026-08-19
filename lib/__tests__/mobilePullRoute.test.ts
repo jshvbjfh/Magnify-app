@@ -99,6 +99,46 @@ describe('GET /api/mobile/pull', () => {
     prismaMock.shift.findFirst.mockResolvedValue(null)
   })
 
+  // Every device polled this endpoint every 10 seconds and got twelve queries
+  // back, almost all of it catalog data nobody had touched. ?catalog=0 asks for
+  // the order half alone; these pin down that it genuinely stops querying, and
+  // that it still returns the orders it was asked for.
+  it('skips the catalog queries when the client asks for orders only', async () => {
+    const response = await GET(new Request('http://localhost/api/mobile/pull?catalog=0', {
+      headers: { authorization: 'Bearer token-1' },
+    }))
+
+    expect(response.status).toBe(200)
+    expect(prismaMock.dish.findMany).not.toHaveBeenCalled()
+    expect(prismaMock.restaurantTable.findMany).not.toHaveBeenCalled()
+    expect(prismaMock.staff.findMany).not.toHaveBeenCalled()
+    expect(prismaMock.branch.findMany).not.toHaveBeenCalled()
+    expect(prismaMock.mepListItem.findMany).not.toHaveBeenCalled()
+    expect(prismaMock.prepLog.findMany).not.toHaveBeenCalled()
+    expect(prismaMock.inventoryItem.findMany).not.toHaveBeenCalled()
+
+    // Orders and the open shift are the point of the poll and must still run.
+    expect(prismaMock.restaurantOrder.findMany).toHaveBeenCalled()
+    expect(prismaMock.shift.findFirst).toHaveBeenCalled()
+  })
+
+  it('flags a light pull so the client leaves its cached menu alone', async () => {
+    const light = await GET(new Request('http://localhost/api/mobile/pull?catalog=0', {
+      headers: { authorization: 'Bearer token-1' },
+    }))
+    // Without this the empty dishes array is indistinguishable from a station
+    // whose menu really is empty, and the waiter is told their menu is gone.
+    await expect(light.json()).resolves.toMatchObject({ catalogIncluded: false })
+  })
+
+  it('still sends the catalog when not asked to skip it', async () => {
+    const full = await GET(new Request('http://localhost/api/mobile/pull', {
+      headers: { authorization: 'Bearer token-1' },
+    }))
+    expect(prismaMock.dish.findMany).toHaveBeenCalled()
+    await expect(full.json()).resolves.toMatchObject({ catalogIncluded: true })
+  })
+
   it('uses the current DB staff binding instead of stale JWT restaurant claims', async () => {
     const response = await GET(new Request('http://localhost/api/mobile/pull', {
       headers: { authorization: 'Bearer token-1' },
