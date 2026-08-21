@@ -3,11 +3,22 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Plus, X, CheckCircle } from 'lucide-react'
 
+// Where a credit sale came from. 'order' is a bill put on a tab at the till,
+// 'buffet' the hotel's breakfast lines, 'manual' a debt typed in below.
+type ReceivableSource = 'manual' | 'order' | 'buffet'
+
 interface CreditItem {
   id: string
+  source: ReceivableSource
   description: string
   amount: number
   saleDate: string
+}
+
+const SOURCE_BADGE: Record<ReceivableSource, { label: string; className: string }> = {
+  order: { label: 'Tab', className: 'bg-blue-50 text-blue-600' },
+  buffet: { label: 'Buffet', className: 'bg-amber-50 text-amber-700' },
+  manual: { label: 'Manual', className: 'bg-gray-100 text-gray-500' },
 }
 
 interface ClientRow {
@@ -65,6 +76,7 @@ export default function AccountsReceivable() {
   const [payMethod, setPayMethod] = useState(PAYMENT_METHODS[0])
   const [confirming, setConfirming] = useState(false)
   const [flashId, setFlashId] = useState<string | null>(null)
+  const [payError, setPayError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ clientName: '', customerPhone: '', amount: '', date: new Date().toISOString().slice(0, 10), description: '' })
   const [submitting, setSubmitting] = useState(false)
@@ -92,13 +104,21 @@ export default function AccountsReceivable() {
 
   async function confirmPayment(itemId: string) {
     setConfirming(true)
+    setPayError(null)
     try {
       const res = await fetch('/api/accounts-receivable', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: itemId, paymentMethod: payMethod }),
       })
-      if (!res.ok) return
+      if (!res.ok) {
+        // Silence here used to leave the button looking like it worked while
+        // the debt stayed open — most often because someone else collected it
+        // first.
+        const payload = await res.json().catch(() => null)
+        setPayError(payload?.error || 'Could not record the payment')
+        return
+      }
       setFlashId(itemId)
       setPayingId(null)
       setTimeout(async () => {
@@ -198,7 +218,7 @@ export default function AccountsReceivable() {
       {!loading && data?.receivables.length === 0 && (
         <div className="rounded-xl border bg-white py-16 text-center">
           <p className="text-sm font-medium text-gray-500">No outstanding credit sales</p>
-          <p className="mt-1 text-xs text-gray-400">Click "+ Add Unpaid Service" to record your first credit sale.</p>
+          <p className="mt-1 text-xs text-gray-400">Bills put on a tab at the till appear here automatically.</p>
         </div>
       )}
 
@@ -267,7 +287,12 @@ export default function AccountsReceivable() {
                       {selected.items.map(item => (
                         <tr key={item.id} className={`border-b last:border-b-0 transition-colors ${flashId === item.id ? 'bg-green-50' : ''}`}>
                           <td className="py-3 pr-4 text-xs text-gray-500 whitespace-nowrap">{fmtDate(item.saleDate)}</td>
-                          <td className="py-3 pr-4 text-gray-700">{item.description}</td>
+                          <td className="py-3 pr-4 text-gray-700">
+                            <span className={`mr-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${(SOURCE_BADGE[item.source] ?? SOURCE_BADGE.manual).className}`}>
+                              {(SOURCE_BADGE[item.source] ?? SOURCE_BADGE.manual).label}
+                            </span>
+                            {item.description}
+                          </td>
                           <td className="py-3 pr-4 text-right font-medium text-gray-800 whitespace-nowrap">{fmt(item.amount)}</td>
                           <td className="py-3 text-right">
                             {flashId === item.id ? (
@@ -284,10 +309,11 @@ export default function AccountsReceivable() {
                                 <button onClick={() => confirmPayment(item.id)} disabled={confirming} className="rounded bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-60">
                                   {confirming ? '…' : 'Confirm'}
                                 </button>
-                                <button onClick={() => setPayingId(null)} className="rounded border px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50">Cancel</button>
+                                <button onClick={() => { setPayingId(null); setPayError(null) }} className="rounded border px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50">Cancel</button>
+                                {payError && <span className="text-xs text-red-600">{payError}</span>}
                               </div>
                             ) : (
-                              <button onClick={() => { setPayingId(item.id); setPayMethod(PAYMENT_METHODS[0]) }} className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700">
+                              <button onClick={() => { setPayingId(item.id); setPayMethod(PAYMENT_METHODS[0]); setPayError(null) }} className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700">
                                 Paid?
                               </button>
                             )}

@@ -23,6 +23,15 @@
 const HOTEL_BUFFET_RESTAURANT_ID = 'cmssn2wif000210rcxlzs1jny' // SIROCCO Y SOL
 const HOTEL_BUFFET_CATEGORY = 'breakfast buffet table'
 
+// Whether this restaurant has the arrangement at all. Callers that would
+// otherwise query dishes or orders just to discover there is no buffet can ask
+// first and skip the work entirely — for every other restaurant this is the
+// only buffet cost on the request. The ID itself stays private so no caller can
+// hand-roll its own comparison and drift from isHotelBuffetLine.
+export function restaurantHasHotelBuffet(restaurantId: string | null | undefined): boolean {
+  return restaurantId === HOTEL_BUFFET_RESTAURANT_ID
+}
+
 // Category is a second guard behind the restaurant check; it is optional
 // because an order item carries no category of its own and its dish may since
 // have been deactivated, in which case the exact name stands alone.

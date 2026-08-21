@@ -170,28 +170,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     const collectPaymentMethod = paymentMethod || 'Cash'
     try {
       const updated = await prisma.$transaction(async (tx) => {
-        const { ensureCoreCategories, ensureAccount, resolveSettlementAccount } = await import('@/lib/accounting')
-        const categories = await ensureCoreCategories(tx, restaurantId)
-        const arAccount = await ensureAccount(tx, {
-          restaurantId, name: 'Accounts Receivable', type: 'asset',
-          categoryId: categories.asset.id, code: '1200',
-        })
-        const { account: cashAccount } = await resolveSettlementAccount(tx, collectPaymentMethod, 'out', categories, restaurantId)
-
-        await tx.journalEntry.create({
-          data: {
-            restaurantId,
-            branchId,
-            description: `A/R Collected: Order ${order.orderNumber}${order.arCustomerName ? ` (${order.arCustomerName})` : ''} via ${collectPaymentMethod}`,
-            reference: `AR-${order.id.slice(-8).toUpperCase()}`,
-            entryDate: new Date(),
-            lines: {
-              create: [
-                { accountId: cashAccount.id, debit: order.totalAmount, credit: 0, description: `Collect A/R: Order ${order.orderNumber}` },
-                { accountId: arAccount.id, debit: 0, credit: order.totalAmount, description: `Clear A/R: ${order.arCustomerName || 'customer'}` },
-              ],
-            },
-          },
+        // Shared with the A/R page, so a receivable clears the same way whether
+        // it was collected at the till or from the owner's Receivable screen.
+        const { recordReceivableCollection } = await import('@/lib/accounting')
+        await recordReceivableCollection(tx, {
+          restaurantId,
+          branchId,
+          amount: order.totalAmount,
+          paymentMethod: collectPaymentMethod,
+          subject: `Order ${order.orderNumber}`,
+          customerName: order.arCustomerName,
+          reference: `AR-${order.id.slice(-8).toUpperCase()}`,
         })
 
         return tx.restaurantOrder.update({

@@ -253,6 +253,73 @@ export async function recordJournalEntry(
   return journalEntry
 }
 
+// ─── Collecting on a receivable ─────────────────────────────────────────────
+//
+// Money arriving against an open credit sale moves value between two asset
+// accounts. It is NOT revenue:
+//
+//   DR <tender>              the money finally arrives
+//   CR Accounts Receivable   the debt is discharged
+//
+// Booking it as revenue instead — DR Cash, CR Sales — is the tempting mistake,
+// and it counts the same plate twice: once when the guest ate it on credit
+// (DR A/R, CR Sales) and again when they paid. The receivable would also sit on
+// the balance sheet for ever, because nothing ever credits it back down.
+//
+// Every path that clears a receivable goes through here — the A/R page and the
+// POS's collect action alike — so the two can never drift into booking the same
+// collection two different ways.
+export async function recordReceivableCollection(
+  db: PrismaDb,
+  params: {
+    restaurantId: string
+    branchId?: string | null
+    date?: Date
+    amount: number
+    // The tender the money actually came in on. Resolved with direction 'out'
+    // so 'Credit' can never resolve back to Accounts Receivable and produce an
+    // entry that debits and credits the same account.
+    paymentMethod: string
+    // What is being collected, in the operator's words: 'Order WA-1234' or the
+    // description of a manually recorded credit sale.
+    subject: string
+    customerName?: string | null
+    reference?: string | null
+  },
+) {
+  const categories = await ensureCoreCategories(db, params.restaurantId)
+  const arAccount = await ensureAccount(db, {
+    restaurantId: params.restaurantId,
+    name: 'Accounts Receivable',
+    type: 'asset',
+    categoryId: categories.asset.id,
+    code: '1200',
+  })
+  const { account: tenderAccount, paymentMethod } = await resolveSettlementAccount(
+    db,
+    params.paymentMethod,
+    'out',
+    categories,
+    params.restaurantId,
+  )
+
+  return db.journalEntry.create({
+    data: {
+      restaurantId: params.restaurantId,
+      branchId: params.branchId ?? null,
+      description: `A/R Collected: ${params.subject}${params.customerName ? ` (${params.customerName})` : ''} via ${paymentMethod}`,
+      reference: params.reference ?? null,
+      entryDate: params.date ?? new Date(),
+      lines: {
+        create: [
+          { accountId: tenderAccount.id, debit: params.amount, credit: 0, description: `Collect A/R: ${params.subject}` },
+          { accountId: arAccount.id, debit: 0, credit: params.amount, description: `Clear A/R: ${params.customerName || 'customer'}` },
+        ],
+      },
+    },
+  })
+}
+
 // ─── VAT journal entry (3 lines) ────────────────────────────────────────────
 //
 // Income with VAT: DR settlement (net + VAT), CR revenue (net), CR VAT Payable (VAT)
