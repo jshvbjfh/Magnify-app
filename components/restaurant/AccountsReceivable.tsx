@@ -80,6 +80,7 @@ export default function AccountsReceivable() {
   const [confirming, setConfirming] = useState(false)
   const [flashId, setFlashId] = useState<string | null>(null)
   const [payError, setPayError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ clientName: '', customerPhone: '', amount: '', date: new Date().toISOString().slice(0, 10), description: '' })
   const [submitting, setSubmitting] = useState(false)
@@ -147,9 +148,20 @@ export default function AccountsReceivable() {
         body: JSON.stringify({ clientName: form.clientName, customerPhone: form.customerPhone, amount: form.amount, date: form.date, description: form.description }),
       })
       if (!res.ok) { setFormError('Failed to record credit sale'); return }
+      // Name the client and the amount back. The form closes and the row joins a
+      // list that may be long enough to scroll, so "saved" on its own leaves the
+      // manager hunting for proof the debt was actually written down.
+      const clientName = form.clientName.trim()
+      const recorded = `${clientName} owes ${fmt(parseFloat(form.amount))}`
       setForm({ clientName: '', customerPhone: '', amount: '', date: new Date().toISOString().slice(0, 10), description: '' })
       setShowForm(false)
+      setSuccess(recorded)
+      // Select only AFTER the reload. Naming the client while the list is still
+      // the old one trips the "client disappeared" guard below, which would
+      // clear the selection before the new row ever arrives.
       await load()
+      setSelectedName(clientName)
+      window.setTimeout(() => setSuccess(null), 4000)
     } finally {
       setSubmitting(false)
     }
@@ -216,6 +228,14 @@ export default function AccountsReceivable() {
             </button>
             <button onClick={() => { setShowForm(false); setFormError(null) }} className="rounded-lg border px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50">Cancel</button>
           </div>
+        </div>
+      )}
+
+      {/* Confirmation that the debt was written down */}
+      {success && (
+        <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-4 py-2.5">
+          <CheckCircle className="h-4 w-4 flex-shrink-0 text-green-600" />
+          <p className="text-sm font-medium text-green-800">Credit sale recorded — {success}</p>
         </div>
       )}
 
