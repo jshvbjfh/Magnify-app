@@ -1484,12 +1484,17 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange, range }: {
         <div className="mb-5">
           <h4 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Top opportunities</h4>
           <div className="rounded-xl border border-gray-200 bg-white px-4">
-            {opportunities.slice(0, 3).map((o, i) => (
+            {opportunities.slice(0, 3).map((o, i) => {
+              // Opportunities are built from these same pairings, so the key always
+              // resolves; the fallback is here only so a shape change degrades to
+              // "no verdict" instead of throwing on the busiest panel of the report.
+              const lift = pairings.find((p) => p.key === o.key)?.lift ?? null
+              return (
               <div key={o.key} className={`flex items-center justify-between gap-5 py-3.5 ${i > 0 ? 'border-t border-gray-100' : ''}`}>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate flex items-center gap-2">
+                  <p className="text-sm font-semibold text-gray-900 flex items-center gap-2 min-w-0">
                     <span className="truncate">{o.baseName} <span className="font-normal text-gray-400">+</span> {o.attachName}</span>
-                    <AffinityChip lift={pairings.find((p) => p.key === o.key)?.lift ?? null} />
+                    <span className="flex-shrink-0"><AffinityChip lift={lift} /></span>
                   </p>
                   <p className="text-xs text-gray-500 mt-0.5">
                     Sold together on <span className="font-semibold text-gray-700">{o.together} of {o.baseBills}</span> bills — <span className="font-semibold text-gray-700">{o.houseRate.toFixed(0)}%</span>.
@@ -1498,15 +1503,11 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange, range }: {
                   {/* An opportunity can rank first purely because the attached item is on
                       half of all bills. Saying so inline is the difference between a
                       manager coaching a real upsell and chasing a statistical artifact. */}
-                  {(() => {
-                    const lift = pairings.find((p) => p.key === o.key)?.lift ?? null
-                    if (lift === null || lift >= 0.8) return null
-                    return (
-                      <p className="text-xs text-rose-600 mt-1">
-                        Guests take {o.attachName} with {o.baseName} <span className="font-semibold">less often than chance</span> — it ranks high because {o.attachName} is on so many bills, not because they go together.
-                      </p>
-                    )
-                  })()}
+                  {affinityOf(lift) === 'substitutes' && (
+                    <p className="text-xs text-rose-600 mt-1">
+                      Guests take {o.attachName} with {o.baseName} <span className="font-semibold">less often than chance</span> — it ranks high because {o.attachName} is on so many bills, not because they go together.
+                    </p>
+                  )}
                   <div className="mt-2 h-1.5 max-w-[320px] rounded-full bg-gray-100 overflow-hidden flex">
                     <span className="h-full bg-orange-500" style={{ width: `${Math.min(100, o.houseRate)}%` }} />
                     <span className="h-full bg-amber-300" style={{ width: `${Math.min(100 - Math.min(100, o.houseRate), o.gapPoints)}%` }} />
@@ -1517,7 +1518,8 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange, range }: {
                   <p className="text-[10px] uppercase tracking-wider text-gray-400">RWF</p>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}
