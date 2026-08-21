@@ -35,6 +35,14 @@ export async function finalizeRestaurantOrderPayment(
     paymentMethod?: string | null
     arCustomerName?: string | null
     arCustomerPhone?: string | null
+    // Why nothing was charged. Required by the callers for a comp, because a
+    // free meal with no reason is indistinguishable from a mistake — and it is
+    // the only thing the No Charge report can show about why the food went out.
+    noChargeReason?: string | null
+    // Who closed the bill when that was not the waiter who took it. On a comp
+    // this is the person who authorised it, which is the accountability the
+    // report exists for.
+    settledByName?: string | null
     paidAt?: Date
   },
 ) {
@@ -139,8 +147,12 @@ export async function finalizeRestaurantOrderPayment(
             vatAmount: remainingTotals.vatAmount,
             totalAmount: remainingTotals.totalAmount,
             compedAmount: compedTotals.totalAmount,
+            ...(params.noChargeReason ? { noChargeReason: params.noChargeReason } : {}),
           }
         : {}),
+      // Written whatever the tender: a supervisor settling another waiter's
+      // table is worth recording on a cash bill too, not only on a comp.
+      ...(params.settledByName ? { settledByName: params.settledByName } : {}),
       canceledAt: null,
       cancelReason: null,
     },

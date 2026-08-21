@@ -81,7 +81,13 @@ type RestaurantOrdersSnapshot = {
   billHeader?: string
 }
 
-const PAY_METHODS  = ['Cash', 'MoMo', 'Card', 'Bank Transfer', 'Credit']
+// 'Complementary' is a settlement, not a payment: the guests ate and nothing was
+// collected. It closes the bill at zero, books no revenue, and still takes the
+// food off stock — and it always carries a reason, because a free meal with none
+// is indistinguishable from a mistake. Kept in step with NO_CHARGE_METHOD in
+// lib/restaurantOrders.ts.
+const NO_CHARGE_METHOD_LABEL = 'Complementary'
+const PAY_METHODS  = ['Cash', 'MoMo', 'Card', 'Bank Transfer', 'Credit', NO_CHARGE_METHOD_LABEL]
 const AR_COLLECT_METHODS = ['Cash', 'Bank Transfer', 'MoMo']
 
 type ArOrder = {
@@ -171,6 +177,8 @@ export default function RestaurantOrders({
   const [payingTableKey, setPayingTableKey] = useState<string | null>(null)
   const [payMethod,      setPayMethod]      = useState('Cash')
   const [arCustomerName, setArCustomerName] = useState('')
+  // Why nothing was charged. Required before a Complementary bill can be closed.
+  const [noChargeReason, setNoChargeReason] = useState('')
   // Optional — a credit tab is chaseable with a name alone, so an empty phone
   // is sent as null rather than an empty string.
   const [arCustomerPhone, setArCustomerPhone] = useState('')
@@ -888,7 +896,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
     try {
       const res = await fetch(`/api/restaurant/orders/${orderId}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-        body: JSON.stringify({ action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, customerPhone: payMethod === 'Credit' ? (arCustomerPhone.trim() || null) : null, actionKey })
+        body: JSON.stringify({ action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, customerPhone: payMethod === 'Credit' ? (arCustomerPhone.trim() || null) : null, noChargeReason: payMethod === NO_CHARGE_METHOD_LABEL ? noChargeReason.trim() : null, actionKey })
       })
       if (!res.ok) {
         const payload = await res.json().catch(() => null)
@@ -903,7 +911,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
       window.dispatchEvent(new CustomEvent('refreshTransactions', {
         detail: { count: 2, source: 'restaurant_order_payment' }
       }))
-      setPayingTableKey(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('')
+      setPayingTableKey(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone(''); setNoChargeReason('')
     } catch (error) {
       if ((typeof navigator !== 'undefined' && navigator.onLine === false) || isLikelyOfflineError(error)) {
         await queueLifecycleActionOffline({
@@ -916,7 +924,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
           request: {
             url: `/api/restaurant/orders/${orderId}`,
             method: 'PATCH',
-            body: { action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, customerPhone: payMethod === 'Credit' ? (arCustomerPhone.trim() || null) : null, actionKey },
+            body: { action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, customerPhone: payMethod === 'Credit' ? (arCustomerPhone.trim() || null) : null, noChargeReason: payMethod === NO_CHARGE_METHOD_LABEL ? noChargeReason.trim() : null, actionKey },
           },
           projection: {
             type: 'remove-order',
@@ -925,6 +933,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
         }, 'Queued payment offline. The order will sync and post its accounting entries when internet returns.')
         setPayingTableKey(null)
         setPayMethod('Cash')
+        setNoChargeReason('')
       } else {
         window.alert(error instanceof Error ? error.message : 'Payment failed.')
       }
@@ -1071,8 +1080,12 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
             <label className="text-xs font-semibold text-gray-600 mb-2 block">Payment Method</label>
             <div className="grid grid-cols-2 gap-2">
               {PAY_METHODS.map(m => (
-                <button key={m} type="button" onClick={() => { setPayMethod(m); if (m !== 'Credit') { setArCustomerName(''); setArCustomerPhone('') } }}
-                  className={`py-2.5 rounded-lg text-sm font-medium border transition-all ${payMethod === m ? (m === 'Credit' ? 'bg-amber-500 text-white border-amber-500' : 'bg-green-500 text-white border-green-500') : 'bg-white text-gray-700 border-gray-300 hover:border-green-400'}`}>
+                <button key={m} type="button" onClick={() => {
+                    setPayMethod(m)
+                    if (m !== 'Credit') { setArCustomerName(''); setArCustomerPhone('') }
+                    if (m !== NO_CHARGE_METHOD_LABEL) setNoChargeReason('')
+                  }}
+                  className={`py-2.5 rounded-lg text-sm font-medium border transition-all ${payMethod === m ? (m === 'Credit' ? 'bg-amber-500 text-white border-amber-500' : m === NO_CHARGE_METHOD_LABEL ? 'bg-purple-600 text-white border-purple-600' : 'bg-green-500 text-white border-green-500') : 'bg-white text-gray-700 border-gray-300 hover:border-green-400'}`}>
                   {m}
                 </button>
               ))}
@@ -1098,10 +1111,27 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
               <p className="mt-1 text-xs text-amber-700">Credit sale records as Accounts Receivable. You can collect later.</p>
             </div>
           )}
+          {payMethod === NO_CHARGE_METHOD_LABEL && (
+            <div>
+              <label className="text-xs font-semibold text-gray-600 mb-1.5 block">Reason <span className="text-red-500">*</span></label>
+              <input
+                value={noChargeReason}
+                onChange={e => setNoChargeReason(e.target.value)}
+                placeholder="e.g. Owner's guests, staff meal, sent back"
+                className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-300 ${!noChargeReason.trim() ? 'border-red-300' : 'border-gray-300'}`}
+              />
+              <p className="mt-1 text-xs text-purple-700">
+                Nothing is charged. The food still comes off stock, and {fmtRWF(tot)} RWF is recorded as comped in the No Charge report.
+              </p>
+            </div>
+          )}
           <div className="flex gap-2 pt-1">
             <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2.5 rounded-xl hover:bg-gray-50">Cancel</button>
-            <button onClick={() => collectPayment(tableKey)} disabled={payingSaving || (payMethod === 'Credit' && !arCustomerName.trim())}
-              className="flex-1 bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl">
+            <button onClick={() => collectPayment(tableKey)}
+              disabled={payingSaving
+                || (payMethod === 'Credit' && !arCustomerName.trim())
+                || (payMethod === NO_CHARGE_METHOD_LABEL && !noChargeReason.trim())}
+              className={`flex-1 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl ${payMethod === NO_CHARGE_METHOD_LABEL ? 'bg-purple-600 hover:bg-purple-700' : 'bg-green-500 hover:bg-green-600'}`}>
               {payingSaving ? 'Processing…' : `Confirm ${payMethod}`}
             </button>
           </div>
@@ -1198,7 +1228,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
             })}
           </div>
         )}
-        {payingTableKey && <PayModal tableKey={payingTableKey} onClose={() => { setPayingTableKey(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') }} />}
+        {payingTableKey && <PayModal tableKey={payingTableKey} onClose={() => { setPayingTableKey(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone(''); setNoChargeReason('') }} />}
 
         {/* ── ACCOUNTS RECEIVABLE PANEL ── */}
         {arOrders.length > 0 && (
@@ -1892,7 +1922,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
 
       {/* Payment modal */}
       {payingTableKey && (
-        <PayModal tableKey={payingTableKey} onClose={() => { setPayingTableKey(null); setPayMethod('Cash') }} />
+        <PayModal tableKey={payingTableKey} onClose={() => { setPayingTableKey(null); setPayMethod('Cash'); setNoChargeReason('') }} />
       )}
     </div>
   )

@@ -206,6 +206,48 @@ describe('finalizeRestaurantOrderPayment — No Charge', () => {
     expect((args.items as unknown[]).length).toBe(1)
   })
 
+  it('stores the reason and who authorised it', async () => {
+    // The reason is the only thing the No Charge report can say about why the
+    // food went out, and settledByName is the only thing it can say about who
+    // let it. Both are mandatory at the till and in the dashboard, so losing
+    // them here would quietly hollow the report out.
+    const { db, updateMany } = makeDb({
+      restaurantId: OTHER_RESTAURANT,
+      items: [{ id: 'it-A', dishId: 'dish-A', dishName: 'Teriyaki Chicken Bowl', dishPrice: 10000, qty: 1 }],
+    })
+
+    await finalizeRestaurantOrderPayment(db, {
+      restaurantId: OTHER_RESTAURANT, branchId: TILL, orderId: ORDER,
+      paymentMethod: NO_CHARGE_METHOD,
+      noChargeReason: "Owner's guests",
+      settledByName: 'Marie',
+    })
+
+    const written = settlementWrite(updateMany)
+    expect(written.noChargeReason).toBe("Owner's guests")
+    expect(written.settledByName).toBe('Marie')
+  })
+
+  it('records who settled a bill even when it was paid for normally', async () => {
+    // A supervisor closing another waiter's cash table is worth recording too —
+    // this is not comp-only bookkeeping.
+    const { db, updateMany } = makeDb({
+      restaurantId: OTHER_RESTAURANT,
+      items: [{ id: 'it-A', dishId: 'dish-A', dishName: 'Teriyaki Chicken Bowl', dishPrice: 10000, qty: 1 }],
+    })
+
+    await finalizeRestaurantOrderPayment(db, {
+      restaurantId: OTHER_RESTAURANT, branchId: TILL, orderId: ORDER,
+      paymentMethod: 'Cash', settledByName: 'Marie',
+    })
+
+    const written = settlementWrite(updateMany)
+    expect(written.settledByName).toBe('Marie')
+    // ...but nothing comp-shaped is written on a bill that was actually paid.
+    expect(written.compedAmount).toBeUndefined()
+    expect(written.noChargeReason).toBeUndefined()
+  })
+
   it('leaves an ordinary paid bill completely untouched', async () => {
     const { db, updateMany } = makeDb({
       restaurantId: OTHER_RESTAURANT,

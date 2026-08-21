@@ -5,7 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { resolveCancellationApprover } from '@/lib/cancelApproval'
 import { InsufficientFifoStockError, InsufficientInventoryStockError, recordDishWasteForOrderItems } from '@/lib/dishSaleRecording'
-import { enqueueOrderSync, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
+import { enqueueOrderSync, isNoChargeMethod, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
 import { finalizeRestaurantOrderPayment } from '@/lib/restaurantOrderPayment'
 import { findRestaurantAction, isRestaurantActionConflict, normalizeRestaurantActionKey, recordRestaurantAction } from '@/lib/restaurantAction'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
@@ -44,7 +44,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const branchId = context.branchId
 
   const { id } = await params
-  const { action, cancelReason, paymentMethod, customerName, customerPhone, supervisorPin, actionKey } = await req.json()
+  const { action, cancelReason, paymentMethod, customerName, customerPhone, noChargeReason, supervisorPin, actionKey } = await req.json()
   const normalizedActionKey = normalizeRestaurantActionKey(actionKey)
 
   const order = await prisma.restaurantOrder.findFirst({
@@ -105,6 +105,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     }
 
     const normalizedPaymentMethod = paymentMethod || order.paymentMethod || 'Cash'
+
+    // A comp with no reason is indistinguishable from a mistake, and it is the
+    // only thing the No Charge report can say about why the food went out. The
+    // till has always demanded one; refusing here means the dashboard cannot
+    // become the quiet way around that.
+    const comped = isNoChargeMethod(normalizedPaymentMethod)
+    const trimmedNoChargeReason = typeof noChargeReason === 'string' ? noChargeReason.trim() : ''
+    if (comped && !trimmedNoChargeReason) {
+      return NextResponse.json({ error: 'A reason is required to settle a bill as Complementary' }, { status: 400 })
+    }
+
     try {
       const updated = await prisma.$transaction(async (tx) => {
         const paidOrder = await finalizeRestaurantOrderPayment(tx, {
@@ -114,6 +125,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
           paymentMethod: normalizedPaymentMethod,
           arCustomerName: customerName || null,
           arCustomerPhone: customerPhone || null,
+          noChargeReason: comped ? trimmedNoChargeReason : null,
+          // Whoever is signed into the dashboard is the one closing this bill.
+          // createdByName is left alone, so the sale stays with the waiter who
+          // took the table.
+          settledByName: session.user.name?.trim() || null,
         })
 
         if (normalizedActionKey) {
