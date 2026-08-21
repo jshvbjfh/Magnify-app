@@ -10,15 +10,22 @@ type ReceivableSource = 'manual' | 'order' | 'buffet'
 interface CreditItem {
   id: string
   source: ReceivableSource
+  /** What was eaten — the dishes, not the order number. */
   description: string
+  /** Order number and table, for looking the bill up if it is disputed. */
+  reference: string | null
   amount: number
   saleDate: string
 }
 
-const SOURCE_BADGE: Record<ReceivableSource, { label: string; className: string }> = {
-  order: { label: 'Tab', className: 'bg-blue-50 text-blue-600' },
-  buffet: { label: 'Buffet', className: 'bg-amber-50 text-amber-700' },
-  manual: { label: 'Manual', className: 'bg-gray-100 text-gray-500' },
+// Where the debt came from, in a word, under the description. It reads as a
+// plain sub-line rather than a coloured chip — the row already carries an
+// orange header above and an action button beside it, and a third colour there
+// competes with the button the manager is meant to press.
+const SOURCE_LABEL: Record<ReceivableSource, string> = {
+  order: 'Put on a tab at the till',
+  buffet: 'Hotel buffet — settled by the hotel',
+  manual: 'Recorded by hand',
 }
 
 interface ClientRow {
@@ -178,7 +185,7 @@ export default function AccountsReceivable() {
         </div>
         <button
           onClick={() => setShowForm(v => !v)}
-          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600"
         >
           {showForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
           {showForm ? 'Cancel' : 'Add Credit Sale'}
@@ -188,9 +195,9 @@ export default function AccountsReceivable() {
       {/* Three totals, equal width. Total Outstanding is the whole business and
           does not move when a client is selected; the other two count it. */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-blue-200 bg-blue-50 px-5 py-4">
-          <p className="text-sm font-semibold text-blue-700">Total Outstanding</p>
-          <p className="mt-1.5 text-3xl font-bold text-blue-900">{fmt(data?.totalUnpaid ?? 0)}</p>
+        <div className="rounded-xl border border-orange-200 bg-orange-50 px-5 py-4">
+          <p className="text-sm font-semibold text-orange-700">Total Outstanding</p>
+          <p className="mt-1.5 text-3xl font-bold text-orange-900">{fmt(data?.totalUnpaid ?? 0)}</p>
         </div>
         <div className="rounded-xl border border-gray-200 bg-white px-5 py-4">
           <p className="text-sm font-medium text-gray-500">Clients Owing</p>
@@ -209,28 +216,28 @@ export default function AccountsReceivable() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-600">Client Name *</label>
-              <input className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" value={form.clientName} onChange={e => setForm(f => ({ ...f, clientName: e.target.value }))} placeholder="e.g. John Doe" />
+              <input className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" value={form.clientName} onChange={e => setForm(f => ({ ...f, clientName: e.target.value }))} placeholder="e.g. John Doe" />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-600">Phone (optional)</label>
-              <input className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" value={form.customerPhone} onChange={e => setForm(f => ({ ...f, customerPhone: e.target.value }))} placeholder="e.g. 078..." />
+              <input className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" value={form.customerPhone} onChange={e => setForm(f => ({ ...f, customerPhone: e.target.value }))} placeholder="e.g. 078..." />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-600">Amount (RWF) *</label>
-              <input type="number" min="0" className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0" />
+              <input type="number" min="0" className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} placeholder="0" />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-600">Date</label>
-              <input type="date" className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+              <input type="date" className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
             </div>
             <div className="sm:col-span-2">
               <label className="mb-1 block text-xs font-medium text-gray-600">Description (optional)</label>
-              <input className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="e.g. Grilled chicken, coconut juice..." />
+              <input className="w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="e.g. Grilled chicken, coconut juice..." />
             </div>
           </div>
           {formError && <p className="mt-2 text-xs text-red-600">{formError}</p>}
           <div className="mt-4 flex gap-2">
-            <button onClick={submitForm} disabled={submitting} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60">
+            <button onClick={submitForm} disabled={submitting} className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-60">
               {submitting ? 'Recording…' : 'Record Credit'}
             </button>
             <button onClick={() => { setShowForm(false); setFormError(null) }} className="rounded-lg border px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50">Cancel</button>
@@ -276,7 +283,7 @@ export default function AccountsReceivable() {
                   onClick={() => setSelectedName(row.customerName)}
                   className={`w-full rounded-lg border px-4 py-3 text-left transition-colors ${
                     selectedName === row.customerName
-                      ? 'border-blue-400 bg-blue-50'
+                      ? 'border-orange-400 bg-orange-50'
                       : 'border-gray-200 bg-white hover:bg-gray-50'
                   }`}
                 >
@@ -320,7 +327,7 @@ export default function AccountsReceivable() {
 
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-y bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      <tr className="bg-orange-500 text-xs font-bold uppercase tracking-wide text-white">
                         <th className="px-6 py-3 text-left">Date / Time</th>
                         <th className="py-3 pr-4 text-left">Sold On Credit</th>
                         <th className="py-3 pr-4 text-right">Amount</th>
@@ -328,13 +335,13 @@ export default function AccountsReceivable() {
                       </tr>
                     </thead>
                     <tbody>
-                      {selected.items.map(item => (
-                        <tr key={item.id} className={`border-b last:border-b-0 transition-colors ${flashId === item.id ? 'bg-green-50' : ''}`}>
+                      {selected.items.map((item, idx) => (
+                        <tr key={item.id} className={`border-b border-gray-100 last:border-b-0 transition-colors ${flashId === item.id ? 'bg-green-50' : idx % 2 === 0 ? 'bg-white' : 'bg-orange-50/40'}`}>
                           <td className="px-6 py-4 text-xs text-gray-500 whitespace-nowrap align-top">{fmtDate(item.saleDate)}</td>
                           <td className="py-4 pr-4 align-top">
                             <p className="font-semibold text-gray-900">{item.description}</p>
                             <p className="mt-0.5 text-xs text-gray-500">
-                              {(SOURCE_BADGE[item.source] ?? SOURCE_BADGE.manual).label}
+                              {[item.reference, SOURCE_LABEL[item.source] ?? SOURCE_LABEL.manual].filter(Boolean).join(' · ')}
                             </p>
                           </td>
                           <td className="py-4 pr-4 text-right font-semibold text-gray-900 whitespace-nowrap align-top">{fmt(item.amount)}</td>
@@ -348,7 +355,7 @@ export default function AccountsReceivable() {
                                 <select
                                   value={payMethod}
                                   onChange={e => setPayMethod(e.target.value)}
-                                  className="rounded border px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                  className="rounded border px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-orange-400"
                                 >
                                   {PAYMENT_METHODS.map(m => <option key={m}>{m}</option>)}
                                 </select>
@@ -359,7 +366,7 @@ export default function AccountsReceivable() {
                                 {payError && <span className="text-xs text-red-600">{payError}</span>}
                               </div>
                             ) : (
-                              <button onClick={() => { setPayingId(item.id); setPayMethod(PAYMENT_METHODS[0]); setPayError(null) }} className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700">
+                              <button onClick={() => { setPayingId(item.id); setPayMethod(PAYMENT_METHODS[0]); setPayError(null) }} className="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600">
                                 Paid?
                               </button>
                             )}
@@ -371,10 +378,10 @@ export default function AccountsReceivable() {
                         the header — a long list means whichever end you are at,
                         the balance is next to you. */}
                     <tfoot>
-                      <tr className="border-t bg-blue-50">
+                      <tr className="bg-gray-900 font-bold text-white">
                         <td className="px-6 py-4" />
-                        <td className="py-4 pr-4 text-right text-sm font-semibold text-gray-700">Total Amount Owed</td>
-                        <td className="py-4 pr-4 text-right text-base font-bold text-gray-900 whitespace-nowrap">{fmt(selected.totalOwed)}</td>
+                        <td className="py-4 pr-4 text-right text-sm">Total Amount Owed</td>
+                        <td className="py-4 pr-4 text-right text-base whitespace-nowrap">{fmt(selected.totalOwed)}</td>
                         <td className="py-4 pr-6" />
                       </tr>
                     </tfoot>

@@ -125,6 +125,7 @@ describe('A/R lists every open credit sale, whatever booked it', () => {
         id: 'ord-1', orderNumber: 'WA-0001', tableName: 'Table 10', totalAmount: 13000,
         paidAt: new Date('2026-08-19T11:51:00Z'), createdAt: new Date('2026-08-19T10:00:00Z'),
         arCustomerName: 'Sebastian', arCustomerPhone: '0788',
+        items: [{ dishName: 'Mixed fruit juice', qty: 1 }],
       }],
     })
 
@@ -144,8 +145,8 @@ describe('A/R lists every open credit sale, whatever booked it', () => {
     }])
     mockOrders({
       credit: [
-        { id: 'ord-1', orderNumber: 'WA-0001', tableName: null, totalAmount: 13000, paidAt: new Date('2026-08-19T11:51:00Z'), createdAt: new Date(), arCustomerName: 'Sebastian', arCustomerPhone: null },
-        { id: 'ord-2', orderNumber: 'WA-0002', tableName: null, totalAmount: 72500, paidAt: new Date('2026-08-21T05:48:00Z'), createdAt: new Date(), arCustomerName: 'Sebastian', arCustomerPhone: '0788' },
+        { id: 'ord-1', orderNumber: 'WA-0001', tableName: null, totalAmount: 13000, paidAt: new Date('2026-08-19T11:51:00Z'), createdAt: new Date(), arCustomerName: 'Sebastian', arCustomerPhone: null, items: [{ dishName: 'Mixed fruit juice', qty: 1 }] },
+        { id: 'ord-2', orderNumber: 'WA-0002', tableName: null, totalAmount: 72500, paidAt: new Date('2026-08-21T05:48:00Z'), createdAt: new Date(), arCustomerName: 'Sebastian', arCustomerPhone: '0788', items: [{ dishName: 'Cappuccino', qty: 2 }] },
       ],
     })
 
@@ -167,6 +168,7 @@ describe('A/R lists every open credit sale, whatever booked it', () => {
       credit: [{
         id: 'ord-1', orderNumber: 'WA-0001', tableName: null, totalAmount: 5000,
         paidAt: new Date('2026-08-21T05:50:00Z'), createdAt: new Date(), arCustomerName: null, arCustomerPhone: null,
+        items: [{ dishName: 'Cappuccino', qty: 1 }],
       }],
     })
 

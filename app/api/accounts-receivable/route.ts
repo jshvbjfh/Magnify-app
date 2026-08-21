@@ -37,11 +37,27 @@ type ReceivableSource = 'manual' | 'order' | 'buffet'
 type ReceivableItem = {
   id: string
   source: ReceivableSource
+  // What was actually eaten. An order number is an identifier, not information:
+  // a manager ringing a client about a debt has to be able to say what it was
+  // for, and "Order WA-CD7D3B11" tells neither of them anything.
   description: string
+  // Where to find it if the client disputes the bill — order number and table.
+  reference: string | null
   amount: number
   saleDate: Date
   customerName: string
   customerPhone: string | null
+}
+
+// "Mixed fruit juice x1, Cappuccino x2". Long orders are cut at a whole item
+// with a count of what is left, so a twenty-line bill does not swamp the row.
+function describeItems(items: { dishName: string; qty: number }[] | null | undefined, maxShown = 4) {
+  // Never let one odd row take the whole page down: a receivable with no
+  // readable lines still has to be listed, because it is still money owed.
+  if (!items?.length) return ''
+  const shown = items.slice(0, maxShown).map((item) => (item.qty > 1 ? `${item.dishName} x${item.qty}` : item.dishName))
+  const hidden = items.length - shown.length
+  return hidden > 0 ? `${shown.join(', ')} +${hidden} more` : shown.join(', ')
 }
 
 // A tab taken without a name still has to appear — an unnamed receivable is
@@ -139,7 +155,10 @@ async function loadBuffetReceivables(restaurantId: string, branchFilter: { branc
     .map((order) => ({
       id: `buffet:${order.id}`,
       source: 'buffet' as const,
-      description: `Hotel buffet — Order ${order.orderNumber}${order.tableName ? ` · ${order.tableName}` : ''}`,
+      description: describeItems(
+        order.items.filter((item) => isHotelBuffetLine(restaurantId, item.dishName, categoriesByDishId.get(item.dishId))),
+      ) || 'Hotel buffet',
+      reference: `Order ${order.orderNumber}${order.tableName ? ` · ${order.tableName}` : ''}`,
       amount: buffetAmount(restaurantId, order.items, categoriesByDishId),
       saleDate: order.paidAt ?? order.createdAt,
       customerName: order.arCustomerName?.trim() || HOTEL_BUFFET_CUSTOMER,
@@ -182,6 +201,7 @@ export async function GET(req: Request) {
           createdAt: true,
           arCustomerName: true,
           arCustomerPhone: true,
+          items: { where: { status: 'ACTIVE' }, select: { dishName: true, qty: true } },
         },
         orderBy: { paidAt: 'asc' },
       }),
@@ -193,6 +213,7 @@ export async function GET(req: Request) {
         id: `manual:${sale.id}`,
         source: 'manual' as const,
         description: sale.description,
+        reference: null,
         amount: sale.amount,
         saleDate: sale.saleDate,
         customerName: sale.customerName?.trim() || UNNAMED_CUSTOMER,
@@ -201,7 +222,8 @@ export async function GET(req: Request) {
       ...creditOrders.map((order) => ({
         id: `order:${order.id}`,
         source: 'order' as const,
-        description: `Order ${order.orderNumber}${order.tableName ? ` · ${order.tableName}` : ''}`,
+        description: describeItems(order.items) || `Order ${order.orderNumber}`,
+        reference: `Order ${order.orderNumber}${order.tableName ? ` · ${order.tableName}` : ''}`,
         amount: order.totalAmount,
         saleDate: order.paidAt ?? order.createdAt,
         customerName: order.arCustomerName?.trim() || UNNAMED_CUSTOMER,
@@ -230,6 +252,7 @@ export async function GET(req: Request) {
           id: item.id,
           source: item.source,
           description: item.description,
+          reference: item.reference,
           amount: item.amount,
           saleDate: item.saleDate,
         })),
