@@ -209,7 +209,7 @@ function statusLabel(value: string | null | undefined) {
 const TABS: { id: ReportTab; label: string; short: string; icon: React.ElementType; desc: string }[] = [
   { id:'general',    label:'General Report',         short:'General',   icon:Store,          desc:'Sales, cost of goods sold and profit by station, across your whole restaurant account' },
   { id:'journal',    label:'Journal Ledger',         short:'Journal',   icon:BookOpen,       desc:'All recorded transactions in chronological order' },
-  { id:'receivable', label:'Credit Sales',           short:'Credit',    icon:TrendingUp,     desc:'Money customers owe you for food already served' },
+  { id:'receivable', label:'Credit Sales',           short:'Credit Sales', icon:TrendingUp,  desc:'Money customers owe you for food already served' },
   { id:'payable',    label:'Accounts Payable',       short:'A/P',       icon:CreditCard,     desc:'Money your business owes to suppliers' },
   { id:'cashflow',   label:'Cash Flow Statement',    short:'Cash Flow', icon:ArrowLeftRight, desc:'Cash inflows and outflows analysis' },
   { id:'balance',    label:'Balance Sheet',          short:'Balance',   icon:BarChart3,      desc:'Assets, liabilities and equity snapshot' },
@@ -1854,6 +1854,13 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
   const [draftFrom, setDraftFrom] = useState(today)
   const [draftTo, setDraftTo] = useState(today)
   const [selectedHistoryDate, setSelectedHistoryDate] = useState(today)
+  // Only the newest request may write results. The mount loop below probes one
+  // period after another to find the first with data, and each probe is a fetch
+  // in flight — so clicking a period pill while it is still probing left two
+  // writers racing, and whichever landed last won. That showed as a pill reading
+  // "This Quarter" over data the loop had just overwritten with Today's, which
+  // is why the report totalled one day instead of the whole range.
+  const requestSeq = useRef(0)
   const [loading, setLoading] = useState(false)
   const [txData, setTxData] = useState<any[] | null>(null)
   // Keeps the full-period transaction list so date chips stay stable when a single day is selected
@@ -1886,6 +1893,8 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
     start: string, end: string, label: string, isPeriodFetch = true,
     snapPeriod?: Period, snapRangeMode?: 'preset' | 'custom', snapFrom?: string, snapTo?: string,
   ) => {
+    const seq = ++requestSeq.current
+    const stale = () => requestSeq.current !== seq
     setLoading(true); setTxData(null); setDishProfitData(null); setInvMovementData(null); setTheoreticalInvData(null)
     try {
       const [txRes, dpRes, imRes, tiRes] = await Promise.all([
@@ -1894,18 +1903,20 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
         fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
       ])
+      if (stale()) return
       let txRows: any[] = []
       if (txRes.ok) {
         const d = await txRes.json()
         txRows = normalizeTransactions(Array.isArray(d)?d:(d.transactions??d.data??[]))
+        if (stale()) return
         setTxData(txRows)
         if (isPeriodFetch) setPeriodTxData(txRows)
         setLoadedPeriod(label)
       }
       let dpData: any = null, imData: any = null, tiData: any = null
-      if (dpRes.ok) { dpData = await dpRes.json(); setDishProfitData(dpData) }
-      if (imRes.ok) { imData = await imRes.json(); setInvMovementData(imData) }
-      if (tiRes.ok) { tiData = await tiRes.json(); setTheoreticalInvData(tiData) }
+      if (dpRes.ok) { dpData = await dpRes.json(); if (stale()) return; setDishProfitData(dpData) }
+      if (imRes.ok) { imData = await imRes.json(); if (stale()) return; setInvMovementData(imData) }
+      if (tiRes.ok) { tiData = await tiRes.json(); if (stale()) return; setTheoreticalInvData(tiData) }
       if (activeBranchRef.current) {
         _branchReportCache.set(activeBranchRef.current, {
           period: snapPeriod ?? 'today', rangeMode: snapRangeMode ?? 'preset',
@@ -1915,8 +1926,8 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
           loadedPeriod: label,
         })
       }
-    } catch { setTxData([]) }
-    finally { setLoading(false) }
+    } catch { if (!stale()) setTxData([]) }
+    finally { if (!stale()) setLoading(false) }
   }, [])
 
   const fetchReport = useCallback(async (p: Period) => {
@@ -1928,6 +1939,11 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
   // On mount: use localStorage-cached period for instant load; background-load heavy reports after transactions
   useEffect(() => {
     async function loadInitial() {
+      // Probing claims the request slot. The moment the user picks a period the
+      // slot moves to their fetch, and every probe still in flight goes quiet
+      // rather than overwriting what they asked for.
+      const seq = ++requestSeq.current
+      const stale = () => requestSeq.current !== seq
       setLoading(true)
       const saved = (typeof localStorage !== 'undefined'
         ? localStorage.getItem('magnify-reports-period')
@@ -1941,8 +1957,10 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         const { start, end, label } = getDateRange(p)
         try {
           const res = await fetch(`/api/transactions?startDate=${start}&endDate=${end}`, FRESH_FETCH_OPTIONS)
+          if (stale()) return
           if (!res.ok) continue
           const d = await res.json()
+          if (stale()) return
           const rows = normalizeTransactions(Array.isArray(d) ? d : (d.transactions ?? d.data ?? []))
           const isLast = i === ordered.length - 1
           if (rows.length > 0 || isLast) {
@@ -1981,6 +1999,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
           }
         } catch { /* continue to next period */ }
       }
+      if (stale()) return
       setLoading(false)
       setInitialPeriodReady(true)
     }

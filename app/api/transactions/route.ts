@@ -132,9 +132,21 @@ export async function GET(req: Request) {
         const amount = drLine?.debit ?? crLine?.credit ?? 0
         // Income entry: CR is revenue → direction 'in', show revenue account as main
         const isIncome = crLine?.account?.category?.type === 'income'
-        const mainAccount = isIncome ? (crLine?.account ?? null) : (drLine?.account ?? null)
+
+        // Collecting a receivable books DR <tender> / CR Accounts Receivable —
+        // both sides are assets, so the income test above says "not income" and
+        // the entry would come out backwards: direction 'out', with the tender
+        // reported as 'Accounts Receivable'. Cash Flow keys off that name, so a
+        // debt paid in cash was dropped from the cash report altogether and
+        // shown as money leaving. It is the opposite: the money arrived.
+        //
+        // Paying a supplier (DR Accounts Payable / CR Cash) already comes out
+        // right, so only the receivable side is special-cased here.
+        const isCollection = /receivable/i.test(crLine?.account?.name ?? '')
+
+        const mainAccount = isIncome || isCollection ? (crLine?.account ?? null) : (drLine?.account ?? null)
         // Settlement account holds the cash/bank/asset side used for payment method detection
-        const settlementAccount = isIncome ? (drLine?.account ?? null) : (crLine?.account ?? null)
+        const settlementAccount = isIncome || isCollection ? (drLine?.account ?? null) : (crLine?.account ?? null)
         return {
           id: entry.id,
           pairId: entry.id,
@@ -142,7 +154,7 @@ export async function GET(req: Request) {
           createdAt: entry.createdAt.toISOString(),
           description: entry.description,
           amount,
-          direction: isIncome ? 'in' : 'out',
+          direction: isIncome || isCollection ? 'in' : 'out',
           accountName: mainAccount?.name ?? '',
           categoryType: mainAccount?.category?.type ?? 'expense',
           paymentMethod: settlementAccount?.name ?? null,

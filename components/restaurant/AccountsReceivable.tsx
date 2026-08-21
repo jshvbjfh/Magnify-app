@@ -170,29 +170,36 @@ export default function AccountsReceivable() {
   return (
     <div className="flex flex-col gap-4">
 
-      {/* Summary cards + add button */}
+      {/* Title and the one action, on a line of their own */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex gap-3 flex-wrap">
-          <div className="rounded-xl border border-blue-100 bg-blue-50 px-5 py-3 min-w-[160px]">
-            <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Total Outstanding</p>
-            <p className="mt-1 text-2xl font-bold text-blue-700">{fmt(data?.totalUnpaid ?? 0)}</p>
-          </div>
-          <div className="rounded-xl border bg-white px-5 py-3 min-w-[130px]">
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Clients Owing</p>
-            <p className="mt-1 text-2xl font-bold text-gray-800">{data?.clientCount ?? 0}</p>
-          </div>
-          <div className="rounded-xl border bg-white px-5 py-3 min-w-[160px]">
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Credit Sales Open</p>
-            <p className="mt-1 text-2xl font-bold text-gray-800">{data?.openCount ?? 0}</p>
-          </div>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Credit Sales</h2>
+          <p className="mt-0.5 text-sm text-gray-500">Select a client to view everything sold on credit, with the current amount they still owe.</p>
         </div>
         <button
           onClick={() => setShowForm(v => !v)}
-          className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
         >
           {showForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
           {showForm ? 'Cancel' : 'Add Credit Sale'}
         </button>
+      </div>
+
+      {/* Three totals, equal width. Total Outstanding is the whole business and
+          does not move when a client is selected; the other two count it. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="rounded-xl border border-blue-200 bg-blue-50 px-5 py-4">
+          <p className="text-sm font-semibold text-blue-700">Total Outstanding</p>
+          <p className="mt-1.5 text-3xl font-bold text-blue-900">{fmt(data?.totalUnpaid ?? 0)}</p>
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-white px-5 py-4">
+          <p className="text-sm font-medium text-gray-500">Clients Owing</p>
+          <p className="mt-1.5 text-3xl font-bold text-gray-900">{data?.clientCount ?? 0}</p>
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-white px-5 py-4">
+          <p className="text-sm font-medium text-gray-500">Credit Sales Open</p>
+          <p className="mt-1.5 text-3xl font-bold text-gray-900">{data?.openCount ?? 0}</p>
+        </div>
       </div>
 
       {/* Add form */}
@@ -254,36 +261,41 @@ export default function AccountsReceivable() {
         </div>
       )}
 
-      {/* Two-panel layout */}
+      {/* Two panels: who owes, and what they owe it for */}
       {(data?.receivables.length ?? 0) > 0 && (
-        <div className="flex gap-4 rounded-xl border bg-white overflow-hidden min-h-[420px]">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
 
-          {/* Left — client list */}
-          <div className="w-1/3 border-r overflow-y-auto">
-            <p className="px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest text-gray-400 border-b">Clients</p>
-            {data!.receivables.map(row => (
-              <button
-                key={row.customerName}
-                onClick={() => setSelectedName(row.customerName)}
-                className={`w-full text-left px-4 py-3 border-b last:border-b-0 transition-colors ${selectedName === row.customerName ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-gray-800 truncate">{row.customerName}</p>
-                    {row.customerPhone && <p className="text-xs text-gray-400">{row.customerPhone}</p>}
-                    <p className="text-xs text-gray-400">{relativeTime(row.lastActivityAt)}</p>
+          {/* Left — client list. Each card is its own tile, the way the whole
+              screen reads: a stack of debts, biggest first. */}
+          <div className="rounded-xl border border-gray-200 bg-white p-3 lg:w-[340px] lg:flex-shrink-0">
+            <p className="px-1 pb-2 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Clients</p>
+            <div className="flex flex-col gap-2">
+              {data!.receivables.map(row => (
+                <button
+                  key={row.customerName}
+                  onClick={() => setSelectedName(row.customerName)}
+                  className={`w-full rounded-lg border px-4 py-3 text-left transition-colors ${
+                    selectedName === row.customerName
+                      ? 'border-blue-400 bg-blue-50'
+                      : 'border-gray-200 bg-white hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="truncate text-base font-semibold text-gray-900">{row.customerName}</p>
+                    <p className="flex-shrink-0 text-base font-bold text-gray-900">{fmt(row.totalOwed)}</p>
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-sm font-bold text-gray-800">{fmt(row.totalOwed)}</p>
-                    <p className="text-xs text-gray-400">{row.openCount} credit sale{row.openCount !== 1 ? 's' : ''}</p>
+                  {row.customerPhone && <p className="mt-1 text-xs text-gray-500">{row.customerPhone}</p>}
+                  <div className="mt-1 flex items-baseline justify-between gap-3">
+                    <p className="text-xs text-gray-500">{fmtDate(row.lastActivityAt)}</p>
+                    <p className="flex-shrink-0 text-xs text-gray-500">{row.openCount} credit sale{row.openCount !== 1 ? 's' : ''}</p>
                   </div>
-                </div>
-              </button>
-            ))}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Right — detail */}
-          <div className="flex-1 overflow-y-auto p-5">
+          <div className="min-w-0 flex-1 overflow-hidden rounded-xl border border-gray-200 bg-white">
             {!selected ? (
               <div className="flex h-full items-center justify-center">
                 <p className="text-sm text-gray-400">Select a client to view details</p>
@@ -293,46 +305,46 @@ export default function AccountsReceivable() {
               const days = daysOutstanding(selected.items[0].saleDate)
               return (
                 <div>
-                  <div className="mb-4 flex items-start justify-between">
-                    <div>
-                      <h2 className="text-lg font-bold text-gray-900">{selected.customerName}</h2>
-                      <p className="text-sm text-gray-500">Outstanding balance: {fmt(selected.totalOwed)}</p>
+                  <div className="flex items-start justify-between gap-4 px-6 py-5">
+                    <div className="min-w-0">
+                      <h3 className="text-xl font-bold text-gray-900">{selected.customerName}</h3>
+                      <p className="mt-0.5 text-sm text-gray-600">Outstanding balance: {fmt(selected.totalOwed)}</p>
                       {selected.customerPhone && <p className="text-xs text-gray-400">{selected.customerPhone}</p>}
                     </div>
-                    <div className="text-right text-xs text-gray-500">
+                    <div className="flex-shrink-0 space-y-1 text-right text-sm text-gray-600">
                       <p>{days} day{days !== 1 ? 's' : ''} outstanding</p>
-                      <span className={`inline-block mt-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${aging.color}`}>{aging.label}</span>
-                      <p className="mt-1">Last activity: {fmtDate(selected.lastActivityAt)}</p>
+                      <p><span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${aging.color}`}>{aging.label}</span></p>
+                      <p className="text-xs text-gray-500">Last activity: {fmtDate(selected.lastActivityAt)}</p>
                     </div>
                   </div>
 
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b text-xs font-semibold uppercase tracking-wide text-gray-400">
-                        <th className="pb-2 text-left">Date / Time</th>
-                        <th className="pb-2 text-left">Description</th>
-                        <th className="pb-2 text-right">Amount</th>
-                        <th className="pb-2 text-right">Paid?</th>
+                      <tr className="border-y bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <th className="px-6 py-3 text-left">Date / Time</th>
+                        <th className="py-3 pr-4 text-left">Sold On Credit</th>
+                        <th className="py-3 pr-4 text-right">Amount</th>
+                        <th className="py-3 pr-6 text-left">Paid?</th>
                       </tr>
                     </thead>
                     <tbody>
                       {selected.items.map(item => (
                         <tr key={item.id} className={`border-b last:border-b-0 transition-colors ${flashId === item.id ? 'bg-green-50' : ''}`}>
-                          <td className="py-3 pr-4 text-xs text-gray-500 whitespace-nowrap">{fmtDate(item.saleDate)}</td>
-                          <td className="py-3 pr-4 text-gray-700">
-                            <span className={`mr-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${(SOURCE_BADGE[item.source] ?? SOURCE_BADGE.manual).className}`}>
+                          <td className="px-6 py-4 text-xs text-gray-500 whitespace-nowrap align-top">{fmtDate(item.saleDate)}</td>
+                          <td className="py-4 pr-4 align-top">
+                            <p className="font-semibold text-gray-900">{item.description}</p>
+                            <p className="mt-0.5 text-xs text-gray-500">
                               {(SOURCE_BADGE[item.source] ?? SOURCE_BADGE.manual).label}
-                            </span>
-                            {item.description}
+                            </p>
                           </td>
-                          <td className="py-3 pr-4 text-right font-medium text-gray-800 whitespace-nowrap">{fmt(item.amount)}</td>
-                          <td className="py-3 text-right">
+                          <td className="py-4 pr-4 text-right font-semibold text-gray-900 whitespace-nowrap align-top">{fmt(item.amount)}</td>
+                          <td className="py-4 pr-6 align-top">
                             {flashId === item.id ? (
                               <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-600">
                                 <CheckCircle className="h-4 w-4" /> Paid
                               </span>
                             ) : payingId === item.id ? (
-                              <div className="flex items-center justify-end gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
                                 <select
                                   value={payMethod}
                                   onChange={e => setPayMethod(e.target.value)}
@@ -355,11 +367,15 @@ export default function AccountsReceivable() {
                         </tr>
                       ))}
                     </tbody>
+                    {/* The client's total again, at the foot. The same number as
+                        the header — a long list means whichever end you are at,
+                        the balance is next to you. */}
                     <tfoot>
-                      <tr>
-                        <td colSpan={2} />
-                        <td className="pt-3 pr-4 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Amount Owed</td>
-                        <td className="pt-3 text-right text-sm font-bold text-gray-900">{fmt(selected.totalOwed)}</td>
+                      <tr className="border-t bg-blue-50">
+                        <td className="px-6 py-4" />
+                        <td className="py-4 pr-4 text-right text-sm font-semibold text-gray-700">Total Amount Owed</td>
+                        <td className="py-4 pr-4 text-right text-base font-bold text-gray-900 whitespace-nowrap">{fmt(selected.totalOwed)}</td>
+                        <td className="py-4 pr-6" />
                       </tr>
                     </tfoot>
                   </table>

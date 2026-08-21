@@ -1281,10 +1281,9 @@ export default function OwnerShell() {
 
               {view === 'receivable' ? (
                 <div className="px-4 pt-6 pb-24">
-                  <div className="mb-4">
-                    <h2 className="text-xl font-bold text-gray-900">Credit Sales</h2>
-                    <p className="text-sm text-gray-500">Everything sold on credit and not yet collected. Pick a client to see what they owe you.</p>
-                  </div>
+                  {/* Title lives inside the component, on the same line as its
+                      action, so the heading and the Add button cannot drift
+                      apart as the page grows. */}
                   <AccountsReceivable />
                 </div>
               ) : null}
