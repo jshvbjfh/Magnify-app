@@ -1,5 +1,6 @@
 import { calculateLineNetAmount } from '@/lib/restaurantOrders'
 import { restaurantHourOfDay } from '@/lib/restaurantDay'
+import { normalizeDishMenuType } from '@/lib/menuMetadata'
 
 // Upsell & attachments — which product pairings make money, and which waiters
 // reproduce them.
@@ -48,6 +49,12 @@ export type UpsellLineItem = {
   dishId: string
   dishName: string
   category: string | null
+  /**
+   * The dish's menu section, set from a fixed dropdown in the menu editor.
+   * Used only when the free-typed category is a word the classifier does not
+   * recognise — see classifyItem.
+   */
+  menuType?: string | null
   qty: number
   dishPrice: number
   discountPercent?: number | null
@@ -122,12 +129,59 @@ export type UpsellPairing = {
   baseBills: number
   together: number
   attachRate: number
+  /** Bills anywhere in the window that carried the attached item at all. */
+  attachBills: number
+  /**
+   * How much more often the two land on one bill than chance alone would give:
+   * P(both) / (P(base) x P(attach)).
+   *
+   * 1.0 is coincidence, 2.0+ is a real affinity, below 1.0 means the two
+   * substitute for each other. Without this the report ranks by attach rate,
+   * which crowns whatever is most popular: High 5ive's top opportunity,
+   * "Signature Dumplings + SODA", scores 18% and reads as the biggest prize on
+   * the menu, but its lift is 0.6 — guests take a soda with dumplings LESS
+   * often than chance. Cocktail Juice, at lift 3.4 and more gross profit, does
+   * not appear at all. Two of the three headline opportunities are artifacts of
+   * soda being on half of all bills.
+   *
+   * Null when either side has no bills to divide by.
+   */
+  lift: number | null
   qty: number
   revenue: number
   cost: number
   profit: number
   margin: number
   confidence: UpsellConfidence
+}
+
+/** How a lift figure should be read. Thresholds live here so UI and copy agree. */
+export type UpsellAffinity = 'real' | 'mild' | 'coincidence' | 'substitutes' | 'unknown'
+
+export const LIFT_REAL = 2
+export const LIFT_MILD = 1.2
+export const LIFT_SUBSTITUTE = 0.8
+
+export function affinityFor(lift: number | null): UpsellAffinity {
+  if (lift === null || !Number.isFinite(lift)) return 'unknown'
+  if (lift >= LIFT_REAL) return 'real'
+  if (lift >= LIFT_MILD) return 'mild'
+  if (lift >= LIFT_SUBSTITUTE) return 'coincidence'
+  return 'substitutes'
+}
+
+/**
+ * P(both) / (P(base) x P(attach)), reduced so it is one division of integers:
+ * (together x bills) / (baseBills x attachBills).
+ */
+export function liftFor(
+  together: number,
+  baseBills: number,
+  attachBills: number,
+  bills: number
+): number | null {
+  if (baseBills <= 0 || attachBills <= 0 || bills <= 0) return null
+  return (together * bills) / (baseBills * attachBills)
 }
 
 export type UpsellOpportunity = {
@@ -219,13 +273,66 @@ const DRINK_CATEGORIES = new Set([
   'beer', 'wine', 'spirit', 'liquor',
 ])
 
+/**
+ * The category word alone — null when it is not a word we recognise.
+ *
+ * Split out from classifyCategory so a caller can tell "this is definitely a
+ * drink" apart from "no idea, assume food". That difference is the whole point
+ * of classifyItem below.
+ */
+function classifyCategoryWord(raw: string | null | undefined): UpsellGroup | null {
+  const category = normalizeCategory(raw)
+  if (!category) return null
+  if (ADDON_CATEGORIES.has(category)) return 'addon'
+  if (DRINK_CATEGORIES.has(category)) return 'drink'
+  return null
+}
+
 export function classifyCategory(raw: string | null | undefined): UpsellGroup {
   const category = normalizeCategory(raw)
   if (!category) return 'unknown'
-  if (ADDON_CATEGORIES.has(category)) return 'addon'
-  if (DRINK_CATEGORIES.has(category)) return 'drink'
   // Anything else on the menu is something a guest came in to eat.
-  return 'food'
+  return classifyCategoryWord(raw) ?? 'food'
+}
+
+/**
+ * What a sold line actually is, using the category word first and the dish's
+ * own menuType as the tie-breaker.
+ *
+ * The word list can only recognise categories someone thought to put in it, and
+ * every restaurant names its menu differently. Sirocco Y Sol files wine under
+ * "Red wine", "Rose wine", "Sparkling wines" and "white whine" (sic), coffee
+ * under "Iced coffee" and "specialty brews", and juice under "Fresh juices" —
+ * 43 of its 62 drinks. classifyCategory calls every one of them FOOD, which
+ * breaks the drink-attach rate twice over: the bill is counted as a food bill
+ * (inflating the denominator) and the sale never counts as an attached drink
+ * (emptying the numerator).
+ *
+ * menuType already holds the right answer for all 43 — the menu editor sets it
+ * from a fixed dropdown, so it cannot drift the way free-typed category text
+ * does. Reading it costs one extra column on the dish query and needs no
+ * migration.
+ *
+ * Order matters: the category word wins when it is recognised, because it is
+ * more specific ("Sides" is an add-on, though its menuType is also "sides"),
+ * and menuType only decides the cases the word list cannot.
+ */
+export function classifyItem(item: {
+  category?: string | null
+  menuType?: string | null
+}): UpsellGroup {
+  const byWord = classifyCategoryWord(item.category)
+  if (byWord) return byWord
+
+  switch (normalizeDishMenuType(item.menuType)) {
+    case 'drinks': return 'drink'
+    case 'sides': return 'addon'
+    case 'mains': return 'food'
+  }
+
+  // No usable signal either way: a named category we do not recognise is still
+  // something the guest came in to eat; a blank one is genuinely unknown.
+  return normalizeCategory(item.category) ? 'food' : 'unknown'
 }
 
 // Guests ordering for themselves at the table via the QR menu. There is no
@@ -425,6 +532,231 @@ export type UpsellReportOptions = {
   hourTo?: number | null
 }
 
+// ─── PAIRING EXPLORER ──────────────────────────────────────────────────────
+//
+// "What pairs with this?" — the drill-down behind the report's headline
+// figures. The subject is one dish or one menu category; the answer is every
+// other item that lands on the same bills, ranked by gross profit and marked
+// with the lift that says whether the pairing is real.
+//
+// Deliberately NOT limited to add-ons and drinks the way the pairings table is:
+// a manager asking what goes with a starter wants to know it pulls a main, and
+// a cross-menu answer (a Food main pulling a Drinks·Alcoholic wine) is the
+// whole point of the feature.
+
+/** Bills a pairing needs before the explorer will list it at all. */
+export const EXPLORER_MIN_TOGETHER = 3
+
+export type PairingSubject =
+  | { kind: 'dish'; dishId: string }
+  | { kind: 'category'; category: string }
+
+export type PairingExplorerRow = {
+  dishId: string
+  dishName: string
+  category: string | null
+  group: UpsellGroup
+  /** Bills carrying both the subject and this item. */
+  together: number
+  /** Bills carrying this item at all, anywhere in scope. */
+  attachBills: number
+  /** together / subjectBills, as a percentage. */
+  pairRate: number
+  lift: number | null
+  affinity: UpsellAffinity
+  qty: number
+  revenue: number
+  cost: number
+  profit: number
+  /** Lines of this item that were never FIFO-costed, so profit understates. */
+  uncostedLines: number
+}
+
+export type PairingExplorer = {
+  subject: {
+    kind: PairingSubject['kind']
+    key: string
+    label: string
+    category: string | null
+    group: UpsellGroup
+  } | null
+  /** Eligible bills in scope — the denominator every lift is computed against. */
+  bills: number
+  /** Bills carrying the subject. */
+  subjectBills: number
+  rows: PairingExplorerRow[]
+  meta: {
+    totalChecks: number
+    selfOrderChecks: number
+    /** Pairings that existed but fell under EXPLORER_MIN_TOGETHER. */
+    belowFloor: number
+    uncostedLines: number
+  }
+}
+
+const EMPTY_EXPLORER: PairingExplorer = {
+  subject: null,
+  bills: 0,
+  subjectBills: 0,
+  rows: [],
+  meta: { totalChecks: 0, selfOrderChecks: 0, belowFloor: 0, uncostedLines: 0 },
+}
+
+export function buildPairingExplorer(
+  checks: UpsellCheck[],
+  subject: PairingSubject,
+  options: UpsellReportOptions = {},
+): PairingExplorer {
+  const { hourFrom = null, hourTo = null } = options
+
+  const matchesSubject = (item: UpsellLineItem) =>
+    subject.kind === 'dish'
+      ? item.dishId === subject.dishId
+      : normalizeCategory(item.category) === normalizeCategory(subject.category)
+
+  // One pass to fix the scope, so every rate and every lift divides by the same
+  // set of bills. Guest QR bills are excluded here for the same reason as
+  // everywhere else in this report: nobody was there to suggest anything.
+  const eligible: UpsellCheck[] = []
+  let selfOrderChecks = 0
+  for (const check of checks) {
+    if (isSelfOrder(check)) { selfOrderChecks++; continue }
+    const hour = restaurantHourOfDay(check.orderedAt)
+    if (!isHourInWindow(hour, hourFrom, hourTo)) continue
+    eligible.push(check)
+  }
+  if (eligible.length === 0) {
+    return { ...EMPTY_EXPLORER, meta: { ...EMPTY_EXPLORER.meta, totalChecks: checks.length, selfOrderChecks } }
+  }
+
+  type Acc = {
+    dishName: string
+    category: string | null
+    group: UpsellGroup
+    together: number
+    qty: number
+    revenue: number
+    cost: number
+    uncostedLines: number
+  }
+  const pairs = new Map<string, Acc>()
+  /** Bills carrying each dish at all — the lift denominator. */
+  const itemBills = new Map<string, number>()
+  let subjectBills = 0
+  let subjectLabel = ''
+  let subjectCategory: string | null = null
+  let subjectGroup: UpsellGroup = 'unknown'
+  let uncostedLines = 0
+
+  for (const check of eligible) {
+    // Deduplicated per bill on both sides: a dish rung twice is one bill that
+    // carried it, and the subject appearing twice is still one opportunity.
+    const onCheck = new Map<string, { item: UpsellLineItem; qty: number; revenue: number; cost: number; uncosted: number }>()
+    let hasSubject = false
+
+    for (const item of check.items) {
+      if (matchesSubject(item)) {
+        hasSubject = true
+        if (!subjectLabel) {
+          subjectLabel = subject.kind === 'dish' ? item.dishName : (item.category ?? subject.category)
+          subjectCategory = item.category ?? null
+          subjectGroup = classifyItem(item)
+        }
+      }
+      const qty = Number(item.qty ?? 0)
+      const revenue = calculateLineNetAmount({
+        dishPrice: Number(item.dishPrice ?? 0),
+        qty,
+        discountPercent: item.discountPercent,
+      })
+      const costed = item.foodCost !== null && item.foodCost !== undefined
+      const prev = onCheck.get(item.dishId)
+      onCheck.set(item.dishId, {
+        item,
+        qty: (prev?.qty ?? 0) + qty,
+        revenue: (prev?.revenue ?? 0) + revenue,
+        cost: (prev?.cost ?? 0) + Number(item.foodCost ?? 0),
+        uncosted: (prev?.uncosted ?? 0) + (costed ? 0 : 1),
+      })
+    }
+
+    for (const dishId of onCheck.keys()) itemBills.set(dishId, (itemBills.get(dishId) ?? 0) + 1)
+    if (!hasSubject) continue
+    subjectBills++
+
+    for (const [dishId, line] of onCheck) {
+      // The subject never pairs with itself. For a category subject that means
+      // dropping every dish in that category, not just the one dish matched —
+      // "what goes with Burgers" must not answer "another burger".
+      if (matchesSubject(line.item)) continue
+      const acc = pairs.get(dishId) ?? {
+        dishName: line.item.dishName,
+        category: line.item.category ?? null,
+        group: classifyItem(line.item),
+        together: 0, qty: 0, revenue: 0, cost: 0, uncostedLines: 0,
+      }
+      acc.together += 1
+      acc.qty += line.qty
+      acc.revenue += line.revenue
+      acc.cost += line.cost
+      acc.uncostedLines += line.uncosted
+      uncostedLines += line.uncosted
+      pairs.set(dishId, acc)
+    }
+  }
+
+  const bills = eligible.length
+  const all: PairingExplorerRow[] = Array.from(pairs.entries()).map(([dishId, a]) => {
+    const attachBills = itemBills.get(dishId) ?? 0
+    const lift = liftFor(a.together, subjectBills, attachBills, bills)
+    const rounded = lift === null ? null : Math.round(lift * 10) / 10
+    return {
+      dishId,
+      dishName: a.dishName,
+      category: a.category,
+      group: a.group,
+      together: a.together,
+      attachBills,
+      pairRate: subjectBills > 0 ? round1((a.together / subjectBills) * 100) : 0,
+      lift: rounded,
+      affinity: affinityFor(rounded),
+      qty: a.qty,
+      revenue: a.revenue,
+      cost: a.cost,
+      profit: a.revenue - a.cost,
+      uncostedLines: a.uncostedLines,
+    }
+  })
+
+  // Ranked by money, because that is what a manager acts on; lift is carried
+  // alongside so a fat number with no affinity behind it is visibly marked
+  // rather than silently promoted.
+  const rows = all
+    .filter((r) => r.together >= EXPLORER_MIN_TOGETHER)
+    .sort((a, b) => b.profit - a.profit)
+
+  return {
+    subject: subjectBills > 0
+      ? {
+          kind: subject.kind,
+          key: subject.kind === 'dish' ? subject.dishId : subject.category,
+          label: subjectLabel,
+          category: subjectCategory,
+          group: subjectGroup,
+        }
+      : null,
+    bills,
+    subjectBills,
+    rows,
+    meta: {
+      totalChecks: checks.length,
+      selfOrderChecks,
+      belowFloor: all.length - rows.length,
+      uncostedLines,
+    },
+  }
+}
+
 export function buildUpsellingReport(
   checks: UpsellCheck[],
   options: UpsellReportOptions = {},
@@ -483,6 +815,8 @@ export function buildUpsellingReport(
     // opportunity to attach something, not two.
     const foodOnCheck = new Map<string, string>()
     const attachOnCheck = new Map<string, { name: string; group: 'addon' | 'drink'; qty: number; revenue: number; cost: number }>()
+    /** Attach dishes already counted against this bill, so `checks` stays a bill count. */
+    const attachSeenOnCheck = new Set<string>()
 
     for (const item of check.items) {
       const qty = Number(item.qty ?? 0)
@@ -493,7 +827,7 @@ export function buildUpsellingReport(
         qty,
         discountPercent: item.discountPercent,
       })
-      const group = classifyCategory(item.category)
+      const group = classifyItem(item)
       lineCount += qty
       if (group === 'food') { hasFood = true; foodOnCheck.set(item.dishId, item.dishName) }
       // The data-quality counters describe the tables below, which cover the
@@ -523,7 +857,12 @@ export function buildUpsellingReport(
           const existing = attached.get(item.dishId)
           if (existing) {
             existing.qty += qty
-            existing.checks += 1
+            // Bills, not lines. A guest who orders a second round of the same
+            // soda is one bill that took a soda, not two — counting the line
+            // would inflate `checks` above the number of bills that exist and
+            // make the lift denominator wrong for exactly the ubiquitous items
+            // lift is meant to demote.
+            if (!attachSeenOnCheck.has(item.dishId)) existing.checks += 1
             existing.revenue += lineRevenue
             existing.profit += lineRevenue - lineCost
           } else {
@@ -538,6 +877,7 @@ export function buildUpsellingReport(
               profit: lineRevenue - lineCost,
             })
           }
+          attachSeenOnCheck.add(item.dishId)
         }
       }
     }
@@ -637,7 +977,12 @@ export function buildUpsellingReport(
 
   const allPairings: UpsellPairing[] = Array.from(pairs.entries()).map(([key, p]) => {
     const base = baseBills.get(p.baseDishId) ?? 0
+    // Bills that carried the attached item at all, whatever else was on them.
+    // This is the denominator that tells a genuine pairing apart from an item
+    // that is simply on everything.
+    const attachTotal = attached.get(p.attachDishId)?.checks ?? 0
     const profit = p.revenue - p.cost
+    const lift = liftFor(p.together, base, attachTotal, serverChecks)
     return {
       key,
       baseDishId: p.baseDishId,
@@ -648,6 +993,8 @@ export function buildUpsellingReport(
       baseBills: base,
       together: p.together,
       attachRate: base > 0 ? round1((p.together / base) * 100) : 0,
+      attachBills: attachTotal,
+      lift: lift === null ? null : Math.round(lift * 10) / 10,
       qty: p.qty,
       revenue: p.revenue,
       cost: p.cost,
