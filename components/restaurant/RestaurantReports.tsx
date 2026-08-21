@@ -2,6 +2,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange, Store, Share2, ArrowUpRight, Ban, Gift } from 'lucide-react'
 import { fmtDesc } from '@/lib/displayId'
+import AccountsReceivable from '@/components/restaurant/AccountsReceivable'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { BranchBadge, useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
@@ -664,34 +665,6 @@ function JournalTable({ txs }: { txs: any[] }) {
         head={['Date','Account','Description','Settled By','Debit (RWF)','Credit (RWF)']}
         rows={txs.map(t=>[t.date?.slice(0,10)??'', t.account?.name??'', fmtDesc(t.description).slice(0,48), t.paymentMethod??'', fmt(t.amount), fmt(t.amount)])}
         foot={['','','','TOTALS',fmt(dr),fmt(cr)]}
-      />
-    </>
-  )
-}
-
-function ReceivableTable({ txs }: { txs: any[] }) {
-  const ar = txs.filter(isReceivableTransaction)
-  const total = ar.reduce((s,t)=>s+getReceivableEffect(t),0)
-  return (
-    <>
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        <StatCard label="Credit Sales" value={ar.length.toString()} />
-        <StatCard label="Still Owed" value={`${fmt(total)} RWF`} color="bg-orange-50 border-orange-200" />
-      </div>
-      {/* Customer first: this report answers "who owes me", and the dish list
-          is only how you recognise the bill. The Account column was dropped —
-          every credit sale books to DishSale, so it repeated one word down the
-          whole page. Descriptions are trimmed on a word so they stop reading
-          "Table Tab" and "Greek ch". */}
-      <DataTable
-        head={['Date','Customer','What was sold','Amount (RWF)']}
-        rows={ar.map(t=>[
-          t.date?.slice(0,10)??'',
-          t.customerName ?? '—',
-          trimWords(fmtDesc(t.description), 60),
-          `${getReceivableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getReceivableEffect(t)))}`,
-        ])}
-        foot={ar.length>0?['','','TOTAL STILL OWED',fmt(total)]:undefined}
       />
     </>
   )
@@ -2581,7 +2554,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
               independently (they are restaurant-account-wide), so the chips would
               highlight a day while their numbers still showed the whole range.
               A single day is also too few orders for Upselling to say anything. */}
-          {activeTab !== 'payment_methods' && activeTab !== 'general' && activeTab !== 'upselling' && activeTab !== 'canceled_orders' && activeTab !== 'no_charge' && dailyRows.length > 0 ? (
+          {activeTab !== 'payment_methods' && activeTab !== 'general' && activeTab !== 'upselling' && activeTab !== 'canceled_orders' && activeTab !== 'no_charge' && activeTab !== 'receivable' && dailyRows.length > 0 ? (
             <div className="mb-4 space-y-2">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-gray-500">{rangeMode === 'custom' ? `Custom range: ${draftFrom} - ${draftTo}` : loadedPeriod}</p>
@@ -2656,7 +2629,12 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
 
               {activeTab==='general'    &&<BranchSummaryTable data={branchSummaryData} exporting={branchSummaryExporting} onExportPdf={exportBranchSummaryPdf} onSharePdf={shareBranchSummaryPdf}/>}
               {activeTab==='journal'    &&<JournalTable     txs={txData??[]}/>}
-              {activeTab==='receivable' &&<ReceivableTable  txs={txData??[]}/>}
+              {/* Credit Sales is the one report you act on rather than read, so
+                  it is the working screen itself: who owes, what for, and a
+                  button to take the money. Open debt is not a dated figure —
+                  a bill is owed until it is paid — so this ignores the period
+                  pills above and always shows everything still outstanding. */}
+              {activeTab==='receivable' &&<AccountsReceivable/>}
               {activeTab==='payable'    &&<PayableTable     txs={txData??[]}/>}
               {activeTab==='cashflow'   &&<CashFlowTable    txs={txData??[]}/>}
               {activeTab==='balance'    &&<BalanceSheetTable txs={txData??[]}/>}
