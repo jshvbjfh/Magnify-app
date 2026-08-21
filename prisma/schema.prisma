@@ -144,6 +144,7 @@ model Branch {
   adjustmentLogs InventoryAdjustmentLog[]
   staffBranches  StaffBranch[]
   shifts         EmployeeShift[]
+  kitchenTickets KitchenTicket[]
   syncCursors    SyncCursor[]
   syncOutbox     SyncOutbox[]
 
@@ -288,6 +289,29 @@ model RestaurantOrder {
   updatedAt      DateTime         @updatedAt
   deletedAt      DateTime?
 
+  // Who actually closed the bill. Deliberately separate from createdByName: a
+  // supervisor may settle any waiter's table, and when they do the sale must
+  // still belong to the waiter who took it. Null on every order settled before
+  // this existed, and on orders closed by their own waiter, so read it as
+  // "nobody other than the waiter", never as "nobody".
+  settledByName  String?
+
+  // The supervisor whose PIN approved the cancellation. cancelReason says why;
+  // this says who authorised it, which is the half the cancellation report
+  // could not show before. Null on cancellations recorded before this existed.
+  canceledByName String?
+
+  // A comped bill: the boss's guests eat, nothing is charged, and paymentMethod
+  // reads 'No Charge'. The reason is mandatory at the till, so a null here on a
+  // No Charge order means the record predates this field.
+  noChargeReason String?
+  // What the comp was worth at menu prices. The order's own totals are zeroed
+  // on a No Charge settlement — that is what keeps revenue, APC and every sales
+  // report honest without each having to know about comps — so this is the only
+  // surviving record of the value written off, and it is what the No Charge
+  // report totals.
+  compedAmount   Float?
+
   // Accounts Receivable: customer name when paid on credit, and when the A/R was collected.
   // The phone is optional — staff often know the guest by name alone — so null
   // means "not taken", never "no phone". It exists so an unpaid tab can actually
@@ -309,6 +333,7 @@ model RestaurantOrder {
 
   items     OrderItem[]
   dishSales DishSale[]
+  tickets   KitchenTicket[]
 
   @@unique([restaurantId, orderNumber])
   @@index([branchId, status, createdAt])
@@ -360,6 +385,46 @@ model OrderItem {
 
   @@index([orderId, status, kitchenStatus])
   @@map("order_items")
+}
+
+// A slip that actually went to a station's printer. One row per station per
+// fire: an order carrying food and drinks produces a KOT for the kitchen and a
+// BOT for the bar, and re-firing after items are added produces another of each.
+//
+// seq is what the cook reads off the paper. It restarts at 1 every business day,
+// per station, so "KOT #6" means the sixth slip that kitchen has seen today.
+// The slip prints it padded to four digits (KOT #0006) purely so the numbers
+// line up on the rail — the value is a plain integer and a busy day is free to
+// run past 9999.
+//
+// The till assigns seq offline, because a ticket has to print the instant it is
+// fired whether or not the internet is up. There is deliberately NO unique
+// constraint on it: if a venue ever runs two tills against one station and both
+// are offline at once, the two can pick the same number, and a duplicate slip
+// number on a report is a far smaller problem than a push that will not sync.
+model KitchenTicket {
+  id           String          @id @default(cuid())
+  restaurantId String
+  branchId     String
+  branch       Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  orderId      String
+  order        RestaurantOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  // 'KOT' for a kitchen station, 'BOT' for a bar — taken from Branch.type at
+  // the moment it printed, so re-typing a station later cannot rewrite history.
+  kind         String
+  seq          Int
+  // The shift's business day, so a slip fired at 1am belongs to the night that
+  // opened it rather than the calendar date it printed on.
+  businessDate DateTime
+  printedAt    DateTime        @default(now())
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  deletedAt    DateTime?
+
+  @@index([restaurantId, businessDate])
+  @@index([branchId, businessDate, seq])
+  @@index([orderId])
+  @@map("kitchen_tickets")
 }
 
 // ─── MENU ──────────────────────────────────────────────────────────────────

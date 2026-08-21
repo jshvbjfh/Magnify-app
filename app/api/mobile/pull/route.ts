@@ -13,6 +13,12 @@ const NO_STORE_HEADERS = {
   'Cache-Control': 'no-store, max-age=0, must-revalidate',
 }
 
+// Job titles that carry supervisor standing on the floor. Compared lowercased
+// against Staff.role, whose allowed values are set by the employees API.
+// 'supervisor' is not one of them today; it is listed so adding it to that
+// list later needs no change here.
+const SUPERVISOR_ROLES = new Set(['manager', 'supervisor'])
+
 function jsonNoStore(body: unknown, init?: ResponseInit) {
   return NextResponse.json(body, {
     ...init,
@@ -144,7 +150,7 @@ export async function GET(req: Request) {
           deletedAt: null,
           OR: [{ pin: { not: null } }, { cancellationPin: { not: null } }],
         },
-        select: { id: true, name: true, pin: true, cancellationPin: true },
+        select: { id: true, name: true, role: true, pin: true, cancellationPin: true },
       }) : Promise.resolve([]),
 
       catalogRequested ? prisma.branch.findMany({
@@ -358,12 +364,19 @@ export async function GET(req: Request) {
           name: e.name,
           pin_hash: e.cancellationPin as string,
         })),
+      // is_supervisor marks the people who may act on ANY waiter's table from
+      // the till, not just their own: a Manager, or anyone trusted with a
+      // cancellation PIN (this app's existing supervisor credential — it
+      // already approves cancellations and opens/closes shifts). Sent as a
+      // flag rather than the role string so the waiter apps never have to
+      // agree on the restaurant's job titles.
       orderCodeHolders: approverEmployees
         .filter(e => e.pin != null)
         .map(e => ({
           id: e.id,
           name: e.name,
           pin_hash: e.pin as string,
+          is_supervisor: e.cancellationPin != null || SUPERVISOR_ROLES.has(String(e.role ?? '').trim().toLowerCase()),
         })),
       // Recent order status updates for local reconciliation on the waiter device.
       // Waiter app can update matching local rows without re-pushing.

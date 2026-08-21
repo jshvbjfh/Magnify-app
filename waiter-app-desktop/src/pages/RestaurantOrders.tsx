@@ -8,12 +8,13 @@ import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
   getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, markTicketsPushed,
   setItemDiscount, mergeOrdersLocal, lineNetAmount,
+  recordKitchenTicket,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import SupervisorPinDialog from './SupervisorPinDialog'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline, validateOrderCode, type BranchInfo } from '../services/sync'
-import { getActiveShift } from '../services/shifts'
+import { getActiveShift, currentBusinessDateISO } from '../services/shifts'
 import { getPrinterMap, getBillPrinter, resolveStationPrinter, listPrinters, isVirtualPrinter, parseBillTemplate, getBillNetworkPrinter, getBillEscposMode, printBillRaw, printTicketRaw, type PrinterMap, type PrinterInfo, type NetworkPrinterConfig } from '../services/printing'
 import { hotelCreditLines, hotelBuffetPriceHidden } from '../services/hotelBuffet'
 import { useOnline } from '../hooks/useOnline'
@@ -31,7 +32,12 @@ type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: numb
 // 'Credit' settles the tab on account rather than at the till: the server books
 // it to Accounts Receivable (1200) instead of cash, and it needs the customer's
 // name so the debt can be chased and collected later.
-const PAY_METHODS = ['Cash', 'MoMo', 'Card', 'Bank Transfer', 'Credit'] as const
+// 'No Charge' is a settlement, not a tender: the guests eat, the bill closes,
+// and nothing is collected — the boss's guests, a comped table, a service
+// recovery. It carries a mandatory reason, and books zero revenue while the
+// food still comes off stock, so it can never quietly pad the day's takings.
+const NO_CHARGE = 'No Charge'
+const PAY_METHODS = ['Cash', 'MoMo', 'Card', 'Bank Transfer', 'Credit', NO_CHARGE] as const
 
 const COLOR_POOL = [
   ['bg-rose-400',    'text-white', 'bg-rose-700'],
@@ -379,6 +385,10 @@ let historyCache: Order[] | null = null
 interface Props {
   mode?: 'pos' | 'history' | 'pending'
   waiterName: string
+  // True when the code that unlocked this till belongs to a manager or a
+  // supervisor-PIN holder. Every pending table is then fully actionable, not
+  // just this person's own — see ownsOrder.
+  isSupervisor?: boolean
   activeBranchId?: string | null
   onPendingCountChange?: (count: number) => void
   syncVersion?: number
@@ -392,7 +402,7 @@ interface Props {
   onEditDone?: () => void
 }
 
-export default function RestaurantOrders({ mode = 'pos', waiterName = '', activeBranchId = null, onPendingCountChange, syncVersion, selectedTableKey: controlledTableKey, onSelectTableKey, editingOrderId = null, onEditOrder, onEditDone }: Props) {
+export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupervisor = false, activeBranchId = null, onPendingCountChange, syncVersion, selectedTableKey: controlledTableKey, onSelectTableKey, editingOrderId = null, onEditOrder, onEditDone }: Props) {
   const { isOnline } = useOnline()
   // ── Shared state ──
   const [dishes,        setDishes]        = useState<Dish[]>([])
@@ -439,6 +449,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
   const [incomingConfirmId, setIncomingConfirmId] = useState<string | null>(null)
   const [payingOrderId,     setPayingOrderId]     = useState<string | null>(null)
   const [payMethod,         setPayMethod]         = useState('Cash')
+  // Why nothing was charged. Required before a No Charge settlement can be
+  // confirmed — a comp with no reason is indistinguishable from a mistake.
+  const [noChargeReason,    setNoChargeReason]    = useState('')
   // Credit sales only: who owes for the tab. Name is required, phone optional.
   const [arCustomerName,    setArCustomerName]    = useState('')
   const [arCustomerPhone,   setArCustomerPhone]   = useState('')
@@ -868,7 +881,7 @@ ${barcodeEl}
     printHtml(html, 0, billPrinter)
   }
 
-  function printKitchenTickets(order: Order, cart: CartItem[], rName: string) {
+  async function printKitchenTickets(order: Order, cart: CartItem[], rName: string) {
     const byBranch = new Map<string, { branchName: string; branchType: string; items: CartItem[] }>()
     for (const ci of cart) {
       // The line's OWN station first, then the dish lookup. `dishes` only holds
@@ -922,7 +935,11 @@ ${barcodeEl}
     const fontPx = Math.max(8, Math.min(14, Math.floor(272 / (LINE * 0.6))))
     // The print queue (printHtml) serialises these tickets, so no per-ticket
     // wall-clock stagger is needed — each just follows the previous in order.
-    let ticketIndex = 1
+    // The number the cook reads off the paper. It is allocated per station and
+    // restarts at 1 each business day, so "KOT #0006" means the sixth slip that
+    // kitchen has seen today — not the sixth line of this order, which is what
+    // the old per-order index counted and which told nobody anything.
+    const businessDate = await currentBusinessDateISO()
     for (const [bId, group] of byBranch) {
       const deviceName = resolveStationPrinter(printerMap, billPrinter, bId === '__none__' ? null : bId)
       // resolveStationPrinter falls back to the bill printer when a station has
@@ -934,7 +951,17 @@ ${barcodeEl}
         setSubmitError(`No printer set for ${group.branchName} — printed on the bill printer. Assign one in Printers.`)
       }
       const station = group.branchType === 'bar' ? 'BAR' : 'KITCHEN'
-      const ticketNo = ticketIndex
+      // KOT for a kitchen, BOT for a bar. Padded to four digits so the numbers
+      // line up on the rail — the padding is display only and a busy day is
+      // free to run past 9999.
+      const kind = station === 'BAR' ? 'BOT' : 'KOT'
+      const seq = await recordKitchenTicket({
+        orderId: order.id,
+        branchId: bId === '__none__' ? null : bId,
+        kind,
+        businessDate,
+      })
+      const ticketNo = `${kind} #${String(seq).padStart(4, '0')}`
 
       // ESC/POS path — the same raw delivery the bill uses. A thermal printer
       // on the "Generic / Text Only" driver cannot render the GDI/HTML page
@@ -975,7 +1002,6 @@ ${barcodeEl}
             .catch((err: Error) => setSubmitError(`Ticket print failed: ${err.message}`))
             .then(() => new Promise<void>(res => setTimeout(res, PRINT_GAP_MS)))
         }
-        ticketIndex += 1
         continue
       }
 
@@ -1008,7 +1034,7 @@ ${barcodeEl}
         }
         divLines.push(ln(rule))
         divLines.push(ln(center(stars)))
-        divLines.push(ln(center(`Ticket #: ${ticketNo}`), true))
+        divLines.push(ln(center(ticketNo), true))
         divLines.push(ln(center(`Order #: ${order.order_number ?? ''}`)))
         divLines.push(ln(center(stars)))
         // Text-only drivers ignore CSS height entirely — paper only advances on
@@ -1032,7 +1058,6 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
 
       printHtml(buildTicket('station'), 0, deviceName)
       printHtml(buildTicket('waiter'), 0, deviceName)
-      ticketIndex += 1
     }
   }
 
@@ -1315,6 +1340,11 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         paid_at:            null,
         canceled_at:        null,
         cancel_reason:      null,
+        // All three are settlement detail, so nothing is known at ring-up: who
+        // closed the bill, and — if it is comped — why and for how much.
+        settled_by_name:    null,
+        no_charge_reason:   null,
+        comped_amount:      null,
         // Set only if the order is later settled on credit.
         ar_customer_name:   null,
         ar_customer_phone:  null,
@@ -1476,10 +1506,38 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
     setPayingSaving(true)
     try {
       const onCredit = payMethod === 'Credit'
+      const comped   = payMethod === NO_CHARGE
+      // What the table was worth at menu prices, discounts included — the same
+      // figure the card and the bill quote. On a comp this is the value written
+      // off, and it is the only place that value survives, because the order's
+      // own totals go to zero below.
+      const items    = orderItemsMap[order.id] ?? []
+      // Sirocco's hotel buffet is owed by the hotel, not the guest, so comping
+      // the guest's bill does not write it off — it is not part of what was
+      // comped. The server recomputes this from the pushed lines and its figure
+      // wins; this one keeps the till's own record honest in the meantime.
+      const compBuffet = hotelCreditLines(order.restaurant_id, items.map(i => ({ name: i.dish_name })))
+      const menuValue = items.reduce((sum, i, idx) => sum + (compBuffet[idx] ? 0 : lineNetAmount(i)), 0)
       await updateOrder(order.id, {
         status:         'PAID',
         payment_method: payMethod,
         paid_at:        new Date().toISOString(),
+        // A comp closes at zero. Zeroing the order itself — rather than asking
+        // every report to learn what 'No Charge' means — is what keeps revenue,
+        // APC and the sales reports honest by construction.
+        ...(comped
+          ? {
+              subtotal_amount:  0,
+              vat_amount:       0,
+              total_amount:     0,
+              comped_amount:    menuValue,
+              no_charge_reason: noChargeReason.trim(),
+            }
+          : { comped_amount: null, no_charge_reason: null }),
+        // Who closed the bill, recorded only when that is not the waiter whose
+        // name is already on the order. created_by_name is deliberately left
+        // alone: the sale belongs to the waiter who took the table.
+        ...(waiterName.trim() && !ownedByMe(order) ? { settled_by_name: waiterName.trim() } : {}),
         // Stored on the order so the debt survives offline and syncs with it.
         // Cleared on any non-credit tender so a mistyped name can't cling to a
         // tab that was ultimately settled in cash.
@@ -1504,6 +1562,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       setPayMethod('Cash')
       setArCustomerName('')
       setArCustomerPhone('')
+      setNoChargeReason('')
     } catch {}
     finally {
       paymentLockRef.current = false
@@ -1561,7 +1620,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
   // Treated as everyone's (fully actionable): guest QR orders awaiting
   // confirmation, and orders with no recorded waiter, which would otherwise
   // be stranded read-only on every terminal with no way to settle them.
-  const ownsOrder = (o: Order): boolean => {
+  const ownedByMe = (o: Order): boolean => {
     if (!waiterName.trim()) return true          // no waiter signed in — full access
     if (o.status === 'UNCONFIRMED') return true  // unclaimed guest QR order
     const who = o.created_by_name?.trim().toLowerCase()
@@ -1573,6 +1632,16 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
     const confirmedBy = who.match(/confirmed by (.+)$/)
     return confirmedBy ? confirmedBy[1].trim() === me : false
   }
+  // A supervisor settles, edits, discounts, fires and cancels any table on the
+  // floor. That is the whole point of their code: a waiter who has gone home,
+  // or is stuck at another table, no longer strands a live bill. Attribution is
+  // untouched — created_by_name still names the waiter who took the order, so
+  // the sale stays theirs in every report; settled_by_name records who closed it.
+  const ownsOrder = (o: Order): boolean => isSupervisor || ownedByMe(o)
+  // True only for the cards a supervisor is reaching into. Kept distinct from
+  // ownsOrder so those cards can still say whose table they are, instead of
+  // silently looking like the supervisor's own.
+  const actingForAnother = (o: Order): boolean => isSupervisor && !ownedByMe(o)
   // Who to name on a locked card. Confirmed guest orders carry the whole
   // "Guest QR Order · confirmed by <waiter>" string — show just the waiter.
   const orderWaiter = (o: Order): string => {
@@ -1592,6 +1661,11 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
     const items   = order ? (orderItemsMap[order.id] ?? []) : []
     // Discounts included — the figure collected here must be the one on the bill.
     const tot     = items.reduce((s, i) => s + lineNetAmount(i), 0)
+    // What a comp would actually write off. Sirocco's hotel buffet is owed by
+    // the hotel rather than the guest, so it is never part of what is comped —
+    // for every other restaurant this is simply the whole total.
+    const compHidden = hotelCreditLines(order?.restaurant_id ?? null, items.map(i => ({ name: i.dish_name })))
+    const compValue = items.reduce((s, i, idx) => s + (compHidden[idx] ? 0 : lineNetAmount(i)), 0)
     const name    = order?.table_name ?? (order?.table_id ? (tables.find(t => t.id === order.table_id)?.name ?? 'Table') : 'Takeaway')
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -1621,12 +1695,18 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
             <div className="grid grid-cols-2 gap-2">
               {PAY_METHODS.map(m => (
                 <button key={m} type="button"
-                  onClick={() => { setPayMethod(m); if (m !== 'Credit') { setArCustomerName(''); setArCustomerPhone('') } }}
+                  onClick={() => {
+                    setPayMethod(m)
+                    if (m !== 'Credit') { setArCustomerName(''); setArCustomerPhone('') }
+                    if (m !== NO_CHARGE) setNoChargeReason('')
+                  }}
                   className={`py-2.5 rounded-lg text-sm font-medium border transition-all ${
                     payMethod === m
                       ? m === 'Credit'
                         ? 'bg-amber-500 text-white border-amber-500'
-                        : 'bg-green-500 text-white border-green-500'
+                        : m === NO_CHARGE
+                          ? 'bg-purple-600 text-white border-purple-600'
+                          : 'bg-green-500 text-white border-green-500'
                       : 'bg-white text-gray-700 border-gray-300 hover:border-green-400'
                   }`}>
                   {m}
@@ -1667,14 +1747,44 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
             </div>
           )}
 
+          {/* A comp is the one settlement with nothing to reconcile against, so
+              the reason is the whole audit trail. Required, and it follows the
+              order all the way to the manager's No Charge report. */}
+          {payMethod === NO_CHARGE && (
+            <div>
+              <label className="text-xs font-semibold text-gray-600 mb-1.5 block">
+                Reason <span className="text-red-500">*</span>
+              </label>
+              <input
+                value={noChargeReason}
+                onChange={e => setNoChargeReason(e.target.value)}
+                placeholder="e.g. Owner's guests, staff meal, sent back"
+                className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-300 ${
+                  noChargeReason.trim() ? 'border-gray-300' : 'border-red-300'
+                }`}
+              />
+              <p className="mt-1 text-xs text-purple-700">
+                Nothing is charged. The food still comes off stock, and {fmtRWF(compValue)} RWF is recorded as comped.
+              </p>
+            </div>
+          )}
+
           <div className="flex gap-2 pt-1">
             <button onClick={onClose} className="flex-1 border border-gray-300 text-gray-700 text-sm font-medium py-2.5 rounded-xl hover:bg-gray-50">
               Cancel
             </button>
             <button onClick={() => collectPayment(orderId)}
-              disabled={payingSaving || (payMethod === 'Credit' && !arCustomerName.trim())}
+              disabled={
+                payingSaving
+                || (payMethod === 'Credit' && !arCustomerName.trim())
+                || (payMethod === NO_CHARGE && !noChargeReason.trim())
+              }
               className={`flex-1 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl ${
-                payMethod === 'Credit' ? 'bg-amber-500 hover:bg-amber-600' : 'bg-green-500 hover:bg-green-600'
+                payMethod === 'Credit'
+                  ? 'bg-amber-500 hover:bg-amber-600'
+                  : payMethod === NO_CHARGE
+                    ? 'bg-purple-600 hover:bg-purple-700'
+                    : 'bg-green-500 hover:bg-green-600'
               }`}>
               {payingSaving ? 'Processing…' : `Confirm ${payMethod}`}
             </button>
@@ -1930,6 +2040,14 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                   </div>
                   <div className="border-t border-gray-100 px-3 py-2 space-y-1.5">
                     <div className="flex justify-between text-sm font-bold text-gray-900"><span>Total</span><span className="text-green-700">{fmtRWF(tot)} RWF</span></div>
+                    {/* Supervisor reaching into someone else's table. The card is
+                        fully actionable, so the only thing that still needs
+                        saying is whose table it is. */}
+                    {actingForAnother(ord) && (
+                      <p className="flex items-center justify-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg py-1 px-2">
+                        <ShieldAlert className="h-3 w-3 flex-shrink-0" /> {orderWaiter(ord)}&apos;s table
+                      </p>
+                    )}
                     {!mine ? (
                       <p className="flex items-center justify-center gap-1 py-2 text-xs font-semibold text-gray-500">
                         <Lock className="h-3.5 w-3.5 flex-shrink-0" /> {`${orderWaiter(ord)}'s order`}

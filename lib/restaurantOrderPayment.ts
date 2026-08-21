@@ -3,7 +3,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import { recordJournalEntry } from '@/lib/accounting'
 import { recordDishSalesForPaidOrder } from '@/lib/dishSaleRecording'
 import { isHotelBuffetLine } from '@/lib/hotelBuffet'
-import { ACTIVE_RESTAURANT_ORDER_STATUSES, calculateRestaurantOrderTotals, enqueueOrderSync, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
+import { ACTIVE_RESTAURANT_ORDER_STATUSES, calculateRestaurantOrderTotals, enqueueOrderSync, isNoChargeMethod, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
@@ -84,6 +84,39 @@ export async function finalizeRestaurantOrderPayment(
 
   const paidAt = params.paidAt ?? new Date()
   const normalizedPaymentMethod = params.paymentMethod || currentOrder.paymentMethod || 'Cash'
+  const isComped = isNoChargeMethod(normalizedPaymentMethod)
+
+  // A comp closes at zero. syncRestaurantOrderTotals above has just rebuilt the
+  // order's totals from its lines, which is exactly right for a bill someone
+  // pays and exactly wrong for one nobody does, so the menu value is captured
+  // here and the order is then written down to nothing. Reports need learn
+  // nothing about comps: a No Charge order simply contributes zero to every one
+  // of them, including the ones written before comps existed.
+  //
+  // SIROCCO Y SOL's hotel buffet is settled by the hotel, not by the guest at
+  // the table, so comping a guest's bill does not cancel what the hotel owes.
+  // The buffet's lines are held out of the comp entirely: they keep their value
+  // on the order, their 'Credit' journal entry and their receivable. For every
+  // other restaurant no line matches, and this degenerates to exactly what it
+  // reads like -- the whole bill written down to zero.
+  const compedLines = isComped
+    ? currentOrder.items.filter((item) => !isHotelBuffetLine(params.restaurantId, item.dishName))
+    : []
+  const owedLines = isComped
+    ? currentOrder.items.filter((item) => isHotelBuffetLine(params.restaurantId, item.dishName))
+    : []
+  const toTotals = (lines: typeof currentOrder.items) =>
+    calculateRestaurantOrderTotals(
+      lines.map((item) => ({
+        dishPrice: Number(item.dishPrice),
+        qty: Number(item.qty),
+        discountPercent: item.discountPercent,
+      })),
+    )
+  const compedTotals = isComped ? toTotals(compedLines) : null
+  // What the order is still worth after the comp: nothing at all in the normal
+  // case, and the hotel's buffet where that applies.
+  const remainingTotals = isComped ? toTotals(owedLines) : null
 
   const paymentUpdate = await db.restaurantOrder.updateMany({
     where: {
@@ -100,6 +133,14 @@ export async function finalizeRestaurantOrderPayment(
       // them can never blank out the customer already recorded against the tab.
       ...(params.arCustomerName ? { arCustomerName: params.arCustomerName } : {}),
       ...(params.arCustomerPhone ? { arCustomerPhone: params.arCustomerPhone } : {}),
+      ...(compedTotals && remainingTotals
+        ? {
+            subtotalAmount: remainingTotals.subtotalAmount,
+            vatAmount: remainingTotals.vatAmount,
+            totalAmount: remainingTotals.totalAmount,
+            compedAmount: compedTotals.totalAmount,
+          }
+        : {}),
       canceledAt: null,
       cancelReason: null,
     },
@@ -127,6 +168,11 @@ export async function finalizeRestaurantOrderPayment(
     sourceDeviceId: params.sourceDeviceId,
     orderId: params.orderId,
     paymentMethod: normalizedPaymentMethod,
+    // The dishes were cooked and eaten, so the sale rows are real and the stock
+    // and cost behind them are real. Only the money is not: a comped line is
+    // recorded at zero so sales-by-dish and sales-by-station never show revenue
+    // that was never collected.
+    zeroRevenue: isComped,
     saleDate: paidAt,
     businessDate: currentOrder.businessDate ?? null,
     items: currentOrder.items.map((item) => ({
@@ -154,7 +200,15 @@ export async function finalizeRestaurantOrderPayment(
   //
   // `reference` ties every entry to its order and makes the booking idempotent —
   // a retried or racing finalize is a no-op once the order has been booked.
+  //
+  // A comp books nothing at all. No money arrived, so there is no revenue to
+  // split across stations and no tender to book it under; writing one would put
+  // the menu value into the Transactions page as income that never existed. The
+  // food is still accounted for -- recordDishSalesForPaidOrder above already
+  // took it off stock and costed it -- and the written-off value lives on the
+  // order as compedAmount for the No Charge report.
   const orderRef = `order:${params.orderId}`
+  const comped = isNoChargeMethod(normalizedPaymentMethod)
   const alreadyBooked = await db.journalEntry.count({
     where: { restaurantId: params.restaurantId, reference: orderRef, deletedAt: null },
   })
@@ -215,7 +269,10 @@ export async function finalizeRestaurantOrderPayment(
       const atTheTill = branchItems.filter((item) => !settlesOnCredit(item))
 
       for (const [tender, tenderItems] of [
-        [normalizedPaymentMethod, atTheTill],
+        // Nothing was collected at the till on a comp, so that leg books
+        // nothing. The credit leg is untouched: the hotel still owes for its
+        // buffet whether or not the guest's own lines were written off.
+        [normalizedPaymentMethod, comped ? [] : atTheTill],
         ['Credit', onCredit],
       ] as const) {
         if (!tenderItems.length) continue

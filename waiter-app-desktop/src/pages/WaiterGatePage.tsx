@@ -25,7 +25,9 @@ interface WaiterGatePageProps {
   // False when the venue does not run service shifts: there is no shift to end,
   // so the button is replaced by Exit (quit the app) as on the start-shift screen.
   shiftsEnabled: boolean
-  onUnlock: (waiterName: string) => void
+  // supervisor: this code belongs to a manager / supervisor-PIN holder, who may
+  // act on every waiter's table rather than only their own.
+  onUnlock: (waiterName: string, supervisor: boolean) => void
   // Called after a supervisor closes the shift — the shell then returns to the
   // start-shift screen.
   onShiftEnded: () => void
@@ -65,8 +67,8 @@ export default function WaiterGatePage({ accountName, syncVersion, shiftsEnabled
     setSaving(true)
     setError(null)
     try {
-      const { waiterName } = await validateOrderCode(nextCode)
-      onUnlock(waiterName)
+      const { waiterName, supervisor } = await validateOrderCode(nextCode)
+      onUnlock(waiterName, supervisor)
     } catch (err) {
       setCode('')
       setError((err as Error).message)
@@ -201,7 +203,7 @@ export default function WaiterGatePage({ accountName, syncVersion, shiftsEnabled
 
           {hasHolders === false && (
             <button type="button" disabled={saving}
-              onClick={() => onUnlock(accountName)}
+              onClick={() => onUnlock(accountName, false)}
               className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 py-2 disabled:opacity-50">
               No waiter codes set up yet — continue as {accountName || 'this account'}
               <ArrowRight className="h-3.5 w-3.5" />

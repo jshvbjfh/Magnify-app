@@ -9,6 +9,28 @@ type TotalsInput = Array<{ dishPrice: number; qty: number; discountPercent?: num
 export const ACTIVE_RESTAURANT_ORDER_STATUSES = ['PENDING', 'OPEN'] as const
 
 /**
+ * The tender written on a comped bill: the guests ate, the table closed, and
+ * nothing was collected — the owner's guests, a staff meal, a service recovery.
+ *
+ * It is a settlement, not a payment. An order carrying it is stored with its
+ * totals at zero and the written-off value kept in `compedAmount`, so revenue,
+ * average-per-cover and every sales report contribute nothing for it without
+ * having to know comps exist. The food still comes off stock, because it really
+ * was cooked and eaten.
+ *
+ * Exported as one constant rather than spelled out at each call site: the string
+ * is compared in the push handler, the payment finalizer and the reports, and a
+ * typo in any one of them would silently book a comp as income.
+ */
+export const NO_CHARGE_METHOD = 'No Charge'
+
+/** Whether a settlement collected nothing. Trims and ignores case, because the
+ *  value arrives from a device and only ever has to mean one thing. */
+export function isNoChargeMethod(paymentMethod: string | null | undefined): boolean {
+  return String(paymentMethod ?? '').trim().toLowerCase() === NO_CHARGE_METHOD.toLowerCase()
+}
+
+/**
  * What one line is actually worth after its discount — the ONLY definition of
  * that in the app, on purpose.
  *

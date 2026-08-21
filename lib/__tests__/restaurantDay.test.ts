@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest'
 
-import { endOfRestaurantDay, startOfRestaurantDay } from '../restaurantDay'
+import { endOfRestaurantDay, restaurantHourOfDay, startOfRestaurantDay } from '../restaurantDay'
 
 describe('restaurant day boundaries', () => {
   it('starts the day at Kigali midnight, not UTC midnight', () => {
@@ -47,5 +47,32 @@ describe('restaurant day boundaries', () => {
     expect(startOfRestaurantDay('')).toBeNull()
     expect(endOfRestaurantDay(undefined)).toBeNull()
     expect(startOfRestaurantDay('not-a-date')).toBeNull()
+  })
+})
+
+describe('restaurantHourOfDay', () => {
+  it('reads the hour at the restaurant, not on the server', () => {
+    // 17:30 UTC is the 19:00 dinner hour in Kigali. getHours() on a UTC server
+    // would call this hour 17 and move the whole dinner service two hours
+    // earlier — in production only.
+    expect(restaurantHourOfDay(new Date('2026-08-01T17:30:00.000Z'))).toBe(19)
+  })
+
+  it('rolls past midnight into the small hours, not back to the morning', () => {
+    // 23:30 UTC is 01:30 the next day in Kigali: late service, hour 1.
+    expect(restaurantHourOfDay(new Date('2026-08-01T23:30:00.000Z'))).toBe(1)
+    // 22:00 UTC is exactly Kigali midnight.
+    expect(restaurantHourOfDay(new Date('2026-08-01T22:00:00.000Z'))).toBe(0)
+  })
+
+  it('accepts the shapes an order timestamp arrives in', () => {
+    expect(restaurantHourOfDay('2026-08-01T17:30:00.000Z')).toBe(19)
+    expect(restaurantHourOfDay(new Date('2026-08-01T17:30:00.000Z').getTime())).toBe(19)
+  })
+
+  it('returns NaN rather than a plausible midnight for an unusable value', () => {
+    // Bucketing an unreadable timestamp as hour 0 would invent a late-night
+    // trade that never happened.
+    expect(Number.isNaN(restaurantHourOfDay('not-a-date'))).toBe(true)
   })
 })

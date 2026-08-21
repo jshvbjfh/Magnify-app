@@ -325,6 +325,15 @@ export interface Order {
   paid_at: string | null
   canceled_at: string | null
   cancel_reason: string | null
+  // Who closed the bill, when that was not simply the waiter who took it — a
+  // supervisor settling another waiter's table. created_by_name is left alone,
+  // so the sale stays credited to the waiter in every report.
+  settled_by_name: string | null
+  // 'No Charge' settlement: why nothing was charged (mandatory at the till),
+  // and what the comp was worth at menu prices. The order's own totals are
+  // zeroed on a comp, so comped_amount is the only record of the value.
+  no_charge_reason: string | null
+  comped_amount: number | null
   ar_customer_name: string | null
   ar_customer_phone: string | null
   shift_id: string | null
@@ -477,7 +486,7 @@ export async function getOrderById(orderId: string): Promise<Order | null> {
 
 export async function updateOrder(
   orderId: string,
-  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount' | 'created_by_name' | 'ar_customer_name' | 'ar_customer_phone'>>,
+  fields: Partial<Pick<Order, 'status' | 'payment_method' | 'served_at' | 'paid_at' | 'canceled_at' | 'cancel_reason' | 'subtotal_amount' | 'vat_amount' | 'total_amount' | 'created_by_name' | 'settled_by_name' | 'no_charge_reason' | 'comped_amount' | 'ar_customer_name' | 'ar_customer_phone'>>,
 ): Promise<void> {
   const now = new Date().toISOString()
   const entries = Object.entries({ ...fields, updated_at: now, synced: 0 })
@@ -704,22 +713,105 @@ export async function getCancellationApprovers(): Promise<CancellationApprover[]
 // Pulled from server on every pullSync. Stores id, name, and bcrypt hash of
 // the 4-digit order code. Separate from cancellation_approvers.
 
-export async function replaceOrderCodeHolders(holders: CancellationApprover[]): Promise<void> {
+// is_supervisor is SQLite's 0/1, not a boolean — read it through isSupervisor()
+// rather than testing it for truthiness, or the string '0' a driver may hand
+// back promotes every waiter to a supervisor.
+export interface OrderCodeHolder extends CancellationApprover {
+  is_supervisor?: number | boolean | string | null
+}
+
+export function isSupervisor(holder: Pick<OrderCodeHolder, 'is_supervisor'>): boolean {
+  const flag = holder.is_supervisor
+  return flag === 1 || flag === true || flag === '1'
+}
+
+export async function replaceOrderCodeHolders(holders: OrderCodeHolder[]): Promise<void> {
   const db = getDB()
   const statements: StatementSet = [
     { statement: 'DELETE FROM order_code_holders', values: [] },
     ...holders.map((h) => ({
-      statement: 'INSERT INTO order_code_holders (id, name, pin_hash) VALUES (?, ?, ?)',
-      values: [h.id, h.name, h.pin_hash],
+      statement: 'INSERT INTO order_code_holders (id, name, pin_hash, is_supervisor) VALUES (?, ?, ?, ?)',
+      values: [h.id, h.name, h.pin_hash, isSupervisor(h) ? 1 : 0],
     })),
   ]
   await db.executeSet(statements)
 }
 
-export async function getOrderCodeHolders(): Promise<CancellationApprover[]> {
+export async function getOrderCodeHolders(): Promise<OrderCodeHolder[]> {
   const db = getDB()
   const rows = await db.query('SELECT * FROM order_code_holders ORDER BY name', [])
-  return (rows ?? []) as unknown as CancellationApprover[]
+  return (rows ?? []) as unknown as OrderCodeHolder[]
+}
+
+// ---- kitchen_tickets -------------------------------------------------------
+// One row per slip fired at a station. The number on the paper (KOT #0006 /
+// BOT #0002) restarts at 1 each business day per station, and is allocated
+// HERE rather than on the server: a ticket has to print the instant the waiter
+// fires it, internet or not.
+//
+// Rows are pushed up so the manager reads the same numbers the cooks are
+// holding. Nothing reads them back down — the paper is already printed, so a
+// server copy could only ever disagree with it.
+
+export type KitchenTicketKind = 'KOT' | 'BOT'
+
+export interface KitchenTicketRow {
+  id: string
+  order_id: string
+  branch_id: string | null
+  kind: string
+  seq: number
+  business_date: string
+  printed_at: string
+  synced: number
+}
+
+// Allocate the next slip number for one station on one business day, and record
+// the slip in the same step. Returns the number to print.
+//
+// MAX(seq) + 1 rather than a stored counter: the count and the evidence are the
+// same rows, so a half-written counter cannot drift away from the slips that
+// actually printed, and clearing history resets the numbering by construction.
+// COALESCE on branch_id because a line whose station cannot be resolved files
+// under '' rather than vanishing from the day's numbering.
+export async function recordKitchenTicket(params: {
+  orderId: string
+  branchId: string | null
+  kind: KitchenTicketKind
+  businessDate: string
+}): Promise<number> {
+  const db = getDB()
+  const rows = await db.query(
+    `SELECT COALESCE(MAX(seq), 0) AS max_seq FROM kitchen_tickets
+      WHERE COALESCE(branch_id, '') = COALESCE(?, '') AND business_date = ?`,
+    [params.branchId, params.businessDate],
+  )
+  const seq = Number((rows?.[0] as { max_seq?: number } | undefined)?.max_seq ?? 0) + 1
+  const now = new Date().toISOString()
+  await db.run(
+    `INSERT INTO kitchen_tickets (id, order_id, branch_id, kind, seq, business_date, printed_at, synced)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+    [
+      `kt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+      params.orderId, params.branchId, params.kind, seq, params.businessDate, now,
+    ],
+  )
+  return seq
+}
+
+export async function getUnsyncedKitchenTickets(): Promise<KitchenTicketRow[]> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM kitchen_tickets WHERE synced = 0 ORDER BY printed_at', [])
+  return (rows ?? []) as unknown as KitchenTicketRow[]
+}
+
+export async function markKitchenTicketsSynced(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  const db = getDB()
+  await db.run(
+    `UPDATE kitchen_tickets SET synced = 1 WHERE id IN (${ids.map(() => '?').join(', ')})`,
+    ids,
+  )
 }
 
 // ---- shifts (service sessions) ---------------------------------------------

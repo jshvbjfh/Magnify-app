@@ -50,6 +50,11 @@ export async function recordDishSalesForPaidOrder(
     // The shift's business day this sale is attributed to (null = no shift; the
     // sale falls back to saleDate in reports).
     businessDate?: Date | null
+    // A comped ("No Charge") settlement. The dishes were cooked and eaten, so
+    // the sale rows, the stock movement and the food cost are all real and
+    // recorded as usual — only the money is not, so every line is booked at zero
+    // and no sales report can show revenue that was never collected.
+    zeroRevenue?: boolean
     items: SaleLineInput[]
   }
 ) {
@@ -120,11 +125,18 @@ export async function recordDishSalesForPaidOrder(
 
     // Same helper the order totals and the journal entry use, so a discounted
     // line is worth exactly one thing across the whole app.
-    const totalSaleAmount = calculateLineNetAmount({
-      dishPrice: Number(item.dishPrice),
-      qty: quantitySold,
-      discountPercent: item.discountPercent,
-    })
+    // SIROCCO Y SOL's hotel buffet is owed by the hotel, not tendered by the
+    // guest at the table -- so comping the guest's bill does not cancel it. The
+    // buffet line keeps its real value and its 'Credit' tender even on a No
+    // Charge settlement; only what the guest would have paid for goes to zero.
+    const buffetLine = isHotelBuffetLine(params.restaurantId, item.dishName ?? dish.name, dish.category)
+    const totalSaleAmount = params.zeroRevenue && !buffetLine
+      ? 0
+      : calculateLineNetAmount({
+          dishPrice: Number(item.dishPrice),
+          qty: quantitySold,
+          discountPercent: item.discountPercent,
+        })
     const dishSale = await db.dishSale.create({
       data: {
         restaurantId: params.restaurantId,
@@ -143,9 +155,7 @@ export async function recordDishSalesForPaidOrder(
         // with — otherwise sales-by-tender reports would count the receivable
         // as cash in the drawer. Matches the journal split in
         // finalizeRestaurantOrderPayment.
-        paymentMethod: isHotelBuffetLine(params.restaurantId, item.dishName ?? dish.name, dish.category)
-          ? 'Credit'
-          : (params.paymentMethod || 'Cash'),
+        paymentMethod: buffetLine ? 'Credit' : (params.paymentMethod || 'Cash'),
         totalSaleAmount,
         calculatedFoodCost: 0,
       },

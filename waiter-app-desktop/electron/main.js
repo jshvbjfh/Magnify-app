@@ -363,6 +363,54 @@ CREATE TABLE IF NOT EXISTS shifts (
       addColumnIfMissing(database, 'orders', 'merged_into_id', 'TEXT')
     },
   },
+  {
+    // Supervisor standing, carried on the order code itself. 1 means this
+    // person's 4-digit code unlocks every waiter's table on the Pending tab
+    // rather than only their own.
+    //
+    // Defaults to 0, so a device that has not pulled since this shipped treats
+    // everyone as an ordinary waiter — the locks stay on until the server says
+    // otherwise, which is the safe direction to fail.
+    version: 13,
+    run: (database) => addColumnIfMissing(database, 'order_code_holders', 'is_supervisor', 'INTEGER NOT NULL DEFAULT 0'),
+  },
+  {
+    // Settlement detail, and the numbered kitchen/bar slips.
+    //
+    // settled_by_name is who closed the bill when that is not simply the waiter
+    // who took it — a supervisor settling another waiter's table. Never written
+    // over created_by_name, which stays the waiter's, so the sale stays theirs.
+    //
+    // no_charge_reason / comped_amount belong to a 'No Charge' settlement: the
+    // bill closes at zero, the reason is mandatory at the till, and the menu
+    // value is kept here because the order's own totals are zeroed.
+    //
+    // kitchen_tickets records every slip fired at a station. seq restarts at 1
+    // each business day per station and is assigned here, offline, because a
+    // ticket must print the moment it is fired whether or not the internet is
+    // up. synced=0 rows are pushed to the server so the manager sees the same
+    // numbers the cooks are holding.
+    version: 14,
+    run: (database) => {
+      addColumnIfMissing(database, 'orders', 'settled_by_name', 'TEXT')
+      addColumnIfMissing(database, 'orders', 'no_charge_reason', 'TEXT')
+      addColumnIfMissing(database, 'orders', 'comped_amount', 'REAL')
+      database.exec(`
+CREATE TABLE IF NOT EXISTS kitchen_tickets (
+  id TEXT PRIMARY KEY,
+  order_id TEXT NOT NULL,
+  branch_id TEXT,
+  kind TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  business_date TEXT NOT NULL,
+  printed_at TEXT NOT NULL,
+  synced INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS kitchen_tickets_day_idx ON kitchen_tickets (branch_id, business_date, seq);
+CREATE INDEX IF NOT EXISTS kitchen_tickets_synced_idx ON kitchen_tickets (synced);
+`)
+    },
+  },
 ]
 
 function addColumnIfMissing(database, table, column, definition) {
@@ -612,7 +660,10 @@ function buildTicketEscPos(data) {
   parts.push(b([ESC, 0x61, 0x01]))
   parts.push(t('*'.repeat(LINE)))
   parts.push(bold(true), size(0x01))
-  parts.push(t(`Ticket #: ${data.ticketNo ?? ''}`))
+  // ticketNo already reads "KOT #0006" / "BOT #0002" — the station's own daily
+  // slip number, assigned by the till. Older payloads sent a bare per-order
+  // index, so those still get the "Ticket #:" caption they were written for.
+  parts.push(t(/^(KOT|BOT) /.test(String(data.ticketNo ?? '')) ? String(data.ticketNo) : `Ticket #: ${data.ticketNo ?? ''}`))
   parts.push(size(0x00), bold(false))
   if (data.orderNo) parts.push(t(`Order #: ${data.orderNo}`))
   parts.push(t('*'.repeat(LINE)))
@@ -941,6 +992,21 @@ async function createWindow() {
     mainWindow.focus()
   }
   mainWindow.once('ready-to-show', showMaximized)
+  // Unsynced-orders check belongs here, while the window still exists: cancel
+  // simply leaves the till open, so a declined quit can never strand the app as
+  // a windowless process.
+  mainWindow.on('close', (event) => {
+    if (forceQuit || !db) return
+    if (okToDiscardUnsynced(mainWindow)) {
+      forceQuit = true
+      return
+    }
+    event.preventDefault()
+  })
+  mainWindow.on('closed', () => {
+    appendStartupLog('Main window closed')
+    mainWindow = null
+  })
   // The POS is only usable full-size, so "restore down" is never what staff
   // want — snap straight back. Covers the caption's restore button, a title-bar
   // double-click and a drag off the top edge. Minimize is left alone on purpose:
@@ -983,34 +1049,57 @@ async function createWindow() {
 // ---------------------------------------------------------------------------
 let forceQuit = false
 
-app.on('before-quit', async (event) => {
-  if (forceQuit || !db) return
-
-  let unsyncedCount = 0
+// Orders left behind by a previous login belong to another restaurant, and
+// pushSync filters those out on purpose — they can never reach the server, so
+// counting them would block every quit for ever. Count only what this session
+// can still push, exactly as the push does.
+function countPushableUnsyncedOrders() {
+  if (!db) return 0
   try {
-    const row = db.prepare('SELECT COUNT(*) AS cnt FROM orders WHERE synced = 0').get()
-    unsyncedCount = row?.cnt ?? 0
+    const restaurantId = db
+      .prepare("SELECT value FROM restaurant_config WHERE key = 'restaurantId'")
+      .get()?.value?.trim()
+    return restaurantId
+      ? db.prepare('SELECT COUNT(*) AS cnt FROM orders WHERE synced = 0 AND restaurant_id = ?').get(restaurantId)?.cnt ?? 0
+      : db.prepare('SELECT COUNT(*) AS cnt FROM orders WHERE synced = 0').get()?.cnt ?? 0
   } catch {
-    // If we can't query, don't block quit
+    // If we can't query, never block the close.
+    return 0
+  }
+}
+
+// True when it's safe to go ahead and close. Synchronous on purpose: both
+// 'close' and 'before-quit' only honour preventDefault() synchronously.
+function okToDiscardUnsynced(win) {
+  const unsyncedCount = countPushableUnsyncedOrders()
+  if (unsyncedCount === 0) return true
+  appendStartupLog(`Close requested with ${unsyncedCount} unsynced order(s) — prompting`)
+  return dialog.showMessageBoxSync(win, {
+    type: 'warning',
+    title: 'Unsynced Orders',
+    message: `You have ${unsyncedCount} unsynced order${unsyncedCount === 1 ? '' : 's'}.`,
+    detail: 'They have not reached the server yet — quitting now risks losing them.',
+    buttons: ['Cancel', 'Quit Anyway'],
+    defaultId: 0,
+    cancelId: 0,
+  }) === 1
+}
+
+// Secondary net for quits that don't start at the window (auto-update restart,
+// Windows shutdown). It prompts only while a live window can parent the dialog:
+// with no window there is nothing to cancel back to, and blocking here is what
+// stranded the process invisibly — the window is already destroyed by the time
+// before-quit runs, so the prompt never appeared and the quit stayed cancelled.
+app.on('before-quit', (event) => {
+  if (forceQuit || !db) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  // Mark it settled here so the window close that follows this quit does not
+  // ask the same question a second time.
+  if (okToDiscardUnsynced(mainWindow)) {
+    forceQuit = true
     return
   }
-
-  if (unsyncedCount > 0) {
-    event.preventDefault()
-    const { response } = await dialog.showMessageBox(mainWindow, {
-      type: 'warning',
-      title: 'Unsynced Orders',
-      message: `You have ${unsyncedCount} unsynced order${unsyncedCount === 1 ? '' : 's'}.`,
-      detail: 'These orders have not been sent to the server yet. If you close now, they may be lost if this device fails before reconnecting.\n\nAre you sure you want to quit?',
-      buttons: ['Cancel', 'Quit Anyway'],
-      defaultId: 0,
-      cancelId: 0,
-    })
-    if (response === 1) {
-      forceQuit = true
-      app.quit()
-    }
-  }
+  event.preventDefault()
 })
 
 // ---------------------------------------------------------------------------
@@ -1097,13 +1186,21 @@ if (!gotLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    // Focus the existing window if a second instance is attempted
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      if (!mainWindow.isMaximized()) mainWindow.maximize()
-      if (!mainWindow.isVisible()) mainWindow.show()
-      mainWindow.focus()
+    // Bring the running till to the front. If its window is gone — closed while
+    // the process stayed alive — rebuild one instead of doing nothing: a
+    // windowless process still holds the single-instance lock, so every later
+    // launch quits silently and the till looks dead while sitting in Task
+    // Manager. Touching the destroyed window here also threw, so even the
+    // focus attempt died before reaching show().
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      appendStartupLog('second-instance: no live window — recreating')
+      void createWindow()
+      return
     }
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    if (!mainWindow.isMaximized()) mainWindow.maximize()
+    if (!mainWindow.isVisible()) mainWindow.show()
+    mainWindow.focus()
   })
 
   app.whenReady().then(async () => {
@@ -1119,7 +1216,13 @@ if (!gotLock) {
       setupAutoUpdater()
     } catch (err) {
       appendStartupLog(`Startup failed: ${err?.stack || err?.message || err}`)
-      throw err
+      // Never linger as an invisible process — it would keep the single-instance
+      // lock and make every later launch quit without ever showing a window.
+      try {
+        dialog.showErrorBox('Magnify POS could not start', String(err?.message || err))
+      } catch {}
+      app.exit(1)
+      return
     }
 
     app.on('activate', () => {

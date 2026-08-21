@@ -24,6 +24,16 @@ function kigaliBusinessDateISO(now = new Date()): string {
   return new Date(`${y}-${m}-${d}T00:00:00.000+02:00`).toISOString()
 }
 
+// The business day a slip or a sale belongs to right now. Prefers the open
+// shift, so a ticket fired at 1am counts on the night that opened rather than
+// the calendar date it printed on. Falls back to the Kigali calendar day for
+// venues that do not run shifts at all, which is the same day those venues'
+// orders already fall back to.
+export async function currentBusinessDateISO(): Promise<string> {
+  const shift = await getActiveShift()
+  return shift?.business_date ?? kigaliBusinessDateISO()
+}
+
 // Statuses that count as "still open" for the end-of-shift settle check.
 const UNSETTLED_STATUSES = ['PENDING', 'OPEN', 'UNCONFIRMED']
 

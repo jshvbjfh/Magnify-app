@@ -68,6 +68,14 @@ export async function GET(req: Request) {
         where: { status: 'ACTIVE' },
         orderBy: { createdAt: 'asc' },
       },
+      // The kitchen/bar slips this order fired, so the manager can match a
+      // paper ticket on the pass to the bill it came from. Ordered as they
+      // printed.
+      tickets: {
+        where: { deletedAt: null },
+        orderBy: { printedAt: 'asc' },
+        select: { id: true, kind: true, seq: true, branchId: true, printedAt: true },
+      },
     },
     orderBy: { createdAt: 'desc' },
     ...(typeof limit === 'number' ? { take: limit } : {}),

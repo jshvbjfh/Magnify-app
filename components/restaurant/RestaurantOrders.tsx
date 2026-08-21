@@ -53,6 +53,19 @@ type ManagerOrder = {
   cancelReason?: string | null
   cancellationApprovedByEmployeeName?: string | null
   paymentMethod?: string | null
+  // Who closed the bill, when that was not the waiter who took it — a
+  // supervisor settling another waiter's table. The sale still belongs to
+  // createdByName; this only says whose hands closed it.
+  settledByName?: string | null
+  // A comped bill: why nothing was charged, and what it was worth at menu
+  // prices. totalAmount is zero on these, which is exactly why the comped
+  // amount has to be shown separately or the table looks like a free lunch
+  // nobody can account for.
+  noChargeReason?: string | null
+  compedAmount?: number | null
+  // The kitchen/bar slips this order fired, so a paper ticket on the pass can
+  // be matched to the bill it came from.
+  tickets?: Array<{ id: string; kind: string; seq: number }>
   timeline: string[]
   items: Array<{ id: string; dishName: string; qty: number }>
 }
@@ -1397,6 +1410,30 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
                         </span>
                       </div>
                       <p className="text-sm text-gray-600 mt-1">{order.tableName} · {order.createdByName} · {new Date(order.createdAt).toLocaleString('en-RW', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>
+                      {/* Only when someone other than the waiter closed it. Saying
+                          "settled by" on every order the waiter closed themselves
+                          would be noise on all but a handful of rows. */}
+                      {order.settledByName && (
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          Created by {order.createdByName} · settled by <span className="font-semibold text-gray-700">{order.settledByName}</span>
+                        </p>
+                      )}
+                      {/* The slip numbers the cooks are holding — KOT #0006 for a
+                          kitchen, BOT #0002 for a bar. */}
+                      {order.tickets && order.tickets.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {order.tickets.map((ticket) => (
+                            <span key={ticket.id}
+                              className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                                ticket.kind === 'BOT'
+                                  ? 'bg-sky-50 border-sky-200 text-sky-700'
+                                  : 'bg-orange-50 border-orange-200 text-orange-700'
+                              }`}>
+                              {ticket.kind} #{String(ticket.seq).padStart(4, '0')}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-bold text-gray-900">{fmtRWF(order.totalAmount)} RWF</p>
@@ -1422,6 +1459,20 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
                       ))}
                     </div>
                   </div>
+
+                  {/* A comped bill. totalAmount reads 0 above — correctly, since
+                      nothing was collected — so this is where the value that was
+                      written off, and the reason for it, actually appear. */}
+                  {order.compedAmount ? (
+                    <div className="rounded-xl border border-purple-200 bg-purple-50 px-4 py-3 text-xs text-purple-700">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="font-semibold uppercase tracking-wide">No charge</span>
+                        <span className="font-bold text-purple-900">{fmtRWF(order.compedAmount)} RWF comped</span>
+                      </div>
+                      {order.noChargeReason && <p className="mt-2 text-sm text-purple-900">Reason: {order.noChargeReason}</p>}
+                      {order.settledByName && <p className="mt-1 text-purple-600">Authorised by {order.settledByName}</p>}
+                    </div>
+                  ) : null}
 
                   {order.displayStatus === 'CANCELED' && order.cancelReason && (
                     <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">

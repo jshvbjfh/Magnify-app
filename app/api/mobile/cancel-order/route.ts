@@ -115,7 +115,11 @@ export async function POST(req: Request) {
 
       await tx.restaurantOrder.update({
         where: { id: orderId },
-        data: { status: 'CANCELED', canceledAt: now, cancelReason: reason },
+        // The approver's name is stored, not just returned to the till. Without
+        // it the cancellation report could say what was voided and why, but
+        // never on whose authority — which is the one question anyone reviewing
+        // a night's voids actually asks.
+        data: { status: 'CANCELED', canceledAt: now, cancelReason: reason, canceledByName: approver.name },
       })
     })
 

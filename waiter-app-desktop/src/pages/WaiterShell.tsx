@@ -50,6 +50,10 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   // Opening-page identity: the waiter who entered their code. Null = locked,
   // shows the gate page. Deliberately not persisted — every app start asks.
   const [activeWaiter, setActiveWaiter] = useState<string | null>(null)
+  // Whether that code carried supervisor standing. Cleared alongside
+  // activeWaiter on every sign-out and shift end, so it can never outlive the
+  // person who unlocked the till.
+  const [activeIsSupervisor, setActiveIsSupervisor] = useState(false)
   // Whether a shift is currently open (null = still checking). No open shift →
   // the start-shift screen gates everything; opening one reveals the waiter gate.
   const [shiftOpen, setShiftOpen] = useState<boolean | null>(null)
@@ -231,8 +235,8 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
         accountName={user?.name ?? ''}
         syncVersion={syncVersion}
         shiftsEnabled={shiftsOn}
-        onUnlock={(name) => setActiveWaiter(name)}
-        onShiftEnded={() => { setActiveWaiter(null); setShiftOpen(false); void runSync() }}
+        onUnlock={(name, supervisor) => { setActiveWaiter(name); setActiveIsSupervisor(supervisor) }}
+        onShiftEnded={() => { setActiveWaiter(null); setActiveIsSupervisor(false); setShiftOpen(false); void runSync() }}
       />
     )
   }
@@ -308,6 +312,14 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             {waiterName && (
               <span className="text-sm font-bold text-white leading-none hidden sm:block">{waiterName}</span>
             )}
+            {/* Says out loud that this code unlocked every table — so nobody
+                wonders why the padlocks are missing, and so a supervisor who
+                walked away from an unlocked till can see it at a glance. */}
+            {activeIsSupervisor && (
+              <span className="text-[10px] font-bold uppercase tracking-wide text-amber-300 bg-amber-500/15 border border-amber-400/30 rounded-md px-1.5 py-0.5 leading-none select-none">
+                Supervisor
+              </span>
+            )}
             {/* Build version — so any terminal's installed version is visible at a glance. */}
             <span className="text-[10px] font-mono text-gray-400 leading-none select-none">
               v{(window as Window & { electronConfig?: { appVersion?: string } }).electronConfig?.appVersion || '?'}
@@ -343,7 +355,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
                 is the wide, solid one. Sign Out sits beside it as a quiet outline
                 — same neighbourhood, unmistakably not the same action. */}
             <button
-              onClick={() => setActiveWaiter(null)}
+              onClick={() => { setActiveWaiter(null); setActiveIsSupervisor(false) }}
               title="Exit to the waiter code page"
               className="flex items-center justify-center gap-2 min-w-[104px] text-sm font-bold px-5 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 shadow-sm transition-colors flex-shrink-0"
             >
@@ -405,6 +417,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
           <RestaurantOrders
             mode="pos"
             waiterName={waiterName}
+            isSupervisor={activeIsSupervisor}
             activeBranchId={activeBranchId}
             syncVersion={syncVersion}
             selectedTableKey={selectedTableKey}
@@ -418,6 +431,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
             <RestaurantOrders
               mode="pending"
               waiterName={waiterName}
+              isSupervisor={activeIsSupervisor}
               activeBranchId={activeBranchId}
               syncVersion={syncVersion}
               onEditOrder={(orderId) => { setEditingOrderId(orderId); setActiveTab('menu') }}

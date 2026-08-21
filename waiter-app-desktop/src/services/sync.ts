@@ -3,14 +3,15 @@ import {
   replaceDishes, replaceTables, setConfig, getConfig,
   getDishes, getTables, getUnsyncedOrders, markOrdersSynced, updateOrderSyncError,
   replaceCancellationApprovers, getCancellationApprovers,
-  replaceOrderCodeHolders, getOrderCodeHolders,
+  replaceOrderCodeHolders, getOrderCodeHolders, isSupervisor,
+  getUnsyncedKitchenTickets, markKitchenTicketsSynced,
   reconcileOrderStatuses, upsertIncomingOrders, deleteServerRemovedOrders,
   replaceMepItems, replaceMepCatalog, reconcileMepLogs, adjustMepRemaining, setMepRemaining,
   getUnsyncedMepLogs, getPendingMepUndos, markMepLogsSynced, markMepLogReversed,
   markMepLogFailed, clearMepLogPendingUndo, setMepLogSyncError,
   upsertMepItem, deleteMepItem,
   getUnsyncedShifts, markShiftsSynced, upsertShiftFromServer, reconcileNoOpenShift,
-  type Dish, type RestaurantTable, type CancellationApprover, type RemoteOrderStatus, type IncomingOrder,
+  type Dish, type RestaurantTable, type CancellationApprover, type OrderCodeHolder, type RemoteOrderStatus, type IncomingOrder,
   type MepItem, type MepCatalogEntry, type Shift,
 } from './db'
 import { getToken, invalidateSession, SESSION_INVALID_MESSAGE } from './auth'
@@ -266,7 +267,7 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   }
 
   // Store order code holders (4-digit waiter codes) for offline order confirmation
-  const orderCodeHolders = (payload as unknown as { orderCodeHolders?: CancellationApprover[] }).orderCodeHolders
+  const orderCodeHolders = (payload as unknown as { orderCodeHolders?: OrderCodeHolder[] }).orderCodeHolders
   if (Array.isArray(orderCodeHolders) && orderCodeHolders.length > 0) {
     await replaceOrderCodeHolders(orderCodeHolders)
   }
@@ -350,6 +351,11 @@ export async function pushSync(): Promise<number> {
 
   const { orders: allUnsynced, items: allItems } = await getUnsyncedOrders()
   const allUnsyncedShifts = await getUnsyncedShifts()
+  // The kitchen/bar slips this device has printed. They ride along with the
+  // orders rather than on their own endpoint: a ticket only means anything
+  // next to the order it fired, and pushing both together means the manager
+  // never sees one without the other.
+  const kitchenTickets = await getUnsyncedKitchenTickets()
 
   // Only push rows that belong to the current session's restaurant. Rows from a
   // previous login (different restaurant) are silently skipped by the server and
@@ -362,8 +368,8 @@ export async function pushSync(): Promise<number> {
     ? allUnsyncedShifts.filter(s => s.restaurant_id === sessionRestaurantId)
     : allUnsyncedShifts
 
-  // Nothing to push (neither orders nor shifts) — done.
-  if (!orders.length && !shifts.length) return 0
+  // Nothing to push (no orders, shifts or slips) — done.
+  if (!orders.length && !shifts.length && !kitchenTickets.length) return 0
 
   const orderIds = new Set(orders.map(o => o.id))
   const items = allItems.filter(i => orderIds.has(i.order_id))
@@ -376,7 +382,7 @@ export async function pushSync(): Promise<number> {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    data: { orders, orderItems: items, shifts },
+    data: { orders, orderItems: items, shifts, kitchenTickets },
   })
 
   if (response.status === 401) {
@@ -439,9 +445,10 @@ export async function pushSync(): Promise<number> {
     throw new Error('Push response was not JSON. Open startup.log for details.')
   }
 
-  const { syncedOrderIds, syncedShiftIds, failedOrderIds, failedOrders } = body as {
+  const { syncedOrderIds, syncedShiftIds, syncedTicketIds, failedOrderIds, failedOrders } = body as {
     syncedOrderIds: string[]
     syncedShiftIds?: string[]
+    syncedTicketIds?: string[]
     failedOrderIds?: string[]
     failedOrders?: Array<{ orderId: string; error: string }>
   }
@@ -450,6 +457,13 @@ export async function pushSync(): Promise<number> {
 
   if (Array.isArray(syncedShiftIds) && syncedShiftIds.length > 0) {
     await markShiftsSynced(syncedShiftIds)
+  }
+
+  // Only clear slips the server actually confirmed. A server too old to know
+  // about tickets returns nothing here, so they stay queued rather than being
+  // silently dropped, and land the moment it is upgraded.
+  if (Array.isArray(syncedTicketIds) && syncedTicketIds.length > 0) {
+    await markKitchenTicketsSynced(syncedTicketIds)
   }
 
   if (Array.isArray(failedOrders) && failedOrders.length > 0) {
@@ -730,14 +744,16 @@ export async function validateCancellationPinOffline(pin: string): Promise<{ app
   throw new Error('Invalid supervisor PIN — ask a manager to enter their PIN')
 }
 
-export async function validateOrderCode(code: string): Promise<{ waiterName: string }> {
+// supervisor tells the caller this code belongs to a manager or a supervisor-PIN
+// holder, who may act on any waiter's table rather than only their own.
+export async function validateOrderCode(code: string): Promise<{ waiterName: string; supervisor: boolean }> {
   const holders = await getOrderCodeHolders()
   if (holders.length === 0) {
     throw new Error('No order codes cached. Connect and sync first.')
   }
   for (const holder of holders) {
     const match = await bcrypt.compare(code, holder.pin_hash)
-    if (match) return { waiterName: holder.name }
+    if (match) return { waiterName: holder.name, supervisor: isSupervisor(holder) }
   }
   throw new Error('Invalid code — check your order code with your manager')
 }

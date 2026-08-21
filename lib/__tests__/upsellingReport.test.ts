@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { buildUpsellingReport, classifyCategory, confidenceFor, normalizeCategory, type UpsellCheck } from '@/lib/upsellingReport'
+import {
+  buildUpsellingReport,
+  classifyCategory,
+  confidenceFor,
+  isHourInWindow,
+  MIN_BILLS_FOR_HOURLY_RATE,
+  normalizeCategory,
+  orderHourAxis,
+  type UpsellCheck,
+} from '@/lib/upsellingReport'
+
+/** An instant at the given clock hour AT THE RESTAURANT (UTC+2). */
+function atHour(hour: number, day = '2026-08-01'): Date {
+  return new Date(`${day}T${String(hour).padStart(2, '0')}:30:00.000+02:00`)
+}
 
 let seq = 0
 function check(partial: Partial<UpsellCheck> & { items: UpsellCheck['items'] }): UpsellCheck {
@@ -11,6 +25,9 @@ function check(partial: Partial<UpsellCheck> & { items: UpsellCheck['items'] }):
     createdByName: 'Alice',
     totalAmount: 0,
     guestCount: null,
+    // Midday unless a test cares, so hour-agnostic cases stay clear of every
+    // service-window boundary.
+    orderedAt: atHour(12),
     ...partial,
   }
 }
@@ -423,5 +440,197 @@ describe('buildUpsellingReport — opportunity', () => {
   it('counts attached lines that were never costed instead of calling them pure profit', () => {
     const report = buildUpsellingReport(burgerBills(10, 5, 'Alice', null))
     expect(report.meta.uncostedAttachLines).toBe(5)
+  })
+})
+
+describe('isHourInWindow', () => {
+  it('treats both ends as whole hour blocks a manager picked', () => {
+    // "Dinner, 18 to 22" means the 22:00 block too — a bill rung at 22:15 is
+    // dinner, not after it.
+    expect(isHourInWindow(18, 18, 22)).toBe(true)
+    expect(isHourInWindow(22, 18, 22)).toBe(true)
+    expect(isHourInWindow(23, 18, 22)).toBe(false)
+    expect(isHourInWindow(17, 18, 22)).toBe(false)
+  })
+
+  it('handles a late window that runs through midnight', () => {
+    // The naive `hour >= from && hour <= to` returns nothing at all for this,
+    // and late service is routine rather than an edge case.
+    expect(isHourInWindow(22, 22, 2)).toBe(true)
+    expect(isHourInWindow(23, 22, 2)).toBe(true)
+    expect(isHourInWindow(0, 22, 2)).toBe(true)
+    expect(isHourInWindow(2, 22, 2)).toBe(true)
+    expect(isHourInWindow(3, 22, 2)).toBe(false)
+    expect(isHourInWindow(12, 22, 2)).toBe(false)
+  })
+
+  it('keeps everything when no window, or only half of one, was given', () => {
+    expect(isHourInWindow(4)).toBe(true)
+    expect(isHourInWindow(4, 18, null)).toBe(true)
+    expect(isHourInWindow(4, null, 22)).toBe(true)
+  })
+
+  it('excludes an hour it cannot place once a window is set', () => {
+    expect(isHourInWindow(Number.NaN, 18, 22)).toBe(false)
+  })
+})
+
+describe('orderHourAxis', () => {
+  it('opens the axis at the start of service, not at 00:00', () => {
+    // A 10:00–02:00 restaurant sorted numerically reads as though the night ran
+    // backwards: 01:00 first, 23:00 last.
+    const hours = [1, 2, 10, 11, 12, 20, 21, 22, 23]
+    expect(orderHourAxis(hours)).toEqual([10, 11, 12, 20, 21, 22, 23, 1, 2])
+  })
+
+  it('leaves a daytime-only service in plain order', () => {
+    expect(orderHourAxis([11, 12, 13, 14])).toEqual([11, 12, 13, 14])
+  })
+
+  it('drops nothing and invents nothing for thin input', () => {
+    expect(orderHourAxis([])).toEqual([])
+    expect(orderHourAxis([19])).toEqual([19])
+    expect(orderHourAxis([19, 19, 19])).toEqual([19])
+  })
+})
+
+describe('buildUpsellingReport — hourly profile', () => {
+  const lunchAndDinner = () => [
+    ...Array.from({ length: 3 }, () => check({
+      totalAmount: 5000, orderedAt: atHour(12),
+      items: [dish('Burger', 'Burgers', 4000), dish('Coke', 'Soft Drinks', 1000, 200)],
+    })),
+    ...Array.from({ length: 2 }, () => check({
+      totalAmount: 4000, orderedAt: atHour(19),
+      items: [dish('Burger', 'Burgers', 4000)],
+    })),
+  ]
+
+  it('buckets a bill by the hour it was rung up at the restaurant', () => {
+    const report = buildUpsellingReport(lunchAndDinner())
+    expect(report.hourly.map((h) => h.hour)).toEqual([12, 19])
+    expect(report.hourly.find((h) => h.hour === 12)?.checks).toBe(3)
+    expect(report.hourly.find((h) => h.hour === 19)?.checks).toBe(2)
+  })
+
+  it('puts a bill rung after midnight in the small hours, not the morning', () => {
+    // 23:30 UTC is 01:30 in Kigali — the tail of the night before.
+    const report = buildUpsellingReport([
+      check({ totalAmount: 3000, orderedAt: new Date('2026-08-01T23:30:00.000Z'), items: [dish('Beer', 'Beers', 3000)] }),
+    ])
+    expect(report.hourly.map((h) => h.hour)).toEqual([1])
+  })
+
+  it('accounts for every server bill exactly once across the hours', () => {
+    const report = buildUpsellingReport(lunchAndDinner())
+    const billed = report.hourly.reduce((sum, h) => sum + h.checks, 0)
+    expect(billed).toBe(report.meta.serverChecks)
+    expect(billed).toBe(report.summary.bills)
+  })
+
+  it('leaves guest QR bills out of the hours, as it does everywhere else', () => {
+    const report = buildUpsellingReport([
+      check({ createdByName: 'Guest QR Order', totalAmount: 5000, orderedAt: atHour(12), items: [dish('Burger', 'Burgers', 4000)] }),
+      check({ createdByName: 'Alice', totalAmount: 5000, orderedAt: atHour(19), items: [dish('Burger', 'Burgers', 4000)] }),
+    ])
+    expect(report.hourly.map((h) => h.hour)).toEqual([19])
+    expect(report.meta.selfOrderChecks).toBe(1)
+  })
+
+  it('reports no attach rate for an hour that never had a food bill', () => {
+    // A drinks-only hour cannot have "failed" to attach a drink to food. Zero
+    // here would read as a failure the hour never had the chance to make.
+    const report = buildUpsellingReport([
+      check({ totalAmount: 3000, orderedAt: atHour(23), items: [dish('Beer', 'Beers', 3000)] }),
+    ])
+    expect(report.hourly[0].foodChecks).toBe(0)
+    expect(report.hourly[0].drinkAttachRate).toBeNull()
+  })
+
+  it('refuses to rank an hour that is too thin to mean anything', () => {
+    const thin = buildUpsellingReport(
+      Array.from({ length: 3 }, () => check({
+        totalAmount: 4000, orderedAt: atHour(15), items: [dish('Burger', 'Burgers', 4000)],
+      }))
+    )
+    expect(thin.hourly[0].checks).toBe(3)
+    expect(thin.hourly[0].ranked).toBe(false)
+
+    const solid = buildUpsellingReport(
+      Array.from({ length: MIN_BILLS_FOR_HOURLY_RATE }, () => check({
+        totalAmount: 4000, orderedAt: atHour(15), items: [dish('Burger', 'Burgers', 4000)],
+      }))
+    )
+    expect(solid.hourly[0].ranked).toBe(true)
+  })
+})
+
+describe('buildUpsellingReport — service window', () => {
+  const spread = () => [
+    ...Array.from({ length: 4 }, () => check({
+      createdByName: 'Alice', totalAmount: 5000, orderedAt: atHour(12),
+      items: [dish('Burger', 'Burgers', 4000), dish('Coke', 'Soft Drinks', 1000, 200)],
+    })),
+    ...Array.from({ length: 6 }, () => check({
+      createdByName: 'Bob', totalAmount: 4000, orderedAt: atHour(20),
+      items: [dish('Burger', 'Burgers', 4000)],
+    })),
+  ]
+
+  it('scores only the bills inside the window', () => {
+    const report = buildUpsellingReport(spread(), { hourFrom: 18, hourTo: 22 })
+    expect(report.summary.bills).toBe(6)
+    expect(report.rows.map((r) => r.serverName)).toEqual(['Bob'])
+    expect(report.meta.checksOutsideWindow).toBe(4)
+    expect(report.meta.hourFrom).toBe(18)
+    expect(report.meta.hourTo).toBe(22)
+  })
+
+  it('gives the same figures as running the report over those bills alone', () => {
+    // The window must narrow the input, not compute anything differently.
+    const all = spread()
+    const windowed = buildUpsellingReport(all, { hourFrom: 18, hourTo: 22 })
+    const dinnerOnly = buildUpsellingReport(all.filter((c) => c.createdByName === 'Bob'))
+
+    expect(windowed.summary).toEqual(dinnerOnly.summary)
+    expect(windowed.rows).toEqual(dinnerOnly.rows)
+    expect(windowed.house).toEqual(dinnerOnly.house)
+    expect(windowed.attachedItems).toEqual(dinnerOnly.attachedItems)
+  })
+
+  it('keeps the whole day in the profile so the window can be re-chosen', () => {
+    // The chart is the navigation; collapsing it to the window already picked
+    // would hide the hour the manager still needs to find.
+    const report = buildUpsellingReport(spread(), { hourFrom: 18, hourTo: 22 })
+    expect(report.hourly.map((h) => h.hour)).toEqual([12, 20])
+    expect(report.hourly.find((h) => h.hour === 12)?.checks).toBe(4)
+  })
+
+  it('collects a window that runs through midnight', () => {
+    const report = buildUpsellingReport([
+      check({ totalAmount: 4000, orderedAt: atHour(23), items: [dish('Beer', 'Beers', 4000)] }),
+      check({ totalAmount: 4000, orderedAt: atHour(1), items: [dish('Beer', 'Beers', 4000)] }),
+      check({ totalAmount: 4000, orderedAt: atHour(12), items: [dish('Beer', 'Beers', 4000)] }),
+    ], { hourFrom: 22, hourTo: 2 })
+    expect(report.summary.bills).toBe(2)
+    expect(report.meta.checksOutsideWindow).toBe(1)
+  })
+
+  it('covers the whole day when no window is set', () => {
+    const report = buildUpsellingReport(spread())
+    expect(report.summary.bills).toBe(10)
+    expect(report.meta.checksOutsideWindow).toBe(0)
+    expect(report.meta.hourFrom).toBeNull()
+  })
+
+  it('leaves the excluded bills out of the data-quality counters too', () => {
+    // Those counters describe the tables on screen; counting bills the window
+    // dropped would report problems in figures nobody is being shown.
+    const report = buildUpsellingReport([
+      check({ totalAmount: 4000, orderedAt: atHour(12), items: [line(null, 4000)] }),
+      check({ totalAmount: 4000, orderedAt: atHour(20), items: [line(null, 4000)] }),
+    ], { hourFrom: 18, hourTo: 22 })
+    expect(report.summary.bills).toBe(1)
+    expect(report.meta.uncategorizedItems).toBe(1)
   })
 })

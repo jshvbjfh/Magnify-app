@@ -1,12 +1,12 @@
 ﻿'use client'
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange, Store, Share2, ArrowUpRight } from 'lucide-react'
+import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange, Store, Share2, ArrowUpRight, Ban, Gift } from 'lucide-react'
 import { fmtDesc } from '@/lib/displayId'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { BranchBadge, useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
 
-type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory' | 'general' | 'upselling'
+type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory' | 'general' | 'upselling' | 'canceled_orders' | 'no_charge'
 
 type UpsellServerRow = {
   serverKey: string
@@ -22,6 +22,19 @@ type UpsellServerRow = {
   vsHouse: number | null
   ranked: boolean
   apc: number | null
+}
+
+type UpsellHourRow = {
+  hour: number
+  checks: number
+  checksWithItems: number
+  foodChecks: number
+  addonRate: number | null
+  drinkAttachRate: number | null
+  upsellProfit: number
+  profitPerCheck: number
+  /** Enough bills that hour for its rates to be worth acting on. */
+  ranked: boolean
 }
 
 type UpsellPairing = {
@@ -49,6 +62,33 @@ type UpsellOpportunity = {
   missedProfit: number
 }
 
+type VoidTallyRow = { name: string; orders: number; value: number }
+
+type CanceledOrdersData = {
+  rows: Array<{
+    id: string; orderNumber: string; stationName: string; tableName: string
+    createdByName: string; approvedByName: string | null; reason: string
+    canceledAt: string | null; businessDate: string
+    itemCount: number; items: Array<{ dishName: string; qty: number }>; value: number
+  }>
+  totals: { orders: number; value: number }
+  byApprover: VoidTallyRow[]
+  byReason: VoidTallyRow[]
+}
+
+type NoChargeData = {
+  rows: Array<{
+    id: string; orderNumber: string; stationName: string; tableName: string
+    createdByName: string; authorisedByName: string | null; reason: string
+    value: number; guestCount: number | null
+    paidAt: string | null; businessDate: string
+    itemCount: number; items: Array<{ dishName: string; qty: number }>
+  }>
+  totals: { orders: number; value: number; covers: number }
+  byAuthoriser: VoidTallyRow[]
+  byReason: VoidTallyRow[]
+}
+
 type UpsellingData = {
   summary: {
     bills: number
@@ -64,11 +104,43 @@ type UpsellingData = {
   house: UpsellServerRow | null
   pairings: UpsellPairing[]
   opportunities: UpsellOpportunity[]
+  hourly: UpsellHourRow[]
   meta: {
     totalChecks: number; serverChecks: number; selfOrderChecks: number
     checksWithoutServer: number; coveredChecks: number
     uncategorizedItems: number; uncostedAttachLines: number; pairingsTotal: number
+    hourFrom: number | null; hourTo: number | null; checksOutsideWindow: number
   }
+}
+
+/** Inclusive hour blocks at the restaurant, or null for the whole day. */
+type HourWindow = { from: number; to: number } | null
+
+// Named services, because a manager reaches for "dinner" rather than for "18".
+// Both ends are inclusive hour blocks, so Dinner covers 18:00 through 22:59.
+const HOUR_PRESETS: { id: string; label: string; window: HourWindow }[] = [
+  { id: 'all', label: 'All day', window: null },
+  { id: 'breakfast', label: 'Breakfast', window: { from: 6, to: 10 } },
+  { id: 'lunch', label: 'Lunch', window: { from: 11, to: 15 } },
+  { id: 'dinner', label: 'Dinner', window: { from: 18, to: 22 } },
+  // Wraps past midnight on purpose — late service is one window, not two.
+  { id: 'late', label: 'Late night', window: { from: 22, to: 2 } },
+]
+
+// Mirrors MIN_BILLS_FOR_HOURLY_RATE in lib/upsellingReport.ts. The server is
+// what decides an hour is too thin to rate — this copy only explains why the
+// hour is showing a dash.
+const MIN_HOURLY_BILLS = 10
+
+const hourLabel = (hour: number) => `${String(hour).padStart(2, '0')}:00`
+
+function windowLabel(w: HourWindow) {
+  if (!w) return 'All day'
+  const preset = HOUR_PRESETS.find((p) => p.window && p.window.from === w.from && p.window.to === w.to)
+  // The end is an inclusive block, so 18–22 runs to 22:59. Spelling that out
+  // stops a manager reading it as "service stops at 22:00".
+  const range = `${hourLabel(w.from)}–${String(w.to).padStart(2, '0')}:59`
+  return preset ? `${preset.label} · ${range}` : range
 }
 
 type BranchSummaryRow = {
@@ -121,13 +193,15 @@ const TABS: { id: ReportTab; label: string; short: string; icon: React.ElementTy
   { id:'inventory_movement', label:'Inventory Movement',    short:'Inventory',   icon:Package,    desc:'Opening stock, in-period purchases, usage, remaining quantity and stock value' },
   { id:'theoretical_inventory', label:'Theoretical Inventory', short:'Theory Inv', icon:Package, desc:'Opening stock, expected usage, waste, theoretical closing and variance versus actual stock' },
   { id:'upselling',         label:'Upsell & Attachments',   short:'Upsell',    icon:ArrowUpRight, desc:'Which product pairings make the most gross profit, where you are leaving money on the table, and which waiters reproduce it — across your whole restaurant account' },
+  { id:'canceled_orders',   label:'Cancelled Orders',       short:'Cancelled', icon:Ban,          desc:'Every voided bill: what was on it, what it would have been worth, who took it, who approved the void and why — across your whole restaurant account' },
+  { id:'no_charge',         label:'No Charge (Comps)',      short:'No Charge', icon:Gift,         desc:'Every comped bill: what was given away, to whose table, on whose authority and why — across your whole restaurant account' },
 ]
 
 // Tabs that report the whole restaurant account rather than the station the
 // user is currently switched to. Showing the station badge above these reads as
 // a filter that isn't being applied — an owner on Parking Bar would take the
 // house upselling figures for Parking Bar's.
-const RESTAURANT_WIDE_TABS = new Set<ReportTab>(['general', 'upselling'])
+const RESTAURANT_WIDE_TABS = new Set<ReportTab>(['general', 'upselling', 'canceled_orders', 'no_charge'])
 
 const PERIOD_LABELS: Record<Period, string> = {
   today:'Today', week:'Last 7 Days', month:'This Month', quarter:'This Quarter', year:'This Year'
@@ -864,7 +938,264 @@ function ConfidenceChip({ level }: { level: 'high'|'medium'|'low' }) {
   )
 }
 
-function UpsellingTable({ data }: { data: UpsellingData | null }) {
+// Mirrors isHourInWindow in lib/upsellingReport.ts, which cannot be imported
+// here: it pulls in lib/restaurantOrders and would drag Prisma into the browser
+// bundle. Kept to four lines so the two cannot quietly diverge.
+function hourInWindow(hour: number, w: HourWindow): boolean {
+  if (!w) return true
+  return w.from <= w.to ? hour >= w.from && hour <= w.to : hour >= w.from || hour <= w.to
+}
+
+function HourWindowPicker({ value, onChange }: { value: HourWindow; onChange: (w: HourWindow) => void }) {
+  const matches = (w: HourWindow) =>
+    (w === null && value === null) || Boolean(w && value && w.from === value.from && w.to === value.to)
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 mb-3">
+      <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mr-1">Service</span>
+      {HOUR_PRESETS.map((preset) => (
+        <button
+          key={preset.id}
+          type="button"
+          onClick={() => onChange(preset.window)}
+          className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+            matches(preset.window)
+              ? 'bg-orange-500 text-white'
+              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+          }`}
+        >
+          {preset.label}
+        </button>
+      ))}
+      <span className="mx-1 h-4 w-px bg-gray-200" />
+      <select
+        aria-label="Window start hour"
+        className="rounded-lg border border-gray-300 px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-orange-400"
+        value={value ? String(value.from) : ''}
+        onChange={(e) => {
+          if (e.target.value === '') return onChange(null)
+          const from = Number(e.target.value)
+          onChange({ from, to: value?.to ?? from })
+        }}
+      >
+        <option value="">From…</option>
+        {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{hourLabel(h)}</option>)}
+      </select>
+      <span className="text-xs text-gray-400">to</span>
+      <select
+        aria-label="Window end hour"
+        className="rounded-lg border border-gray-300 px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-orange-400"
+        value={value ? String(value.to) : ''}
+        onChange={(e) => {
+          if (e.target.value === '') return onChange(null)
+          const to = Number(e.target.value)
+          onChange({ from: value?.from ?? to, to })
+        }}
+      >
+        <option value="">To…</option>
+        {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{`${String(h).padStart(2, '0')}:59`}</option>)}
+      </select>
+    </div>
+  )
+}
+
+// The shape of the trading day. Always the full date range, never narrowed to
+// the window already picked — this is what a manager reads to decide which
+// hours are worth looking at, so collapsing it to the current choice would hide
+// the hour they are still hunting for.
+function HourlyProfile({ hours, window: win, onPick }: {
+  hours: UpsellHourRow[]
+  window: HourWindow
+  onPick: (w: HourWindow) => void
+}) {
+  if (hours.length === 0) return null
+  const peak = Math.max(...hours.map((h) => h.checks), 1)
+  const thin = hours.some((h) => !h.ranked)
+
+  return (
+    <div className="mb-5">
+      <h4 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Shape of the day</h4>
+      <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+        <div className="overflow-x-auto">
+          <div className="flex items-end gap-1.5 min-w-max h-32">
+            {hours.map((h) => {
+              const active = hourInWindow(h.hour, win)
+              return (
+                <button
+                  key={h.hour}
+                  type="button"
+                  // Clicking an hour narrows straight to it — the chart is the
+                  // navigation, the tables below are the drill-down.
+                  onClick={() => onPick(win && win.from === h.hour && win.to === h.hour ? null : { from: h.hour, to: h.hour })}
+                  title={`${hourLabel(h.hour)} · ${fmt(h.checks)} bills${h.ranked && h.drinkAttachRate !== null ? ` · ${h.drinkAttachRate.toFixed(0)}% drink attach` : ' · too few bills to rate'}`}
+                  className="group flex w-11 flex-col items-center justify-end gap-1 flex-shrink-0"
+                >
+                  <span className={`text-[10px] font-semibold leading-none ${active ? 'text-gray-700' : 'text-gray-300'}`}>
+                    {h.ranked && h.drinkAttachRate !== null ? `${h.drinkAttachRate.toFixed(0)}%` : '—'}
+                  </span>
+                  <span
+                    className={`w-full rounded-t transition ${
+                      active ? 'bg-orange-500 group-hover:bg-orange-600' : 'bg-gray-200 group-hover:bg-gray-300'
+                    }`}
+                    style={{ height: `${Math.max(4, (h.checks / peak) * 76)}px` }}
+                  />
+                  <span className={`text-[10px] leading-none ${active ? 'text-gray-500' : 'text-gray-300'}`}>
+                    {String(h.hour).padStart(2, '0')}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        <p className="mt-3 text-[11px] text-gray-400 leading-relaxed">
+          Bar height is bills taken; the figure above it is drink attachment on food bills.
+          {thin && <> Hours with fewer than {MIN_HOURLY_BILLS} bills show “—” — too few to read a rate from.</>}
+          {' '}Click an hour to narrow the report to it.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// A short "who, and what for" breakdown, shared by the voids and the comps
+// reports. Both answer the same shape of question — whether one name or one
+// reason is running away with the total — so they share a table rather than
+// growing two that drift apart.
+function TallyBlock({ title, rows, emptyLabel }: { title: string; rows: VoidTallyRow[]; emptyLabel: string }) {
+  if (rows.length === 0) return null
+  const total = rows.reduce((sum, row) => sum + row.value, 0)
+  return (
+    <div className="rounded-xl border border-gray-200 overflow-hidden">
+      <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
+        <p className="text-xs font-bold text-gray-700">{title}</p>
+      </div>
+      <div className="divide-y divide-gray-100">
+        {rows.map((row) => (
+          <div key={row.name} className="flex items-center justify-between gap-3 px-4 py-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-800 truncate">{row.name || emptyLabel}</p>
+              <p className="text-xs text-gray-400">{row.orders} order{row.orders === 1 ? '' : 's'}</p>
+            </div>
+            <div className="text-right flex-shrink-0">
+              <p className="text-sm font-bold text-gray-900">{fmt(row.value)} RWF</p>
+              {total > 0 && <p className="text-xs text-gray-400">{Math.round((row.value / total) * 100)}%</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Cancelled orders. A void is the one action on the floor that makes money
+// vanish without leaving a mark on any sales report — the order simply stops
+// being counted — so this page exists to make that disappearance visible, and
+// attributable to whoever approved it.
+function CanceledOrdersTable({ data }: { data: CanceledOrdersData | null }) {
+  if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading cancelled orders…</div>
+  const rows = data.rows ?? []
+  if (rows.length === 0) {
+    return (
+      <div className="py-12 text-center">
+        <Ban className="h-8 w-8 text-gray-300 mx-auto mb-3" />
+        <p className="text-sm font-semibold text-gray-600">No cancelled orders in this period</p>
+        <p className="text-xs text-gray-400 mt-1">Nothing was voided — every bill rung up was either settled or is still open.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+        <StatCard label="Orders cancelled" value={String(data.totals.orders)} color="bg-red-50 border-red-200" />
+        <StatCard label="Value voided" value={`${fmt(data.totals.value)} RWF`} color="bg-red-50 border-red-200" />
+        <StatCard
+          label="Average per void"
+          value={`${fmt(data.totals.orders ? data.totals.value / data.totals.orders : 0)} RWF`}
+        />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <TallyBlock title="Approved by" rows={data.byApprover} emptyLabel="Not recorded" />
+        <TallyBlock title="Reason given" rows={data.byReason} emptyLabel="No reason given" />
+      </div>
+
+      <DataTable
+        head={['Date', 'Order', 'Station', 'Table', 'Waiter', 'Approved by', 'Reason', 'Items', 'Value']}
+        rows={rows.map((row) => [
+          (row.canceledAt ?? row.businessDate).slice(0, 10),
+          row.orderNumber,
+          row.stationName,
+          row.tableName,
+          row.createdByName,
+          row.approvedByName ?? '—',
+          row.reason,
+          String(row.itemCount),
+          fmt(row.value),
+        ])}
+        foot={['', '', '', '', '', '', 'TOTAL', String(rows.reduce((sum, r) => sum + r.itemCount, 0)), fmt(data.totals.value)]}
+      />
+    </div>
+  )
+}
+
+// Comped bills. Every other report counts these as zero — correctly, because
+// nothing was collected — and that is exactly why they need a page of their
+// own: the food was still cooked and the stock still left the store.
+function NoChargeTable({ data }: { data: NoChargeData | null }) {
+  if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading no-charge report…</div>
+  const rows = data.rows ?? []
+  if (rows.length === 0) {
+    return (
+      <div className="py-12 text-center">
+        <Gift className="h-8 w-8 text-gray-300 mx-auto mb-3" />
+        <p className="text-sm font-semibold text-gray-600">No comped bills in this period</p>
+        <p className="text-xs text-gray-400 mt-1">Every table that was settled was charged for.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard label="Bills comped" value={String(data.totals.orders)} color="bg-purple-50 border-purple-200" />
+        <StatCard label="Value given away" value={`${fmt(data.totals.value)} RWF`} color="bg-purple-50 border-purple-200" />
+        <StatCard
+          label="Average per comp"
+          value={`${fmt(data.totals.orders ? data.totals.value / data.totals.orders : 0)} RWF`}
+        />
+        {/* Covers are only counted where a waiter actually recorded them, so this
+            can legitimately read lower than the number of bills. */}
+        <StatCard label="Guests hosted" value={data.totals.covers ? String(data.totals.covers) : '—'} />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <TallyBlock title="Authorised by" rows={data.byAuthoriser} emptyLabel="Not recorded" />
+        <TallyBlock title="Reason given" rows={data.byReason} emptyLabel="No reason given" />
+      </div>
+
+      <DataTable
+        head={['Date', 'Order', 'Station', 'Table', 'Waiter', 'Authorised by', 'Reason', 'Items', 'Comped']}
+        rows={rows.map((row) => [
+          (row.paidAt ?? row.businessDate).slice(0, 10),
+          row.orderNumber,
+          row.stationName,
+          row.tableName,
+          row.createdByName,
+          row.authorisedByName ?? '—',
+          row.reason,
+          String(row.itemCount),
+          fmt(row.value),
+        ])}
+        foot={['', '', '', '', '', '', 'TOTAL', String(rows.reduce((sum, r) => sum + r.itemCount, 0)), fmt(data.totals.value)]}
+      />
+    </div>
+  )
+}
+
+function UpsellingTable({ data, hourWindow, onHourWindowChange }: {
+  data: UpsellingData | null
+  hourWindow: HourWindow
+  onHourWindowChange: (w: HourWindow) => void
+}) {
   if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading upsell report…</div>
   const rows = data.rows ?? []
   const house = data.house
@@ -872,18 +1203,40 @@ function UpsellingTable({ data }: { data: UpsellingData | null }) {
   const opportunities = data.opportunities ?? []
   const summary = data.summary
   const meta = data.meta
+  const hourly = data.hourly ?? []
   const pct = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`)
 
   if (!house || house.checks === 0) {
-    return <div className="py-8 text-center text-gray-400 text-sm">No paid orders found for this period.</div>
+    // The window is the likeliest reason there is nothing here, so the picker
+    // and the day's shape stay on screen — otherwise the manager is stranded on
+    // an empty page with no way back out of the hours they chose.
+    return (
+      <>
+        <HourWindowPicker value={hourWindow} onChange={onHourWindowChange} />
+        <HourlyProfile hours={hourly} window={hourWindow} onPick={onHourWindowChange} />
+        <div className="py-8 text-center text-gray-400 text-sm">
+          {hourWindow
+            ? `No paid orders between ${windowLabel(hourWindow)} in this period.`
+            : 'No paid orders found for this period.'}
+        </div>
+      </>
+    )
   }
 
   return (
     <>
+      <HourWindowPicker value={hourWindow} onChange={onHourWindowChange} />
+      <HourlyProfile hours={hourly} window={hourWindow} onPick={onHourWindowChange} />
+
       {/* Scope — without it the numbers have no context */}
       <p className="text-xs text-gray-500 mb-3">
         All stations · <span className="font-semibold text-gray-700">{fmt(meta.serverChecks)} eligible bills</span>
         {meta.selfOrderChecks > 0 && <> · {fmt(meta.selfOrderChecks)} guest QR bills excluded</>}
+        {hourWindow && (
+          <> · <span className="font-semibold text-orange-600">{windowLabel(hourWindow)}</span>
+            {meta.checksOutsideWindow > 0 && <> · {fmt(meta.checksOutsideWindow)} bills outside it</>}
+          </>
+        )}
       </p>
 
       <div className="grid grid-cols-3 gap-3 mb-4">
@@ -1235,6 +1588,10 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
   const [branchSummaryData, setBranchSummaryData] = useState<{ rows: BranchSummaryRow[]; totals: { totalSales: number; totalCost: number; totalProfit: number } } | null>(null)
   const [branchSummaryExporting, setBranchSummaryExporting] = useState(false)
   const [upsellingData, setUpsellingData] = useState<UpsellingData | null>(null)
+  const [canceledData, setCanceledData] = useState<CanceledOrdersData | null>(null)
+  const [noChargeData, setNoChargeData] = useState<NoChargeData | null>(null)
+  // Service window for the upsell report. Null is the whole trading day.
+  const [hourWindow, setHourWindow] = useState<HourWindow>(null)
   const [loadedPeriod, setLoadedPeriod] = useState<string>('')
   const [exporting, setExporting] = useState(false)
   const branchCtx = useRestaurantBranch()
@@ -1470,11 +1827,39 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
   useEffect(() => {
     if (activeTab !== 'upselling' || !initialPeriodReady) return
     const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)
+    // Both hours or neither: a half-window would be silently ignored server-side
+    // and the picker would then disagree with the figures it produced.
+    const hours = hourWindow ? `&hourFrom=${hourWindow.from}&hourTo=${hourWindow.to}` : ''
     let cancelled = false
-    fetch(`/api/restaurant/reports/upselling?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS)
+    fetch(`/api/restaurant/reports/upselling?from=${start}&to=${end}${hours}`, FRESH_FETCH_OPTIONS)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (!cancelled) setUpsellingData(data) })
       .catch(() => { if (!cancelled) setUpsellingData(null) })
+    return () => { cancelled = true }
+  }, [activeTab, period, rangeMode, draftFrom, draftTo, initialPeriodReady, hourWindow])
+
+  // Voids and comps are both restaurant-account-wide, for the same reason the
+  // General Report is: a bill routinely spans stations, so slicing either per
+  // station would split one voided check across two reports.
+  useEffect(() => {
+    if (activeTab !== 'canceled_orders' || !initialPeriodReady) return
+    const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)
+    let cancelled = false
+    fetch(`/api/restaurant/reports/canceled-orders?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (!cancelled) setCanceledData(data) })
+      .catch(() => { if (!cancelled) setCanceledData(null) })
+    return () => { cancelled = true }
+  }, [activeTab, period, rangeMode, draftFrom, draftTo, initialPeriodReady])
+
+  useEffect(() => {
+    if (activeTab !== 'no_charge' || !initialPeriodReady) return
+    const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)
+    let cancelled = false
+    fetch(`/api/restaurant/reports/no-charge?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (!cancelled) setNoChargeData(data) })
+      .catch(() => { if (!cancelled) setNoChargeData(null) })
     return () => { cancelled = true }
   }, [activeTab, period, rangeMode, draftFrom, draftTo, initialPeriodReady])
 
@@ -1881,7 +2266,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
               independently (they are restaurant-account-wide), so the chips would
               highlight a day while their numbers still showed the whole range.
               A single day is also too few orders for Upselling to say anything. */}
-          {activeTab !== 'payment_methods' && activeTab !== 'general' && activeTab !== 'upselling' && dailyRows.length > 0 ? (
+          {activeTab !== 'payment_methods' && activeTab !== 'general' && activeTab !== 'upselling' && activeTab !== 'canceled_orders' && activeTab !== 'no_charge' && dailyRows.length > 0 ? (
             <div className="mb-4 space-y-2">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-gray-500">{rangeMode === 'custom' ? `Custom range: ${draftFrom} - ${draftTo}` : loadedPeriod}</p>
@@ -1933,7 +2318,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
           )}
 
           {/* Report tables */}
-          {(txData || activeTab==='dish_profit' || activeTab==='inventory_movement' || activeTab==='theoretical_inventory' || activeTab==='general' || activeTab==='upselling')&&!loading&&(
+          {(txData || activeTab==='dish_profit' || activeTab==='inventory_movement' || activeTab==='theoretical_inventory' || activeTab==='general' || activeTab==='upselling' || activeTab==='canceled_orders' || activeTab==='no_charge')&&!loading&&(
             <div className="space-y-2">
               {/* Attribution */}
               <div className="flex items-center justify-between mb-4">
@@ -1963,7 +2348,9 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
               {activeTab==='income'     &&<IncomeTable      txs={txData??[]}/>}
               {activeTab==='payment_methods' &&<PaymentMethodsTable txs={txData??[]}/>} 
               {activeTab==='dish_profit'        &&<DishProfitTable        data={dishProfitData}/>}
-              {activeTab==='upselling'          &&<UpsellingTable         data={upsellingData}/>}
+              {activeTab==='upselling'          &&<UpsellingTable         data={upsellingData} hourWindow={hourWindow} onHourWindowChange={setHourWindow}/>}
+              {activeTab==='canceled_orders'    &&<CanceledOrdersTable    data={canceledData}/>}
+              {activeTab==='no_charge'          &&<NoChargeTable          data={noChargeData}/>}
               {activeTab==='inventory_movement' &&<InventoryMovementTable data={invMovementData}/>}
               {activeTab==='theoretical_inventory' &&<TheoreticalInventoryTable data={theoreticalInvData} onCountSaved={() => {
                 const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)

@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { jwtVerify } from 'jose'
-import { calculateRestaurantOrderTotals, enqueueOrderSync } from '@/lib/restaurantOrders'
+import { calculateRestaurantOrderTotals, enqueueOrderSync, isNoChargeMethod } from '@/lib/restaurantOrders'
+import { isHotelBuffetLine } from '@/lib/hotelBuffet'
 import { finalizeRestaurantOrderPayment } from '@/lib/restaurantOrderPayment'
 import { resolveActiveStaffAccess } from '@/lib/mobileStaffAccess'
 
@@ -35,6 +36,11 @@ function parseRequiredDate(value: string | null | undefined, fallback: Date) {
 function normalizeRequiredText(value: string | null | undefined, fallback: string) {
   const trimmed = typeof value === 'string' ? value.trim() : ''
   return trimmed || fallback
+}
+
+function normalizeOptionalText(value: string | null | undefined) {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  return trimmed || null
 }
 
 function normalizeNumber(value: unknown, fallback = 0) {
@@ -94,6 +100,15 @@ interface MobileOrder {
   // Credit payment carries them, and the phone is optional even then.
   ar_customer_name?: string | null
   ar_customer_phone?: string | null
+  // Who closed the bill, when that was not the waiter whose name is already on
+  // it — a supervisor settling another waiter's table. Optional: clients older
+  // than this omit it, and an order closed by its own waiter never sets it.
+  settled_by_name?: string | null
+  // A 'No Charge' settlement. The reason is mandatory at the till; the comped
+  // amount is what the table was worth at menu prices, kept because the order's
+  // own totals arrive zeroed.
+  no_charge_reason?: string | null
+  comped_amount?: number | null
   // Service session this order was rung up in, and the business day it belongs
   // to (from that shift). Both optional — orders taken with no open shift, and
   // orders from app versions before shifts existed, simply carry neither.
@@ -107,6 +122,20 @@ interface MobileOrder {
   source?: string | null
   created_at: string
   updated_at: string
+}
+
+// A slip that printed at a station. The till allocates the number offline (a
+// ticket must reach the pass whether or not the internet is up), so the server
+// stores what it is told rather than issuing its own — the paper is already in
+// the cook's hand and a server-side number could only ever disagree with it.
+interface MobileKitchenTicket {
+  id: string
+  order_id: string
+  branch_id: string | null
+  kind: string
+  seq: number
+  business_date: string
+  printed_at: string
 }
 
 interface MobileShift {
@@ -157,10 +186,11 @@ export async function POST(req: Request) {
     const restaurantId = staffAccess.restaurantId
     const branchId = staffAccess.branchId
 
-    const { orders, orderItems, shifts } = (await req.json()) as {
+    const { orders, orderItems, shifts, kitchenTickets } = (await req.json()) as {
       orders: MobileOrder[]
       orderItems: MobileOrderItem[]
       shifts?: MobileShift[]
+      kitchenTickets?: MobileKitchenTicket[]
     }
 
     // Shifts must be upserted BEFORE orders: an order carries a shiftId FK, so
@@ -209,20 +239,84 @@ export async function POST(req: Request) {
       }
     }
 
-    if (!Array.isArray(orders) || !orders.length) {
-      return jsonNoStore({ ok: true, syncedOrderIds: [], syncedShiftIds })
-    }
-
-    const syncedOrderIds: string[] = []
-    const failedOrders: Array<{ orderId: string; error: string }> = []
-
-    // Pre-fetch all valid branch IDs for this restaurant once, outside the order loop.
+    // Pre-fetch all valid branch IDs for this restaurant once, outside the order
+    // loop. Read before the kitchen-ticket helper below rather than beside the
+    // order loop, because the no-orders path returns through that helper and
+    // would otherwise reach this const before it is initialised.
     const validBranchIds = new Set(
       (await prisma.branch.findMany({
         where: { restaurantId, isActive: true },
         select: { id: true },
       })).map((b) => b.id),
     )
+
+    // Slips that printed at a station. Stored AFTER the orders below, because a
+    // ticket carries an FK to the order that fired it — except on the
+    // no-orders path just below, where the order it names was pushed in an
+    // earlier batch and is already on the server.
+    //
+    // Each is guarded on its own and confirmed individually: a slip that cannot
+    // be stored (its order never made it up, its station was deleted) must
+    // never fail the push and strand the orders travelling with it. Unconfirmed
+    // ids simply stay queued on the till and come back next time.
+    const storeKitchenTickets = async (): Promise<string[]> => {
+      if (!Array.isArray(kitchenTickets) || kitchenTickets.length === 0) return []
+      const stored: string[] = []
+      for (const ticket of kitchenTickets) {
+        try {
+          const businessDate = parseOptionalDate(ticket.business_date)
+          const seq = normalizeInteger(ticket.seq, 0)
+          // 'KOT' or 'BOT' only. Anything else is a client that has drifted, and
+          // storing it would put a label on the manager's screen that means
+          // nothing to anyone.
+          const kind = ticket.kind === 'KOT' || ticket.kind === 'BOT' ? ticket.kind : null
+          if (!businessDate || !kind || seq <= 0) continue
+
+          const owningOrder = await prisma.restaurantOrder.findFirst({
+            where: { id: ticket.order_id, restaurantId },
+            select: { id: true, branchId: true },
+          })
+          if (!owningOrder) continue
+
+          const ticketBranchId =
+            ticket.branch_id && validBranchIds.has(ticket.branch_id)
+              ? ticket.branch_id
+              : owningOrder.branchId
+
+          await prisma.kitchenTicket.upsert({
+            where: { id: ticket.id },
+            create: {
+              id: ticket.id,
+              restaurantId,
+              branchId: ticketBranchId,
+              orderId: owningOrder.id,
+              kind,
+              seq,
+              businessDate,
+              printedAt: parseRequiredDate(ticket.printed_at, new Date()),
+            },
+            // The paper is already in the cook's hand, so a replay must not
+            // renumber it. Only printedAt is refreshed, for a re-fired slip.
+            update: { printedAt: parseRequiredDate(ticket.printed_at, new Date()) },
+          })
+          stored.push(ticket.id)
+        } catch (ticketErr) {
+          console.error('[mobile/push] failed to store kitchen ticket', {
+            ticketId: ticket.id,
+            error: ticketErr instanceof Error ? ticketErr.message : String(ticketErr),
+          })
+        }
+      }
+      return stored
+    }
+
+    if (!Array.isArray(orders) || !orders.length) {
+      const syncedTicketIds = await storeKitchenTickets()
+      return jsonNoStore({ ok: true, syncedOrderIds: [], syncedShiftIds, syncedTicketIds })
+    }
+
+    const syncedOrderIds: string[] = []
+    const failedOrders: Array<{ orderId: string; error: string }> = []
 
     // Valid shift IDs for this restaurant — an order's shiftId is nulled if the
     // shift isn't on the server (e.g. its push failed), so a missing shift never
@@ -282,9 +376,57 @@ export async function POST(req: Request) {
             discountPercent: normalizeDiscountPercent(i.discount_percent),
           })))
         : null
-      const normalizedSubtotalAmount = derived ? derived.subtotalAmount : normalizeNumber(order.subtotal_amount)
-      const normalizedVatAmount = derived ? derived.vatAmount : normalizeNumber(order.vat_amount)
-      const normalizedTotalAmount = derived ? derived.totalAmount : normalizeNumber(order.total_amount)
+      const derivedSubtotal = derived ? derived.subtotalAmount : normalizeNumber(order.subtotal_amount)
+      const derivedVat = derived ? derived.vatAmount : normalizeNumber(order.vat_amount)
+      const derivedTotal = derived ? derived.totalAmount : normalizeNumber(order.total_amount)
+
+      // A comped bill ("No Charge"): the guests ate, nothing was collected.
+      //
+      // The order is stored at zero. Doing it here, rather than asking each
+      // report to learn what 'No Charge' means, is what keeps revenue, APC and
+      // every sales figure honest by construction — a comp simply contributes
+      // nothing, everywhere, including in reports written before comps existed.
+      // The food still comes off stock further down, because it really was
+      // cooked and eaten.
+      //
+      // The written-off value is the total the SERVER just derived from the
+      // lines, not a figure the device sent: totals are not taken on trust
+      // anywhere else in this handler, and the comped amount is the one number
+      // the No Charge report adds up.
+      //
+      // SIROCCO Y SOL's hotel buffet is settled by the hotel, not by the guest,
+      // so comping a guest's bill does not cancel what the hotel owes: its lines
+      // are held out of the comp and stay on the order. No line matches for any
+      // other restaurant, so this is simply "the whole bill goes to zero".
+      // Mirrors finalizeRestaurantOrderPayment, which owns the same split when
+      // the order is settled -- the two must not disagree, or a re-push would
+      // rewrite what the finalizer decided.
+      const isNoCharge = isNoChargeMethod(order.payment_method)
+      const toTotals = (lines: typeof pushedItems) =>
+        calculateRestaurantOrderTotals(lines.map((i) => ({
+          dishPrice: normalizeNumber(i.dish_price),
+          qty: Math.max(1, normalizeInteger(i.qty, 1)),
+          discountPercent: normalizeDiscountPercent(i.discount_percent),
+        })))
+      const compedTotals = isNoCharge && pushedItems.length
+        ? toTotals(pushedItems.filter((i) => !isHotelBuffetLine(restaurantId, i.dish_name)))
+        : null
+      const owedTotals = isNoCharge && pushedItems.length
+        ? toTotals(pushedItems.filter((i) => isHotelBuffetLine(restaurantId, i.dish_name)))
+        : null
+
+      const normalizedSubtotalAmount = owedTotals ? owedTotals.subtotalAmount : (isNoCharge ? 0 : derivedSubtotal)
+      const normalizedVatAmount = owedTotals ? owedTotals.vatAmount : (isNoCharge ? 0 : derivedVat)
+      const normalizedTotalAmount = owedTotals ? owedTotals.totalAmount : (isNoCharge ? 0 : derivedTotal)
+      const normalizedCompedAmount = compedTotals
+        ? compedTotals.totalAmount
+        : (isNoCharge
+            ? derivedTotal
+            : (Number.isFinite(Number(order.comped_amount)) && Number(order.comped_amount) > 0
+                ? Number(order.comped_amount)
+                : null))
+      const normalizedNoChargeReason = isNoCharge ? normalizeOptionalText(order.no_charge_reason) : null
+      const normalizedSettledByName = normalizeOptionalText(order.settled_by_name)
       // Covers: keep null when absent or nonsensical rather than coercing to 0,
       // so a table with no recorded count is excluded from average-per-cover
       // instead of dragging it down as a zero-guest sale.
@@ -348,6 +490,9 @@ export async function POST(req: Request) {
               paidAt: shouldFinalizePaidOrder ? null : normalizedPaidAt,
               canceledAt: shouldFinalizePaidOrder ? null : normalizedCanceledAt,
               cancelReason: shouldFinalizePaidOrder ? null : order.cancel_reason,
+              settledByName: normalizedSettledByName,
+              noChargeReason: normalizedNoChargeReason,
+              compedAmount: normalizedCompedAmount,
               createdAt: normalizedCreatedAt,
               updatedAt: normalizedUpdatedAt,
             },
@@ -380,6 +525,12 @@ export async function POST(req: Request) {
               paidAt: shouldFinalizePaidOrder ? null : normalizedPaidAt,
               canceledAt: shouldFinalizePaidOrder ? null : normalizedCanceledAt,
               cancelReason: shouldFinalizePaidOrder ? null : order.cancel_reason,
+              // Same rule as shift/day/source above: set what we were told, never
+              // clear what is already stored. A re-sync from a client too old to
+              // send these must not erase who settled a bill or why it was comped.
+              ...(normalizedSettledByName ? { settledByName: normalizedSettledByName } : {}),
+              ...(normalizedNoChargeReason ? { noChargeReason: normalizedNoChargeReason } : {}),
+              ...(normalizedCompedAmount !== null ? { compedAmount: normalizedCompedAmount } : {}),
               updatedAt: normalizedUpdatedAt,
             },
           })
@@ -459,10 +610,13 @@ export async function POST(req: Request) {
       }
     }
 
+    const syncedTicketIds = await storeKitchenTickets()
+
     return jsonNoStore({
       ok: failedOrders.length === 0,
       syncedOrderIds,
       syncedShiftIds,
+      syncedTicketIds,
       failedOrderIds: failedOrders.map((entry) => entry.orderId),
       failedOrders,
     })

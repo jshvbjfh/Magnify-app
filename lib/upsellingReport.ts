@@ -1,4 +1,5 @@
 import { calculateLineNetAmount } from '@/lib/restaurantOrders'
+import { restaurantHourOfDay } from '@/lib/restaurantDay'
 
 // Upsell & attachments — which product pairings make money, and which waiters
 // reproduce them.
@@ -30,6 +31,16 @@ export const PAIRING_MIN_TOGETHER = 4
 export const BENCHMARK_MIN_WAITER_BILLS = 5
 /** How many opportunities the headline figure and the UI list cover. */
 export const OPPORTUNITY_LIMIT = 3
+/**
+ * Bills an hour needs before its attach rates are presented as a finding.
+ *
+ * Slicing a period by hour shrinks the sample hard — one hour of one day can be
+ * three bills, and 0% or 100% off three bills is a data artifact, not a
+ * performance signal. Hours under this floor still report their bill count and
+ * their money, but the UI must show "—" for their rates rather than a
+ * confident-looking percentage. Same reasoning as MIN_BILLS_FOR_COMPARISON.
+ */
+export const MIN_BILLS_FOR_HOURLY_RATE = 10
 
 export type UpsellConfidence = 'high' | 'medium' | 'low'
 
@@ -51,6 +62,13 @@ export type UpsellCheck = {
   createdByName: string | null
   totalAmount: number
   guestCount: number | null
+  /**
+   * When the order was RUNG UP, not when it was paid. The upsell decision
+   * happens as the waiter takes the order, so a table seated at 19:00 and
+   * settled at 22:00 is a 19:00 upsell — bucketing it by paidAt would report
+   * the busy 19:00 service as a busy 22:00 one.
+   */
+  orderedAt: Date | string | number
   items: UpsellLineItem[]
 }
 
@@ -82,6 +100,17 @@ export type UpsellServerRow = {
   coveredChecks: number
   apc: number | null
 }
+
+/**
+ * One clock hour at the restaurant. Deliberately the same shape as a server
+ * row so it inherits the same null-vs-zero discipline from finalize(): an hour
+ * that took no food bills reports drinkAttachRate as null, not as a 0% that
+ * would read as "nobody attached a drink".
+ *
+ * `ranked` here means the hour cleared MIN_BILLS_FOR_HOURLY_RATE — enough bills
+ * for its rates to be worth acting on.
+ */
+export type UpsellHourRow = UpsellServerRow & { hour: number }
 
 export type UpsellPairing = {
   key: string
@@ -133,6 +162,13 @@ export type UpsellReport = {
   pairings: UpsellPairing[]
   opportunities: UpsellOpportunity[]
   attachedItems: UpsellAttachedItem[]
+  /**
+   * The shape of the whole day, ALWAYS over the full date range and ignoring
+   * any hour window — the profile is what a manager reads to decide which hours
+   * are worth filtering to, so it must not collapse to the window already
+   * chosen. Ordered by service, not 00→23; see orderHourAxis.
+   */
+  hourly: UpsellHourRow[]
   meta: {
     totalChecks: number
     serverChecks: number
@@ -142,6 +178,11 @@ export type UpsellReport = {
     uncategorizedItems: number
     uncostedAttachLines: number
     pairingsTotal: number
+    /** The window everything except `hourly` was computed over. Null when all day. */
+    hourFrom: number | null
+    hourTo: number | null
+    /** Bills dropped by the hour window. Zero when no window is set. */
+    checksOutsideWindow: number
   }
 }
 
@@ -217,6 +258,57 @@ function serverKeyFor(check: UpsellCheck): { key: string; name: string } {
   return { key: name.toLowerCase(), name }
 }
 
+/**
+ * Is this hour inside the manager's chosen service window?
+ *
+ * Both ends are INCLUSIVE and name whole hour blocks: 18→22 is the five blocks
+ * 18:00 through 22:59, which is what someone picking "dinner" means.
+ *
+ * Wrap-around windows are normal here, not an edge case — late service is
+ * routinely 22→02, and the obvious `hour >= from && hour <= to` returns nothing
+ * at all for it.
+ *
+ * An unplaceable hour (NaN, from an order with no usable timestamp) is excluded
+ * whenever a window is set: it cannot be shown to be inside one.
+ */
+export function isHourInWindow(
+  hour: number,
+  from?: number | null,
+  to?: number | null,
+): boolean {
+  if (from === null || from === undefined || to === null || to === undefined) return true
+  if (!Number.isInteger(hour)) return false
+  if (from <= to) return hour >= from && hour <= to
+  return hour >= from || hour <= to
+}
+
+/**
+ * Put the hour axis in service order rather than 00→23.
+ *
+ * A restaurant open 10:00–02:00 sorted numerically opens the chart at 01:00 and
+ * closes it at 23:00, which reads as though the night ran backwards. The real
+ * start of service is the hour following the longest stretch with no bills at
+ * all — for that restaurant, the 03:00–09:00 dead zone — so the axis is rotated
+ * to begin there and run through midnight.
+ */
+export function orderHourAxis(hours: number[]): number[] {
+  const present = Array.from(new Set(hours.filter((hour) => Number.isInteger(hour) && hour >= 0 && hour <= 23)))
+    .sort((a, b) => a - b)
+  if (present.length < 2) return present
+
+  let startIndex = 0
+  let widestGap = -1
+  for (let i = 0; i < present.length; i += 1) {
+    const previous = present[(i - 1 + present.length) % present.length]
+    const gap = (present[i] - previous + 24) % 24
+    if (gap > widestGap) {
+      widestGap = gap
+      startIndex = i
+    }
+  }
+  return [...present.slice(startIndex), ...present.slice(0, startIndex)]
+}
+
 export function confidenceFor(baseBills: number): UpsellConfidence {
   if (baseBills >= CONFIDENCE_HIGH_BILLS) return 'high'
   if (baseBills >= CONFIDENCE_MEDIUM_BILLS) return 'medium'
@@ -275,6 +367,45 @@ function stripInternal(row: InternalRow): UpsellServerRow {
   return rest
 }
 
+/** What one check contributes to any bucket it belongs to. */
+type CheckTotals = {
+  itemCount: number
+  revenue: number
+  lineCount: number
+  upsellRevenue: number
+  upsellCost: number
+  hasFood: boolean
+  hasDrink: boolean
+  hasAddon: boolean
+  guestCount: number | null
+}
+
+// One check folded into one bucket. Shared by the waiter rows, the house
+// average and the hourly profile so a bill can never be counted one way in the
+// table and another way in the chart.
+function applyCheckToRow(target: InternalRow, totals: CheckTotals) {
+  target.checks += 1
+  if (totals.itemCount > 0) target.checksWithItems += 1
+  target.revenue += totals.revenue
+  target.items += totals.lineCount
+  target.upsellRevenue += totals.upsellRevenue
+  target.upsellCost += totals.upsellCost
+  if (totals.hasAddon) target.addonChecks += 1
+  if (totals.hasFood) {
+    target.foodChecks += 1
+    if (totals.hasDrink) target.drinkAttachChecks += 1
+  }
+  // Guest counts landed on 2026-08-09 and are null on everything before
+  // that. Averaging revenue that has no guest count against the guests that
+  // do roughly doubles the figure and still looks believable, so orders
+  // without a count stay out of both sides — same rule as the dashboard APC.
+  if ((totals.guestCount ?? 0) > 0) {
+    target.covers += totals.guestCount as number
+    target.coveredChecks += 1
+    target.coveredRevenue__ += totals.revenue
+  }
+}
+
 type PairAccumulator = {
   baseDishId: string
   baseName: string
@@ -287,10 +418,29 @@ type PairAccumulator = {
   cost: number
 }
 
-export function buildUpsellingReport(checks: UpsellCheck[]): UpsellReport {
+export type UpsellReportOptions = {
+  /** Inclusive start of the service window, 0–23. Omit for the whole day. */
+  hourFrom?: number | null
+  /** Inclusive end of the service window, 0–23. May be lower than hourFrom for late service. */
+  hourTo?: number | null
+}
+
+export function buildUpsellingReport(
+  checks: UpsellCheck[],
+  options: UpsellReportOptions = {},
+): UpsellReport {
+  const hourFrom = Number.isInteger(options.hourFrom) ? (options.hourFrom as number) : null
+  const hourTo = Number.isInteger(options.hourTo) ? (options.hourTo as number) : null
+  // A half-specified window is not a window. Falling back to "all day" is the
+  // safe reading: it shows more than asked rather than silently hiding bills.
+  const windowActive = hourFrom !== null && hourTo !== null
+
   const byServer = new Map<string, InternalRow>()
   const house: InternalRow = { ...emptyRow('__house__', 'House average', null), coveredRevenue__: 0 }
   const attached = new Map<string, UpsellAttachedItem>()
+  // The day's shape, built from every bill in the date range whether or not the
+  // window keeps it — this is what the manager reads to choose a window.
+  const byHour = new Map<number, InternalRow>()
 
   const pairs = new Map<string, PairAccumulator>()
   const baseBills = new Map<string, number>()
@@ -306,6 +456,7 @@ export function buildUpsellingReport(checks: UpsellCheck[]): UpsellReport {
   let selfOrderChecks = 0
   let serverChecks = 0
   let uncostedAttachLines = 0
+  let checksOutsideWindow = 0
 
   for (const check of checks) {
     // A guest ordering for themselves on the QR menu is not a server's bill.
@@ -314,20 +465,11 @@ export function buildUpsellingReport(checks: UpsellCheck[]): UpsellReport {
       selfOrderChecks++
       continue
     }
-    serverChecks++
 
-    const { key, name } = serverKeyFor(check)
-    if (key === '__unattributed__') checksWithoutServer++
-    serverNames.set(key, name)
-
-    let row = byServer.get(key)
-    if (!row) {
-      row = { ...emptyRow(key, name, check.staffName ?? null), coveredRevenue__: 0 }
-      byServer.set(key, row)
-    }
-    // Which screen they were ringing up on, for context only. First one seen
-    // wins; a waiter who moves between terminals is still one row.
-    if (!row.terminalAccount && check.staffName) row.terminalAccount = check.staffName
+    // Restaurant clock hour, never the server's — see restaurantHourOfDay.
+    const hour = restaurantHourOfDay(check.orderedAt)
+    const inWindow = isHourInWindow(hour, hourFrom, hourTo)
+    if (!inWindow) checksOutsideWindow++
 
     const revenue = Number(check.totalAmount ?? 0)
     let hasFood = false
@@ -354,13 +496,16 @@ export function buildUpsellingReport(checks: UpsellCheck[]): UpsellReport {
       const group = classifyCategory(item.category)
       lineCount += qty
       if (group === 'food') { hasFood = true; foodOnCheck.set(item.dishId, item.dishName) }
-      if (group === 'unknown') uncategorizedItems++
+      // The data-quality counters describe the tables below, which cover the
+      // window only — counting bills the window excluded would report problems
+      // in figures the manager is not being shown.
+      if (group === 'unknown' && inWindow) uncategorizedItems++
 
       if (group === 'drink' || group === 'addon') {
         if (group === 'drink') hasDrink = true
         if (group === 'addon') hasAddon = true
         const cost = item.foodCost
-        if (cost === null || cost === undefined) uncostedAttachLines++
+        if ((cost === null || cost === undefined) && inWindow) uncostedAttachLines++
         const lineCost = Number(cost ?? 0)
         upsellRevenue += lineRevenue
         upsellCost += lineCost
@@ -374,26 +519,67 @@ export function buildUpsellingReport(checks: UpsellCheck[]): UpsellReport {
           cost: (prev?.cost ?? 0) + lineCost,
         })
 
-        const existing = attached.get(item.dishId)
-        if (existing) {
-          existing.qty += qty
-          existing.checks += 1
-          existing.revenue += lineRevenue
-          existing.profit += lineRevenue - lineCost
-        } else {
-          attached.set(item.dishId, {
-            dishId: item.dishId,
-            dishName: item.dishName,
-            category: item.category,
-            group,
-            qty,
-            checks: 1,
-            revenue: lineRevenue,
-            profit: lineRevenue - lineCost,
-          })
+        if (inWindow) {
+          const existing = attached.get(item.dishId)
+          if (existing) {
+            existing.qty += qty
+            existing.checks += 1
+            existing.revenue += lineRevenue
+            existing.profit += lineRevenue - lineCost
+          } else {
+            attached.set(item.dishId, {
+              dishId: item.dishId,
+              dishName: item.dishName,
+              category: item.category,
+              group,
+              qty,
+              checks: 1,
+              revenue: lineRevenue,
+              profit: lineRevenue - lineCost,
+            })
+          }
         }
       }
     }
+
+    const totals: CheckTotals = {
+      itemCount: check.items.length,
+      revenue,
+      lineCount,
+      upsellRevenue,
+      upsellCost,
+      hasFood,
+      hasDrink,
+      hasAddon,
+      guestCount: check.guestCount ?? null,
+    }
+
+    // The hourly profile takes every bill in the range, window or not.
+    if (Number.isInteger(hour)) {
+      let bucket = byHour.get(hour)
+      if (!bucket) {
+        bucket = { ...emptyRow(`hour-${hour}`, `${String(hour).padStart(2, '0')}:00`, null), coveredRevenue__: 0 }
+        byHour.set(hour, bucket)
+      }
+      applyCheckToRow(bucket, totals)
+    }
+
+    // Everything past here describes the selected window only.
+    if (!inWindow) continue
+
+    serverChecks++
+    const { key, name } = serverKeyFor(check)
+    if (key === '__unattributed__') checksWithoutServer++
+    serverNames.set(key, name)
+
+    let row = byServer.get(key)
+    if (!row) {
+      row = { ...emptyRow(key, name, check.staffName ?? null), coveredRevenue__: 0 }
+      byServer.set(key, row)
+    }
+    // Which screen they were ringing up on, for context only. First one seen
+    // wins; a waiter who moves between terminals is still one row.
+    if (!row.terminalAccount && check.staffName) row.terminalAccount = check.staffName
 
     // Pairings: every food item on the bill is a chance to have attached each
     // add-on or drink. Counted once per bill on both sides.
@@ -416,32 +602,21 @@ export function buildUpsellingReport(checks: UpsellCheck[]): UpsellReport {
       }
     }
 
-    for (const target of [row, house]) {
-      target.checks += 1
-      if (check.items.length > 0) target.checksWithItems += 1
-      target.revenue += revenue
-      target.items += lineCount
-      target.upsellRevenue += upsellRevenue
-      target.upsellCost += upsellCost
-      if (hasAddon) target.addonChecks += 1
-      if (hasFood) {
-        target.foodChecks += 1
-        if (hasDrink) target.drinkAttachChecks += 1
-      }
-      // Guest counts landed on 2026-08-09 and are null on everything before
-      // that. Averaging revenue that has no guest count against the guests that
-      // do roughly doubles the figure and still looks believable, so orders
-      // without a count stay out of both sides — same rule as the dashboard APC.
-      if ((check.guestCount ?? 0) > 0) {
-        target.covers += check.guestCount as number
-        target.coveredChecks += 1
-        target.coveredRevenue__ += revenue
-      }
-    }
+    for (const target of [row, house]) applyCheckToRow(target, totals)
     if ((check.guestCount ?? 0) > 0) coveredChecks++
   }
 
   const finalizedHouse = finalize(house)
+
+  // Hour buckets go through the same finalize() as the waiter rows, so their
+  // rates carry the same meaning: null where there was never a chance to
+  // attach anything, rather than a 0% that reads as a failure. `ranked` then
+  // marks the hours that carry enough bills to be worth acting on.
+  const hourly: UpsellHourRow[] = orderHourAxis(Array.from(byHour.keys())).map((hour) => {
+    const bucket = finalize(byHour.get(hour) as InternalRow)
+    bucket.ranked = bucket.checksWithItems >= MIN_BILLS_FOR_HOURLY_RATE
+    return { hour, ...stripInternal(bucket) }
+  })
 
   // Best attach rate first. Servers whose bills carried no items at all have no
   // rate to rank on and sort to the bottom rather than tying with a genuine 0%.
@@ -547,6 +722,7 @@ export function buildUpsellingReport(checks: UpsellCheck[]): UpsellReport {
     pairings,
     opportunities,
     attachedItems: Array.from(attached.values()).sort((a, b) => b.profit - a.profit),
+    hourly,
     meta: {
       totalChecks: checks.length,
       serverChecks,
@@ -556,6 +732,9 @@ export function buildUpsellingReport(checks: UpsellCheck[]): UpsellReport {
       uncategorizedItems,
       uncostedAttachLines,
       pairingsTotal: allPairings.filter((p) => p.together >= PAIRING_MIN_TOGETHER).length,
+      hourFrom: windowActive ? hourFrom : null,
+      hourTo: windowActive ? hourTo : null,
+      checksOutsideWindow,
     },
   }
 }

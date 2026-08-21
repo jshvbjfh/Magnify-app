@@ -16,6 +16,15 @@ function parseDateParam(value: string | null, endOfDay = false) {
   return endOfDay ? endOfRestaurantDay(value) : startOfRestaurantDay(value)
 }
 
+// An hour block, 0–23, at the restaurant. Anything else is treated as "not
+// given" so a malformed link falls back to the whole day rather than 400-ing a
+// manager out of their report.
+function parseHourParam(value: string | null): number | null {
+  if (value === null || value.trim() === '') return null
+  const hour = Number(value)
+  return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : null
+}
+
 const EMPTY = {
   summary: {
     bills: 0, upsellRevenue: 0, upsellCost: 0, upsellProfit: 0, upsellMargin: 0,
@@ -26,9 +35,11 @@ const EMPTY = {
   pairings: [],
   opportunities: [],
   attachedItems: [],
+  hourly: [],
   meta: {
     totalChecks: 0, serverChecks: 0, selfOrderChecks: 0, checksWithoutServer: 0,
     coveredChecks: 0, uncategorizedItems: 0, uncostedAttachLines: 0, pairingsTotal: 0,
+    hourFrom: null, hourTo: null, checksOutsideWindow: 0,
   },
 }
 
@@ -40,7 +51,14 @@ const EMPTY = {
 // unit of analysis, and one check routinely spans stations (a Grill burger and
 // a Bar soda are one guest, one bill, one server's upsell). See
 // lib/upsellingReport.ts.
-// ?from=YYYY-MM-DD&to=YYYY-MM-DD
+//
+// hourFrom/hourTo narrow it to one service window — 18–22 for dinner — so every
+// waiter is judged on the same hours instead of a number that blends the coffee
+// crowd with the cocktail crowd. Both ends are inclusive hour blocks at the
+// restaurant, and hourFrom may be the larger of the two for late service
+// (22→02). The `hourly` profile in the response always covers the whole date
+// range regardless of the window; see lib/upsellingReport.ts.
+// ?from=YYYY-MM-DD&to=YYYY-MM-DD&hourFrom=18&hourTo=22
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -52,6 +70,8 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const fromDate = parseDateParam(searchParams.get('from'))
   const toDate = parseDateParam(searchParams.get('to'), true)
+  const hourFrom = parseHourParam(searchParams.get('hourFrom'))
+  const hourTo = parseHourParam(searchParams.get('hourTo'))
 
   // Group by the shift's business day when the order has one, else fall back to
   // paidAt — a table opened at 11pm and paid at 1am counts on the shift's day.
@@ -76,6 +96,11 @@ export async function GET(req: Request) {
       createdByName: true,
       totalAmount: true,
       guestCount: true,
+      // When the order was RUNG UP, which is when the upsell was made or missed.
+      // The day range above still keys on businessDate/paidAt — those are what
+      // the indexes cover — so this is only ever used to place the bill in an
+      // hour, never to decide whether it is in range.
+      createdAt: true,
       staff: { select: { name: true } },
       items: {
         where: { status: 'ACTIVE', deletedAt: null },
@@ -125,6 +150,7 @@ export async function GET(req: Request) {
     createdByName: order.createdByName ?? null,
     totalAmount: Number(order.totalAmount ?? 0),
     guestCount: order.guestCount ?? null,
+    orderedAt: order.createdAt,
     items: order.items.map((item) => ({
       dishId: item.dishId,
       dishName: item.dishName,
@@ -138,5 +164,5 @@ export async function GET(req: Request) {
     })),
   }))
 
-  return NextResponse.json(buildUpsellingReport(checks))
+  return NextResponse.json(buildUpsellingReport(checks, { hourFrom, hourTo }))
 }
