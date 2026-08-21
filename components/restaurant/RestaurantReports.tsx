@@ -44,9 +44,35 @@ type UpsellPairing = {
   baseBills: number
   together: number
   attachRate: number
+  attachBills: number
+  /** How much more often the two land together than chance. See lib/upsellingReport.ts. */
+  lift: number | null
   profit: number
   margin: number
   confidence: 'high' | 'medium' | 'low'
+}
+
+type PairingExplorerRow = {
+  dishId: string
+  dishName: string
+  category: string | null
+  group: 'food' | 'drink' | 'addon' | 'unknown'
+  together: number
+  attachBills: number
+  pairRate: number
+  lift: number | null
+  affinity: 'real' | 'mild' | 'coincidence' | 'substitutes' | 'unknown'
+  qty: number
+  profit: number
+  uncostedLines: number
+}
+
+type PairingExplorerData = {
+  subject: { kind: 'dish' | 'category'; key: string; label: string; category: string | null } | null
+  bills: number
+  subjectBills: number
+  rows: PairingExplorerRow[]
+  meta: { totalChecks: number; selfOrderChecks: number; belowFloor: number; uncostedLines: number }
 }
 
 type UpsellOpportunity = {
@@ -938,6 +964,38 @@ function ConfidenceChip({ level }: { level: 'high'|'medium'|'low' }) {
   )
 }
 
+// Lift, in words. Mirrors affinityFor in lib/upsellingReport.ts — kept in step
+// with it by hand for the same bundle reason as hourInWindow below.
+//
+// A rate alone cannot tell a pairing from a popular item: soda attaches to
+// everything, so it wins every list ranked on rate. This chip is what stops a
+// manager acting on that.
+const AFFINITY_STYLES: Record<string, { label: string; cls: string; title: string }> = {
+  real:         { label: 'Real pair',   cls: 'bg-green-50 text-green-700 border-green-200',   title: 'Sold together far more often than chance — a genuine pairing' },
+  mild:         { label: 'Mild',        cls: 'bg-amber-50 text-amber-700 border-amber-200',   title: 'Somewhat more often than chance' },
+  coincidence:  { label: 'Coincidence', cls: 'bg-gray-100 text-gray-500 border-gray-200',     title: 'About what chance gives — this item is simply popular, not attached' },
+  substitutes:  { label: 'Substitutes', cls: 'bg-rose-50 text-rose-700 border-rose-200',      title: 'Sold together LESS often than chance — guests pick one or the other. Never bundle these' },
+  unknown:      { label: '—',           cls: 'bg-gray-50 text-gray-400 border-gray-200',      title: 'Not enough data to judge' },
+}
+
+function affinityOf(lift: number | null): keyof typeof AFFINITY_STYLES {
+  if (lift === null || !Number.isFinite(lift)) return 'unknown'
+  if (lift >= 2) return 'real'
+  if (lift >= 1.2) return 'mild'
+  if (lift >= 0.8) return 'coincidence'
+  return 'substitutes'
+}
+
+function AffinityChip({ lift }: { lift: number | null }) {
+  const s = AFFINITY_STYLES[affinityOf(lift)]
+  return (
+    <span title={s.title} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${s.cls}`}>
+      {lift !== null && <span className="tabular-nums">{lift.toFixed(1)}×</span>}
+      {s.label}
+    </span>
+  )
+}
+
 // Mirrors isHourInWindow in lib/upsellingReport.ts, which cannot be imported
 // here: it pulls in lib/restaurantOrders and would drag Prisma into the browser
 // bundle. Kept to four lines so the two cannot quietly diverge.
@@ -1191,10 +1249,170 @@ function NoChargeTable({ data }: { data: NoChargeData | null }) {
   )
 }
 
-function UpsellingTable({ data, hourWindow, onHourWindowChange }: {
+// "What pairs with this?" — the drill-down behind the headline figures.
+//
+// Answers deliberately span the whole menu: asking about a steak has to be able
+// to reply "a red wine", which the pairings table above can never do because a
+// main is not an "attach". The category and item pickers narrow the QUESTION,
+// never the answer.
+function PairingExplorer({ range, hourWindow }: {
+  range: { start: string; end: string }
+  hourWindow: HourWindow
+}) {
+  const [menu, setMenu] = useState<{ id: string; name: string; category: string | null }[]>([])
+  const [category, setCategory] = useState<string>('')
+  const [dishId, setDishId] = useState<string>('')
+  const [data, setData] = useState<PairingExplorerData | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  // Restaurant-wide, matching the report above. A branch-scoped menu would
+  // offer dishes the report never counted and hide ones it did.
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/restaurant/dishes?scope=restaurant', FRESH_FETCH_OPTIONS)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((rows) => {
+        if (cancelled || !Array.isArray(rows)) return
+        setMenu(rows.map((d: any) => ({ id: d.id, name: d.name, category: d.category ?? null })))
+      })
+      .catch(() => { if (!cancelled) setMenu([]) })
+    return () => { cancelled = true }
+  }, [])
+
+  const categories = Array.from(new Set(menu.map((d) => (d.category ?? '').trim()).filter(Boolean))).sort()
+  const itemsInCategory = category ? menu.filter((d) => (d.category ?? '').trim() === category) : menu
+
+  useEffect(() => {
+    // Asking about nothing would return a cross-join of the menu, so the
+    // explorer stays empty until a subject is chosen.
+    if (!dishId && !category) { setData(null); return }
+    const subject = dishId ? `dishId=${encodeURIComponent(dishId)}` : `category=${encodeURIComponent(category)}`
+    const hours = hourWindow ? `&hourFrom=${hourWindow.from}&hourTo=${hourWindow.to}` : ''
+    let cancelled = false
+    setLoading(true)
+    fetch(`/api/restaurant/reports/upselling/pairings?${subject}&from=${range.start}&to=${range.end}${hours}`, FRESH_FETCH_OPTIONS)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((d) => { if (!cancelled) setData(d) })
+      .catch(() => { if (!cancelled) setData(null) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [dishId, category, range.start, range.end, hourWindow])
+
+  const subjectLabel = data?.subject?.label ?? (dishId ? menu.find((d) => d.id === dishId)?.name : category) ?? ''
+
+  return (
+    <div className="mb-5">
+      <h4 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Pairing explorer</h4>
+
+      <div className="rounded-xl border border-gray-200 bg-white p-3 flex flex-wrap gap-3 items-end">
+        <div className="flex-1 min-w-[180px]">
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Category</label>
+          <select
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
+            value={category}
+            onChange={(e) => { setCategory(e.target.value); setDishId('') }}
+          >
+            <option value="">All categories</option>
+            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Item</label>
+          <select
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
+            value={dishId}
+            onChange={(e) => setDishId(e.target.value)}
+            disabled={menu.length === 0}
+          >
+            <option value="">{category ? `Whole category (${category})` : 'Choose an item…'}</option>
+            {itemsInCategory.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
+        {(dishId || category) && (
+          <button
+            type="button"
+            onClick={() => { setCategory(''); setDishId('') }}
+            className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      {!dishId && !category ? (
+        <p className="mt-2 text-xs text-gray-400">
+          Pick a category or an item to see what sells alongside it. Answers can come from anywhere on the menu, not just add-ons and drinks.
+        </p>
+      ) : loading ? (
+        <p className="mt-3 text-xs text-gray-400">Loading pairings…</p>
+      ) : !data || data.subjectBills === 0 ? (
+        <p className="mt-3 text-xs text-gray-400">
+          No paid bills carried {subjectLabel || 'that'} in this period.
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 rounded-t-xl border border-b-0 border-gray-200 bg-orange-50/40 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              {data.subject?.category && <p className="text-[11px] text-gray-400 truncate">{data.subject.category}</p>}
+              <p className="text-base font-bold text-gray-900 truncate">{subjectLabel}</p>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <span className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-600">
+                {data.subjectBills} of {data.bills} bills
+              </span>
+              <span className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-600">
+                {data.rows.length} pairing{data.rows.length === 1 ? '' : 's'}
+              </span>
+            </div>
+          </div>
+
+          {data.rows.length === 0 ? (
+            <div className="rounded-b-xl border border-gray-200 px-4 py-6 text-center text-xs text-gray-400">
+              Nothing sold alongside it on enough bills to be worth showing.
+              {data.meta.belowFloor > 0 && <> {data.meta.belowFloor} pairing{data.meta.belowFloor === 1 ? '' : 's'} fell under the 3-bill floor.</>}
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-b-xl border border-gray-200">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="bg-orange-500 text-white">
+                    {['Paired item', 'Where it lives', 'Together', 'Pair rate', 'Real pairing?', 'Gross profit (RWF)'].map((h, i) => (
+                      <th key={h} className={`px-3 py-2.5 text-xs font-bold uppercase tracking-wide whitespace-nowrap ${i <= 1 || i === 4 ? 'text-left' : 'text-right'}`}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.rows.map((r, i) => (
+                    <tr key={r.dishId} className={i % 2 === 0 ? 'bg-white' : 'bg-orange-50/40'}>
+                      <td className="px-3 py-2 text-xs border-b border-gray-100 font-semibold text-gray-800 whitespace-nowrap">{r.dishName}</td>
+                      <td className="px-3 py-2 text-xs border-b border-gray-100 text-gray-400 whitespace-nowrap">{r.category ?? '—'}</td>
+                      <td className="px-3 py-2 text-xs text-right border-b border-gray-100 tabular-nums">{r.together} of {data.subjectBills}</td>
+                      <td className="px-3 py-2 text-xs text-right border-b border-gray-100 tabular-nums">{r.pairRate.toFixed(0)}%</td>
+                      <td className="px-3 py-2 text-xs text-left border-b border-gray-100"><AffinityChip lift={r.lift} /></td>
+                      <td className="px-3 py-2 text-xs text-right border-b border-gray-100 font-bold text-green-700 tabular-nums">{fmt(r.profit)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="mt-2 text-xs text-gray-400">
+            Ranked by gross profit; &ldquo;real pairing?&rdquo; is what says whether the money is a genuine attachment or just a popular item.
+            {data.meta.belowFloor > 0 && <> {data.meta.belowFloor} more fell under the 3-bill floor.</>}
+            {data.meta.uncostedLines > 0 && <> {data.meta.uncostedLines} line{data.meta.uncostedLines === 1 ? ' was' : 's were'} never costed, so profit is understated.</>}
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
+function UpsellingTable({ data, hourWindow, onHourWindowChange, range }: {
   data: UpsellingData | null
   hourWindow: HourWindow
   onHourWindowChange: (w: HourWindow) => void
+  range: { start: string; end: string }
 }) {
   if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading upsell report…</div>
   const rows = data.rows ?? []
@@ -1269,13 +1487,26 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange }: {
             {opportunities.slice(0, 3).map((o, i) => (
               <div key={o.key} className={`flex items-center justify-between gap-5 py-3.5 ${i > 0 ? 'border-t border-gray-100' : ''}`}>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">
-                    {o.baseName} <span className="font-normal text-gray-400">+</span> {o.attachName}
+                  <p className="text-sm font-semibold text-gray-900 truncate flex items-center gap-2">
+                    <span className="truncate">{o.baseName} <span className="font-normal text-gray-400">+</span> {o.attachName}</span>
+                    <AffinityChip lift={pairings.find((p) => p.key === o.key)?.lift ?? null} />
                   </p>
                   <p className="text-xs text-gray-500 mt-0.5">
                     Sold together on <span className="font-semibold text-gray-700">{o.together} of {o.baseBills}</span> bills — <span className="font-semibold text-gray-700">{o.houseRate.toFixed(0)}%</span>.
                     {' '}{o.bestServerName} reaches <span className="font-semibold text-gray-700">{o.bestServerRate.toFixed(0)}%</span>.
                   </p>
+                  {/* An opportunity can rank first purely because the attached item is on
+                      half of all bills. Saying so inline is the difference between a
+                      manager coaching a real upsell and chasing a statistical artifact. */}
+                  {(() => {
+                    const lift = pairings.find((p) => p.key === o.key)?.lift ?? null
+                    if (lift === null || lift >= 0.8) return null
+                    return (
+                      <p className="text-xs text-rose-600 mt-1">
+                        Guests take {o.attachName} with {o.baseName} <span className="font-semibold">less often than chance</span> — it ranks high because {o.attachName} is on so many bills, not because they go together.
+                      </p>
+                    )
+                  })()}
                   <div className="mt-2 h-1.5 max-w-[320px] rounded-full bg-gray-100 overflow-hidden flex">
                     <span className="h-full bg-orange-500" style={{ width: `${Math.min(100, o.houseRate)}%` }} />
                     <span className="h-full bg-amber-300" style={{ width: `${Math.min(100 - Math.min(100, o.houseRate), o.gapPoints)}%` }} />
@@ -1298,8 +1529,8 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange }: {
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-orange-500 text-white">
-                  {['Pairing', 'Sold together', 'Gross profit (RWF)', 'Margin', 'Confidence'].map((h, i) => (
-                    <th key={h} className={`px-3 py-2.5 text-xs font-bold uppercase tracking-wide whitespace-nowrap ${i === 0 || i === 4 ? 'text-left' : 'text-right'}`}>{h}</th>
+                  {['Pairing', 'Sold together', 'Real pairing?', 'Gross profit (RWF)', 'Margin', 'Confidence'].map((h, i) => (
+                    <th key={h} className={`px-3 py-2.5 text-xs font-bold uppercase tracking-wide whitespace-nowrap ${i === 0 || i === 2 || i === 5 ? 'text-left' : 'text-right'}`}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -1312,6 +1543,7 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange }: {
                       <span className="font-semibold text-orange-600">{p.attachName}</span>
                     </td>
                     <td className="px-3 py-2 text-xs text-right border-b border-gray-100 tabular-nums">{p.together} of {p.baseBills} · {p.attachRate.toFixed(0)}%</td>
+                    <td className="px-3 py-2 text-xs text-left border-b border-gray-100"><AffinityChip lift={p.lift ?? null} /></td>
                     <td className="px-3 py-2 text-xs text-right border-b border-gray-100 font-bold text-green-700 tabular-nums">{fmt(p.profit)}</td>
                     <td className="px-3 py-2 text-xs text-right border-b border-gray-100 tabular-nums">{p.margin.toFixed(0)}%</td>
                     <td className="px-3 py-2 text-xs text-left border-b border-gray-100"><ConfidenceChip level={p.confidence} /></td>
@@ -1326,6 +1558,8 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange }: {
           </p>
         </div>
       )}
+
+      <PairingExplorer range={range} hourWindow={hourWindow} />
 
       <div className="mb-5">
         <h4 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Who sells it</h4>
@@ -2348,7 +2582,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
               {activeTab==='income'     &&<IncomeTable      txs={txData??[]}/>}
               {activeTab==='payment_methods' &&<PaymentMethodsTable txs={txData??[]}/>} 
               {activeTab==='dish_profit'        &&<DishProfitTable        data={dishProfitData}/>}
-              {activeTab==='upselling'          &&<UpsellingTable         data={upsellingData} hourWindow={hourWindow} onHourWindowChange={setHourWindow}/>}
+              {activeTab==='upselling'          &&<UpsellingTable         data={upsellingData} hourWindow={hourWindow} onHourWindowChange={setHourWindow} range={rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : { start: getDateRange(period).start, end: getDateRange(period).end }}/>}
               {activeTab==='canceled_orders'    &&<CanceledOrdersTable    data={canceledData}/>}
               {activeTab==='no_charge'          &&<NoChargeTable          data={noChargeData}/>}
               {activeTab==='inventory_movement' &&<InventoryMovementTable data={invMovementData}/>}
