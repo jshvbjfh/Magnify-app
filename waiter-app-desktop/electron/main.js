@@ -411,6 +411,43 @@ CREATE INDEX IF NOT EXISTS kitchen_tickets_synced_idx ON kitchen_tickets (synced
 `)
     },
   },
+  {
+    // Every line moved from one bill to another, so a move can be undone.
+    //
+    // A supervisor moving the wrong line used to be unrecoverable from the
+    // floor: the line was retired on one bill and recreated on another, and
+    // nothing recorded that the two were the same line. Without this row the
+    // item is simply "lost" — on a table nobody expected, with no way back.
+    //
+    // target_created says whether the move opened a NEW bill or joined one that
+    // was already on the table, because undoing the two is not the same: the
+    // bill this move opened has to be retired with it, a bill that was already
+    // there must obviously survive.
+    //
+    // Local only, never pushed. The server sees the move as what it materially
+    // is — a retired line and a new one — and does not need to know it can be
+    // reversed.
+    version: 15,
+    sql: `
+CREATE TABLE IF NOT EXISTS item_moves (
+  id TEXT PRIMARY KEY,
+  source_order_id TEXT NOT NULL,
+  source_order_number TEXT,
+  source_item_id TEXT NOT NULL,
+  target_order_id TEXT NOT NULL,
+  target_order_number TEXT,
+  target_item_id TEXT NOT NULL,
+  target_created INTEGER NOT NULL DEFAULT 0,
+  table_name TEXT,
+  dish_name TEXT,
+  qty INTEGER,
+  approved_by TEXT,
+  moved_at TEXT NOT NULL,
+  undone INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS item_moves_undone_idx ON item_moves (undone, moved_at);
+`,
+  },
 ]
 
 function addColumnIfMissing(database, table, column, definition) {

@@ -546,6 +546,138 @@ export async function moveOrderItemToNewOrder(params: {
   ])
 }
 
+// Move a line onto a bill that is ALREADY open at the target table.
+//
+// A table with a bill open should end up with one bill, not two cards side by
+// side — that was the whole complaint about the first version of this. Same
+// retire-and-recreate shape as the new-bill case, and the same single
+// transaction, because a half-finished move either charges twice or not at all.
+export async function moveOrderItemToExistingOrder(params: {
+  sourceOrderId: string
+  sourceItemId: string
+  targetOrderId: string
+  newItem: OrderItem
+}): Promise<void> {
+  const db = getDB()
+  const now = new Date().toISOString()
+  await db.executeSet([
+    {
+      statement:
+        'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, branch_id, discount_percent, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      values: [
+        params.newItem.id, params.targetOrderId, params.newItem.dish_id, params.newItem.dish_name,
+        params.newItem.dish_price, params.newItem.qty, 'ACTIVE', params.newItem.notes ?? null,
+        params.newItem.branch_id ?? null, params.newItem.discount_percent ?? null,
+        params.newItem.created_at, now,
+      ],
+    },
+    { statement: 'UPDATE order_items SET status = ?, updated_at = ? WHERE id = ?', values: ['CANCELED', now, params.sourceItemId] },
+    { statement: 'UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?', values: [now, params.sourceOrderId] },
+    { statement: 'UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?', values: [now, params.targetOrderId] },
+  ])
+}
+
+// ---- item_moves ------------------------------------------------------------
+// The record that makes a move reversible. Local only — the server sees a move
+// as what it materially is, a retired line and a new one, and has no need to
+// know it can be undone.
+
+export interface ItemMove {
+  id: string
+  source_order_id: string
+  source_order_number: string | null
+  source_item_id: string
+  target_order_id: string
+  target_order_number: string | null
+  target_item_id: string
+  target_created: number
+  table_name: string | null
+  dish_name: string | null
+  qty: number | null
+  approved_by: string | null
+  moved_at: string
+  undone: number
+}
+
+export async function recordItemMove(move: Omit<ItemMove, 'undone'>): Promise<void> {
+  const db = getDB()
+  await db.run(
+    `INSERT INTO item_moves
+      (id, source_order_id, source_order_number, source_item_id, target_order_id, target_order_number,
+       target_item_id, target_created, table_name, dish_name, qty, approved_by, moved_at, undone)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+    [
+      move.id, move.source_order_id, move.source_order_number, move.source_item_id,
+      move.target_order_id, move.target_order_number, move.target_item_id, move.target_created,
+      move.table_name, move.dish_name, move.qty, move.approved_by, move.moved_at,
+    ],
+  )
+}
+
+// Moves that can still be taken back: not already undone, and both bills still
+// open. A move onto a bill that has since been PAID is deliberately absent —
+// putting the line back would change a bill the guest has already settled.
+export async function getUndoableMoves(limit = 20): Promise<ItemMove[]> {
+  const db = getDB()
+  const rows = await db.query(
+    `SELECT m.* FROM item_moves m
+       JOIN orders src ON src.id = m.source_order_id
+       JOIN orders tgt ON tgt.id = m.target_order_id
+      WHERE m.undone = 0
+        AND src.status IN ('PENDING', 'UNCONFIRMED')
+        AND tgt.status IN ('PENDING', 'UNCONFIRMED')
+      ORDER BY m.moved_at DESC
+      LIMIT ${Math.max(1, Math.floor(limit))}`,
+    [],
+  )
+  return (rows ?? []) as unknown as ItemMove[]
+}
+
+// Put a moved line back where it came from.
+//
+// The reverse of the move, in one transaction: the original line goes back to
+// ACTIVE, the copy is retired, and a bill that only existed to receive the line
+// is cancelled with it. Both bills are marked unsynced so the correction
+// reaches the server the same way the move did.
+export async function undoItemMove(moveId: string): Promise<ItemMove> {
+  const db = getDB()
+  const rows = await db.query('SELECT * FROM item_moves WHERE id = ?', [moveId])
+  const move = (rows ?? [])[0] as unknown as ItemMove | undefined
+  if (!move) throw new Error('That move is no longer on record.')
+  if (Number(move.undone) === 1) throw new Error('That move has already been undone.')
+
+  // Re-check both bills at the moment of undoing, not when the list was drawn:
+  // one of them may have been settled while the dialog sat open.
+  const guard = await db.query(
+    `SELECT id, status FROM orders WHERE id IN (?, ?)`,
+    [move.source_order_id, move.target_order_id],
+  )
+  for (const row of (guard ?? []) as unknown as Array<{ id: string; status: string }>) {
+    if (!['PENDING', 'UNCONFIRMED'].includes(row.status)) {
+      throw new Error('One of these bills has already been settled — the move cannot be undone.')
+    }
+  }
+
+  const now = new Date().toISOString()
+  const statements: StatementSet = [
+    { statement: 'UPDATE order_items SET status = ?, updated_at = ? WHERE id = ?', values: ['ACTIVE', now, move.source_item_id] },
+    { statement: 'UPDATE order_items SET status = ?, updated_at = ? WHERE id = ?', values: ['CANCELED', now, move.target_item_id] },
+    { statement: 'UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?', values: [now, move.source_order_id] },
+    { statement: 'UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?', values: [now, move.target_order_id] },
+    { statement: 'UPDATE item_moves SET undone = 1 WHERE id = ?', values: [moveId] },
+  ]
+  if (Number(move.target_created) === 1) {
+    // This bill only ever existed to hold the moved line. Leaving it behind
+    // empty would sit on the floor as a 0 RWF card and block an end-of-shift.
+    statements.push({
+      statement: 'UPDATE orders SET status = ?, cancel_reason = ?, canceled_at = ?, updated_at = ?, synced = 0 WHERE id = ?',
+      values: ['CANCELED', 'Move undone', now, now, move.target_order_id],
+    })
+  }
+  await db.executeSet(statements)
+  return move
+}
+
 export async function getOrderById(orderId: string): Promise<Order | null> {
   const db = getDB()
   const rows = await db.query('SELECT * FROM orders WHERE id = ?', [orderId])

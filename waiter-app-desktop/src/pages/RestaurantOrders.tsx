@@ -8,7 +8,7 @@ import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
   getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, markTicketsPushed,
   setItemDiscount, mergeOrdersLocal, lineNetAmount,
-  recordKitchenTicket, moveOrderItemToNewOrder,
+  recordKitchenTicket, moveOrderItemToNewOrder, moveOrderItemToExistingOrder, recordItemMove,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import SupervisorPinDialog from './SupervisorPinDialog'
@@ -1139,10 +1139,57 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
     const table  = tables.find(t => t.id === moveTableId)
     if (!source || !table) { setSubmitError('Pick a table to move this item to.'); return }
     try {
-      const now      = new Date().toISOString()
+      const now       = new Date().toISOString()
+      const net       = lineNetAmount(moveTarget.item)
+      const movedItem = { ...moveTarget.item, id: crypto.randomUUID(), created_at: now, updated_at: now }
+
+      // Join a bill that is already open at that table rather than opening a
+      // second one beside it. A table shows ONE card; two cards for the same
+      // table is what made a moved line look lost.
+      //
+      // Only a PENDING bill is joined: an UNCONFIRMED guest QR order has not
+      // been accepted by anyone yet, and absorbing a line into it would put the
+      // line behind a confirmation step it never needed.
+      const existing = pendingOrders.find(o => o.table_id === table.id && o.status === 'PENDING')
+
+      if (existing) {
+        await moveOrderItemToExistingOrder({
+          sourceOrderId: source.id,
+          sourceItemId:  moveTarget.item.id,
+          targetOrderId: existing.id,
+          newItem:       { ...movedItem, order_id: existing.id },
+        })
+        await recomputeOrderTotals(existing.id)
+        await recomputeOrderTotals(source.id)
+        await recordItemMove({
+          id: crypto.randomUUID(),
+          source_order_id: source.id,
+          source_order_number: source.order_number,
+          source_item_id: moveTarget.item.id,
+          target_order_id: existing.id,
+          target_order_number: existing.order_number,
+          target_item_id: movedItem.id,
+          target_created: 0,
+          table_name: table.name,
+          dish_name: moveTarget.item.dish_name,
+          qty: moveTarget.item.qty,
+          approved_by: approvedBy,
+          moved_at: now,
+        })
+        await logInfo('order', 'Item moved onto an open bill', {
+          fromOrder: source.order_number, toOrder: existing.order_number,
+          table: table.name, item: moveTarget.item.dish_name, qty: moveTarget.item.qty, approvedBy,
+        })
+        await loadPOS()
+        setMoveTarget(null); setMoveAwaitingPin(false); setMoveTableId('')
+        setConfirmSuccess(`${moveTarget.item.dish_name} moved to ${table.name} (${existing.order_number}) · approved by ${approvedBy}`)
+        setTimeout(() => setConfirmSuccess(null), 4000)
+        pushSync().catch(() => {})
+        return
+      }
+
       const newId    = crypto.randomUUID()
       const orderNum = `WA-${newId.replace(/-/g, '').slice(-8).toUpperCase()}`
-      const net      = lineNetAmount(moveTarget.item)
 
       await moveOrderItemToNewOrder({
         sourceOrderId: source.id,
@@ -1173,12 +1220,29 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
           created_at: now,
           updated_at: now,
         },
-        newItem: { ...moveTarget.item, id: crypto.randomUUID(), order_id: newId, created_at: now, updated_at: now },
+        newItem: { ...movedItem, order_id: newId },
       })
 
       // The source bill has to be re-totalled: its retired line must stop being
       // charged for. recomputeOrderTotals counts ACTIVE lines only.
       await recomputeOrderTotals(source.id)
+      await recordItemMove({
+        id: crypto.randomUUID(),
+        source_order_id: source.id,
+        source_order_number: source.order_number,
+        source_item_id: moveTarget.item.id,
+        target_order_id: newId,
+        target_order_number: orderNum,
+        target_item_id: movedItem.id,
+        // This bill exists only because the line was moved here, so undoing the
+        // move has to take the bill away with it.
+        target_created: 1,
+        table_name: table.name,
+        dish_name: moveTarget.item.dish_name,
+        qty: moveTarget.item.qty,
+        approved_by: approvedBy,
+        moved_at: now,
+      })
       await logInfo('order', 'Item moved to another table', {
         fromOrder: source.order_number,
         toOrder: orderNum,
