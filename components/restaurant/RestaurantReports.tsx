@@ -320,22 +320,54 @@ function isCashEquivalentAccountName(name?: string) {
     || normalized.includes('momo')
 }
 
+// A/R and A/P sit on the SETTLEMENT side of a row, not the main account.
+//
+// /api/transactions collapses a two-line journal entry into one row: the main
+// account (the revenue or expense) becomes `accountName`, and the account that
+// settled it becomes `paymentMethod`. A credit sale books DR Accounts
+// Receivable / CR DishSale, so it arrives as accountName 'DishSale' with
+// paymentMethod 'Accounts Receivable'.
+//
+// These checks used to look only at `accountName`, which on a receivable is
+// always the revenue account — so they matched nothing and the A/R and A/P tabs
+// showed "No records found" no matter how much was owed. Both sides are checked
+// now.
+function mentionsAccount(tx: any, needle: string) {
+  const main = (tx.account?.name ?? tx.accountName ?? '').trim().toLowerCase()
+  const settlement = (tx.paymentMethod ?? '').trim().toLowerCase()
+  return main.includes(needle) || settlement.includes(needle)
+}
+
 function isReceivableTransaction(tx: any) {
-  const accountName = (tx.account?.name ?? '').trim().toLowerCase()
-  return accountName.includes('receivable')
+  return mentionsAccount(tx, 'receivable')
 }
 
 function isPayableTransaction(tx: any) {
-  const accountName = (tx.account?.name ?? '').trim().toLowerCase()
-  return accountName.includes('payable')
+  return mentionsAccount(tx, 'payable')
+}
+
+// Which side of the row the control account landed on decides the sign.
+//
+// On an income row the settlement account is the DEBIT and the main account the
+// CREDIT; on an expense row it is the other way round. So a receivable rises
+// when it settled an income row (the guest owes for a sale) and falls when it
+// settled an expense row (DR Cash / CR A/R — the money came in). A payable is
+// the mirror: it rises on a credit, being a liability.
+function controlAccountEffect(tx: any, needle: string, risesOn: 'debit' | 'credit') {
+  const settlement = (tx.paymentMethod ?? '').trim().toLowerCase()
+  const flow = getTransactionFlow(tx)
+  // Whether the matched account was debited in this entry.
+  const debited = settlement.includes(needle) ? flow === 'in' : flow === 'out'
+  const rising = risesOn === 'debit' ? debited : !debited
+  return rising ? tx.amount : -tx.amount
 }
 
 function getReceivableEffect(tx: any) {
-  return tx.type === 'debit' ? tx.amount : -tx.amount
+  return controlAccountEffect(tx, 'receivable', 'debit')
 }
 
 function getPayableEffect(tx: any) {
-  return tx.type === 'credit' ? tx.amount : -tx.amount
+  return controlAccountEffect(tx, 'payable', 'credit')
 }
 
 function isIncomeTransaction(tx: any) {
@@ -601,8 +633,13 @@ function StatCard({ label, value, color }: { label:string; value:string; color?:
 //  PER-TAB REPORT TABLES 
 
 function JournalTable({ txs }: { txs: any[] }) {
-  const dr = txs.filter(t=>t.type==='debit').reduce((s,t)=>s+t.amount,0)
-  const cr = txs.filter(t=>t.type==='credit').reduce((s,t)=>s+t.amount,0)
+  // Every entry is a balanced pair — it debits one account and credits another
+  // by the same amount — so both totals are the sum of the entries, and they
+  // always agree. Splitting the rows by `type` (which only records whether the
+  // entry was income or expense) put every sale on the credit side and left
+  // Total Debits reading 0 RWF against a ledger that balances perfectly.
+  const dr = txs.reduce((s,t)=>s+t.amount,0)
+  const cr = dr
   return (
     <>
       <div className="grid grid-cols-3 gap-3 mb-4">
@@ -611,8 +648,11 @@ function JournalTable({ txs }: { txs: any[] }) {
         <StatCard label="Total Credits" value={`${fmt(cr)} RWF`} color="bg-green-50 border-green-200" />
       </div>
       <DataTable
-        head={['Date','Account','Description','Type','Debit (RWF)','Credit (RWF)']}
-        rows={txs.map(t=>[t.date?.slice(0,10)??'', t.account?.name??'', fmtDesc(t.description).slice(0,48), t.type?.toUpperCase(), t.type==='debit'?fmt(t.amount):'', t.type==='credit'?fmt(t.amount):''])}
+        // Each row is a whole entry, so it carries both sides: the amount is
+        // debited to one account and credited to the other. Showing it in one
+        // column only was what made the totals look lopsided.
+        head={['Date','Account','Description','Settled By','Debit (RWF)','Credit (RWF)']}
+        rows={txs.map(t=>[t.date?.slice(0,10)??'', t.account?.name??'', fmtDesc(t.description).slice(0,48), t.paymentMethod??'', fmt(t.amount), fmt(t.amount)])}
         foot={['','','','TOTALS',fmt(dr),fmt(cr)]}
       />
     </>
