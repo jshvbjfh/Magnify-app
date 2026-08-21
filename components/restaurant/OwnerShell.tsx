@@ -274,7 +274,10 @@ const NAV_ITEMS: { id: OwnerView; label: string; icon: React.ReactNode }[] = [
   { id: 'history',   label: 'History',   icon: <CalendarDays className="h-5 w-5" /> },
   { id: 'reports',   label: 'Reports',   icon: <BarChart3 className="h-5 w-5" /> },
   { id: 'inventory',    label: 'Stock',    icon: <Package className="h-5 w-5" /> },
-  { id: 'receivable',  label: 'Receivable',   icon: <ArrowDownLeft className="h-5 w-5" /> },
+  // Called Credit Sales, not Accounts Receivable: the person using this screen
+  // is chasing money for food they already served, not reading a balance sheet.
+  // The ledger account keeps its proper accounting name.
+  { id: 'receivable',  label: 'Credit Sales', icon: <ArrowDownLeft className="h-5 w-5" /> },
   { id: 'payable',     label: 'Payable',      icon: <ArrowUpRight className="h-5 w-5" /> },
   { id: 'diagnostics', label: 'Diagnostics', icon: <Activity className="h-5 w-5" /> },
 ]
@@ -1279,8 +1282,8 @@ export default function OwnerShell() {
               {view === 'receivable' ? (
                 <div className="px-4 pt-6 pb-24">
                   <div className="mb-4">
-                    <h2 className="text-xl font-bold text-gray-900">Accounts Receivable</h2>
-                    <p className="text-sm text-gray-500">Select a client to view everything sold on credit, with the current amount they still owe.</p>
+                    <h2 className="text-xl font-bold text-gray-900">Credit Sales</h2>
+                    <p className="text-sm text-gray-500">Everything sold on credit and not yet collected. Pick a client to see what they owe you.</p>
                   </div>
                   <AccountsReceivable />
                 </div>

@@ -37,7 +37,10 @@ interface SummaryData {
   openCount: number
 }
 
-const PAYMENT_METHODS = ['Cash', 'Card', 'Mobile Money', 'Bank Transfer']
+// How the money actually came in. Every one of these maps to a real settlement
+// account through normalizePaymentMethod, so what the manager picks here is what
+// the ledger debits — Owner Momo lands on 1021, not lumped in with Mobile Money.
+const PAYMENT_METHODS = ['Cash', 'Mobile Money', 'Owner Momo', 'Card', 'Bank Transfer']
 
 function agingLabel(firstItemDate: string): { label: string; color: string } {
   const days = Math.floor((Date.now() - new Date(firstItemDate).getTime()) / 86400000)
@@ -121,10 +124,12 @@ export default function AccountsReceivable() {
       }
       setFlashId(itemId)
       setPayingId(null)
+      // Long enough to actually register that it worked before the row vanishes
+      // from under the cursor. 800ms read as a flicker.
       setTimeout(async () => {
         setFlashId(null)
         await load()
-      }, 800)
+      }, 1800)
     } finally {
       setConfirming(false)
     }
@@ -174,7 +179,7 @@ export default function AccountsReceivable() {
           className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
         >
           {showForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-          {showForm ? 'Cancel' : '+ Add Unpaid Service'}
+          {showForm ? 'Cancel' : 'Add Credit Sale'}
         </button>
       </div>
 
@@ -214,11 +219,18 @@ export default function AccountsReceivable() {
         </div>
       )}
 
+      {/* Loading — say what is coming, so the panel is never blank with no reason */}
+      {loading && !data && (
+        <div className="rounded-xl border bg-white py-16 text-center">
+          <p className="text-sm text-gray-400">Loading credit sales…</p>
+        </div>
+      )}
+
       {/* Empty state */}
       {!loading && data?.receivables.length === 0 && (
-        <div className="rounded-xl border bg-white py-16 text-center">
-          <p className="text-sm font-medium text-gray-500">No outstanding credit sales</p>
-          <p className="mt-1 text-xs text-gray-400">Bills put on a tab at the till appear here automatically.</p>
+        <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white py-16 text-center">
+          <p className="text-sm font-medium text-gray-500">Nobody owes you anything right now</p>
+          <p className="mt-1 text-xs text-gray-400">A bill put on a tab at the till shows up here by itself.</p>
         </div>
       )}
 
@@ -296,7 +308,9 @@ export default function AccountsReceivable() {
                           <td className="py-3 pr-4 text-right font-medium text-gray-800 whitespace-nowrap">{fmt(item.amount)}</td>
                           <td className="py-3 text-right">
                             {flashId === item.id ? (
-                              <CheckCircle className="ml-auto h-5 w-5 text-green-500" />
+                              <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-600">
+                                <CheckCircle className="h-4 w-4" /> Paid
+                              </span>
                             ) : payingId === item.id ? (
                               <div className="flex items-center justify-end gap-2">
                                 <select

@@ -209,7 +209,7 @@ function statusLabel(value: string | null | undefined) {
 const TABS: { id: ReportTab; label: string; short: string; icon: React.ElementType; desc: string }[] = [
   { id:'general',    label:'General Report',         short:'General',   icon:Store,          desc:'Sales, cost of goods sold and profit by station, across your whole restaurant account' },
   { id:'journal',    label:'Journal Ledger',         short:'Journal',   icon:BookOpen,       desc:'All recorded transactions in chronological order' },
-  { id:'receivable', label:'Accounts Receivable',    short:'A/R',       icon:TrendingUp,     desc:'Money customers owe your business' },
+  { id:'receivable', label:'Credit Sales',           short:'Credit',    icon:TrendingUp,     desc:'Money customers owe you for food already served' },
   { id:'payable',    label:'Accounts Payable',       short:'A/P',       icon:CreditCard,     desc:'Money your business owes to suppliers' },
   { id:'cashflow',   label:'Cash Flow Statement',    short:'Cash Flow', icon:ArrowLeftRight, desc:'Cash inflows and outflows analysis' },
   { id:'balance',    label:'Balance Sheet',          short:'Balance',   icon:BarChart3,      desc:'Assets, liabilities and equity snapshot' },
@@ -665,13 +665,13 @@ function ReceivableTable({ txs }: { txs: any[] }) {
   return (
     <>
       <div className="grid grid-cols-2 gap-3 mb-4">
-        <StatCard label="A/R Transactions" value={ar.length.toString()} />
-        <StatCard label="Total Receivables" value={`${fmt(total)} RWF`} color="bg-orange-50 border-orange-200" />
+        <StatCard label="Credit Sales" value={ar.length.toString()} />
+        <StatCard label="Still Owed" value={`${fmt(total)} RWF`} color="bg-orange-50 border-orange-200" />
       </div>
       <DataTable
         head={['Date','Customer / Description','Account','Effect (RWF)']}
         rows={ar.map(t=>[t.date?.slice(0,10)??'',fmtDesc(t.description).slice(0,54),t.account?.name??'',`${getReceivableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getReceivableEffect(t)))}`])}
-        foot={ar.length>0?['','','TOTAL RECEIVABLE',fmt(total)]:undefined}
+        foot={ar.length>0?['','','TOTAL STILL OWED',fmt(total)]:undefined}
       />
     </>
   )
@@ -2261,7 +2261,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
       doc.text(`Generated: ${new Date().toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'})}`,pw/2,125,{align:'center'})
       doc.setFontSize(10); doc.setFont('helvetica','bold'); doc.text('CONTENTS',pw/2,148,{align:'center'})
       doc.setFont('helvetica','normal'); doc.setFontSize(9)
-      ;['1. Profit Margin Dashboard','2. Journal Ledger','3. Accounts Receivable','4. Accounts Payable','5. Cash Flow Statement','6. Balance Sheet','7. Income Statement (P&L)','8. Payment Methods','9. Orders Report','10. Inventory Movement','11. Theoretical Inventory']
+      ;['1. Profit Margin Dashboard','2. Journal Ledger','3. Credit Sales','4. Accounts Payable','5. Cash Flow Statement','6. Balance Sheet','7. Income Statement (P&L)','8. Payment Methods','9. Orders Report','10. Inventory Movement','11. Theoretical Inventory']
         .forEach((c,i)=>doc.text(c,pw/2,157+i*8,{align:'center'}))
       doc.setFontSize(8); doc.text('Prepared by Jesse AI  Your Restaurant Financial Intelligence System',pw/2,ph-15,{align:'center'})
 
@@ -2304,13 +2304,13 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
       autoTable(doc,{...td,startY:y,head:[['Date','Account','Description','Type','Debit (RWF)','Credit (RWF)']],body:txs.map(t=>[t.date?.slice(0,10)??'',t.account?.name??'',(t.description??'').slice(0,40),t.type?.toUpperCase(),t.type==='debit'?fmt(t.amount):'',t.type==='credit'?fmt(t.amount):''])})
 
       // 3. A/R
-      y=section('Accounts Receivable',`Outstanding receivables  ${label}`)
+      y=section('Credit Sales',`Sold on credit, not yet collected  ${label}`)
       const ar=txs.filter(isReceivableTransaction)
       if(ar.length>0){
         autoTable(doc,{...td,startY:y,head:[['Date','Description','Account','Effect (RWF)']],body:ar.map(t=>[t.date?.slice(0,10)??'',(t.description??'').slice(0,50),t.account?.name??'',`${getReceivableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getReceivableEffect(t)))}`])})
         y=(doc as any).lastAutoTable.finalY+4; doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...ORANGE)
         doc.text(`Total: ${fmt(ar.reduce((s,t)=>s+getReceivableEffect(t),0))} RWF`,pw-14,y,{align:'right'})
-      } else { doc.setFontSize(9); doc.setTextColor(107,114,128); doc.text('No A/R records found.',14,y) }
+      } else { doc.setFontSize(9); doc.setTextColor(107,114,128); doc.text('No credit sales found.',14,y) }
 
       // 4. A/P
       y=section('Accounts Payable',`Outstanding payables  ${label}`)
