@@ -125,6 +125,29 @@ export async function GET(req: Request) {
       orderBy: [{ entryDate: 'desc' }, { createdAt: 'desc' }],
     })
 
+    // Who owes it. A credit sale's journal description is the food that was
+    // served — useful, but not the thing a manager chasing a debt needs to read.
+    // The customer lives on the order the entry came from, reached through the
+    // entry's reference. Only entries that touch Accounts Receivable are looked
+    // up, so an ordinary cash day costs nothing extra.
+    const creditOrderIds = [...new Set(
+      entries
+        .filter((entry) => entry.lines.some((line) => /receivable/i.test(line.account?.name ?? '')))
+        .map((entry) => entry.reference ?? '')
+        .filter((reference) => reference.startsWith('order:'))
+        .map((reference) => reference.slice('order:'.length)),
+    )]
+    const customerByOrderId = new Map<string, string>()
+    if (creditOrderIds.length > 0) {
+      const creditOrders = await prisma.restaurantOrder.findMany({
+        where: { id: { in: creditOrderIds }, restaurantId: context.restaurantId },
+        select: { id: true, arCustomerName: true },
+      })
+      for (const order of creditOrders) {
+        if (order.arCustomerName?.trim()) customerByOrderId.set(order.id, order.arCustomerName.trim())
+      }
+    }
+
     return NextResponse.json({
       transactions: entries.map((entry) => {
         const drLine = entry.lines.find((l) => l.debit > 0)
@@ -159,6 +182,10 @@ export async function GET(req: Request) {
           categoryType: mainAccount?.category?.type ?? 'expense',
           paymentMethod: settlementAccount?.name ?? null,
           reference: entry.reference ?? null,
+          // Null on everything that is not a credit sale against a named tab.
+          customerName: entry.reference?.startsWith('order:')
+            ? customerByOrderId.get(entry.reference.slice('order:'.length)) ?? null
+            : null,
           isManual: entry.reference === 'manual',
           sourceKind: null,
           uploadId: null,

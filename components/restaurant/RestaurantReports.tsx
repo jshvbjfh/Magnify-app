@@ -310,6 +310,16 @@ function normalizeTransactions(rows: any[]) {
   }))
 }
 
+// Cut to a length, but never mid-word — a description ending "Greek ch" reads
+// like a bug, not like an abbreviation.
+function trimWords(text: string, max: number) {
+  const clean = (text ?? '').trim()
+  if (clean.length <= max) return clean
+  const cut = clean.slice(0, max)
+  const lastSpace = cut.lastIndexOf(' ')
+  return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,·]+$/, '')}…`
+}
+
 function isCashEquivalentAccountName(name?: string) {
   const normalized = (name ?? '').trim().toLowerCase()
   return normalized === 'cash'
@@ -668,9 +678,19 @@ function ReceivableTable({ txs }: { txs: any[] }) {
         <StatCard label="Credit Sales" value={ar.length.toString()} />
         <StatCard label="Still Owed" value={`${fmt(total)} RWF`} color="bg-orange-50 border-orange-200" />
       </div>
+      {/* Customer first: this report answers "who owes me", and the dish list
+          is only how you recognise the bill. The Account column was dropped —
+          every credit sale books to DishSale, so it repeated one word down the
+          whole page. Descriptions are trimmed on a word so they stop reading
+          "Table Tab" and "Greek ch". */}
       <DataTable
-        head={['Date','Customer / Description','Account','Effect (RWF)']}
-        rows={ar.map(t=>[t.date?.slice(0,10)??'',fmtDesc(t.description).slice(0,54),t.account?.name??'',`${getReceivableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getReceivableEffect(t)))}`])}
+        head={['Date','Customer','What was sold','Amount (RWF)']}
+        rows={ar.map(t=>[
+          t.date?.slice(0,10)??'',
+          t.customerName ?? '—',
+          trimWords(fmtDesc(t.description), 60),
+          `${getReceivableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getReceivableEffect(t)))}`,
+        ])}
         foot={ar.length>0?['','','TOTAL STILL OWED',fmt(total)]:undefined}
       />
     </>
@@ -2326,7 +2346,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
       y=section('Credit Sales',`Sold on credit, not yet collected  ${label}`)
       const ar=txs.filter(isReceivableTransaction)
       if(ar.length>0){
-        autoTable(doc,{...td,startY:y,head:[['Date','Description','Account','Effect (RWF)']],body:ar.map(t=>[t.date?.slice(0,10)??'',(t.description??'').slice(0,50),t.account?.name??'',`${getReceivableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getReceivableEffect(t)))}`])})
+        autoTable(doc,{...td,startY:y,head:[['Date','Customer','What was sold','Amount (RWF)']],body:ar.map(t=>[t.date?.slice(0,10)??'',t.customerName??'—',trimWords(fmtDesc(t.description),60),`${getReceivableEffect(t)>=0?'+':'-'}${fmt(Math.abs(getReceivableEffect(t)))}`])})
         y=(doc as any).lastAutoTable.finalY+4; doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...ORANGE)
         doc.text(`Total: ${fmt(ar.reduce((s,t)=>s+getReceivableEffect(t),0))} RWF`,pw-14,y,{align:'right'})
       } else { doc.setFontSize(9); doc.setTextColor(107,114,128); doc.text('No credit sales found.',14,y) }
