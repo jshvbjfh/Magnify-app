@@ -8,7 +8,7 @@ import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
   getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, markTicketsPushed,
   setItemDiscount, mergeOrdersLocal, lineNetAmount,
-  recordKitchenTicket,
+  recordKitchenTicket, moveOrderItemToNewOrder,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import SupervisorPinDialog from './SupervisorPinDialog'
@@ -36,7 +36,10 @@ type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: numb
 // and nothing is collected — the boss's guests, a comped table, a service
 // recovery. It carries a mandatory reason, and books zero revenue while the
 // food still comes off stock, so it can never quietly pad the day's takings.
-const NO_CHARGE = 'No Charge'
+// Kept in step with NO_CHARGE_METHOD in lib/restaurantOrders.ts. The server
+// still recognises the older 'No Charge' spelling that shipped before this, so
+// a till that has not updated yet keeps having its comps treated as comps.
+const NO_CHARGE = 'compl.'
 const PAY_METHODS = ['Cash', 'MoMo', 'Card', 'Bank Transfer', 'Credit', NO_CHARGE] as const
 
 const COLOR_POOL = [
@@ -463,6 +466,12 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
   const [discountTarget,    setDiscountTarget]    = useState<{ orderId: string; item: OrderItem } | null>(null)
   const [discountPct,       setDiscountPct]       = useState('')
   const [discountAwaitingPin, setDiscountAwaitingPin] = useState(false)
+  // Moving one line to another table. Same two-step shape as a discount: choose
+  // the destination, then a supervisor PIN approves it — a line changing bills
+  // moves money between tables, so it takes the same approval a cancellation does.
+  const [moveTarget,        setMoveTarget]        = useState<{ orderId: string; item: OrderItem } | null>(null)
+  const [moveTableId,       setMoveTableId]       = useState<string>('')
+  const [moveAwaitingPin,   setMoveAwaitingPin]   = useState(false)
   // Joining orders: a selection mode over the pending list. Off by default so
   // the list behaves exactly as before until a waiter asks to combine bills.
   const [joinMode,          setJoinMode]          = useState(false)
@@ -1117,6 +1126,78 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       vat_amount: 0,
       total_amount: subtotal,
     })
+  }
+
+  // Move an approved line onto a fresh bill at another table.
+  //
+  // The new bill keeps the ORIGINAL order's waiter, not whoever is signed in:
+  // the sale still belongs to the person who took it, exactly as it does when a
+  // supervisor settles someone else's table.
+  async function applyApprovedMove(approvedBy: string) {
+    if (!moveTarget) return
+    const source = pendingOrders.find(o => o.id === moveTarget.orderId)
+    const table  = tables.find(t => t.id === moveTableId)
+    if (!source || !table) { setSubmitError('Pick a table to move this item to.'); return }
+    try {
+      const now      = new Date().toISOString()
+      const newId    = crypto.randomUUID()
+      const orderNum = `WA-${newId.replace(/-/g, '').slice(-8).toUpperCase()}`
+      const net      = lineNetAmount(moveTarget.item)
+
+      await moveOrderItemToNewOrder({
+        sourceOrderId: source.id,
+        sourceItemId:  moveTarget.item.id,
+        newOrder: {
+          ...source,
+          id: newId,
+          order_number: orderNum,
+          table_id: table.id,
+          table_name: table.name,
+          status: 'PENDING',
+          payment_method: null,
+          subtotal_amount: net,
+          vat_amount: 0,
+          total_amount: net,
+          // A moved line is not a new cover count — the guests were already
+          // counted on the bill it came from.
+          guest_count: null,
+          served_at: null,
+          paid_at: null,
+          canceled_at: null,
+          cancel_reason: null,
+          settled_by_name: null,
+          no_charge_reason: null,
+          comped_amount: null,
+          tickets_pushed_at: null,
+          synced: 0,
+          created_at: now,
+          updated_at: now,
+        },
+        newItem: { ...moveTarget.item, id: crypto.randomUUID(), order_id: newId, created_at: now, updated_at: now },
+      })
+
+      // The source bill has to be re-totalled: its retired line must stop being
+      // charged for. recomputeOrderTotals counts ACTIVE lines only.
+      await recomputeOrderTotals(source.id)
+      await logInfo('order', 'Item moved to another table', {
+        fromOrder: source.order_number,
+        toOrder: orderNum,
+        table: table.name,
+        item: moveTarget.item.dish_name,
+        qty: moveTarget.item.qty,
+        approvedBy,
+      })
+      await loadPOS()
+      setMoveTarget(null)
+      setMoveAwaitingPin(false)
+      setMoveTableId('')
+      setConfirmSuccess(`${moveTarget.item.dish_name} moved to ${table.name} as ${orderNum} · approved by ${approvedBy}`)
+      setTimeout(() => setConfirmSuccess(null), 4000)
+      pushSync().catch(() => {})
+    } catch (err) {
+      setMoveAwaitingPin(false)
+      setSubmitError(`Could not move the item: ${(err as Error).message}`)
+    }
   }
 
   // ── Joining orders ─────────────────────────────────────────────────────────
@@ -2034,6 +2115,14 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                           </span>
                           {mine && !joinMode && (
                             <button
+                              onClick={() => { setMoveTarget({ orderId: ord.id, item }); setMoveTableId('') }}
+                              title={`Move ${item.dish_name} to another table`}
+                              className="flex-shrink-0 rounded-lg border border-gray-200 px-2 py-0.5 text-[11px] font-bold text-gray-400 transition-colors hover:border-blue-300 hover:text-blue-600">
+                              Move
+                            </button>
+                          )}
+                          {mine && !joinMode && (
+                            <button
                               onClick={() => { setDiscountTarget({ orderId: ord.id, item }); setDiscountPct(item.discount_percent ? String(item.discount_percent) : '') }}
                               title={item.discount_percent ? `${item.discount_percent}% off — tap to change` : 'Add a discount'}
                               className={`flex-shrink-0 rounded-lg border px-2 py-0.5 text-[11px] font-bold transition-colors ${
@@ -2181,6 +2270,70 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
               </div>
             </div>
           </div>
+        )}
+
+        {/* Step 1 — where is this line actually for? Every table is offered, not
+            just the free ones: a line often belongs to a table that already has
+            a bill open. */}
+        {moveTarget && !moveAwaitingPin && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-gray-900">Move item to another table</h3>
+                <button onClick={() => { setMoveTarget(null); setMoveTableId('') }}>
+                  <X className="h-5 w-5 text-gray-400 hover:text-gray-600" />
+                </button>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-3">
+                <p className="text-sm font-semibold text-gray-900">{moveTarget.item.dish_name}</p>
+                <p className="text-xs text-gray-500">
+                  {moveTarget.item.qty} × {fmtRWF(moveTarget.item.dish_price)} = {fmtRWF(lineNetAmount(moveTarget.item))} RWF
+                </p>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-gray-600">Move to</label>
+                <select
+                  value={moveTableId}
+                  onChange={e => setMoveTableId(e.target.value)}
+                  className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-300">
+                  <option value="">Choose a table…</option>
+                  {tables.map(t => {
+                    const busy = pendingOrders.some(o => o.table_id === t.id)
+                    return (
+                      <option key={t.id} value={t.id}>
+                        {t.name}{busy ? ' — has an open bill' : ''}
+                      </option>
+                    )
+                  })}
+                </select>
+                <p className="mt-1.5 text-xs text-gray-500">
+                  It leaves this bill and opens its own pending bill at that table. Nothing is charged twice.
+                </p>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button onClick={() => { setMoveTarget(null); setMoveTableId('') }}
+                  className="flex-1 rounded-xl border border-gray-300 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                  Cancel
+                </button>
+                <button onClick={() => setMoveAwaitingPin(true)} disabled={!moveTableId}
+                  className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-40">
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2 — the same PIN that approves a cancellation. */}
+        {moveTarget && moveAwaitingPin && (
+          <SupervisorPinDialog
+            title="Approve move"
+            prompt={`Move ${moveTarget.item.dish_name} to ${tables.find(t => t.id === moveTableId)?.name ?? 'another table'}. Enter the supervisor PIN to approve.`}
+            confirmLabel="Approve"
+            busyLabel="Moving…"
+            onClose={() => setMoveAwaitingPin(false)}
+            onApproved={applyApprovedMove}
+          />
         )}
 
         {discountTarget && discountAwaitingPin && (

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { NO_CHARGE_METHOD } from '@/lib/restaurantOrders'
+import { NO_CHARGE_METHOD_VALUES } from '@/lib/restaurantOrders'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
 
@@ -50,7 +50,10 @@ export async function GET(req: Request) {
       where: {
         restaurantId,
         status: 'PAID',
-        paymentMethod: NO_CHARGE_METHOD,
+        // Every spelling the tender has ever been stored under. The name changed
+        // to 'compl.' after 'No Charge' had already shipped to tills, and a comp
+        // missing from this report is a free meal nothing in the building names.
+        paymentMethod: { in: NO_CHARGE_METHOD_VALUES },
         deletedAt: null,
         ...(fromDate || toDate
           ? {

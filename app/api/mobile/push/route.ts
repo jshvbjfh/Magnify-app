@@ -368,7 +368,12 @@ export async function POST(req: Request) {
       // Only when this push actually carries the order's lines. A payload with
       // none (a status-only update, say) keeps the device's figures rather than
       // zeroing a real bill.
-      const pushedItems = orderItems.filter((i) => i.order_id === order.id)
+      // ACTIVE lines only. A cancelled line is still pushed — that is how the
+      // cancellation reaches the server at all, and the upsert loop below needs
+      // it — but it must never be charged for. Counting every pushed line was
+      // what made moving or voiding a single item silently keep its money on
+      // the bill.
+      const pushedItems = items.filter((i) => String(i.status ?? 'ACTIVE').toUpperCase() === 'ACTIVE')
       const derived = pushedItems.length
         ? calculateRestaurantOrderTotals(pushedItems.map((i) => ({
             dishPrice: normalizeNumber(i.dish_price),

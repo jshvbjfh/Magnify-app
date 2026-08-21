@@ -98,6 +98,21 @@ describe('POST /api/mobile/cancel-order', () => {
     )
   })
 
+  it('records WHO approved the cancellation, not just the reason', async () => {
+    // cancelReason says why a bill was voided; without the approver's name the
+    // cancellation report can never answer the question anyone actually asks of
+    // a night's voids — on whose authority. The name comes from the PIN that
+    // was validated, never from the client.
+    await POST(request(VALID_BODY))
+
+    expect(txMock.restaurantOrder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'order-1' },
+        data: expect.objectContaining({ status: 'CANCELED', canceledByName: 'Marie' }),
+      }),
+    )
+  })
+
   it('enqueues the sync change on the order\'s branch, not the terminal\'s', async () => {
     await POST(request(VALID_BODY))
 

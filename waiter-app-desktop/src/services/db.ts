@@ -478,6 +478,74 @@ export async function mergeOrdersLocal(targetId: string, sourceIds: string[]): P
   await db.executeSet(statements)
 }
 
+// Move ONE line off a bill and onto a new bill at another table.
+//
+// A guest orders at the counter, the whole round goes on one takeaway bill, and
+// then the drinks are actually for table 6. Before this the only way out was to
+// void the entire order and ring the whole thing again.
+//
+// Done as retire-and-recreate, not as an UPDATE of the line's order_id:
+//
+//  - the pulled copy of an order is INSERT OR IGNORE on every device, so a line
+//    that merely changed hands would never move on any till but this one;
+//  - the source line has to stay on its bill as CANCELED so the change is
+//    visible rather than a line silently vanishing overnight;
+//  - a CANCELED line is excluded from every total (locally by
+//    recomputeOrderTotals, on the server by the push handler), so the money
+//    lands on exactly one bill.
+//
+// One executeSet, so it is one transaction: a half-finished move would either
+// charge the guest twice or not at all.
+export async function moveOrderItemToNewOrder(params: {
+  sourceOrderId: string
+  sourceItemId: string
+  newOrder: Order
+  newItem: OrderItem
+}): Promise<void> {
+  const db = getDB()
+  const now = new Date().toISOString()
+  await db.executeSet([
+    {
+      statement: `INSERT INTO orders
+        (id, restaurant_id, branch_id, table_id, table_name, order_number, status,
+         payment_method, subtotal_amount, vat_amount, total_amount, created_by_name,
+         guest_count, served_at, paid_at, canceled_at, cancel_reason, shift_id, business_date, source, synced, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+      values: [
+        params.newOrder.id, params.newOrder.restaurant_id, params.newOrder.branch_id,
+        params.newOrder.table_id, params.newOrder.table_name, params.newOrder.order_number,
+        params.newOrder.status, params.newOrder.payment_method,
+        params.newOrder.subtotal_amount, params.newOrder.vat_amount, params.newOrder.total_amount,
+        params.newOrder.created_by_name, params.newOrder.guest_count ?? null,
+        params.newOrder.served_at, params.newOrder.paid_at, params.newOrder.canceled_at,
+        params.newOrder.cancel_reason, params.newOrder.shift_id ?? null,
+        params.newOrder.business_date ?? null, params.newOrder.source ?? null,
+        params.newOrder.created_at, params.newOrder.updated_at,
+      ],
+    },
+    {
+      // The discount rides along: what the guest was promised must not change
+      // because the line changed table.
+      statement:
+        'INSERT INTO order_items (id, order_id, dish_id, dish_name, dish_price, qty, status, notes, branch_id, discount_percent, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      values: [
+        params.newItem.id, params.newOrder.id, params.newItem.dish_id, params.newItem.dish_name,
+        params.newItem.dish_price, params.newItem.qty, 'ACTIVE', params.newItem.notes ?? null,
+        params.newItem.branch_id ?? null, params.newItem.discount_percent ?? null,
+        params.newItem.created_at, now,
+      ],
+    },
+    {
+      statement: 'UPDATE order_items SET status = ?, updated_at = ? WHERE id = ?',
+      values: ['CANCELED', now, params.sourceItemId],
+    },
+    {
+      statement: 'UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?',
+      values: [now, params.sourceOrderId],
+    },
+  ])
+}
+
 export async function getOrderById(orderId: string): Promise<Order | null> {
   const db = getDB()
   const rows = await db.query('SELECT * FROM orders WHERE id = ?', [orderId])

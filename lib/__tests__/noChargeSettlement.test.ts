@@ -43,7 +43,7 @@ vi.mock('../restaurantTableSync', () => ({
 import { finalizeRestaurantOrderPayment } from '../restaurantOrderPayment'
 import { recordJournalEntry } from '../accounting'
 import { recordDishSalesForPaidOrder } from '../dishSaleRecording'
-import { calculateRestaurantOrderTotals, isNoChargeMethod, NO_CHARGE_METHOD } from '../restaurantOrders'
+import { calculateRestaurantOrderTotals, isNoChargeMethod, NO_CHARGE_METHOD, NO_CHARGE_METHOD_VALUES } from '../restaurantOrders'
 
 const recordJournalEntryMock = vi.mocked(recordJournalEntry)
 const recordDishSalesMock = vi.mocked(recordDishSalesForPaidOrder)
@@ -109,8 +109,29 @@ beforeEach(() => {
 describe('isNoChargeMethod', () => {
   it('recognises the tender however the device cased or padded it', () => {
     expect(isNoChargeMethod(NO_CHARGE_METHOD)).toBe(true)
-    expect(isNoChargeMethod('  no charge ')).toBe(true)
-    expect(isNoChargeMethod('NO CHARGE')).toBe(true)
+    expect(isNoChargeMethod('  compl. ')).toBe(true)
+    expect(isNoChargeMethod('COMPL.')).toBe(true)
+  })
+
+  it('still recognises the older "No Charge" spelling from tills in the field', () => {
+    // The tender was renamed to 'compl.' AFTER 'No Charge' had already shipped
+    // to tills. Those tills keep sending the old string until each one updates,
+    // and a comp that stops being recognised is booked as revenue nobody
+    // collected. This test is the guard on that — do not relax it.
+    expect(isNoChargeMethod('No Charge')).toBe(true)
+    expect(isNoChargeMethod('no charge')).toBe(true)
+    expect(isNoChargeMethod('complimentary')).toBe(true)
+  })
+
+  it('lists every stored spelling for SQL filters', () => {
+    // The reports match in SQL and cannot call isNoChargeMethod, so the two
+    // must not drift apart — a spelling missing here is a comp missing from
+    // the report.
+    for (const value of NO_CHARGE_METHOD_VALUES) {
+      expect(isNoChargeMethod(value)).toBe(true)
+    }
+    expect(NO_CHARGE_METHOD_VALUES).toContain('No Charge')
+    expect(NO_CHARGE_METHOD_VALUES).toContain(NO_CHARGE_METHOD)
   })
 
   it('does not mistake any real tender for a comp', () => {

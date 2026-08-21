@@ -22,13 +22,29 @@ export const ACTIVE_RESTAURANT_ORDER_STATUSES = ['PENDING', 'OPEN'] as const
  * is compared in the push handler, the payment finalizer and the reports, and a
  * typo in any one of them would silently book a comp as income.
  */
-export const NO_CHARGE_METHOD = 'No Charge'
+export const NO_CHARGE_METHOD = 'compl.'
+
+/**
+ * Every spelling this tender has ever been stored under.
+ *
+ * 'No Charge' shipped first and is hardcoded into the tills already in the
+ * field, which keep sending it until every one of them updates. Dropping it
+ * here would not "clean up a legacy name" — it would make those comps stop
+ * being recognised as comps, and a comp that is not recognised is booked as
+ * revenue that was never collected. Never remove a value from this list.
+ */
+const NO_CHARGE_ALIASES = [NO_CHARGE_METHOD, 'No Charge', 'compl', 'complimentary']
+  .map((value) => value.toLowerCase())
 
 /** Whether a settlement collected nothing. Trims and ignores case, because the
  *  value arrives from a device and only ever has to mean one thing. */
 export function isNoChargeMethod(paymentMethod: string | null | undefined): boolean {
-  return String(paymentMethod ?? '').trim().toLowerCase() === NO_CHARGE_METHOD.toLowerCase()
+  return NO_CHARGE_ALIASES.includes(String(paymentMethod ?? '').trim().toLowerCase())
 }
+
+/** Every stored spelling, for `where: { paymentMethod: { in: ... } }` filters
+ *  that cannot call isNoChargeMethod because the matching happens in SQL. */
+export const NO_CHARGE_METHOD_VALUES = ['compl.', 'compl', 'complimentary', 'No Charge']
 
 /**
  * What one line is actually worth after its discount — the ONLY definition of
