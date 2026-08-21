@@ -955,13 +955,27 @@ ${barcodeEl}
       // line up on the rail — the padding is display only and a busy day is
       // free to run past 9999.
       const kind = station === 'BAR' ? 'BOT' : 'KOT'
-      const seq = await recordKitchenTicket({
-        orderId: order.id,
-        branchId: bId === '__none__' ? null : bId,
-        kind,
-        businessDate,
-      })
-      const ticketNo = `${kind} #${String(seq).padStart(4, '0')}`
+      // The number is record-keeping; the slip reaching the pass is not. If
+      // allocation fails — the table missing because a migration has not run,
+      // the disk full — the ticket must STILL print, or the kitchen never
+      // learns about food a guest has already ordered. Print unnumbered and
+      // log it rather than letting the whole run die.
+      let seq: number | null = null
+      try {
+        seq = await recordKitchenTicket({
+          orderId: order.id,
+          branchId: bId === '__none__' ? null : bId,
+          kind,
+          businessDate,
+        })
+      } catch (err) {
+        void logError('print', 'Ticket number allocation failed — printing unnumbered', {
+          orderId: order.id,
+          branchId: bId,
+          error: (err as Error).message,
+        })
+      }
+      const ticketNo = seq === null ? `${kind} (unnumbered)` : `${kind} #${String(seq).padStart(4, '0')}`
 
       // ESC/POS path — the same raw delivery the bill uses. A thermal printer
       // on the "Generic / Text Only" driver cannot render the GDI/HTML page
@@ -1236,7 +1250,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       })
 
       // Tickets for the NEW items only — the kitchen already has the rest.
-      printKitchenTickets(editingOrder, cart, restaurantName ?? '')
+      await printKitchenTickets(editingOrder, cart, restaurantName ?? '')
 
       await loadPOS()
       setLocalCart(prev => ({ ...prev, [selectedTableKey]: [] }))
@@ -1385,7 +1399,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         totalAmount,
       })
 
-      printKitchenTickets(order, cart, restaurantName ?? '')
+      await printKitchenTickets(order, cart, restaurantName ?? '')
 
       // ── Reload BEFORE clearing cart so the panel never flashes empty ──────
       await loadPOS()
@@ -1439,7 +1453,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
     const allDishes = await getDishes()
     const stationOfDish = new Map(allDishes.map(d => [d.id, d.branch_id]))
 
-    printKitchenTickets(
+    await printKitchenTickets(
       order,
       items.map(i => ({
         dishId: i.dish_id, dishName: i.dish_name, dishPrice: i.dish_price,
@@ -1469,7 +1483,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       const allDishes = await getDishes()
       const stationOfDish = new Map(allDishes.map(d => [d.id, d.branch_id]))
       if (order) {
-        printKitchenTickets(
+        await printKitchenTickets(
           { ...order, created_by_name: createdByName },
           // branchId: the station the line was rung up on. A guest QR order can
           // hold dishes from several stations, and this terminal only has its
