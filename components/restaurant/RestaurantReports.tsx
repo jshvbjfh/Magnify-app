@@ -194,7 +194,7 @@ const TABS: { id: ReportTab; label: string; short: string; icon: React.ElementTy
   { id:'theoretical_inventory', label:'Theoretical Inventory', short:'Theory Inv', icon:Package, desc:'Opening stock, expected usage, waste, theoretical closing and variance versus actual stock' },
   { id:'upselling',         label:'Upsell & Attachments',   short:'Upsell',    icon:ArrowUpRight, desc:'Which product pairings make the most gross profit, where you are leaving money on the table, and which waiters reproduce it — across your whole restaurant account' },
   { id:'canceled_orders',   label:'Cancelled Orders',       short:'Cancelled', icon:Ban,          desc:'Every voided bill: what was on it, what it would have been worth, who took it, who approved the void and why — across your whole restaurant account' },
-  { id:'no_charge',         label:'No Charge (Comps)',      short:'No Charge', icon:Gift,         desc:'Every comped bill: what was given away, to whose table, on whose authority and why — across your whole restaurant account' },
+  { id:'no_charge',         label:'No Charge (Complementary)', short:'No Charge', icon:Gift,      desc:'Every bill settled as Complementary: what was given away, to whose table, on whose authority and why — across your whole restaurant account' },
 ]
 
 // Tabs that report the whole restaurant account rather than the station the
@@ -1148,7 +1148,7 @@ function NoChargeTable({ data }: { data: NoChargeData | null }) {
     return (
       <div className="py-12 text-center">
         <Gift className="h-8 w-8 text-gray-300 mx-auto mb-3" />
-        <p className="text-sm font-semibold text-gray-600">No comped bills in this period</p>
+        <p className="text-sm font-semibold text-gray-600">No complementary bills in this period</p>
         <p className="text-xs text-gray-400 mt-1">Every table that was settled was charged for.</p>
       </div>
     )

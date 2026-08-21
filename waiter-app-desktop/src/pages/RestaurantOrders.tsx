@@ -39,7 +39,7 @@ type CartItem = { dishId: string; dishName: string; dishPrice: number; qty: numb
 // Kept in step with NO_CHARGE_METHOD in lib/restaurantOrders.ts. The server
 // still recognises the older 'No Charge' spelling that shipped before this, so
 // a till that has not updated yet keeps having its comps treated as comps.
-const NO_CHARGE = 'compl.'
+const NO_CHARGE = 'Complementary'
 const PAY_METHODS = ['Cash', 'MoMo', 'Card', 'Bank Transfer', 'Credit', NO_CHARGE] as const
 
 const COLOR_POOL = [

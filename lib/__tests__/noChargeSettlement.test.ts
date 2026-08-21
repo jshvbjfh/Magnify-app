@@ -109,8 +109,8 @@ beforeEach(() => {
 describe('isNoChargeMethod', () => {
   it('recognises the tender however the device cased or padded it', () => {
     expect(isNoChargeMethod(NO_CHARGE_METHOD)).toBe(true)
-    expect(isNoChargeMethod('  compl. ')).toBe(true)
-    expect(isNoChargeMethod('COMPL.')).toBe(true)
+    expect(isNoChargeMethod('  complementary ')).toBe(true)
+    expect(isNoChargeMethod('COMPLEMENTARY')).toBe(true)
   })
 
   it('still recognises the older "No Charge" spelling from tills in the field', () => {
@@ -120,7 +120,12 @@ describe('isNoChargeMethod', () => {
     // collected. This test is the guard on that — do not relax it.
     expect(isNoChargeMethod('No Charge')).toBe(true)
     expect(isNoChargeMethod('no charge')).toBe(true)
+    // 'compl.' was the name for part of one afternoon; a till that settled a
+    // bill in that window must still have it counted as a comp.
+    expect(isNoChargeMethod('compl.')).toBe(true)
+    // Both spellings of the word mean the same free meal.
     expect(isNoChargeMethod('complimentary')).toBe(true)
+    expect(isNoChargeMethod('complementary')).toBe(true)
   })
 
   it('lists every stored spelling for SQL filters', () => {
@@ -131,6 +136,9 @@ describe('isNoChargeMethod', () => {
       expect(isNoChargeMethod(value)).toBe(true)
     }
     expect(NO_CHARGE_METHOD_VALUES).toContain('No Charge')
+    expect(NO_CHARGE_METHOD_VALUES).toContain('compl.')
+    // The value the till actually writes today has to be in the SQL list, or
+    // every comp settled from now on is missing from the report.
     expect(NO_CHARGE_METHOD_VALUES).toContain(NO_CHARGE_METHOD)
   })
 
