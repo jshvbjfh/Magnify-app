@@ -40,7 +40,9 @@ type UpsellHourRow = {
 
 type UpsellPairing = {
   key: string
+  baseDishId: string
   baseName: string
+  attachDishId: string
   attachName: string
   baseBills: number
   together: number
@@ -1290,15 +1292,32 @@ function NoChargeTable({ data }: { data: NoChargeData | null }) {
 // to reply "a red wine", which the pairings table above can never do because a
 // main is not an "attach". The category and item pickers narrow the QUESTION,
 // never the answer.
-function PairingExplorer({ range, hourWindow }: {
+function PairingExplorer({ range, hourWindow, defaultDishId }: {
   range: { start: string; end: string }
   hourWindow: HourWindow
+  /**
+   * The base dish of the strongest pairing, used to open the explorer already
+   * answering something.
+   *
+   * An empty picker asks the manager to guess what the tool is for before it
+   * has shown them anything. Landing on the best pairing the period actually
+   * produced teaches the table by example, and they can change it from there.
+   */
+  defaultDishId?: string
 }) {
   const [menu, setMenu] = useState<{ id: string; name: string; category: string | null }[]>([])
   const [category, setCategory] = useState<string>('')
   const [dishId, setDishId] = useState<string>('')
   const [data, setData] = useState<PairingExplorerData | null>(null)
   const [loading, setLoading] = useState(false)
+  // Once the manager touches a picker the default stops applying, so a
+  // deliberate "Clear" is not undone the moment the report refreshes.
+  const [touched, setTouched] = useState(false)
+
+  useEffect(() => {
+    if (touched || !defaultDishId) return
+    setDishId(defaultDishId)
+  }, [defaultDishId, touched])
 
   // Restaurant-wide, matching the report above. A branch-scoped menu would
   // offer dishes the report never counted and hide ones it did.
@@ -1345,7 +1364,7 @@ function PairingExplorer({ range, hourWindow }: {
           <select
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
             value={category}
-            onChange={(e) => { setCategory(e.target.value); setDishId('') }}
+            onChange={(e) => { setTouched(true); setCategory(e.target.value); setDishId('') }}
           >
             <option value="">All categories</option>
             {categories.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -1356,7 +1375,7 @@ function PairingExplorer({ range, hourWindow }: {
           <select
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
             value={dishId}
-            onChange={(e) => setDishId(e.target.value)}
+            onChange={(e) => { setTouched(true); setDishId(e.target.value) }}
             disabled={menu.length === 0}
           >
             <option value="">{category ? `Whole category (${category})` : 'Choose an item…'}</option>
@@ -1366,7 +1385,7 @@ function PairingExplorer({ range, hourWindow }: {
         {(dishId || category) && (
           <button
             type="button"
-            onClick={() => { setCategory(''); setDishId('') }}
+            onClick={() => { setTouched(true); setCategory(''); setDishId('') }}
             className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-50"
           >
             Clear
@@ -1390,6 +1409,13 @@ function PairingExplorer({ range, hourWindow }: {
             <div className="min-w-0">
               {data.subject?.category && <p className="text-[11px] text-gray-400 truncate">{data.subject.category}</p>}
               <p className="text-base font-bold text-gray-900 truncate">{subjectLabel}</p>
+              {/* Nobody chose this dish, so say why it is the one on screen —
+                  otherwise the table looks like it picked at random. */}
+              {!touched && (
+                <p className="text-[11px] font-semibold text-orange-600 mt-0.5">
+                  Starting with your most profitable pairing — use the pickers above to ask about anything else
+                </p>
+              )}
             </div>
             <div className="flex gap-2 flex-shrink-0">
               <span className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-600">
@@ -1635,7 +1661,9 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange, range }: {
         </div>
       )}
 
-      <PairingExplorer range={range} hourWindow={hourWindow} />
+      {/* Opens on the base dish of the most profitable pairing in the period, so
+          the table arrives already showing a manager what it is for. */}
+      <PairingExplorer range={range} hourWindow={hourWindow} defaultDishId={pairings[0]?.baseDishId} />
 
       <div className="mb-5">
         <h4 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Who sells it</h4>
