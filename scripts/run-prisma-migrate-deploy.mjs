@@ -53,6 +53,42 @@ function getLocalSqliteUrl() {
 const provider = resolveProvider()
 const env = { ...process.env }
 
+// A PREVIEW build must never migrate the database.
+//
+// Vercel runs this on every build, and Preview and Production share one Neon
+// endpoint — so before this guard, pushing ANY branch applied that branch's
+// migrations to PRODUCTION, hours or days before anyone decided to deploy it.
+// It happened three times in one day on 2026-08-21. All three were additive and
+// harmless; that was luck, not design. A migration that drops or rewrites a
+// column would have hit live data the moment the branch was pushed, which is
+// how the wipe of 2026-07-27 happened.
+//
+// Migrations now land only when a production build runs — i.e. when someone
+// actually promotes or deploys. Pushing a branch can no longer reach the
+// production schema at all.
+//
+// The cost, stated plainly: a preview whose code needs a new column will fail
+// against the un-migrated shared database until it is promoted. That is the
+// right trade — a broken preview is visible to one reviewer, a broken
+// production is visible to every guest in the building. The real fix is to give
+// Preview its own database (a Neon branch, with DATABASE_URL scoped to the
+// Preview environment in Vercel); once that exists, this guard can be relaxed
+// to "migrate whatever database this environment actually points at".
+//
+// PRISMA_ALLOW_PREVIEW_MIGRATE=1 forces it through, for the rare case of
+// deliberately migrating from a preview build.
+const vercelEnv = String(process.env.VERCEL_ENV ?? '').trim().toLowerCase()
+const allowPreviewMigrate = String(process.env.PRISMA_ALLOW_PREVIEW_MIGRATE ?? '').trim() === '1'
+if (vercelEnv && vercelEnv !== 'production' && !allowPreviewMigrate) {
+	console.log([
+		`Skipping prisma migrate deploy: VERCEL_ENV=${vercelEnv}.`,
+		'Preview and Production share one database, so a branch build must not',
+		'change the production schema. Migrations run on the production build.',
+		'Set PRISMA_ALLOW_PREVIEW_MIGRATE=1 to override.',
+	].join('\n'))
+	process.exit(0)
+}
+
 // Neon sits behind a connection pooler, and a pooled connection can be returned
 // to the pool without releasing Prisma's session-level advisory lock. The lock
 // then outlives the process that took it, and every later `migrate deploy` fails
