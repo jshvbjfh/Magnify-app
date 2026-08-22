@@ -952,7 +952,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                             : 'bg-emerald-100 text-emerald-700'
                       const recordedAt = t.createdAt ?? t.date
                       return (
-                        <tr key={t.id} className="group hover:bg-gray-50 transition-colors">
+                        <tr key={t.id} className="hover:bg-gray-50 transition-colors">
                           {/* Type badge */}
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
@@ -994,7 +994,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                               onClick={() => { setDeleteError(null); setPendingDelete(t) }}
                               title="Delete this transaction"
                               aria-label="Delete this transaction"
-                              className="p-1.5 rounded-lg text-gray-300 hover:text-red-600 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
