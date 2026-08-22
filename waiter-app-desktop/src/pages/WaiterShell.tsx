@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { UtensilsCrossed, ClipboardList, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Printer, ChefHat, Power, Undo2 } from 'lucide-react'
+import { UtensilsCrossed, ClipboardList, Layout, LogOut, Wifi, WifiOff, RefreshCw, ScrollText, Printer, ChefHat, Power } from 'lucide-react'
 import { useOnline } from '../hooks/useOnline'
 import { isOfflineLikeErrorMessage } from '../services/http'
 import { getConfig, setConfig, getOrders } from '../services/db'
@@ -15,7 +15,6 @@ import StartupLogPage from './StartupLogPage'
 import WaiterGatePage from './WaiterGatePage'
 import ShiftGatePage from './ShiftGatePage'
 import SupervisorPinDialog from './SupervisorPinDialog'
-import UndoMoveDialog from './UndoMoveDialog'
 
 type TabId = 'menu' | 'pending' | 'tables' | 'mep' | 'printers' | 'logs'
 
@@ -63,10 +62,6 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
   // Supervisor PIN prompt guarding Sign Out — signing out unregisters the
   // device, so it takes the same approval as cancelling an order.
   const [confirmSignOut, setConfirmSignOut] = useState(false)
-  // Taking back a line moved to the wrong table. Lives on the station bar
-  // rather than on a bill, because the whole point is that the person looking
-  // for it does not know which bill the line ended up on.
-  const [showUndoMove, setShowUndoMove] = useState(false)
   const [restaurantName, setRestaurantName] = useState<string>('')
   // Edit-pending flow: set from the Pending tab, consumed by the POS tab.
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null)
@@ -413,28 +408,7 @@ export default function WaiterShell({ user, onLogout }: WaiterShellProps) {
               </button>
             )
           })}
-          {/* Sits with the stations, not on a bill: a supervisor who moved the
-              wrong line is looking for it precisely because they no longer know
-              which bill it is on. */}
-          <button
-            type="button"
-            onClick={() => setShowUndoMove(true)}
-            title="Take back an item that was moved to the wrong table"
-            className="ml-1 flex flex-shrink-0 items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-4 py-1.5 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100"
-          >
-            <Undo2 className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Undo move</span>
-          </button>
         </div>
-      )}
-
-      {showUndoMove && (
-        <UndoMoveDialog
-          onClose={() => setShowUndoMove(false)}
-          // Same bump the sync path uses, so the pending list and the POS both
-          // redraw with the line back where it started.
-          onUndone={() => setSyncVersion(v => v + 1)}
-        />
       )}
 
       {/* ── Content ── */}

@@ -2,16 +2,17 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   ShoppingBag, CheckCircle2, CreditCard, RefreshCw,
   ArrowLeft, Trash2, X, ShieldAlert, WifiOff, AlertCircle, Cloud, Printer, StickyNote,
-  Search, ChevronDown, Lock,
+  Search, ChevronDown, Lock, Undo2,
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
   getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, markTicketsPushed,
   setItemDiscount, mergeOrdersLocal, lineNetAmount,
-  recordKitchenTicket, moveOrderItemToNewOrder, moveOrderItemToExistingOrder, recordItemMove,
+  recordKitchenTicket, moveOrderItemToNewOrder, moveOrderItemToExistingOrder, recordItemMove, getMovedItemIds, findOpenOrderForTable,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import SupervisorPinDialog from './SupervisorPinDialog'
+import UndoMoveDialog from './UndoMoveDialog'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline, validateOrderCode, type BranchInfo } from '../services/sync'
 import { getActiveShift, currentBusinessDateISO } from '../services/shifts'
@@ -472,6 +473,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
   const [moveTarget,        setMoveTarget]        = useState<{ orderId: string; item: OrderItem } | null>(null)
   const [moveTableId,       setMoveTableId]       = useState<string>('')
   const [moveAwaitingPin,   setMoveAwaitingPin]   = useState(false)
+  // Lines sitting on a bill because someone moved them there. Screen only —
+  // the printed bill and the kitchen ticket never mention it.
+  const [movedItemIds,      setMovedItemIds]      = useState<Set<string>>(new Set())
+  const [showUndoMove,      setShowUndoMove]      = useState(false)
   // Joining orders: a selection mode over the pending list. Off by default so
   // the list behaves exactly as before until a waiter asks to combine bills.
   const [joinMode,          setJoinMode]          = useState(false)
@@ -542,6 +547,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
       setDishes(d)
       setTables(t)
       setPendingOrders(orders)
+      // Never let a failure here block the POS from loading — the tint is a
+      // convenience, the orders are the job.
+      getMovedItemIds().then(setMovedItemIds).catch(() => {})
       setRestaurantId(rId)
       setBranchId(bId)
       setRestaurantName(rName)
@@ -1150,7 +1158,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       // Only a PENDING bill is joined: an UNCONFIRMED guest QR order has not
       // been accepted by anyone yet, and absorbing a line into it would put the
       // line behind a confirmation step it never needed.
-      const existing = pendingOrders.find(o => o.table_id === table.id && o.status === 'PENDING')
+      const existing = await findOpenOrderForTable(table.id)
 
       if (existing) {
         await moveOrderItemToExistingOrder({
@@ -2058,10 +2066,28 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
   if (mode === 'pending') {
     return (
       <div className="space-y-4">
+        {showUndoMove && (
+          <UndoMoveDialog
+            onClose={() => setShowUndoMove(false)}
+            onUndone={() => { void loadPOS() }}
+          />
+        )}
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h2 className="text-lg font-bold text-gray-800">Pending Orders</h2>
-            <p className="text-sm text-gray-500">{pendingOrders.length} active</p>
+          <div className="flex items-center gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-gray-800">Pending Orders</h2>
+              <p className="text-sm text-gray-500">{pendingOrders.length} active</p>
+            </div>
+            {/* Beside the heading, not on a bill: someone hunting a line they
+                moved by mistake does not know which bill it landed on. */}
+            <button
+              type="button"
+              onClick={() => setShowUndoMove(true)}
+              title="Take back an item that was moved to the wrong table"
+              className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100">
+              <Undo2 className="h-3.5 w-3.5" />
+              Undo move
+            </button>
           </div>
           <div className="flex items-center gap-2">
             <input
@@ -2157,8 +2183,20 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                     {oi.map(item => (
                       <div key={item.id}>
                         <div className="flex items-start justify-between gap-2">
-                          <span className="text-sm text-gray-800 font-medium flex-1 min-w-0 leading-snug">
+                          {/* Blue means this line was moved here from another
+                              bill. Screen only: printBill and the kitchen
+                              tickets build their own text and say nothing about
+                              it, because neither the guest nor the cook has any
+                              reason to care where it was first rung up. */}
+                          <span className={`text-sm font-medium flex-1 min-w-0 leading-snug ${
+                            movedItemIds.has(item.id) ? 'text-blue-600' : 'text-gray-800'
+                          }`}>
                             {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
+                            {movedItemIds.has(item.id) && (
+                              <span className="ml-1.5 rounded border border-blue-200 bg-blue-50 px-1 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-600 align-middle">
+                                moved
+                              </span>
+                            )}
                           </span>
                           {/* A discounted line shows both numbers: the guest can
                               see what came off, and so can whoever checks the

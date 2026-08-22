@@ -617,6 +617,40 @@ export async function recordItemMove(move: Omit<ItemMove, 'undone'>): Promise<vo
 // Moves that can still be taken back: not already undone, and both bills still
 // open. A move onto a bill that has since been PAID is deliberately absent —
 // putting the line back would change a bill the guest has already settled.
+// The open bill on a table, read at the moment it is needed.
+//
+// Deliberately queried rather than taken from whatever the screen last loaded:
+// the pending list in the page is a snapshot, and a bill opened on another till
+// seconds ago is not in it. Moving a line against that snapshot is how a table
+// ends up with two cards instead of one.
+//
+// PENDING only. An UNCONFIRMED guest QR order has not been accepted by anyone
+// yet, so a line must not be absorbed into it — that order still has to be
+// confirmed as a whole, and the moved line never needed confirming.
+export async function findOpenOrderForTable(tableId: string): Promise<Order | null> {
+  const db = getDB()
+  const rows = await db.query(
+    `SELECT * FROM orders
+      WHERE table_id = ? AND status = 'PENDING'
+      ORDER BY created_at ASC
+      LIMIT 1`,
+    [tableId],
+  )
+  return ((rows ?? [])[0] as unknown as Order) ?? null
+}
+
+// The lines currently sitting on a bill because someone moved them there.
+//
+// Used to tint them in the pending list, so a waiter looking at a table can see
+// at a glance which line did not start there. Screen only — the printed bill and
+// the kitchen ticket say nothing about it, because the guest and the cook have
+// no reason to care where a line was rung up first.
+export async function getMovedItemIds(): Promise<Set<string>> {
+  const db = getDB()
+  const rows = await db.query('SELECT target_item_id FROM item_moves WHERE undone = 0', [])
+  return new Set(((rows ?? []) as unknown as Array<{ target_item_id: string }>).map(r => r.target_item_id))
+}
+
 export async function getUndoableMoves(limit = 20): Promise<ItemMove[]> {
   const db = getDB()
   const rows = await db.query(
