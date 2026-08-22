@@ -16,10 +16,20 @@ export async function GET() {
     const branchId = context?.branchId ?? null
     if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
+    // Main is not another station — it oversees them all. This filtered on the
+    // station outright, so an owner standing on Main saw no open tabs at all
+    // while every one of them sat on the stations underneath. A station still
+    // sees only its own, which is what a till should show.
+    const activeBranch = await prisma.branch.findFirst({
+      where: { id: branchId, restaurantId },
+      select: { id: true, isMain: true },
+    })
+    const branchFilter = !activeBranch || activeBranch.isMain ? {} : { branchId: activeBranch.id }
+
     const orders = await prisma.restaurantOrder.findMany({
       where: {
         restaurantId,
-        branchId,
+        ...branchFilter,
         status: 'PAID',
         paymentMethod: 'Credit',
         arCollectedAt: null,

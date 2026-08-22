@@ -47,8 +47,23 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const { action, cancelReason, paymentMethod, customerName, customerPhone, noChargeReason, supervisorPin, actionKey } = await req.json()
   const normalizedActionKey = normalizeRestaurantActionKey(actionKey)
 
+  // Main is not another station — it oversees them all, so a receivable
+  // collected from it has to reach a tab taken anywhere in the restaurant.
+  // Without this the A/R list on Main showed tabs it then refused to collect,
+  // 404ing because the order belonged to the station that served it.
+  //
+  // Only collection is widened. Serving, paying and cancelling stay tied to the
+  // till that owns the order, because those are floor actions and the station
+  // holding the table is the one that may take them.
+  const collectingFromMain = action === 'collect-ar'
+    ? Boolean((await prisma.branch.findFirst({
+        where: { id: branchId, restaurantId },
+        select: { isMain: true },
+      }))?.isMain)
+    : false
+
   const order = await prisma.restaurantOrder.findFirst({
-    where: { id, restaurantId, branchId },
+    where: collectingFromMain ? { id, restaurantId } : { id, restaurantId, branchId },
     include: { items: { where: { status: 'ACTIVE' } } },
   })
   if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
@@ -175,7 +190,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         const { recordReceivableCollection } = await import('@/lib/accounting')
         await recordReceivableCollection(tx, {
           restaurantId,
-          branchId,
+          // The station that served the food, not the till that took the money.
+          // Collecting from Main must not move the entry onto Main's books.
+          branchId: order.branchId ?? branchId,
           amount: order.totalAmount,
           paymentMethod: collectPaymentMethod,
           subject: `Order ${order.orderNumber}`,
