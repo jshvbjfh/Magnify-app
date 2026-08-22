@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession } from 'next-auth/react'
-import { Plus, ArrowDownLeft, ArrowUpRight, RefreshCw, Search, X, Calendar, TrendingUp, TrendingDown, Layers, Check } from 'lucide-react'
+import { Plus, ArrowDownLeft, ArrowUpRight, RefreshCw, Search, X, Calendar, TrendingUp, TrendingDown, Layers, Check, Trash2, AlertTriangle } from 'lucide-react'
 import { fmtDesc } from '@/lib/displayId'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
@@ -21,6 +21,9 @@ interface Transaction {
   categoryType: string
   paymentMethod: string
   pairId: string | null
+  // 'order:<id>' on a settled bill, 'manual' on a typed entry. The delete
+  // confirmation reads it to warn that a sale takes its whole order with it.
+  reference?: string | null
   isManual?: boolean
   sourceKind?: string | null
   uploadId: string | null
@@ -115,6 +118,7 @@ function normalizeTransaction(row: Partial<Transaction>): Transaction {
     categoryType: String(row.categoryType ?? ''),
     paymentMethod: typeof row.paymentMethod === 'string' ? row.paymentMethod : '',
     pairId: typeof row.pairId === 'string' ? row.pairId : null,
+    reference: typeof row.reference === 'string' ? row.reference : null,
     isManual: Boolean(row.isManual),
     sourceKind: typeof row.sourceKind === 'string' ? row.sourceKind : null,
     uploadId: typeof row.uploadId === 'string' ? row.uploadId : null,
@@ -163,6 +167,10 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   const [snapshotUpdatedAt, setSnapshotUpdatedAt] = useState<string | null>(null)
   const [showingCachedSnapshot, setShowingCachedSnapshot] = useState(false)
   const [salesTotals, setSalesTotals] = useState<{ revenue: number; cost: number; profit: number } | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<Transaction | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deletedNotice, setDeletedNotice] = useState<string | null>(null)
   const initializedSelectedDateRef = useRef(false)
   const descriptionRef = useRef<HTMLInputElement>(null)
 
@@ -495,6 +503,38 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     }
   }
 
+  // A settled bill is one row here but several rows underneath — the sale, its
+  // dishes, the stock they used. The confirmation has to say so before it goes.
+  const pendingDeleteIsSale = Boolean(pendingDelete?.reference?.startsWith('order:'))
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const res = await fetch(`/api/transactions/${encodeURIComponent(pendingDelete.id)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.error || 'Could not delete this transaction.')
+      }
+      // Drop it locally first so the row goes the moment it is confirmed, then
+      // let the refetch below settle the totals and the cached snapshot.
+      setTransactions(prev => prev.filter(t => t.id !== pendingDelete.id))
+      setPendingDelete(null)
+      window.dispatchEvent(new Event('refreshTransactions'))
+      await fetchTransactions()
+      setDeletedNotice(pendingDeleteIsSale ? 'Sale deleted' : 'Transaction deleted')
+      setTimeout(() => setDeletedNotice(null), 2500)
+    } catch (e: any) {
+      setDeleteError(e?.message || 'Could not delete this transaction.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const dateLabel = selectedDate === today ? 'Today' : formatDateLabel(selectedDate)
   const snapshotUpdatedLabel = snapshotUpdatedAt
     ? new Date(snapshotUpdatedAt).toLocaleString('en-RW', { dateStyle: 'medium', timeStyle: 'short' })
@@ -767,6 +807,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Received / Paid</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Time</th>
                       <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Source</th>
+                      <th className="w-10 px-2 py-3"><span className="sr-only">Delete</span></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -873,10 +914,11 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                               </button>
                             </div>
                           </td>
+                          <td className="px-2 py-2" />
                         </tr>
                         {/* Hints row */}
                         <tr className="bg-blue-50 border-b-2 border-blue-400">
-                          <td colSpan={7} className="px-4 pb-2.5">
+                          <td colSpan={8} className="px-4 pb-2.5">
                             <div className="flex items-center gap-4 flex-wrap">
                               <button
                                 onClick={() => void saveNewTxRow(true)}
@@ -910,7 +952,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                             : 'bg-emerald-100 text-emerald-700'
                       const recordedAt = t.createdAt ?? t.date
                       return (
-                        <tr key={t.id} className="hover:bg-gray-50 transition-colors">
+                        <tr key={t.id} className="group hover:bg-gray-50 transition-colors">
                           {/* Type badge */}
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
@@ -946,6 +988,17 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${originClass}`}>{originLabel}</span>
                           </td>
+                          {/* Delete */}
+                          <td className="px-2 py-3 text-right">
+                            <button
+                              onClick={() => { setDeleteError(null); setPendingDelete(t) }}
+                              title="Delete this transaction"
+                              aria-label="Delete this transaction"
+                              className="p-1.5 rounded-lg text-gray-300 hover:text-red-600 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </td>
                         </tr>
                       )
                     })}
@@ -963,11 +1016,77 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
         </div>{/* end main content */}
       </div>{/* end two-column */}
 
+      {/* Delete confirmation — deliberately blunt: this one is not undoable */}
+      {pendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => { if (!deleting) setPendingDelete(null) }}
+        >
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-3 px-5 pt-5">
+              <div className="p-2 bg-red-100 rounded-lg flex-shrink-0">
+                <AlertTriangle className="h-5 w-5 text-red-600" />
+              </div>
+              <div>
+                <p className="text-base font-bold text-gray-900">Are you sure you want to delete this transaction?</p>
+                <p className="mt-1 text-sm text-gray-600">This also deletes it from every report, for ever. It cannot be undone.</p>
+              </div>
+            </div>
+
+            <div className="mx-5 mt-4 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+              <p className="text-sm font-semibold text-gray-800 break-words">{fmtDesc(pendingDelete.description)}</p>
+              <p className="mt-0.5 text-xs text-gray-500">
+                {fmtRWF(pendingDelete.amount)}
+                {pendingDelete.paymentMethod ? ` · ${pendingDelete.paymentMethod}` : ''}
+                {` · ${formatRecordedDateTime(pendingDelete.createdAt ?? pendingDelete.date)}`}
+              </p>
+            </div>
+
+            {pendingDeleteIsSale && (
+              <p className="px-5 mt-3 text-xs text-gray-500">
+                The whole bill goes with it — the order, its dishes, and the stock they used comes back.
+              </p>
+            )}
+
+            {deleteError && (
+              <p className="px-5 mt-3 text-xs font-medium text-red-600">{deleteError}</p>
+            )}
+
+            <div className="flex items-center justify-end gap-2 px-5 py-4">
+              <button
+                onClick={() => setPendingDelete(null)}
+                disabled={deleting}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void confirmDelete()}
+                disabled={deleting}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 transition-colors shadow-sm disabled:opacity-50"
+              >
+                {deleting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {deleting ? 'Deleting…' : 'Delete for ever'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Success toast */}
       {saveSuccess && (
         <div className="fixed bottom-6 right-6 z-50 bg-green-600 text-white px-5 py-3 rounded-xl shadow-lg text-sm font-semibold flex items-center gap-2">
           <Check className="h-4 w-4" />
           Transaction saved
+        </div>
+      )}
+
+      {deletedNotice && (
+        <div className="fixed bottom-6 right-6 z-50 bg-gray-900 text-white px-5 py-3 rounded-xl shadow-lg text-sm font-semibold flex items-center gap-2">
+          <Trash2 className="h-4 w-4" />
+          {deletedNotice}
         </div>
       )}
     </div>
