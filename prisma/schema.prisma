@@ -61,6 +61,11 @@ model Restaurant {
   // shiftId/businessDate columns were always designed to allow. Orders already
   // stamped keep their shift, so history stays intact either way.
   shiftsEnabled      Boolean   @default(true)
+  // Print a payment-confirmation slip automatically every time a bill is
+  // settled: the same bill the guest already got, plus the tender it was paid
+  // with. Some venues hand it over as the receipt; most do not want a second
+  // slip per table, so it is off unless a manager asks for it.
+  printPaymentConfirmation Boolean @default(false)
   // Hides financial history before this date from the Transactions page without
   // deleting anything — the entries stay in the database (so stock, purchase
   // records and audits remain intact) and clearing this field restores them.

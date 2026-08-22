@@ -15,6 +15,7 @@ const settingsRestaurantSelect = {
   billPrinterPort: true,
   qrOrderingMode: true,
   shiftsEnabled: true,
+  printPaymentConfirmation: true,
   fifoEnabled: true,
   fifoConfiguredAt: true,
   joinCode: true,
@@ -107,7 +108,7 @@ export async function POST(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const userId = session.user.id
   const body = await req.json()
-  const { name, billHeader, billPrinterIp, billPrinterPort, qrOrderingMode, shiftsEnabled, fifoEnabled } = body
+  const { name, billHeader, billPrinterIp, billPrinterPort, qrOrderingMode, shiftsEnabled, fifoEnabled, printPaymentConfirmation } = body
   const qrMenuHeroImageUrl = body?.qrMenuHeroImageUrl === null
     ? null
     : typeof body?.qrMenuHeroImageUrl === 'string'
@@ -141,6 +142,7 @@ export async function POST(req: Request) {
     billPrinterPort?: number | null
     qrOrderingMode?: 'order' | 'view_only' | 'disabled'
     shiftsEnabled?: boolean
+    printPaymentConfirmation?: boolean
     fifoEnabled?: boolean
     fifoConfiguredAt?: Date
   } = {}
@@ -151,6 +153,12 @@ export async function POST(req: Request) {
   if (billPrinterPort !== undefined) restaurantUpdateData.billPrinterPort = typeof billPrinterPort === 'number' && billPrinterPort > 0 ? billPrinterPort : null
   if (qrOrderingMode === 'order' || qrOrderingMode === 'view_only' || qrOrderingMode === 'disabled') {
     restaurantUpdateData.qrOrderingMode = qrOrderingMode
+  }
+  // Whether the till prints a confirmation slip on every settlement. Safe to
+  // flip either way at any time: it changes what the NEXT payment prints and
+  // touches nothing already recorded.
+  if (typeof printPaymentConfirmation === 'boolean') {
+    restaurantUpdateData.printPaymentConfirmation = printPaymentConfirmation
   }
   // Turning shifts off mid-service would strand the open orders: they are already
   // stamped with the shift, but the till would stop offering End Shift, leaving

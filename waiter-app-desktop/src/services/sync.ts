@@ -47,7 +47,7 @@ export interface PullPayload {
   catalogIncluded?: boolean
   dishes: Dish[]
   tables: RestaurantTable[]
-  restaurant: { id: string; name: string; billHeader?: string; billPrinterIp?: string | null; billPrinterPort?: number | null; shifts_enabled?: boolean }
+  restaurant: { id: string; name: string; billHeader?: string; billPrinterIp?: string | null; billPrinterPort?: number | null; shifts_enabled?: boolean; print_payment_confirmation?: boolean }
   branches?: BranchInfo[]
   cancellationApprovers?: CancellationApprover[]
   openShift?: Shift | null
@@ -251,6 +251,10 @@ export async function pullSync(branchId?: string): Promise<PullResult> {
   // field, so treat only an explicit false as off — a missing value must keep
   // the shift gate up rather than silently unlock the till.
   await setConfig('shiftsEnabled', payload.restaurant.shifts_enabled === false ? '0' : '1')
+  // Only an explicit true switches confirmation slips on. A server too old to
+  // send the field, or a blip that omits it, must not start printing a second
+  // slip for every settled table on its own.
+  await setConfig('printPaymentConfirmation', payload.restaurant.print_payment_confirmation === true ? '1' : '0')
   await setConfig('lastPullAttemptAt', now)
   if (didRefreshLocalSnapshot) {
     await setConfig('lastPulledAt', now)

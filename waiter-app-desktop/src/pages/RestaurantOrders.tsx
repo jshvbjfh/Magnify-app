@@ -489,6 +489,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
   const [billPrinter,       setBillPrinter]       = useState<string>('')
   const [billNetworkPrinter, setBillNetworkPrinter] = useState<NetworkPrinterConfig | null>(null)
   const [billEscposMode,    setBillEscposModeOn]   = useState<boolean>(false)
+  // Restaurant-wide setting, pulled from the manager portal: print a slip on
+  // every settlement, tagged with the tender it was paid with.
+  const [printPayConfirm,   setPrintPayConfirm]    = useState<boolean>(false)
   const [billColumns,       setBillColumns]       = useState<number>(42)
   const [printers,          setPrinters]          = useState<PrinterInfo[]>([])
   // Manager-editable receipt template (raw billHeader; parsed into top/bottom at print time).
@@ -629,13 +632,14 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
   useEffect(() => {
     if (mode === 'history') return
     void (async () => {
-      const [map, bill, list, tpl, net, colsRaw, escpos] = await Promise.all([getPrinterMap(), getBillPrinter(), listPrinters(), getConfig('billHeader'), getBillNetworkPrinter(), getConfig('billColumns'), getBillEscposMode()])
+      const [map, bill, list, tpl, net, colsRaw, escpos, payConfirm] = await Promise.all([getPrinterMap(), getBillPrinter(), listPrinters(), getConfig('billHeader'), getBillNetworkPrinter(), getConfig('billColumns'), getBillEscposMode(), getConfig('printPaymentConfirmation')])
       setPrinterMap(map)
       setBillPrinter(bill)
       setPrinters(list)
       setBillHeaderTpl(tpl ?? '')
       setBillNetworkPrinter(net)
       setBillEscposModeOn(escpos)
+      setPrintPayConfirm(payConfirm === '1')
       const parsedCols = parseInt(colsRaw ?? '', 10)
       setBillColumns(Number.isFinite(parsedCols) && parsedCols >= 24 && parsedCols <= 64 ? parsedCols : 42)
     })()
@@ -731,7 +735,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
     }, delay)
   }
 
-  function printBill(order: Order, items: OrderItem[]) {
+  // paidWith turns the bill into a payment-confirmation slip: identical to the
+  // bill the guest already has, plus the tender it was settled with. Passed only
+  // when the restaurant has asked for confirmation slips; the on-demand
+  // "Print Bill" button never sends it, because at that point nothing is paid.
+  function printBill(order: Order, items: OrderItem[], paidWith?: string) {
     // Bill printers are commonly installed with a "Generic / Text Only"-class
     // driver that discards ALL CSS — no text-align, no flex, no borders, no
     // bold, no SVG. Only the literal characters print, in the printer's own
@@ -812,6 +820,7 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
           noPrice: l.hidePrice,
         })),
         totalAmount,
+        paidWith: paidWith ?? null,
         columns: LINE,
         ...(billNetworkPrinter?.ip
           ? { ip: billNetworkPrinter.ip, port: billNetworkPrinter.port }
@@ -856,6 +865,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
     }
     divLines.push(ln(rule))
     for (const s of cols('TOTAL:', `Rwf ${fmtRWF(totalAmount)}`)) divLines.push(ln(s, true))
+    if (paidWith) {
+      divLines.push(ln(center(`*** PAID ***`), true))
+      for (const s of cols('Paid with:', paidWith)) divLines.push(ln(s, true))
+    }
     divLines.push(ln(rule))
     divLines.push(ln(center(`>> ${orderNo} <<`)))
     divLines.push(ln(center(dt)))
@@ -1714,6 +1727,22 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       // The bill is printed on demand via the "Print Bill" button when the
       // guest asks for it. Confirming payment must NOT re-print it — that
       // wasted a second slip of paper on every settled order.
+      //
+      // Unless the restaurant has asked for confirmation slips, in which case
+      // that second slip IS the point: the same bill, tagged with what it was
+      // paid with. Printed from the freshly loaded lines rather than the ones
+      // on screen, so a comp shows its zeroed total rather than the figure the
+      // card was quoting a moment ago.
+      if (printPayConfirm) {
+        try {
+          const paidOrder = (await getOrderById(order.id)) ?? order
+          printBill(paidOrder, await getOrderItems(order.id), payMethod)
+        } catch (err) {
+          // A failed slip must never leave the payment in doubt — the money is
+          // already recorded by this point.
+          setSubmitError(`Payment recorded, but the confirmation slip failed: ${(err as Error).message}`)
+        }
+      }
       await logInfo('order', 'Payment collected — queuing push', {
         orderId: order.id,
         orderNumber: order.order_number,
@@ -2192,11 +2221,6 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                             movedItemIds.has(item.id) ? 'text-blue-600' : 'text-gray-800'
                           }`}>
                             {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
-                            {movedItemIds.has(item.id) && (
-                              <span className="ml-1.5 rounded border border-blue-200 bg-blue-50 px-1 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-600 align-middle">
-                                moved
-                              </span>
-                            )}
                           </span>
                           {/* A discounted line shows both numbers: the guest can
                               see what came off, and so can whoever checks the

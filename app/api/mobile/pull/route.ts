@@ -134,7 +134,7 @@ export async function GET(req: Request) {
 
       prisma.restaurant.findUnique({
         where: { id: restaurantId },
-        select: { id: true, name: true, billHeader: true, billPrinterIp: true, billPrinterPort: true, shiftsEnabled: true },
+        select: { id: true, name: true, billHeader: true, billPrinterIp: true, billPrinterPort: true, shiftsEnabled: true, printPaymentConfirmation: true },
       }),
 
       // Staff with a stored order code (pin) can confirm orders offline.
@@ -350,8 +350,11 @@ export async function GET(req: Request) {
       // It defaults to true when the restaurant row is missing so a lookup blip
       // can never silently drop a venue out of its shift discipline.
       restaurant: restaurant
-        ? { id: restaurant.id, name: restaurant.name, billHeader: restaurant.billHeader ?? '', billPrinterIp: restaurant.billPrinterIp ?? '', billPrinterPort: restaurant.billPrinterPort ?? null, shifts_enabled: restaurant.shiftsEnabled }
-        : { id: restaurantId, name: 'Restaurant', billHeader: '', billPrinterIp: '', billPrinterPort: null, shifts_enabled: true },
+        ? { id: restaurant.id, name: restaurant.name, billHeader: restaurant.billHeader ?? '', billPrinterIp: restaurant.billPrinterIp ?? '', billPrinterPort: restaurant.billPrinterPort ?? null, shifts_enabled: restaurant.shiftsEnabled, print_payment_confirmation: restaurant.printPaymentConfirmation }
+        // A lookup blip must not silently switch a venue's slips off, but it
+        // must not switch them on either — false is the setting every venue
+        // starts with, so it is the honest fallback.
+        : { id: restaurantId, name: 'Restaurant', billHeader: '', billPrinterIp: '', billPrinterPort: null, shifts_enabled: true, print_payment_confirmation: false },
       // Tells the client which half it received. Without it a light pull looks
       // identical to a restaurant whose menu really is empty, and the client
       // warns the waiter their station has no menu.

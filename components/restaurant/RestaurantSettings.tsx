@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Cloud, RefreshCw, Download, Upload, ShieldCheck, ChevronDown, Briefcase, AlertTriangle, Clock } from 'lucide-react'
+import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Cloud, RefreshCw, Download, Upload, ShieldCheck, ChevronDown, Briefcase, AlertTriangle, Clock, Printer } from 'lucide-react'
 import { FIFO_FEATURE_AVAILABLE } from '@/lib/fifoFeature'
 import { getOwnerSyncRetryDelayMs, loadOwnerSyncConfig, loadOwnerSyncStatus, loadServerOwnerSyncConfig, loadSyncConflicts, resolveSyncConflict, retryStalledSyncOutbox, saveOwnerSyncConfig, syncOwnerCloud, type OwnerSyncConfig, type OwnerSyncStatus, type ServerOwnerSyncConfig, type SyncConflictEntry } from '@/lib/ownerSyncBrowser'
 import { composeRestaurantBillTemplate, parseRestaurantBillTemplate } from '@/lib/restaurantBillTemplate'
@@ -178,6 +178,8 @@ export default function RestaurantSettings() {
   // Whether this venue runs service shifts. On by default; the server refuses to
   // switch it off while any order is still unsettled.
   const [shiftsEnabled, setShiftsEnabled] = useState(true)
+  // Print a confirmation slip on every settlement — off unless a venue asks.
+  const [printPaymentConfirmation, setPrintPaymentConfirmation] = useState(false)
   // What the server last told us. The card marks a choice "Active", so it must
   // never show a selection the server rejected — on a failed save we snap back
   // to this and say why, rather than leaving the UI claiming a setting that
@@ -414,6 +416,7 @@ export default function RestaurantSettings() {
           if (setupData.restaurant?.qrOrderingMode === 'view_only') setQrOrderingMode('view_only')
           else if (setupData.restaurant?.qrOrderingMode === 'order') setQrOrderingMode('order')
           else setQrOrderingMode('disabled')
+          setPrintPaymentConfirmation(setupData.restaurant?.printPaymentConfirmation === true)
           setShiftsEnabled(setupData.restaurant?.shiftsEnabled !== false)
           setSavedShiftsEnabled(setupData.restaurant?.shiftsEnabled !== false)
         }
@@ -531,7 +534,7 @@ export default function RestaurantSettings() {
       // fifoConfiguredAt is set, re-sending it on every unrelated settings save (name, bill
       // header, printer IP, QR mode) would re-trigger the strict FIFO integrity gate and block
       // saving anything else until a full inventory reconciliation is done.
-      const body: Record<string, unknown> = { name: restaurantName, billHeader, billPrinterIp: billPrinterIp.trim() || null, billPrinterPort: billPrinterPort.trim() ? parseInt(billPrinterPort) || 9100 : null, qrOrderingMode, shiftsEnabled }
+      const body: Record<string, unknown> = { name: restaurantName, billHeader, billPrinterIp: billPrinterIp.trim() || null, billPrinterPort: billPrinterPort.trim() ? parseInt(billPrinterPort) || 9100 : null, qrOrderingMode, shiftsEnabled, printPaymentConfirmation }
       if (!fifoConfiguredAt) body.fifoEnabled = true
       const response = await fetch('/api/restaurant/setup', {
         method: 'POST',
@@ -568,6 +571,7 @@ export default function RestaurantSettings() {
         if (savedRestaurant.qrOrderingMode === 'view_only') setQrOrderingMode('view_only')
         else if (savedRestaurant.qrOrderingMode === 'order') setQrOrderingMode('order')
         else setQrOrderingMode('disabled')
+        setPrintPaymentConfirmation(savedRestaurant.printPaymentConfirmation === true)
         setShiftsEnabled(savedRestaurant.shiftsEnabled !== false)
         setSavedShiftsEnabled(savedRestaurant.shiftsEnabled !== false)
         setFifoEnabled(true)
@@ -1349,6 +1353,36 @@ export default function RestaurantSettings() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* ── Payment confirmation slip ──────────────────────────────────── */}
+      <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-5">
+        <div>
+          <h2 className="text-base font-bold text-gray-900">Payment Confirmation Slip</h2>
+          <p className="text-sm text-gray-500 mt-1">Whether the waiter app prints a slip automatically every time a bill is settled.</p>
+        </div>
+
+        <button type="button" onClick={() => setPrintPaymentConfirmation(!printPaymentConfirmation)}
+          className={`w-full text-left rounded-xl border-2 p-4 transition-all ${
+            printPaymentConfirmation ? 'border-orange-500 bg-orange-50' : 'border-gray-200 bg-white hover:border-gray-300'
+          }`}>
+          <div className="flex items-start gap-3">
+            <div className={`p-2 rounded-lg flex-shrink-0 ${printPaymentConfirmation ? 'bg-orange-100' : 'bg-gray-100'}`}>
+              <Printer className={`h-5 w-5 ${printPaymentConfirmation ? 'text-orange-600' : 'text-gray-500'}`} />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className={`text-sm font-bold ${printPaymentConfirmation ? 'text-orange-700' : 'text-gray-800'}`}>
+                  Print a confirmation slip on every payment
+                </p>
+                {printPaymentConfirmation && <span className="text-[10px] font-bold bg-orange-500 text-white px-2 py-0.5 rounded-full">On</span>}
+              </div>
+              <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                The same bill the guest already has, with the tender printed on it — &ldquo;Paid with: Cash&rdquo;, &ldquo;Paid with: Card&rdquo;, and so on. Leave this off and the till prints a bill only when a waiter asks for one, which is what most venues want: switching it on means a second slip for every settled table.
+              </p>
+            </div>
+          </div>
+        </button>
       </div>
 
       {/* ── Service shifts ─────────────────────────────────────────────── */}

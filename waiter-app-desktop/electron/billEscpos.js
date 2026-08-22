@@ -188,6 +188,24 @@ function buildBillEscPos(data) {
     for (const s of cols(`${label}:`, money)) parts.push(t(s))
   }
   parts.push(bold(false))
+
+  // Payment confirmation. Present only when the restaurant has asked the till
+  // to print a slip on every settlement — an ordinary bill, printed before the
+  // guest has paid, carries no tender and prints none of this.
+  //
+  // Centred and bold rather than doubled: the amount above is the number that
+  // must never wrap, and adding a second enlarged row next to it is what makes
+  // a 32-column slip start folding lines.
+  if (data.paidWith) {
+    parts.push(t(rule))
+    parts.push(b([ESC, 0x61, 0x01]))
+    parts.push(bold(true))
+    parts.push(t('*** PAID ***'))
+    parts.push(t(`Paid with: ${ascii(data.paidWith)}`))
+    parts.push(bold(false))
+    parts.push(b([ESC, 0x61, 0x00]))
+  }
+
   parts.push(t(rule))
 
   // Footer. Blank lines separate the ticket number, the timestamp and the
