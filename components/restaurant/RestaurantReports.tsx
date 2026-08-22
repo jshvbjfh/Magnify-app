@@ -136,6 +136,8 @@ type UpsellingData = {
     totalChecks: number; serverChecks: number; selfOrderChecks: number
     checksWithoutServer: number; coveredChecks: number
     uncategorizedItems: number; uncostedAttachLines: number; pairingsTotal: number
+    /** Attach lines in the window, and how many carried a cost above zero. */
+    attachLines?: number; attachLinesCosted?: number
     hourFrom: number | null; hourTo: number | null; checksOutsideWindow: number
   }
 }
@@ -1457,6 +1459,13 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange, range }: {
   const hourly = data.hourly ?? []
   const pct = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`)
 
+  // Nothing sold carried a food cost, so every "profit" on this screen is really
+  // revenue and the margin is 100% only because there was nothing to subtract.
+  // Sirocco has a recipe for 1 of the 23 dishes it sells at lunch; presenting
+  // that as a perfect margin invites a manager to budget against a number that
+  // does not exist.
+  const costUnknown = (meta?.attachLines ?? 0) > 0 && (meta?.attachLinesCosted ?? 0) === 0
+
   if (!house || house.checks === 0) {
     // The window is the likeliest reason there is nothing here, so the picker
     // and the day's shape stay on screen — otherwise the manager is stranded on
@@ -1491,17 +1500,41 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange, range }: {
       </p>
 
       <div className="grid grid-cols-3 gap-3 mb-4">
-        <StatCard label="Upsell Gross Profit" value={`${fmt(summary.upsellProfit)} RWF`} color="bg-green-50 border-green-200" />
-        <StatCard label="Profit per Bill" value={`${fmt(summary.profitPerBill)} RWF`} />
+        <StatCard
+          label={costUnknown ? 'Upsell Revenue' : 'Upsell Gross Profit'}
+          value={`${fmt(costUnknown ? summary.upsellRevenue : summary.upsellProfit)} RWF`}
+          color="bg-green-50 border-green-200"
+        />
+        <StatCard
+          label={costUnknown ? 'Revenue per Bill' : 'Profit per Bill'}
+          value={`${fmt(costUnknown && summary.bills > 0 ? Math.round(summary.upsellRevenue / summary.bills) : summary.profitPerBill)} RWF`}
+        />
         <StatCard label="Profit Opportunity" value={`${fmt(summary.opportunity)} RWF`} color="bg-amber-50 border-amber-200" />
       </div>
+
+      {/* Without recipes there is no cost to subtract, so "profit" here would be
+          revenue wearing a better name and "100% margin" would be the absence of
+          a margin rather than a good one. Say so where the number is, not in a
+          footnote nobody reads. */}
+      {costUnknown && (
+        <div className="-mt-2 mb-5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <span className="font-semibold">Cost unknown — this is revenue, not profit.</span>{' '}
+          None of the {meta.attachLines} attached line{meta.attachLines === 1 ? '' : 's'} in this period had a food cost,
+          so nothing can be subtracted. Add recipes to your menu items to see real margin here.
+        </div>
+      )}
 
       {/* One sentence so an owner can stop reading here */}
       <div className="rounded-xl border border-gray-200 border-l-[3px] border-l-orange-500 bg-white px-4 py-3 mb-5">
         <p className="text-[10px] font-bold uppercase tracking-wider text-orange-600 mb-1">Jesse&apos;s take</p>
         <p className="text-sm text-gray-700 leading-relaxed">
-          Upselling generated <span className="font-bold text-gray-900">{fmt(summary.upsellProfit)} RWF</span> of gross profit
-          at a <span className="font-bold text-gray-900">{summary.upsellMargin.toFixed(0)}%</span> margin.
+          {costUnknown ? (
+            <>Upselling brought in <span className="font-bold text-gray-900">{fmt(summary.upsellRevenue)} RWF</span> of
+              revenue. Margin cannot be shown: none of these items has a recipe, so there is no food cost to subtract.</>
+          ) : (
+            <>Upselling generated <span className="font-bold text-gray-900">{fmt(summary.upsellProfit)} RWF</span> of gross profit
+              at a <span className="font-bold text-gray-900">{summary.upsellMargin.toFixed(0)}%</span> margin.</>
+          )}
           {summary.topServerName && (
             <> <span className="font-bold text-gray-900">{summary.topServerName}</span> leads the floor at{' '}
               <span className="font-bold text-gray-900">{pct(summary.topServerRate)}</span> attachment.</>
@@ -1509,6 +1542,14 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange, range }: {
           {opportunities.length > 0 && (
             <> The largest single gap is <span className="font-bold text-gray-900">{opportunities[0].baseName} + {opportunities[0].attachName}</span>,
               worth about <span className="font-bold text-gray-900">{fmt(opportunities[0].missedProfit)} RWF</span>.</>
+          )}
+          {/* With no ranked waiter and no pairing above the floor, the sentence
+              above is all there is — and stopping there reads like the report
+              broke. Naming the reason is the difference between "nothing to say"
+              and "nothing to say YET". */}
+          {!summary.topServerName && opportunities.length === 0 && (
+            <> Too few bills here to name a leader or a pairing — <span className="font-bold text-gray-900">{summary.bills}</span>{' '}
+              bill{summary.bills === 1 ? '' : 's'} in this period, where a waiter needs 20 to be ranked.</>
           )}
         </p>
       </div>

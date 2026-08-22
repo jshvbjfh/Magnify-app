@@ -231,6 +231,22 @@ export type UpsellReport = {
     coveredChecks: number
     uncategorizedItems: number
     uncostedAttachLines: number
+    /** Drink and add-on lines counted in the window. */
+    attachLines: number
+    /**
+     * Of those, how many carried a food cost above zero.
+     *
+     * A line with no DishSale row and a line costed at exactly 0 are the same
+     * number downstream, and only this counter tells them apart. Sirocco Y Sol
+     * has a recipe for 1 of the 23 dishes it sells at lunch, so all 42 of its
+     * lines arrive costed at zero: the report subtracts nothing, hands back the
+     * revenue, and calls it "gross profit at a 100% margin". That figure is not
+     * a margin, it is the absence of one — and a manager can budget against it.
+     *
+     * When this is 0 while attachLines is not, the caller must present revenue
+     * and say the cost is unknown, never a profit or a margin.
+     */
+    attachLinesCosted: number
     pairingsTotal: number
     /** The window everything except `hourly` was computed over. Null when all day. */
     hourFrom: number | null
@@ -788,6 +804,8 @@ export function buildUpsellingReport(
   let selfOrderChecks = 0
   let serverChecks = 0
   let uncostedAttachLines = 0
+  let attachLines = 0
+  let attachLinesCosted = 0
   let checksOutsideWindow = 0
 
   for (const check of checks) {
@@ -841,6 +859,12 @@ export function buildUpsellingReport(
         const cost = item.foodCost
         if ((cost === null || cost === undefined) && inWindow) uncostedAttachLines++
         const lineCost = Number(cost ?? 0)
+        if (inWindow) {
+          attachLines++
+          // Above zero, not merely present: a dish with no recipe still gets a
+          // DishSale row, and that row says the cost was nothing.
+          if (lineCost > 0) attachLinesCosted++
+        }
         upsellRevenue += lineRevenue
         upsellCost += lineCost
 
@@ -1078,6 +1102,8 @@ export function buildUpsellingReport(
       coveredChecks,
       uncategorizedItems,
       uncostedAttachLines,
+      attachLines,
+      attachLinesCosted,
       pairingsTotal: allPairings.filter((p) => p.together >= PAIRING_MIN_TOGETHER).length,
       hourFrom: windowActive ? hourFrom : null,
       hourTo: windowActive ? hourTo : null,

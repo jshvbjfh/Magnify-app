@@ -324,3 +324,52 @@ describe('buildPairingExplorer', () => {
     expect(out.meta.uncostedLines).toBe(4)
   })
 })
+
+
+// ─── COST DATA PRESENCE ────────────────────────────────────────────────────
+
+describe('telling missing cost apart from zero cost', () => {
+  it('reports no costed lines when nothing has a recipe', () => {
+    // Sirocco's shape: every dish sells, every DishSale says the cost was 0,
+    // because only 1 of 23 dishes has a recipe behind it.
+    const checks = bills(6, () => [
+      dish('lamb', 'Mains dish', 12000, 0, 1, 'mains'),
+      dish('merlot', 'Red wine', 8000, 0, 1, 'drinks'),
+    ])
+    const report = buildUpsellingReport(checks)
+
+    expect(report.meta.attachLines).toBe(6)
+    expect(report.meta.attachLinesCosted).toBe(0)
+    // The figure the old UI called "100% margin" is really untouched revenue.
+    expect(report.summary.upsellCost).toBe(0)
+    expect(report.summary.upsellProfit).toBe(report.summary.upsellRevenue)
+    expect(report.summary.upsellMargin).toBe(100)
+    // uncostedAttachLines cannot catch this: the rows exist, they just say zero.
+    expect(report.meta.uncostedAttachLines).toBe(0)
+  })
+
+  it('counts the lines that do carry a real cost', () => {
+    const checks = bills(6, () => [
+      dish('lamb', 'Mains dish', 12000, 5000, 1, 'mains'),
+      dish('merlot', 'Red wine', 8000, 2000, 1, 'drinks'),
+    ])
+    const report = buildUpsellingReport(checks)
+    expect(report.meta.attachLines).toBe(6)
+    expect(report.meta.attachLinesCosted).toBe(6)
+    expect(report.summary.upsellMargin).toBeLessThan(100)
+  })
+
+  it('separates a never-costed line from one costed at zero', () => {
+    const checks = [
+      // menuType matters here: "Red wine" is not a word the classifier knows, so
+      // without it the line would be counted as food and never reach the attach
+      // counters at all.
+      ...bills(3, () => [dish('lamb', 'Mains'), dish('wine', 'Red wine', 8000, null, 1, 'drinks')]),
+      ...bills(3, () => [dish('lamb', 'Mains'), dish('soda', 'Soft Drinks', 1000, 0)]),
+    ]
+    const report = buildUpsellingReport(checks)
+    expect(report.meta.attachLines).toBe(6)
+    expect(report.meta.uncostedAttachLines).toBe(3)  // the nulls
+    expect(report.meta.attachLinesCosted).toBe(0)    // neither kind has real cost
+  })
+})
