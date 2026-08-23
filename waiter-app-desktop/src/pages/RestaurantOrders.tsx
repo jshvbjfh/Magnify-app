@@ -789,7 +789,20 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
       })),
     )
     const now = new Date()
-    const dt  = now.toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+    const stamp = (value: Date | string | null | undefined): string => {
+      if (!value) return ''
+      const d = value instanceof Date ? value : new Date(value)
+      return Number.isFinite(d.getTime())
+        ? d.toLocaleString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+        : ''
+    }
+    const dt  = stamp(now)
+    // When the guests sat down and when they settled. Only meaningful once a
+    // bill is actually paid, so they ride with the tender on the confirmation
+    // slip rather than on the ordinary bill, which is handed over before there
+    // is anything to say about settlement.
+    const openedAt  = paidWith ? stamp(order.created_at) : ''
+    const settledAt = paidWith ? (stamp(order.paid_at) || dt) : ''
     const isTakeaway = !order.table_id
     const orderType  = isTakeaway ? 'Take Away' : 'Dine In'
     const server     = order.created_by_name ?? '—'
@@ -821,6 +834,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
         })),
         totalAmount,
         paidWith: paidWith ?? null,
+        openedAt: openedAt || null,
+        settledAt: settledAt || null,
         columns: LINE,
         ...(billNetworkPrinter?.ip
           ? { ip: billNetworkPrinter.ip, port: billNetworkPrinter.port }
@@ -868,6 +883,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
     if (paidWith) {
       divLines.push(ln(center(`*** PAID ***`), true))
       for (const s of cols('Paid with:', paidWith)) divLines.push(ln(s, true))
+      if (openedAt)  for (const s of cols('Opened:', openedAt))   divLines.push(ln(s))
+      if (settledAt) for (const s of cols('Settled:', settledAt)) divLines.push(ln(s))
     }
     divLines.push(ln(rule))
     divLines.push(ln(center(`>> ${orderNo} <<`)))

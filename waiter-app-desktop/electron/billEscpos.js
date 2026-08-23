@@ -203,7 +203,12 @@ function buildBillEscPos(data) {
     parts.push(t('*** PAID ***'))
     parts.push(t(`Paid with: ${ascii(data.paidWith)}`))
     parts.push(bold(false))
+    // When the guests sat down and when they settled. Left-aligned in padded
+    // columns rather than centred: they are two facts to be read off, not a
+    // headline, and centring them would compete with the tender above.
     parts.push(b([ESC, 0x61, 0x00]))
+    if (data.openedAt)  for (const s of cols('Opened:', ascii(data.openedAt))) parts.push(t(s))
+    if (data.settledAt) for (const s of cols('Settled:', ascii(data.settledAt))) parts.push(t(s))
   }
 
   parts.push(t(rule))
