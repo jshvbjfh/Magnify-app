@@ -1,13 +1,13 @@
 ﻿'use client'
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange, Store, Share2, ArrowUpRight, Ban, Gift } from 'lucide-react'
+import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange, Store, Share2, ArrowUpRight, Ban, Gift, Layers } from 'lucide-react'
 import { fmtDesc } from '@/lib/displayId'
 import AccountsReceivable from '@/components/restaurant/AccountsReceivable'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { BranchBadge, useRestaurantBranch } from '@/contexts/RestaurantBranchContext'
 
-type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory' | 'general' | 'upselling' | 'canceled_orders' | 'no_charge'
+type ReportTab = 'journal' | 'receivable' | 'payable' | 'cashflow' | 'balance' | 'income' | 'payment_methods' | 'sales_by_category' | 'dish_profit' | 'inventory_movement' | 'theoretical_inventory' | 'general' | 'upselling' | 'canceled_orders' | 'no_charge'
 
 type UpsellServerRow = {
   serverKey: string
@@ -118,6 +118,11 @@ type NoChargeData = {
   byReason: VoidTallyRow[]
 }
 
+type SalesByCategoryItem = { dishId: string; dishName: string; qty: number; amount: number }
+type SalesByCategoryGroup = { name: string; qty: number; revenue: number; items: SalesByCategoryItem[] }
+type SalesByCategorySection = { key: string; label: string; qty: number; revenue: number; categories: SalesByCategoryGroup[] }
+type SalesByCategoryData = { sections: SalesByCategorySection[]; totals: { revenue: number; qty: number; items: number; categories: number } }
+
 type UpsellingData = {
   summary: {
     bills: number
@@ -220,6 +225,7 @@ const TABS: { id: ReportTab; label: string; short: string; icon: React.ElementTy
   { id:'balance',    label:'Balance Sheet',          short:'Balance',   icon:BarChart3,      desc:'Assets, liabilities and equity snapshot' },
   { id:'income',            label:'Income Statement (P&L)', short:'P&L',       icon:FileText,   desc:'Revenue, expenses and net profit' },
   { id:'payment_methods',   label:'Payment Methods',        short:'Payments',  icon:CreditCard, desc:'Track how much has been collected by each payment method and review the full payment history with date and time.' },
+  { id:'sales_by_category', label:'Sales Report',           short:'Sales',     icon:Layers,     desc:'Every item sold, grouped by menu category and section, with revenue and quantity for each' },
   { id:'dish_profit',       label:'Orders Report',          short:'Orders',      icon:Utensils,   desc:'Orders, waiter, status, quantity sold, cost, price, total price, revenue and profit' },
   { id:'inventory_movement', label:'Inventory Movement',    short:'Inventory',   icon:Package,    desc:'Opening stock, in-period purchases, usage, remaining quantity and stock value' },
   { id:'theoretical_inventory', label:'Theoretical Inventory', short:'Theory Inv', icon:Package, desc:'Opening stock, expected usage, waste, theoretical closing and variance versus actual stock' },
@@ -930,6 +936,71 @@ function DishProfitTable({ data }: { data: any }) {
         <div className="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-gray-700">
           <span>Total Revenue: <span className="text-green-700">{fmt(totals.totalRevenue ?? 0)} RWF</span></span>
           <span>Total Profit: <span className={(totals.totalProfit ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'}>{fmt(totals.totalProfit ?? 0)} RWF</span></span>
+        </div>
+      )}
+    </>
+  )
+}
+
+// Mirrors the guest-facing QR menu's own section (menu type) > category >
+// item hierarchy (see QrMenuPageContent.tsx) so a manager sees sales grouped
+// the same way the menu itself is organized, not a flat dish list.
+function SalesByCategoryTable({ data }: { data: SalesByCategoryData | null }) {
+  if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading sales report data…</div>
+  const sections = data.sections ?? []
+  const totals = data.totals ?? { revenue: 0, qty: 0, items: 0, categories: 0 }
+  const hasData = sections.some((s) => s.categories.length > 0)
+  return (
+    <>
+      <div className="grid grid-cols-4 gap-3 mb-4">
+        <StatCard label="Items Sold" value={fmt(totals.qty)} />
+        <StatCard label="Distinct Dishes" value={totals.items.toString()} />
+        <StatCard label="Categories" value={totals.categories.toString()} />
+        <StatCard label="Total Revenue" value={`${fmt(totals.revenue)} RWF`} color="bg-green-50 border-green-200" />
+      </div>
+      {!hasData ? (
+        <div className="py-8 text-center text-gray-400 text-sm">No sales found for this period.</div>
+      ) : (
+        <div className="space-y-5">
+          {sections.map((section) => (
+            <div key={section.key}>
+              <SectionTitle>{section.label} &middot; {fmt(section.qty)} sold &middot; {fmt(section.revenue)} RWF</SectionTitle>
+              <div className="space-y-3">
+                {section.categories.map((category) => (
+                  <div key={category.name} className="overflow-hidden rounded-xl border border-gray-200">
+                    <div className="px-3 py-2 bg-orange-50 border-b border-orange-100 flex items-center justify-between gap-3">
+                      <p className="text-xs font-bold text-orange-800 uppercase tracking-wide">{category.name}</p>
+                      <p className="text-xs font-semibold text-orange-700">
+                        {category.items.length} {category.items.length === 1 ? 'item' : 'items'} &middot; Sales Revenue: {fmt(category.revenue)} RWF
+                      </p>
+                    </div>
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {category.items.map((item, ri) => (
+                          <tr key={item.dishId} className={ri % 2 === 0 ? 'bg-white' : 'bg-orange-50/40'}>
+                            <td className="px-3 py-2 text-xs text-gray-700 border-b border-gray-100">{fmtDesc(item.dishName)}</td>
+                            <td className="px-3 py-2 text-xs text-right text-gray-500 border-b border-gray-100 w-28">{fmt(item.qty)} sold</td>
+                            <td className="px-3 py-2 text-xs text-right font-semibold text-green-600 border-b border-gray-100 w-32">{fmt(item.amount)} RWF</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-gray-50">
+                          <td className="px-3 py-2 text-xs font-bold text-gray-500 uppercase">Category total</td>
+                          <td className="px-3 py-2 text-xs text-right font-bold text-gray-500">{fmt(category.qty)} sold</td>
+                          <td className="px-3 py-2 text-xs text-right font-bold text-gray-700">{fmt(category.revenue)} RWF</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="rounded-xl bg-gray-900 text-white px-4 py-3 flex items-center justify-between">
+            <p className="text-xs font-bold uppercase tracking-wide">Grand Total</p>
+            <p className="text-xs font-bold">{fmt(totals.qty)} items sold &middot; {fmt(totals.revenue)} RWF</p>
+          </div>
         </div>
       )}
     </>
@@ -1932,6 +2003,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
   const [theoreticalInvData, setTheoreticalInvData] = useState<any>(null)
   const [branchSummaryData, setBranchSummaryData] = useState<{ rows: BranchSummaryRow[]; totals: { totalSales: number; totalCost: number; totalProfit: number } } | null>(null)
   const [branchSummaryExporting, setBranchSummaryExporting] = useState(false)
+  const [salesByCategoryData, setSalesByCategoryData] = useState<SalesByCategoryData | null>(null)
   const [upsellingData, setUpsellingData] = useState<UpsellingData | null>(null)
   const [canceledData, setCanceledData] = useState<CanceledOrdersData | null>(null)
   const [noChargeData, setNoChargeData] = useState<NoChargeData | null>(null)
@@ -2177,6 +2249,20 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
       .catch(() => { if (!cancelled) setBranchSummaryData(null) })
     return () => { cancelled = true }
   }, [activeTab, period, rangeMode, draftFrom, draftTo, initialPeriodReady])
+
+  // Sales Report is a per-station question (what did THIS till sell), so it is
+  // branch-scoped like the Orders Report — refetch on branch switch too.
+  useEffect(() => {
+    if (activeTab !== 'sales_by_category' || !initialPeriodReady) return
+    const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)
+    const branchParam = branchId ? `&branchId=${encodeURIComponent(branchId)}` : ''
+    let cancelled = false
+    fetch(`/api/restaurant/reports/sales-by-category?from=${start}&to=${end}${branchParam}`, FRESH_FETCH_OPTIONS)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (!cancelled) setSalesByCategoryData(data) })
+      .catch(() => { if (!cancelled) setSalesByCategoryData(null) })
+    return () => { cancelled = true }
+  }, [activeTab, period, rangeMode, draftFrom, draftTo, initialPeriodReady, branchId])
 
   // Upselling is restaurant-account-wide for the same reason the General Report
   // is: one bill routinely spans stations, and slicing it per station would
@@ -2623,7 +2709,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
               independently (they are restaurant-account-wide), so the chips would
               highlight a day while their numbers still showed the whole range.
               A single day is also too few orders for Upselling to say anything. */}
-          {activeTab !== 'payment_methods' && activeTab !== 'general' && activeTab !== 'upselling' && activeTab !== 'canceled_orders' && activeTab !== 'no_charge' && activeTab !== 'receivable' && dailyRows.length > 0 ? (
+          {activeTab !== 'payment_methods' && activeTab !== 'general' && activeTab !== 'sales_by_category' && activeTab !== 'upselling' && activeTab !== 'canceled_orders' && activeTab !== 'no_charge' && activeTab !== 'receivable' && dailyRows.length > 0 ? (
             <div className="mb-4 space-y-2">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-gray-500">{rangeMode === 'custom' ? `Custom range: ${draftFrom} - ${draftTo}` : loadedPeriod}</p>
@@ -2675,7 +2761,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
           )}
 
           {/* Report tables */}
-          {(txData || activeTab==='dish_profit' || activeTab==='inventory_movement' || activeTab==='theoretical_inventory' || activeTab==='general' || activeTab==='upselling' || activeTab==='canceled_orders' || activeTab==='no_charge')&&!loading&&(
+          {(txData || activeTab==='dish_profit' || activeTab==='inventory_movement' || activeTab==='theoretical_inventory' || activeTab==='general' || activeTab==='sales_by_category' || activeTab==='upselling' || activeTab==='canceled_orders' || activeTab==='no_charge')&&!loading&&(
             <div className="space-y-2">
               {/* Attribution */}
               <div className="flex items-center justify-between mb-4">
@@ -2708,7 +2794,8 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
               {activeTab==='cashflow'   &&<CashFlowTable    txs={txData??[]}/>}
               {activeTab==='balance'    &&<BalanceSheetTable txs={txData??[]}/>}
               {activeTab==='income'     &&<IncomeTable      txs={txData??[]}/>}
-              {activeTab==='payment_methods' &&<PaymentMethodsTable txs={txData??[]}/>} 
+              {activeTab==='payment_methods' &&<PaymentMethodsTable txs={txData??[]}/>}
+              {activeTab==='sales_by_category'  &&<SalesByCategoryTable    data={salesByCategoryData}/>}
               {activeTab==='dish_profit'        &&<DishProfitTable        data={dishProfitData}/>}
               {activeTab==='upselling'          &&<UpsellingTable         data={upsellingData} hourWindow={hourWindow} onHourWindowChange={setHourWindow} range={rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : { start: getDateRange(period).start, end: getDateRange(period).end }}/>}
               {activeTab==='canceled_orders'    &&<CanceledOrdersTable    data={canceledData}/>}

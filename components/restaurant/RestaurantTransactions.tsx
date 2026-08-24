@@ -297,25 +297,45 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     }
   }, [selectedDate, fetchDishSales])
 
-  const groupedDishRows = (() => {
-    const map = new Map<string, { dishName: string; qty: number; amount: number }>()
+  // Grouped view: dish sales rolled up by menu category, each with its own
+  // revenue subtotal and the items sold under it — not just a flat dish list.
+  const groupedByCategory = (() => {
+    const categories = new Map<string, { category: string; qty: number; amount: number; items: Map<string, { dishName: string; qty: number; amount: number }> }>()
     for (const sale of dishSales) {
       if (sale?.deletedAt) continue
-      const key = String(sale?.dishName ?? 'Unknown')
+      const dishName = String(sale?.dishName ?? 'Unknown')
+      if (search && !dishName.toLowerCase().includes(search.toLowerCase())) continue
+      const categoryName = String(sale?.dish?.category ?? '').trim() || 'Uncategorized'
       const qty = Number(sale?.quantitySold ?? 0)
       const amount = Number(sale?.totalSaleAmount ?? 0)
-      const existing = map.get(key)
-      if (existing) {
-        existing.qty += qty
-        existing.amount += amount
+
+      let category = categories.get(categoryName)
+      if (!category) {
+        category = { category: categoryName, qty: 0, amount: 0, items: new Map() }
+        categories.set(categoryName, category)
+      }
+      category.qty += qty
+      category.amount += amount
+
+      const existingItem = category.items.get(dishName)
+      if (existingItem) {
+        existingItem.qty += qty
+        existingItem.amount += amount
       } else {
-        map.set(key, { dishName: key, qty, amount })
+        category.items.set(dishName, { dishName, qty, amount })
       }
     }
-    return Array.from(map.values())
-      .filter((row) => !search || row.dishName.toLowerCase().includes(search.toLowerCase()))
-      .sort((a, b) => b.qty - a.qty)
+    return Array.from(categories.values())
+      .map((category) => ({
+        ...category,
+        items: Array.from(category.items.values()).sort((a, b) => b.amount - a.amount),
+      }))
+      .sort((a, b) => b.amount - a.amount)
   })()
+
+  const groupedItemCount = groupedByCategory.reduce((sum, c) => sum + c.items.length, 0)
+  const groupedTotalQty = groupedByCategory.reduce((sum, c) => sum + c.qty, 0)
+  const groupedTotalAmount = groupedByCategory.reduce((sum, c) => sum + c.amount, 0)
 
   useEffect(() => {
     if (!snapshotStorageScope) return
@@ -688,7 +708,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
               <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-bold text-gray-800">{dateLabel}</p>
-                  <p className="text-xs text-gray-400">{groupedDishRows.length} {groupedDishRows.length === 1 ? 'item' : 'items'} sold</p>
+                  <p className="text-xs text-gray-400">{groupedByCategory.length} {groupedByCategory.length === 1 ? 'category' : 'categories'} &middot; {groupedItemCount} {groupedItemCount === 1 ? 'item' : 'items'} sold</p>
                 </div>
                 <div className="relative">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
@@ -701,7 +721,7 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                   />
                 </div>
               </div>
-              {groupedDishRows.length === 0 ? (
+              {groupedByCategory.length === 0 ? (
                 <div className="text-center py-16">
                   <Calendar className="h-10 w-10 text-gray-300 mx-auto mb-3" />
                   <p className="text-gray-500 font-medium">No items sold</p>
@@ -710,32 +730,34 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-100 bg-gray-50">
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Dish</th>
-                        <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Qty Sold</th>
-                        <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Net Amount (RWF)</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {groupedDishRows.map((row) => (
-                        <tr key={row.dishName} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 py-3 text-gray-800 font-medium">{fmtDesc(row.dishName)}</td>
-                          <td className="px-4 py-3 text-right text-gray-600">{row.qty}</td>
-                          <td className="px-4 py-3 text-right font-semibold text-green-600">{row.amount >= 0 ? '+' : '-'}{fmtRWF(Math.abs(row.amount))}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr className="bg-gray-900 text-white font-bold">
-                        <td className="px-4 py-2.5 text-xs">TOTAL</td>
-                        <td className="px-4 py-2.5 text-xs text-right">{groupedDishRows.reduce((s, r) => s + r.qty, 0)}</td>
-                        <td className="px-4 py-2.5 text-xs text-right">{fmtRWF(groupedDishRows.reduce((s, r) => s + r.amount, 0))}</td>
-                      </tr>
-                    </tfoot>
-                  </table>
+                <div className="divide-y divide-gray-100">
+                  {groupedByCategory.map((category) => (
+                    <div key={category.category}>
+                      <div className="px-4 py-2.5 bg-orange-50/70 border-y border-orange-100 flex items-center justify-between gap-3">
+                        <p className="text-xs font-bold text-orange-800 uppercase tracking-wide">{category.category}</p>
+                        <p className="text-xs font-semibold text-orange-700">
+                          {category.items.length} {category.items.length === 1 ? 'item' : 'items'} &middot; Sales Revenue: {fmtRWF(category.amount)}
+                        </p>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <tbody className="divide-y divide-gray-50">
+                            {category.items.map((item) => (
+                              <tr key={item.dishName} className="hover:bg-gray-50 transition-colors">
+                                <td className="px-4 py-2.5 text-gray-800 font-medium">{fmtDesc(item.dishName)}</td>
+                                <td className="px-4 py-2.5 text-right text-gray-500 w-24">{item.qty} sold</td>
+                                <td className="px-4 py-2.5 text-right font-semibold text-green-600 w-36">{item.amount >= 0 ? '+' : '-'}{fmtRWF(Math.abs(item.amount))}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="px-4 py-3 bg-gray-900 text-white flex items-center justify-between gap-3">
+                    <p className="text-xs font-bold uppercase tracking-wide">Grand Total</p>
+                    <p className="text-xs font-bold">{groupedTotalQty} items sold &middot; {fmtRWF(groupedTotalAmount)}</p>
+                  </div>
                 </div>
               )}
             </div>
