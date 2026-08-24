@@ -173,7 +173,25 @@ export async function consumeIngredientStock(
     },
     orderBy: [{ purchasedAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
   })
-  const layerSnapshots = layers.map((layer) => ({
+  // Stock a station imported from the main store is consumed BEFORE the shared
+  // pool, then the station falls back to the pool once its own is gone. That is
+  // the whole point of importing: a station reserves what it needs for service
+  // and works off that first, rather than competing for the pool mid-shift.
+  //
+  // A stable partition, so FIFO still holds inside each group — the oldest
+  // imported batch goes first, and once they are all empty the oldest pool
+  // batch follows. Ordering only, never filtering: the station can always still
+  // reach the pool, so an import can never leave it unable to sell.
+  //
+  // With nothing imported this is a no-op. Every batch is non-local, the
+  // partition preserves the incoming FIFO order exactly, and consumption
+  // behaves as it did before — which is the state every restaurant is in until
+  // someone imports for the first time.
+  const orderedLayers = [
+    ...layers.filter((layer) => layer.branchId === params.branchId),
+    ...layers.filter((layer) => layer.branchId !== params.branchId),
+  ]
+  const layerSnapshots = orderedLayers.map((layer) => ({
     ...layer,
     remainingQuantity: Number(layer.remainingQuantity || 0),
     unitCost: Number(layer.unitCost || 0),

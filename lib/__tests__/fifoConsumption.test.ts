@@ -319,3 +319,79 @@ describe('consumeIngredientStock — non-FIFO mode', () => {
     expect(result.totalCost).toBeCloseTo(3000) // 4 × 750
   })
 })
+
+// ---------------------------------------------------------------------------
+// Tests: imported stock is consumed before the shared pool
+// ---------------------------------------------------------------------------
+
+describe('consumeIngredientStock — imported stock first', () => {
+  /** A batch that also carries the station it sits on. */
+  function batchOnBranch(id: string, remainingQuantity: number, unitCost: number, branchId: string, purchasedAt: string) {
+    return { ...makeBatch(id, remainingQuantity, unitCost, purchasedAt), branchId }
+  }
+
+  it('drains what the station imported before touching the pool', async () => {
+    // The imported batch is NEWER than the pool's, so plain FIFO would reach
+    // for the pool first. Importing is a deliberate act — the station reserved
+    // that stock for its service and expects to work off it.
+    const ingredient = makeIngredient()
+    const batches = [
+      batchOnBranch('pool-old', 10, 100, 'branch-main', '2026-01-01'),
+      batchOnBranch('imported', 4, 250, 'branch-1', '2026-06-01'),
+    ]
+    const db = makeMockDb(ingredient, batches)
+
+    const result = await consumeIngredientStock(db as any, { ...BASE_PARAMS, quantity: 3 })
+
+    expect(result.allocations).toHaveLength(1)
+    expect(result.allocations[0].purchaseId).toBe('imported')
+    expect(result.totalCost).toBe(3 * 250)
+  })
+
+  it('falls back to the pool once the imported stock is used up', async () => {
+    // The station is never cut off: an import can only ever change the order,
+    // so running out mid-service still sells.
+    const ingredient = makeIngredient()
+    const batches = [
+      batchOnBranch('pool-old', 10, 100, 'branch-main', '2026-01-01'),
+      batchOnBranch('imported', 4, 250, 'branch-1', '2026-06-01'),
+    ]
+    const db = makeMockDb(ingredient, batches)
+
+    const result = await consumeIngredientStock(db as any, { ...BASE_PARAMS, quantity: 6 })
+
+    expect(result.allocations.map((a) => a.purchaseId)).toEqual(['imported', 'pool-old'])
+    // 4 imported at 250, then 2 from the pool at 100.
+    expect(result.totalCost).toBe(4 * 250 + 2 * 100)
+  })
+
+  it('keeps FIFO inside the imported stock itself', async () => {
+    const ingredient = makeIngredient()
+    const batches = [
+      batchOnBranch('imported-old', 2, 250, 'branch-1', '2026-05-01'),
+      batchOnBranch('imported-new', 5, 300, 'branch-1', '2026-06-01'),
+      batchOnBranch('pool', 10, 100, 'branch-main', '2026-01-01'),
+    ]
+    const db = makeMockDb(ingredient, batches)
+
+    const result = await consumeIngredientStock(db as any, { ...BASE_PARAMS, quantity: 4 })
+
+    expect(result.allocations.map((a) => a.purchaseId)).toEqual(['imported-old', 'imported-new'])
+  })
+
+  it('behaves exactly as before when the station has imported nothing', async () => {
+    // Every restaurant is in this state until someone imports for the first
+    // time, so this is the case that must not move.
+    const ingredient = makeIngredient()
+    const batches = [
+      batchOnBranch('b1', 3, 100, 'branch-main', '2026-01-01'),
+      batchOnBranch('b2', 5, 200, 'branch-main', '2026-02-01'),
+    ]
+    const db = makeMockDb(ingredient, batches)
+
+    const result = await consumeIngredientStock(db as any, { ...BASE_PARAMS, quantity: 5 })
+
+    expect(result.allocations.map((a) => a.purchaseId)).toEqual(['b1', 'b2'])
+    expect(result.totalCost).toBe(3 * 100 + 2 * 200)
+  })
+})
