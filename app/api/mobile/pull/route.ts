@@ -112,8 +112,151 @@ export async function GET(req: Request) {
     const catalogRequested = url.searchParams.get('catalog') !== '0'
     const skip = <T,>(value: T) => Promise.resolve(value)
 
+    // A poll costs the same whether anything happened or not. The order half is
+    // four queries that re-send up to five hundred orders and every line on
+    // them, and a device asks every ten seconds — so a quiet afternoon is
+    // thousands of byte-for-byte re-sends of what the till already has. That,
+    // not the amount of data stored, is what exhausted the transfer allowance:
+    // the whole database is around twenty megabytes and we shipped five
+    // gigabytes in three weeks.
+    //
+    // changeToken summarises everything the order half can return. The device
+    // sends back the one it last saw; if it still matches, nothing has moved and
+    // the reply is a few bytes instead of tens of kilobytes. The interval is
+    // deliberately unchanged — only the cost of an unchanged answer falls — so
+    // nothing on the floor goes staler than it already was. Making polls cheap
+    // is safe; making them rarer is what would put a wrong order on a table.
+    //
+    // The token has to span every source the order half reads, or a device
+    // silently misses a change:
+    //   - the orders themselves
+    //   - their LINES, which move without touching the order row: adding a dish
+    //     writes an OrderItem and leaves restaurant_orders.updatedAt alone
+    //   - the restaurant row (bill header, printers, shift gating)
+    //   - the open shift, which gates the till
+    //
+    // Each carries a count as well as max(updatedAt), because a delete lowers
+    // the count while leaving every surviving row's timestamp untouched — and
+    // orders do get deleted, from the Transactions page. Timestamps alone would
+    // strand a removed order on the floor for ever.
+    //
+    // Every filter below mirrors the corresponding query exactly. A token more
+    // sensitive than its query only costs a needless refetch; one less sensitive
+    // loses a change, so when in doubt these must match rather than approximate.
+    const sinceToken = url.searchParams.get('since')
+    const [orderStat, itemStat, restaurantStat, shiftStat] = await Promise.all([
+      prisma.restaurantOrder.aggregate({
+        where: { restaurantId, deletedAt: null, updatedAt: { gte: recentOrderSince } },
+        _count: { _all: true },
+        _max: { updatedAt: true },
+      }),
+      prisma.orderItem.aggregate({
+        where: { status: 'ACTIVE', order: { restaurantId, deletedAt: null } },
+        _count: { _all: true },
+        _max: { updatedAt: true },
+      }),
+      prisma.restaurant.findUnique({
+        where: { id: restaurantId },
+        select: { updatedAt: true },
+      }),
+      prisma.shift.aggregate({
+        where: { restaurantId, status: 'OPEN', deletedAt: null },
+        _count: { _all: true },
+        _max: { updatedAt: true },
+      }),
+    ])
+
+    const stamp = (value: Date | null | undefined) => (value ? value.getTime() : 0)
+    const changeToken = [
+      `o${orderStat._count._all}.${stamp(orderStat._max.updatedAt)}`,
+      `i${itemStat._count._all}.${stamp(itemStat._max.updatedAt)}`,
+      `r${stamp(restaurantStat?.updatedAt)}`,
+      `s${shiftStat._count._all}.${stamp(shiftStat._max.updatedAt)}`,
+    ].join('-')
+
+    // The catalog half needs exactly the same treatment, and for a bigger prize.
+    // It refreshes every sixty seconds and ships all 231 dishes plus tables,
+    // staff, stations, MEP and preps each time — around 75KB against the order
+    // half's 20KB. At roughly 1,300 refreshes a day that is the larger share of
+    // the bill, and the menu changes a few times a WEEK.
+    //
+    // Same rule as above: the interval stays at sixty seconds so a dish marked
+    // out still reaches the floor within a minute. Only an unchanged answer gets
+    // cheaper. Every filter mirrors its query, including the ones that move
+    // during service (MEP items, prep logs, stock counts) — a menu that has not
+    // changed must not mask a prep list that has.
+    const catalogSince = url.searchParams.get('catalogSince')
+    let catalogToken: string | null = null
+    if (catalogRequested) {
+      const [dishStat, tableStat, staffStat, branchStat, mepStat, prepLogStat, prepStat] = await Promise.all([
+        prisma.dish.aggregate({ where: dishWhere, _count: { _all: true }, _max: { updatedAt: true } }),
+        prisma.restaurantTable.aggregate({ where: tableWhere, _count: { _all: true }, _max: { updatedAt: true } }),
+        prisma.staff.aggregate({
+          where: {
+            restaurantId,
+            isActive: true,
+            deletedAt: null,
+            OR: [{ pin: { not: null } }, { cancellationPin: { not: null } }],
+          },
+          _count: { _all: true },
+          _max: { updatedAt: true },
+        }),
+        prisma.branch.aggregate({
+          where: { restaurantId, isActive: true },
+          _count: { _all: true },
+          _max: { updatedAt: true },
+        }),
+        prisma.mepListItem.aggregate({
+          where: { restaurantId, branchId: effectiveBranchId, deletedAt: null },
+          _count: { _all: true },
+          _max: { updatedAt: true },
+        }),
+        prisma.prepLog.aggregate({
+          where: { restaurantId, branchId: effectiveBranchId, madeAt: { gte: startOfToday } },
+          _count: { _all: true },
+          _max: { updatedAt: true },
+        }),
+        prisma.inventoryItem.aggregate({
+          where: { restaurantId, branchId: effectiveBranchId, type: 'prep', deletedAt: null },
+          _count: { _all: true },
+          _max: { updatedAt: true },
+        }),
+      ])
+
+      catalogToken = [
+        `d${dishStat._count._all}.${stamp(dishStat._max.updatedAt)}`,
+        `t${tableStat._count._all}.${stamp(tableStat._max.updatedAt)}`,
+        `f${staffStat._count._all}.${stamp(staffStat._max.updatedAt)}`,
+        `b${branchStat._count._all}.${stamp(branchStat._max.updatedAt)}`,
+        `m${mepStat._count._all}.${stamp(mepStat._max.updatedAt)}`,
+        `l${prepLogStat._count._all}.${stamp(prepLogStat._max.updatedAt)}`,
+        `p${prepStat._count._all}.${stamp(prepStat._max.updatedAt)}`,
+      ].join('-')
+    }
+
+    // Asked for, but not a byte of it has moved — so the device keeps the copy
+    // it already has. Distinct from "not asked for": the client has to reset its
+    // catalog clock on this, or it would ask again ten seconds later and pay for
+    // the check on every single poll.
+    const catalogUnchanged = Boolean(catalogRequested && catalogSince && catalogSince === catalogToken)
+    const sendCatalog = catalogRequested && !catalogUnchanged
+
+    // Nothing has moved on either half, so there is nothing to send at all. This
+    // is the common case on a quiet floor and the entire point of the tokens. A
+    // device that sends neither ?since= nor ?catalogSince= never reaches this
+    // branch and keeps the old behaviour exactly.
+    if (sinceToken && sinceToken === changeToken && !sendCatalog) {
+      return jsonNoStore({
+        unchanged: true,
+        changeToken,
+        catalogToken,
+        catalogUnchanged,
+        catalogIncluded: false,
+      })
+    }
+
     const [dishes, tables, restaurant, approverEmployees, allBranches, recentOrders, incomingOrders, mepItems, mepTodayLogs, prepCatalog, openShift] = await Promise.all([
-      catalogRequested ? prisma.dish.findMany({
+      sendCatalog ? prisma.dish.findMany({
         where: dishWhere,
         select: {
           id: true, name: true, sellingPrice: true,
@@ -123,7 +266,7 @@ export async function GET(req: Request) {
         orderBy: { name: 'asc' },
       }) : Promise.resolve([]),
 
-      catalogRequested ? prisma.restaurantTable.findMany({
+      sendCatalog ? prisma.restaurantTable.findMany({
         where: tableWhere,
         select: {
           id: true, name: true, seats: true, status: true,
@@ -143,7 +286,7 @@ export async function GET(req: Request) {
       // cancellation PINs identify a *person*, not a station, so anyone on
       // staff can confirm/cancel regardless of which station tab is active.
       // Hashes are sent, never plaintext.
-      catalogRequested ? prisma.staff.findMany({
+      sendCatalog ? prisma.staff.findMany({
         where: {
           restaurantId,
           isActive: true,
@@ -153,7 +296,7 @@ export async function GET(req: Request) {
         select: { id: true, name: true, role: true, pin: true, cancellationPin: true },
       }) : Promise.resolve([]),
 
-      catalogRequested ? prisma.branch.findMany({
+      sendCatalog ? prisma.branch.findMany({
         where: { restaurantId, isActive: true },
         select: { id: true, name: true, code: true, isMain: true, type: true },
         orderBy: { name: 'asc' },
@@ -240,20 +383,20 @@ export async function GET(req: Request) {
       }),
 
       // MEP list for this station — persists until removed by staff.
-      catalogRequested ? prisma.mepListItem.findMany({
+      sendCatalog ? prisma.mepListItem.findMany({
         where: { restaurantId, branchId: effectiveBranchId, deletedAt: null },
         orderBy: { createdAt: 'asc' },
       }) : Promise.resolve([]),
 
       // Today's prep logs for offline reconciliation on the device.
-      catalogRequested ? prisma.prepLog.findMany({
+      sendCatalog ? prisma.prepLog.findMany({
         where: { restaurantId, branchId: effectiveBranchId, madeAt: { gte: startOfToday } },
         orderBy: { madeAt: 'desc' },
         take: 200,
       }) : Promise.resolve([]),
 
       // Prep catalog for the MEP search box (dishes come from the dishes array).
-      catalogRequested ? prisma.inventoryItem.findMany({
+      sendCatalog ? prisma.inventoryItem.findMany({
         where: { restaurantId, branchId: effectiveBranchId, type: 'prep', deletedAt: null },
         select: { id: true, name: true, unit: true, quantity: true },
         orderBy: { name: 'asc' },
@@ -331,9 +474,15 @@ export async function GET(req: Request) {
       restaurant_id: t.restaurantId,
     }))
 
-    if (normalisedDishes.length === 0) {
-      // Diagnostic: log when pull returns an empty menu so server logs capture
-      // the branchId context without requiring a debugger.
+    // Diagnostic: log when a pull that ASKED for the menu comes back empty, so
+    // server logs carry the branchId without needing a debugger.
+    //
+    // Guarded on catalogRequested. A light pull returns no dishes and no tables
+    // by design, so without this it fired on every single one — 2,485 false
+    // alarms in eleven minutes, all of them reading as if a station had lost its
+    // menu while the restaurant in question had 231 active dishes the whole
+    // time. A warning that cries wolf on the happy path is worse than none.
+    if (sendCatalog && normalisedDishes.length === 0) {
       console.warn('[mobile/pull] zero dishes returned', {
         restaurantId,
         branchId: effectiveBranchId,
@@ -358,7 +507,16 @@ export async function GET(req: Request) {
       // Tells the client which half it received. Without it a light pull looks
       // identical to a restaurant whose menu really is empty, and the client
       // warns the waiter their station has no menu.
-      catalogIncluded: catalogRequested,
+      catalogIncluded: sendCatalog,
+      // True when the catalog was asked for and had not changed, so the device
+      // keeps its cached menu AND resets its catalog clock. Without the reset it
+      // would ask again on the very next poll and pay for the check every time.
+      catalogUnchanged,
+      // What the device sends back as ?since= / ?catalogSince= next time. When
+      // they still match, the next pull answers in a few bytes instead of
+      // resending everything.
+      changeToken,
+      catalogToken,
       branches: allBranches,
       cancellationApprovers: approverEmployees
         .filter(e => e.cancellationPin != null)
