@@ -1,5 +1,5 @@
 ﻿'use client'
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { X, Sparkles, ShoppingCart, Search, Trash2 } from 'lucide-react'
 import { createInventoryBatchSuffix, formatInventoryBatchId } from '@/lib/inventoryBatch'
@@ -358,7 +358,16 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
   const [purchaseAutofillMatchKey, setPurchaseAutofillMatchKey] = useState('')
   const [suggestionDismissed, setSuggestionDismissed] = useState(false)
   const [pForm, setPForm] = useState(createEmptyPurchaseForm())
-  const [inventoryView, setInventoryView] = useState<'stock' | 'preps'>('stock')
+  const [inventoryView, setInventoryView] = useState<'stock' | 'preps' | 'imported'>('stock')
+  // What this station has pulled out of the shared store and not yet used up.
+  const [importedRows, setImportedRows] = useState<{ ingredientId: string; name: string; unit: string; remaining: number }[]>([])
+  // Imported and now at zero — the station is back on the main store for these.
+  const [usedUpRows, setUsedUpRows] = useState<{ ingredientId: string; name: string; unit: string }[]>([])
+  const [importSearch, setImportSearch] = useState('')
+  const [importQty, setImportQty] = useState<Record<string, string>>({})
+  const [importBusyId, setImportBusyId] = useState<string | null>(null)
+  const [importNotice, setImportNotice] = useState<string | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
   // Stock lives at the main station once the pool is shared; everywhere else the
   // page is about preps only.
   const showStockTab = !restaurantBranch?.sharedStock || Boolean(restaurantBranch?.branchIsMain)
@@ -397,9 +406,57 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
 
   // Switching to a station that holds no stock must not leave the page sitting
   // on a tab that is no longer there.
+  // A station under shared stock can import, because there is a store to import
+  // from. The main station IS that store, so it has nothing to import to.
+  const showImportedTab = Boolean(restaurantBranch?.sharedStock) && !restaurantBranch?.branchIsMain
+
   useEffect(() => {
-    if (!showStockTab && inventoryView === 'stock') setInventoryView('preps')
-  }, [showStockTab, inventoryView])
+    if (!showStockTab && inventoryView === 'stock') setInventoryView(showImportedTab ? 'imported' : 'preps')
+  }, [showStockTab, inventoryView, showImportedTab])
+
+  const loadImported = useCallback(async () => {
+    if (!showImportedTab) return
+    try {
+      const res = await fetch('/api/restaurant/inventory/transfer', FRESH_FETCH_OPTIONS)
+      const data = await res.json()
+      setImportedRows(Array.isArray(data?.items) ? data.items : [])
+      setUsedUpRows(Array.isArray(data?.usedUp) ? data.usedUp : [])
+    } catch {
+      setImportedRows([])
+      setUsedUpRows([])
+    }
+  }, [showImportedTab])
+
+  useEffect(() => { void loadImported() }, [loadImported])
+
+  const importItem = useCallback(async (ingredientId: string) => {
+    const raw = importQty[ingredientId]
+    const quantity = Number(raw)
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setImportError('Enter how much to import.')
+      return
+    }
+    setImportBusyId(ingredientId)
+    setImportError(null)
+    setImportNotice(null)
+    try {
+      const res = await fetch('/api/restaurant/inventory/transfer', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ingredientId, quantity }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || 'Import failed.')
+      setImportNotice(`Imported ${fmtQty(data.quantity)} ${data.unit} of ${data.ingredientName} — ${data.batchesMoved} batch${data.batchesMoved === 1 ? '' : 'es'}.`)
+      setImportQty((current) => ({ ...current, [ingredientId]: '' }))
+      await loadImported()
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Import failed.')
+    } finally {
+      setImportBusyId(null)
+    }
+  }, [importQty, loadImported])
 
   useEffect(() => {
     const unsubscribeTickets = subscribeStockEntryTickets(setQueueTickets)
@@ -1500,11 +1557,137 @@ export default function RestaurantInventory({ onAskJesse }: { onAskJesse?: () =>
             Stock
           </button>
         )}
+        {/* The station cannot record batches into the shared pool, but it can
+            pull stock out of it onto itself and work off that first. */}
+        {showImportedTab && (
+          <button type="button" onClick={() => setInventoryView('imported')}
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${inventoryView === 'imported' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            Imported stock
+          </button>
+        )}
         <button type="button" onClick={() => setInventoryView('preps')}
           className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${inventoryView === 'preps' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
           Preps
         </button>
       </div>
+
+      {inventoryView === 'imported' && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <p className="text-sm font-bold text-gray-800">Stock this station is holding</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Imported stock is used before the main store&rsquo;s. When it runs out this station carries on
+              selling from the main store — import again to top it up.
+            </p>
+          </div>
+
+          {/* The alert the station acts on: what it imported has run out, so it
+              is back on the main store until someone imports again. */}
+          {usedUpRows.length > 0 && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+              <p className="text-sm font-bold text-amber-900">
+                {usedUpRows.length === 1 ? 'Imported stock used up' : `${usedUpRows.length} imported items used up`}
+              </p>
+              <p className="text-xs text-amber-800 mt-0.5">
+                {usedUpRows.map((r) => r.name).join(', ')} — this station is selling from the main store again. Import more below to keep working off your own stock.
+              </p>
+            </div>
+          )}
+
+          {importNotice && (
+            <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-800">{importNotice}</div>
+          )}
+          {importError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{importError}</div>
+          )}
+
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+            <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+              <p className="text-xs font-bold uppercase tracking-wide text-gray-600">Holding now</p>
+            </div>
+            {importedRows.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm text-gray-400">
+                Nothing imported yet — this station is selling straight from the main store.
+              </p>
+            ) : (
+              <table className="w-full text-sm">
+                <tbody>
+                  {importedRows.map((row, i) => (
+                    <tr key={row.ingredientId} className={i % 2 === 0 ? 'bg-white' : 'bg-orange-50/40'}>
+                      <td className="px-4 py-2 text-sm font-semibold text-gray-800 border-b border-gray-100">{row.name}</td>
+                      <td className="px-4 py-2 text-sm text-right text-gray-600 border-b border-gray-100 tabular-nums">
+                        {fmtQty(row.remaining)} {row.unit}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+            <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex items-center justify-between gap-3 flex-wrap">
+              <p className="text-xs font-bold uppercase tracking-wide text-gray-600">Import from the main store</p>
+              <input
+                type="text"
+                value={importSearch}
+                onChange={(e) => setImportSearch(e.target.value)}
+                placeholder="Search stock&hellip;"
+                className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-52 focus:outline-none focus:ring-2 focus:ring-orange-300"
+              />
+            </div>
+            {/* Search first, so a long stock list is not dumped on screen before
+                anyone has said what they are looking for. */}
+            {importSearch.trim() === '' ? (
+              <p className="px-4 py-6 text-center text-sm text-gray-400">Search for an item to import.</p>
+            ) : (
+              (() => {
+                const matches = items
+                  .filter((it) => it.name.toLowerCase().includes(importSearch.trim().toLowerCase()))
+                  .slice(0, 25)
+                if (matches.length === 0) {
+                  return <p className="px-4 py-6 text-center text-sm text-gray-400">No stock matches &ldquo;{importSearch}&rdquo;.</p>
+                }
+                return (
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {matches.map((it, i) => (
+                        <tr key={it.id} className={i % 2 === 0 ? 'bg-white' : 'bg-orange-50/40'}>
+                          <td className="px-4 py-2 border-b border-gray-100">
+                            <p className="font-semibold text-gray-800">{it.name}</p>
+                            <p className="text-xs text-gray-400">{fmtQty(Number(it.quantity ?? 0))} {it.unit} in the store</p>
+                          </td>
+                          <td className="px-4 py-2 border-b border-gray-100 w-56">
+                            <div className="flex items-center gap-2 justify-end">
+                              <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                value={importQty[it.id] ?? ''}
+                                onChange={(e) => setImportQty((c) => ({ ...c, [it.id]: e.target.value }))}
+                                placeholder={it.unit}
+                                className="w-24 px-2 py-1.5 border border-gray-200 rounded-lg text-sm text-right focus:outline-none focus:ring-2 focus:ring-orange-300"
+                              />
+                              <button
+                                type="button"
+                                disabled={importBusyId === it.id}
+                                onClick={() => { void importItem(it.id) }}
+                                className="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 disabled:opacity-50"
+                              >
+                                {importBusyId === it.id ? 'Importing…' : 'Import'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )
+              })()
+            )}
+          </div>
+        </div>
+      )}
 
       {inventoryView === 'stock' && (<>
       {resumedTicketCount > 0 && (

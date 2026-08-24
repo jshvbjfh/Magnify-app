@@ -44,24 +44,52 @@ export async function GET(req: Request) {
   if (!branch) return NextResponse.json({ error: 'Station not found.' }, { status: 403 })
 
   const imported = await getImportedStockForBranch(prisma, { restaurantId, branchId: branch.id })
-  if (imported.length === 0) return NextResponse.json({ branchId: branch.id, items: [] })
+  const stillHeld = new Set(imported.map((row) => row.ingredientId))
+
+  // Anything this station imported that is now at zero. The station has fallen
+  // back on the main store for it, which is exactly the moment whoever imported
+  // wants to know — an item that simply vanished off the list would look like
+  // the import had never happened.
+  const everImported = await prisma.inventoryAdjustmentLog.findMany({
+    where: { restaurantId, branchId: branch.id, adjustmentType: 'transfer_in' },
+    select: { ingredientId: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+  })
+  const usedUpIds: string[] = []
+  const lastImportedAt = new Map<string, Date>()
+  for (const row of everImported) {
+    if (!lastImportedAt.has(row.ingredientId)) lastImportedAt.set(row.ingredientId, row.createdAt)
+    if (!stillHeld.has(row.ingredientId) && !usedUpIds.includes(row.ingredientId)) {
+      usedUpIds.push(row.ingredientId)
+    }
+  }
+
+  const referenced = Array.from(new Set([...stillHeld, ...usedUpIds]))
+  if (referenced.length === 0) {
+    return NextResponse.json({ branchId: branch.id, items: [], usedUp: [] })
+  }
 
   const items = await prisma.inventoryItem.findMany({
-    where: { id: { in: imported.map((row) => row.ingredientId) }, restaurantId },
+    where: { id: { in: referenced }, restaurantId },
     select: { id: true, name: true, unit: true, category: true },
   })
   const byId = new Map(items.map((item) => [item.id, item]))
+  const describe = (ingredientId: string) => ({
+    ingredientId,
+    name: byId.get(ingredientId)?.name ?? 'Unknown item',
+    unit: byId.get(ingredientId)?.unit ?? '',
+    category: byId.get(ingredientId)?.category ?? null,
+    lastImportedAt: lastImportedAt.get(ingredientId) ?? null,
+  })
 
   return NextResponse.json({
     branchId: branch.id,
     items: imported
-      .map((row) => ({
-        ingredientId: row.ingredientId,
-        name: byId.get(row.ingredientId)?.name ?? 'Unknown item',
-        unit: byId.get(row.ingredientId)?.unit ?? '',
-        category: byId.get(row.ingredientId)?.category ?? null,
-        remaining: row.remaining,
-      }))
+      .map((row) => ({ ...describe(row.ingredientId), remaining: row.remaining }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    usedUp: usedUpIds
+      .map(describe)
       .sort((a, b) => a.name.localeCompare(b.name)),
   })
 }
