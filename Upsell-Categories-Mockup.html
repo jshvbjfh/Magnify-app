@@ -1,0 +1,714 @@
+<title>Upsell report with menu categories</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fffaf5; --line: #e6e4e1; --line-soft: #f0eeeb;
+    --ink: #1c1b1a; --ink-2: #57534e; --ink-3: #8b8580;
+    --accent: #ea580c; --accent-soft: #fff2e8; --accent-line: #fbd5b5;
+    --good: #047857; --good-soft: #ecfdf5;
+    --warn: #b45309; --warn-soft: #fffbeb; --warn-line: #fcd9a3;
+    --bad: #be123c; --bad-soft: #fff1f2; --bad-line: #fecdd3;
+    --foot: #1c1b1a; --foot-ink: #ffffff;
+    --shadow: 0 1px 2px rgba(28,27,26,.06), 0 1px 3px rgba(28,27,26,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17161a; --surface: #1f1e23; --surface-2: #26232a; --line: #35323a; --line-soft: #2b282f;
+      --ink: #f2efec; --ink-2: #b6b0aa; --ink-3: #837d78;
+      --accent: #fb923c; --accent-soft: #2e2018; --accent-line: #4d3421;
+      --good: #34d399; --good-soft: #172a24; --warn: #fbbf24; --warn-soft: #2b2415; --warn-line: #4a3a1a;
+      --bad: #fb7185; --bad-soft: #2d1a1e; --bad-line: #4d2830;
+      --foot: #100f13; --foot-ink: #f2efec; --shadow: 0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17161a; --surface: #1f1e23; --surface-2: #26232a; --line: #35323a; --line-soft: #2b282f;
+    --ink: #f2efec; --ink-2: #b6b0aa; --ink-3: #837d78;
+    --accent: #fb923c; --accent-soft: #2e2018; --accent-line: #4d3421;
+    --good: #34d399; --good-soft: #172a24; --warn: #fbbf24; --warn-soft: #2b2415; --warn-line: #4a3a1a;
+    --bad: #fb7185; --bad-soft: #2d1a1e; --bad-line: #4d2830;
+    --foot: #100f13; --foot-ink: #f2efec; --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 22px 20px 60px; display: flex; flex-direction: column; gap: 20px; }
+
+  .mock { border: 1px dashed var(--accent-line); background: var(--accent-soft); color: var(--ink-2);
+    border-radius: 11px; padding: 9px 14px; font-size: 12px; }
+  .mock b { color: var(--ink); }
+
+  /* app chrome */
+  .tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 3px; }
+  .tab { flex: 0 0 auto; border-radius: 9px; padding: 6px 12px; font-size: 11.5px; font-weight: 600;
+    white-space: nowrap; background: var(--surface); border: 1px solid var(--line); color: var(--ink-2); }
+  .tab[aria-current="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .scope { font-size: 12.5px; color: var(--ink-2); font-weight: 600; }
+  .scope span { color: var(--ink-3); font-weight: 400; }
+  .scope em { color: var(--accent); font-style: normal; font-weight: 700; }
+
+  .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .chips .lb { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); margin-right: 3px; }
+  .chip { border-radius: 999px; padding: 4px 12px; font-size: 11.5px; font-weight: 600;
+    background: var(--line-soft); color: var(--ink-2); border: 1px solid transparent; }
+  .chip[aria-pressed="true"] { background: var(--accent); color: #fff; }
+
+  /* shape of day */
+  .day { background: var(--surface); border: 1px solid var(--line); border-radius: 13px; padding: 12px 14px 10px; box-shadow: var(--shadow); }
+  .day .row { display: flex; align-items: flex-end; gap: 5px; height: 92px; overflow-x: auto; }
+  .day .h { flex: 0 0 auto; width: 38px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 3px; }
+  .day .h .p { font-size: 9.5px; font-weight: 700; color: var(--ink-3); }
+  .day .h .p.on { color: var(--ink-2); }
+  .day .h i { display: block; width: 100%; border-radius: 4px 4px 0 0; background: var(--line); }
+  .day .h.on i { background: var(--accent); }
+  .day .h .t { font-size: 9.5px; color: var(--ink-3); }
+  .day .cap { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-3); }
+
+  /* kpis */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 11px; }
+  .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 13px; padding: 12px 15px; box-shadow: var(--shadow); }
+  .kpi .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); font-weight: 600; }
+  .kpi .v { font-size: 24px; font-weight: 700; letter-spacing: -.022em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .kpi .m { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+  .kpi.lead { background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 26%, var(--line)); } .kpi.lead .v { color: var(--good); }
+  .kpi.gap { background: var(--warn-soft); border-color: var(--warn-line); } .kpi.gap .v { color: var(--warn); }
+
+  .take { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 12px; padding: 13px 16px; box-shadow: var(--shadow); }
+  .take .who { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
+  .take p { margin: 4px 0 0; font-size: 14px; line-height: 1.5; }
+  .take b { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* sections */
+  section > .hd { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+  section h2 { font-size: 11.5px; font-weight: 700; margin: 0; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); }
+  .new { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; padding: 2px 7px;
+    border-radius: 999px; background: var(--accent); color: #fff; }
+  .old { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; padding: 2px 7px;
+    border-radius: 999px; background: var(--line-soft); color: var(--ink-3); border: 1px solid var(--line); }
+
+  /* tables */
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { background: var(--accent); color: #fff; font-size: 10.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em; padding: 9px 11px; text-align: right; white-space: nowrap; }
+  thead th:first-child, thead th.l { text-align: left; }
+  tbody td { padding: 9px 11px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line-soft);
+    font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  tbody td:first-child, tbody td.l { text-align: left; color: var(--ink); }
+  tbody tr:nth-child(even) { background: var(--surface-2); }
+  tbody tr.dim td { color: var(--ink-3); }
+  tfoot td { background: var(--foot); color: var(--foot-ink); font-weight: 700; padding: 10px 11px;
+    text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  tfoot td:first-child { text-align: left; }
+  .money { font-weight: 650; color: var(--ink); }
+  .strong { font-weight: 700; color: var(--ink); }
+  .pair .b { font-weight: 650; }
+  .pair .ar { color: var(--ink-3); font-size: 11px; margin: 0 5px; }
+  .pair .a { color: var(--accent); font-weight: 650; }
+
+  /* the talking column */
+  td.says { text-align: left; white-space: normal; font-size: 12px; line-height: 1.4; min-width: 210px; color: var(--ink-2); }
+  td.says b { color: var(--ink); font-weight: 650; }
+  .v { display: inline-block; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: 2px 7px; border-radius: 999px; margin-right: 6px; vertical-align: 1px; }
+  .v.fix { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad-line); }
+  .v.watch { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-line); }
+  .v.good { background: var(--good-soft); color: var(--good); border: 1px solid color-mix(in srgb, var(--good) 30%, var(--line)); }
+  .v.thin { background: var(--line-soft); color: var(--ink-3); border: 1px solid var(--line); }
+
+  /* rate pills */
+  .r { display: inline-block; min-width: 44px; padding: 3px 6px; border-radius: 7px; font-weight: 650; text-align: center; }
+  .r.hi { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+  .r.mid { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+  .r.lo { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); }
+  .r.na { background: var(--line-soft); color: var(--ink-3); }
+  .matrix td.c { text-align: center; }
+
+  /* parent / child rows in the combined matrix */
+  tbody tr.parent td { border-top: 1px solid var(--line); }
+  tbody tr.parent td:first-child { font-weight: 700; }
+  tbody tr.kid td { background: transparent; }
+  tbody tr.kid td:first-child { padding-left: 26px; color: var(--ink-2); font-size: 12.5px; }
+  tbody tr.kid td:first-child::before { content: "└ "; color: var(--ink-3); }
+  th.grp { border-left: 2px solid rgba(255,255,255,.35); }
+  td.grp { border-left: 2px solid var(--line); }
+
+  .tag { display: inline-block; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+    padding: 2px 7px; border-radius: 999px; background: var(--line-soft); color: var(--ink-3); border: 1px solid var(--line); }
+  .tag.drink { background: #e0f2fe; color: #0369a1; border-color: #bae6fd; }
+  .tag.addon { background: var(--good-soft); color: var(--good); border-color: color-mix(in srgb, var(--good) 30%, var(--line)); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tag.drink { background:#0c2a3d; color:#7dd3fc; border-color:#17475f; } }
+  :root[data-theme="dark"] .tag.drink { background:#0c2a3d; color:#7dd3fc; border-color:#17475f; }
+
+  details.about { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+  details.about > summary { cursor: pointer; list-style: none; padding: 11px 15px; font-size: 12px; font-weight: 650; color: var(--ink-2); }
+  details.about > summary::-webkit-details-marker { display: none; }
+  details.about ul { margin: 0; padding: 0 16px 14px 34px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
+  details.about b { color: var(--ink); }
+</style>
+
+<div class="wrap">
+
+  <div class="mock">
+    <b>Mockup of the Upsell tab with menu categories added.</b> Orange <span class="new">new</span> marks what categories
+    bring; <span class="old">today</span> marks what is already there. Real figures, live data, 126 paid High&nbsp;5ive bills.
+  </div>
+
+  <!-- app chrome -->
+  <div class="tabs">
+    <div class="tab">Journal</div><div class="tab">Income</div><div class="tab">Payments</div>
+    <div class="tab">Dish Profit</div><div class="tab">Inventory</div><div class="tab">General</div>
+    <div class="tab" aria-current="true">Upsell &amp; Attachments</div>
+  </div>
+
+  <div class="chips">
+    <span class="lb">Service</span>
+    <span class="chip">All day</span><span class="chip">Breakfast</span><span class="chip">Lunch</span>
+    <span class="chip" aria-pressed="true">Dinner</span><span class="chip">Late night</span>
+    <span class="chip" style="background:transparent;border-color:var(--line)">18:00 → 22:59</span>
+  </div>
+
+  <p class="scope" style="margin:0">
+    All stations · 126 eligible bills · <em>Dinner 18:00–22:59</em> <span>· 54 bills outside it · 4 guest QR bills excluded</span>
+  </p>
+
+  <!-- shape of day -->
+  <div class="day">
+    <div class="row">
+      <div class="h"><span class="p">—</span><i style="height:8px"></i><span class="t">08</span></div>
+      <div class="h"><span class="p">—</span><i style="height:12px"></i><span class="t">09</span></div>
+      <div class="h"><span class="p">—</span><i style="height:18px"></i><span class="t">10</span></div>
+      <div class="h"><span class="p">—</span><i style="height:18px"></i><span class="t">11</span></div>
+      <div class="h"><span class="p">—</span><i style="height:20px"></i><span class="t">12</span></div>
+      <div class="h"><span class="p">61%</span><i style="height:48px"></i><span class="t">13</span></div>
+      <div class="h"><span class="p">—</span><i style="height:26px"></i><span class="t">14</span></div>
+      <div class="h"><span class="p">—</span><i style="height:18px"></i><span class="t">15</span></div>
+      <div class="h"><span class="p">—</span><i style="height:20px"></i><span class="t">16</span></div>
+      <div class="h"><span class="p">—</span><i style="height:22px"></i><span class="t">17</span></div>
+      <div class="h on"><span class="p on">72%</span><i style="height:30px"></i><span class="t">18</span></div>
+      <div class="h on"><span class="p on">76%</span><i style="height:38px"></i><span class="t">19</span></div>
+      <div class="h on"><span class="p on">74%</span><i style="height:48px"></i><span class="t">20</span></div>
+      <div class="h on"><span class="p on">78%</span><i style="height:66px"></i><span class="t">21</span></div>
+      <div class="h on"><span class="p on">75%</span><i style="height:92px"></i><span class="t">22</span></div>
+      <div class="h"><span class="p">76%</span><i style="height:44px"></i><span class="t">23</span></div>
+      <div class="h"><span class="p">—</span><i style="height:18px"></i><span class="t">00</span></div>
+      <div class="h"><span class="p">—</span><i style="height:10px"></i><span class="t">01</span></div>
+      <div class="h"><span class="p">—</span><i style="height:8px"></i><span class="t">02</span></div>
+    </div>
+    <p class="cap">Bars are bills; the figure is drink attachment. Hours under 10 bills show “—”. <span class="old">today</span></p>
+  </div>
+
+  <!-- kpis -->
+  <div class="kpis">
+    <div class="kpi"><div class="k">Attach revenue</div><div class="v">1,829,500</div><div class="m">RWF, drinks + add-ons</div></div>
+    <div class="kpi gap"><div class="k">Revenue opportunity</div><div class="v">302,000</div><div class="m">RWF, top 3 category gaps</div></div>
+    <div class="kpi lead"><div class="k">Category pairings found</div><div class="v">34</div><div class="m">vs 19 dish pairings</div></div>
+    <div class="kpi"><div class="k">Drink attach, dinner</div><div class="v">75%</div><div class="m">of 72 food bills</div></div>
+  </div>
+
+  <div class="take">
+    <div class="who">Jesse&rsquo;s take</div>
+    <p>Sides ride <b>87%</b> of grills but <b>20%</b> of burgers &mdash; your biggest section. Closing that is worth about
+      <b>149,000 RWF</b>. And burgers take a soft drink <b>73%</b> of the time but a mocktail only <b>15%</b>, at
+      <b>2.9&times;</b> the value.</p>
+  </div>
+
+  <!-- THE ONE TABLE -->
+  <section>
+    <div class="hd"><h2>What pairs with what — one table</h2><span class="new">new</span></div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th class="l">Category</th><th class="l">Sub-category</th><th>Bills</th><th>Guests</th>
+            <th class="grp">Sides</th><th>Add-ons</th>
+            <th class="grp">Alcoholic</th><th>Non-alc.</th>
+            <th>Bare</th><th class="l">What it says</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- BURGERS -->
+          <tr class="parent">
+            <td class="l">Burgers</td><td class="l">All</td><td class="strong">40</td><td>3.3</td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">78%</span></td>
+            <td><span class="r lo">15%</span></td>
+            <td class="says"><span class="v fix">fix</span>Biggest section, pairs with <b>nothing</b> but a soft drink.</td>
+          </tr>
+          <tr class="kid">
+            <td class="l">Burgers</td><td class="l">Signature</td><td>27</td><td>3.7</td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">85%</span></td>
+            <td><span class="r lo">11%</span></td>
+            <td class="says">The better half — closest to a pairing at 26% sides.</td>
+          </tr>
+          <tr class="kid">
+            <td class="l">Burgers</td><td class="l">Smash</td><td>17</td><td>3.2</td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r mid">71%</span></td>
+            <td><span class="r lo">18%</span></td>
+            <td class="says"><span class="v fix">worst row</span>Nothing pairs. Nearly 1 in 5 goes out bare.</td>
+          </tr>
+
+          <!-- GRILL -->
+          <tr class="parent">
+            <td class="l">Grill</td><td class="l">All</td><td class="strong">23</td><td>4.5</td>
+            <td class="grp"><span class="r hi">87%</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">100%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v good">benchmark</span>The only strong side pairing on the menu.</td>
+          </tr>
+          <tr class="kid">
+            <td class="l">Grill</td><td class="l">Skewers &amp; Cuts</td><td>15</td><td>3.9</td>
+            <td class="grp"><span class="r hi">87%</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">100%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says">Holds up at normal table size — this one is real selling.</td>
+          </tr>
+          <tr class="kid">
+            <td class="l">Grill</td><td class="l">Platters</td><td>9</td><td class="strong">6.1</td>
+            <td class="grp"><span class="r hi">89%</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">100%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v thin">party size</span>6.1 guests. Full basket because it is a big table.</td>
+          </tr>
+
+          <!-- RICE BOWLS -->
+          <tr class="parent">
+            <td class="l">Rice Bowls</td><td class="l">All</td><td class="strong">29</td><td>3.8</td>
+            <td class="grp"><span class="r mid">59%</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">93%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v good">solid</span>Sides land. Never leaves bare.</td>
+          </tr>
+          <tr class="kid">
+            <td class="l">Rice Bowls</td><td class="l">Fried Rice</td><td>19</td><td>4.5</td>
+            <td class="grp"><span class="r hi">68%</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">89%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says">Carries the parent&rsquo;s side rate on its own.</td>
+          </tr>
+          <tr class="kid">
+            <td class="l">Rice Bowls</td><td class="l">Bowls</td><td>12</td><td>3.4</td>
+            <td class="grp"><span class="r mid">42%</span></td><td><span class="r mid">33%</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">100%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v watch">split</span>Weaker sides than Fried Rice, but the only bowl that pairs an add-on.</td>
+          </tr>
+
+          <!-- DUMPLINGS -->
+          <tr class="parent">
+            <td class="l">Dumplings &amp; Wontons</td><td class="l">All</td><td class="strong">24</td><td>3.6</td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">96%</span></td>
+            <td><span class="r hi">4%</span></td>
+            <td class="says"><span class="v fix">fix</span>Drinks only. No wontons sold at all, so no sub-split to show.</td>
+          </tr>
+
+          <!-- PASTA -->
+          <tr class="parent">
+            <td class="l">Pasta</td><td class="l">All</td><td class="strong">16</td><td>4.6</td>
+            <td class="grp"><span class="r mid">44%</span></td><td><span class="r hi">94%</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">81%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v good">best pair</span>Add-ons at <b>94%</b> — the strongest pairing anywhere on the menu.</td>
+          </tr>
+          <tr class="kid">
+            <td class="l">Pasta</td><td class="l">Classic</td><td>8</td><td class="strong">5.5</td>
+            <td class="grp"><span class="r mid">50%</span></td><td><span class="r hi">100%</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r mid">75%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says">Every single bill took an add-on.</td>
+          </tr>
+          <tr class="kid">
+            <td class="l">Pasta</td><td class="l">Baked</td><td>8</td><td>3.8</td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">88%</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">88%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v watch">split</span>Add-ons hold, sides drop out entirely. Different dish, different basket.</td>
+          </tr>
+
+          <!-- WOK -->
+          <tr class="parent">
+            <td class="l">Wok &amp; Sizzling</td><td class="l">All</td><td class="strong">16</td><td>4.4</td>
+            <td class="grp"><span class="r hi">69%</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">88%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v good">solid</span>Sides pair well. Nothing else does.</td>
+          </tr>
+
+          <!-- NOODLES -->
+          <tr class="parent">
+            <td class="l">Noodles</td><td class="l">All</td><td class="strong">13</td><td>3.9</td>
+            <td class="grp"><span class="r mid">46%</span></td><td><span class="r na">–</span></td>
+            <td class="grp"><span class="r na">–</span></td><td><span class="r hi">92%</span></td>
+            <td><span class="r hi">0%</span></td>
+            <td class="says">Sides just clear the bar. Thin at 13 bills.</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td>7 categories · 8 sub-categories</td><td></td><td>126</td><td>4.0</td>
+            <td class="grp">6 of 16 pair</td><td>3 of 16</td>
+            <td class="grp" style="color:#fca5a5">0 of 16</td><td>16 of 16</td>
+            <td></td>
+            <td class="says">Alcohol pairs with nothing. Sides pair with everything except burgers.</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <p class="note">
+      A cell only shows a number when it is genuinely a pair: <b>4+ bills together</b> and <b>33%+ of that section&rsquo;s bills</b>.
+      Everything else is a dash — the pairing is not there, so no figure is invented for it.
+    </p>
+    <p class="note" style="color:var(--ink-3)">
+      Sub-category rows are the argument for sub-categories: Pasta looks uniform at 94% add-ons until you split it and
+      find sides pair with <b>Classic</b> and vanish on <b>Baked</b>. The parent average hid it.
+    </p>
+  </section>
+
+  <!-- CATEGORY OPPORTUNITIES -->
+  <section>
+    <div class="hd"><h2>Category opportunities</h2><span class="new">new</span></div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th class="l">Category pairing</th><th>Bills</th><th>Together</th><th>Rate</th><th>Best in house</th><th>Worth</th><th class="l">What it says</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="l pair"><span class="b">Burgers</span><span class="ar">+</span><span class="a">Sides</span></td>
+            <td class="strong">40</td><td>8</td><td><span class="r lo">20%</span></td><td>Grill 87%</td><td class="money">149,000</td>
+            <td class="says"><span class="v fix">fix</span>Your biggest section attaches sides least. <b>67 points</b> behind the grill.</td>
+          </tr>
+          <tr>
+            <td class="l pair"><span class="b">Burgers</span><span class="ar">+</span><span class="a">Mocktails</span></td>
+            <td class="strong">40</td><td>6</td><td><span class="r lo">15%</span></td><td>Grill 43%</td><td class="money">108,000</td>
+            <td class="says"><span class="v fix">fix</span>Burger guests take the cheapest drink. A mocktail is worth <b>2.9&times;</b> a soda.</td>
+          </tr>
+          <tr>
+            <td class="l pair"><span class="b">Rice Bowls</span><span class="ar">+</span><span class="a">Sides</span></td>
+            <td>29</td><td>17</td><td><span class="r mid">59%</span></td><td>Grill 87%</td><td class="money">45,000</td>
+            <td class="says"><span class="v watch">watch</span>Decent, but <b>28 points</b> off the grill&rsquo;s rate.</td>
+          </tr>
+          <tr>
+            <td class="l pair"><span class="b">Pasta</span><span class="ar">+</span><span class="a">Sides</span></td>
+            <td>16</td><td>7</td><td><span class="r mid">44%</span></td><td>Grill 87%</td><td class="money">38,000</td>
+            <td class="says"><span class="v watch">watch</span>Half the grill&rsquo;s rate on a section that carries add-ons well.</td>
+          </tr>
+          <tr>
+            <td class="l pair"><span class="b">Dumplings</span><span class="ar">+</span><span class="a">Mocktails</span></td>
+            <td>24</td><td>6</td><td><span class="r lo">25%</span></td><td>Grill 43%</td><td class="money">42,000</td>
+            <td class="says"><span class="v watch">watch</span>Hot drinks already attach here at 29% &mdash; the habit exists, the mocktail does not.</td>
+          </tr>
+          <tr>
+            <td class="l pair"><span class="b">Grill</span><span class="ar">+</span><span class="a">Sides</span></td>
+            <td>23</td><td>20</td><td><span class="r hi">87%</span></td><td>—</td><td class="money">—</td>
+            <td class="says"><span class="v good">benchmark</span>The rate everything else is measured against. Whatever happens here, copy it.</td>
+          </tr>
+          <tr>
+            <td class="l pair"><span class="b">Noodles</span><span class="ar">+</span><span class="a">Soft Drinks</span></td>
+            <td>13</td><td>11</td><td><span class="r hi">85%</span></td><td>—</td><td class="money">—</td>
+            <td class="says"><span class="v good">strong</span>Nothing to do. Volume is thin, so treat it lightly.</td>
+          </tr>
+          <tr class="dim">
+            <td class="l pair"><span class="b">Dumplings</span><span class="ar">+</span><span class="a">Sides</span></td>
+            <td>24</td><td>3</td><td><span class="r na">—</span></td><td>Grill 87%</td><td>—</td>
+            <td class="says"><span class="v thin">too thin</span>Only 3 bills together. No rate shown rather than a made-up one.</td>
+          </tr>
+        </tbody>
+        <tfoot><tr><td>Top 3 gaps</td><td></td><td></td><td></td><td></td><td>302,000</td><td class="says">RWF of attach revenue currently not happening</td></tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <!-- MATRIX -->
+  <section>
+    <div class="hd"><h2>Attach rate, every category against every category</h2><span class="new">new</span></div>
+    <div class="scroll">
+      <table class="matrix">
+        <thead><tr><th class="l">Base</th><th>Bills</th><th>Soft Drinks</th><th>Sides</th><th>Mocktails</th><th>Hot Bev.</th><th>Beers</th><th>Add-ons</th><th class="l">What it says</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="l">Burgers</td><td class="strong">40</td>
+            <td class="c"><span class="r hi">73%</span></td><td class="c"><span class="r lo">20%</span></td>
+            <td class="c"><span class="r lo">15%</span></td><td class="c"><span class="r lo">13%</span></td>
+            <td class="c"><span class="r lo">13%</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="says"><span class="v fix">fix</span>Sells a soda and nothing else. Four weak columns on your biggest section.</td>
+          </tr>
+          <tr>
+            <td class="l">Grill</td><td class="strong">23</td>
+            <td class="c"><span class="r hi">83%</span></td><td class="c"><span class="r hi">87%</span></td>
+            <td class="c"><span class="r mid">43%</span></td><td class="c"><span class="r mid">26%</span></td>
+            <td class="c"><span class="r na">—</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="says"><span class="v good">benchmark</span>Best row in the house. Sides <em>and</em> mocktails both land.</td>
+          </tr>
+          <tr>
+            <td class="l">Rice Bowls</td><td class="strong">29</td>
+            <td class="c"><span class="r hi">79%</span></td><td class="c"><span class="r mid">59%</span></td>
+            <td class="c"><span class="r mid">31%</span></td><td class="c"><span class="r lo">21%</span></td>
+            <td class="c"><span class="r na">—</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="says"><span class="v watch">watch</span>Solid middle. Sides are the one to push.</td>
+          </tr>
+          <tr>
+            <td class="l">Dumplings &amp; Wontons</td><td class="strong">24</td>
+            <td class="c"><span class="r hi">71%</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="c"><span class="r lo">25%</span></td><td class="c"><span class="r mid">29%</span></td>
+            <td class="c"><span class="r na">—</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="says"><span class="v watch">watch</span>The only section where hot drinks beat mocktails.</td>
+          </tr>
+          <tr>
+            <td class="l">Pasta</td><td class="strong">16</td>
+            <td class="c"><span class="r hi">69%</span></td><td class="c"><span class="r mid">44%</span></td>
+            <td class="c"><span class="r mid">31%</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="c"><span class="r na">—</span></td><td class="c"><span class="r hi">69%</span></td>
+            <td class="says"><span class="v good">strong</span>Only section where add-ons sell. Sauces are working.</td>
+          </tr>
+          <tr>
+            <td class="l">Wok &amp; Sizzling</td><td class="strong">16</td>
+            <td class="c"><span class="r hi">75%</span></td><td class="c"><span class="r hi">69%</span></td>
+            <td class="c"><span class="r na">—</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="c"><span class="r na">—</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="says"><span class="v good">strong</span>Sides land well. No drink beyond soda yet.</td>
+          </tr>
+          <tr>
+            <td class="l">Noodles</td><td class="strong">13</td>
+            <td class="c"><span class="r hi">85%</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="c"><span class="r na">—</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="c"><span class="r na">—</span></td><td class="c"><span class="r na">—</span></td>
+            <td class="says"><span class="v thin">too thin</span>13 bills. One row of soda, nothing else provable.</td>
+          </tr>
+        </tbody>
+        <tfoot><tr><td>7 sections</td><td>161</td><td colspan="6">34 pairings clear the floor</td><td class="says">Dish-level finds 19 on the same bills</td></tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <!-- DISH DRILL-DOWN -->
+  <section>
+    <div class="hd"><h2>Drill down — what each main dish pulls with it</h2><span class="new">new</span></div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th class="l">Main dish</th><th>Bills</th><th>Guests</th><th>Alcoholic</th><th>Non-alc.</th><th>Sides</th><th>Add-ons</th><th>Bare</th><th class="l">Top categories · what it says</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="l">What A Burger <span class="tag">Burgers</span></td><td class="strong">23</td><td>3.2</td>
+            <td><span class="r lo">17%</span></td><td><span class="r hi">87%</span></td>
+            <td><span class="r lo">13%</span></td><td><span class="r lo">13%</span></td><td><span class="r lo">13%</span></td>
+            <td class="says"><span class="v fix">fix</span>Soft Drinks 83% and little else. Your best-selling main and <b>3 in 10 leave with only a soda</b>.</td>
+          </tr>
+          <tr>
+            <td class="l">Single Smash Burger <span class="tag">Burgers</span></td><td>9</td><td>2.9</td>
+            <td><span class="r lo">0%</span></td><td><span class="r mid">56%</span></td>
+            <td><span class="r lo">0%</span></td><td><span class="r lo">11%</span></td><td><span class="r lo">33%</span></td>
+            <td class="says"><span class="v fix">worst</span>Zero sides, zero alcohol, <b>a third of bills carry nothing at all</b>. Nobody is selling on this dish.</td>
+          </tr>
+          <tr>
+            <td class="l">Brochette (Beef) <span class="tag">Grill</span></td><td>7</td><td>5.1</td>
+            <td><span class="r hi">43%</span></td><td><span class="r hi">100%</span></td>
+            <td><span class="r hi">100%</span></td><td><span class="r lo">0%</span></td><td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v good">benchmark</span>Sides 100%, Wines 43%, Beers 29%. The complete basket &mdash; but note 5.1 guests.</td>
+          </tr>
+          <tr>
+            <td class="l">High Five Land Plancha <span class="tag">Grill</span></td><td>9</td><td>6.1</td>
+            <td><span class="r mid">22%</span></td><td><span class="r hi">100%</span></td>
+            <td><span class="r hi">89%</span></td><td><span class="r mid">22%</span></td><td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v thin">party size</span>Sides 89%, Mocktails 56%. At 6.1 guests this is a sharing table, not an upsell.</td>
+          </tr>
+          <tr>
+            <td class="l">BAO House Fried Rice <span class="tag">Rice Bowls</span></td><td class="strong">19</td><td>4.5</td>
+            <td><span class="r lo">11%</span></td><td><span class="r hi">89%</span></td>
+            <td><span class="r hi">68%</span></td><td><span class="r mid">16%</span></td><td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v good">strong</span>Sides 68%, never leaves bare. Alcohol at 11% is the only soft spot.</td>
+          </tr>
+          <tr>
+            <td class="l">Signature Dumplings <span class="tag">Dumplings</span></td><td class="strong">22</td><td>3.7</td>
+            <td><span class="r mid">23%</span></td><td><span class="r hi">95%</span></td>
+            <td><span class="r mid">32%</span></td><td><span class="r lo">14%</span></td><td><span class="r hi">5%</span></td>
+            <td class="says"><span class="v watch">watch</span>Hot Beverages 32% &mdash; the only main where tea beats mocktails. A real habit worth naming.</td>
+          </tr>
+          <tr>
+            <td class="l">Teriyaki Chicken Bowl <span class="tag">Rice Bowls</span></td><td>9</td><td>2.9</td>
+            <td><span class="r lo">11%</span></td><td><span class="r hi">100%</span></td>
+            <td><span class="r mid">44%</span></td><td><span class="r mid">33%</span></td><td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v good">strong</span>Every bill takes a drink, Mocktails 44%. Small tables doing it right.</td>
+          </tr>
+          <tr>
+            <td class="l">Spaghetti <span class="tag">Pasta</span></td><td>7</td><td>6.0</td>
+            <td><span class="r hi">43%</span></td><td><span class="r hi">86%</span></td>
+            <td><span class="r mid">43%</span></td><td><span class="r hi">71%</span></td><td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v good">strong</span>Add-ons 71%, Sauces 43%. Pasta is the only place extras really sell.</td>
+          </tr>
+          <tr>
+            <td class="l">Macaroni <span class="tag">Pasta</span></td><td>8</td><td>3.8</td>
+            <td><span class="r lo">13%</span></td><td><span class="r hi">88%</span></td>
+            <td><span class="r mid">38%</span></td><td><span class="r hi">63%</span></td><td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v good">strong</span>Same pattern &mdash; Add-ons 63%, Sauces 38%.</td>
+          </tr>
+          <tr>
+            <td class="l">Double Smash Burger <span class="tag">Burgers</span></td><td>8</td><td>4.5</td>
+            <td><span class="r mid">25%</span></td><td><span class="r hi">88%</span></td>
+            <td><span class="r mid">38%</span></td><td><span class="r lo">0%</span></td><td><span class="r hi">0%</span></td>
+            <td class="says"><span class="v watch">watch</span>Beers 25% &mdash; the one burger that sells alcohol. Sides still only 38%.</td>
+          </tr>
+        </tbody>
+        <tfoot><tr><td>Same kitchen, opposite results</td><td colspan="7">Brochette: sides 100%, alcohol 43% &nbsp;·&nbsp; Single Smash: sides 0%, alcohol 0%</td>
+          <td class="says">The dish, not the waiter, predicts the basket</td></tr></tfoot>
+      </table>
+    </div>
+    <p class="note" style="color:var(--ink-3)">
+      &ldquo;Bare&rdquo; = bills where the main went out with nothing attached. &ldquo;Guests&rdquo; matters:
+      the two best baskets are also the two biggest tables, so part of that attach rate is party size, not selling.
+    </p>
+  </section>
+
+  <!-- VALUE -->
+  <section>
+    <div class="hd"><h2>What one attached line is worth</h2><span class="new">new</span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th class="l">Category</th><th class="l">Group</th><th>Lines</th><th>Revenue</th><th>RWF / line</th><th class="l">What it says</th></tr></thead>
+        <tbody>
+          <tr><td class="l">Cocktails</td><td class="l"><span class="tag drink">drink</span></td><td>7</td><td class="money">159,000</td><td class="strong">22,714</td>
+            <td class="says"><span class="v fix">push</span>Your most valuable attach, on 7 bills all month.</td></tr>
+          <tr><td class="l">Wines</td><td class="l"><span class="tag drink">drink</span></td><td>6</td><td class="money">128,000</td><td class="strong">21,333</td>
+            <td class="says"><span class="v fix">push</span>Same story. Nobody offers it.</td></tr>
+          <tr><td class="l">Mocktails</td><td class="l"><span class="tag drink">drink</span></td><td>31</td><td class="money">300,000</td><td class="strong">9,677</td>
+            <td class="says"><span class="v watch">grow</span>The realistic swap for a soft drink &mdash; <b>2.9&times;</b> the value.</td></tr>
+          <tr><td class="l">Smoothies &amp; Shakes</td><td class="l"><span class="tag drink">drink</span></td><td>15</td><td class="money">120,000</td><td>8,000</td>
+            <td class="says"><span class="v watch">grow</span>Sells at dinner, disappears late.</td></tr>
+          <tr><td class="l">Beers</td><td class="l"><span class="tag drink">drink</span></td><td>22</td><td class="money">167,500</td><td>7,614</td>
+            <td class="says"><span class="v watch">grow</span>Only attaches after 22:00, and only 19% of the time.</td></tr>
+          <tr><td class="l">Sides</td><td class="l"><span class="tag addon">add-on</span></td><td>57</td><td class="money">317,500</td><td>5,570</td>
+            <td class="says"><span class="v good">working</span>Second-highest volume. The grill proves it can go higher.</td></tr>
+          <tr><td class="l">Hot Beverages</td><td class="l"><span class="tag drink">drink</span></td><td>26</td><td class="money">131,000</td><td>5,038</td>
+            <td class="says"><span class="v good">working</span>Steady with dumplings.</td></tr>
+          <tr><td class="l">Add-ons</td><td class="l"><span class="tag addon">add-on</span></td><td>17</td><td class="money">73,000</td><td>4,294</td>
+            <td class="says"><span class="v good">working</span>Almost entirely pasta.</td></tr>
+          <tr><td class="l">Soft Drinks</td><td class="l"><span class="tag drink">drink</span></td><td class="strong">123</td><td class="money">411,500</td><td>3,346</td>
+            <td class="says"><span class="v fix">swap</span>Half of all attachments, lowest value of any drink. This is the one to trade up.</td></tr>
+          <tr class="dim"><td class="l">Sauces</td><td class="l"><span class="tag addon">add-on</span></td><td>6</td><td class="money">15,000</td><td>2,500</td>
+            <td class="says"><span class="v thin">minor</span>Rounding.</td></tr>
+        </tbody>
+        <tfoot><tr><td>All attachments</td><td></td><td>310</td><td>1,822,500</td><td>5,879</td>
+          <td class="says">A 75% drink-attach rate made mostly of the cheapest drink</td></tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <!-- FEASIBILITY -->
+  <section>
+    <div class="hd"><h2>Multi-item baskets — what is actually minable</h2><span class="new">new</span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th class="l">Combination size</th><th>At dish level</th><th>At category level</th><th class="l">What it says</th></tr></thead>
+        <tbody>
+          <tr><td class="l">2 items &nbsp;<span class="tag">Burger + Coke</span></td><td>43</td><td class="strong">62</td>
+            <td class="says"><span class="v good">works</span>Both levels fine. This is what the report does today.</td></tr>
+          <tr><td class="l">3 items &nbsp;<span class="tag">+ Fries</span></td><td class="strong" style="color:var(--bad)">2</td><td class="strong">57</td>
+            <td class="says"><span class="v fix">categories only</span>Dish level collapses. Category level barely moves.</td></tr>
+          <tr><td class="l">4 items &nbsp;<span class="tag">+ BBQ sauce</span></td><td class="strong" style="color:var(--bad)">0</td><td class="strong">12</td>
+            <td class="says"><span class="v fix">categories only</span><b>Zero</b> dish combos reach 4 bills. 3,563 possible, none repeat.</td></tr>
+        </tbody>
+        <tfoot><tr><td>Combinations appearing on 4+ bills</td><td>126 bills</td><td>126 bills</td>
+          <td class="says">Categories are what make the client&rsquo;s 4-item request possible at all</td></tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <!-- BASKET COMPLETION -->
+  <section>
+    <div class="hd"><h2>Basket completion — pick the shape, see what is missing</h2><span class="new">new</span></div>
+    <div class="chips" style="margin-bottom:9px">
+      <span class="lb">Basket</span>
+      <span class="chip" aria-pressed="true">Main dish</span><span class="chip" aria-pressed="true">Drink</span>
+      <span class="chip" aria-pressed="true">Side</span><span class="chip" aria-pressed="true">Add-on</span>
+      <span class="chip">Alcoholic only</span><span class="chip">Dessert</span>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th class="l">Basket so far</th><th>Bills</th><th>Of food bills</th><th>Drop</th><th class="l">What it says</th></tr></thead>
+        <tbody>
+          <tr><td class="l">Main dish</td><td class="strong">98</td><td><span class="r hi">100%</span></td><td>—</td>
+            <td class="says">Every bill with something from the kitchen.</td></tr>
+          <tr><td class="l">Main + Drink</td><td class="strong">88</td><td><span class="r hi">90%</span></td><td>−10</td>
+            <td class="says"><span class="v good">solved</span>Drinks are not your problem. Nine bills in ten already have one.</td></tr>
+          <tr><td class="l">Main + Drink + Side</td><td class="strong">38</td><td><span class="r lo">39%</span></td><td style="color:var(--bad);font-weight:700">−51</td>
+            <td class="says"><span class="v fix">the leak</span>The basket falls apart here. <b>50 bills</b> lose the side.</td></tr>
+          <tr><td class="l">Main + Drink + Side + Add-on</td><td class="strong">8</td><td><span class="r lo">8%</span></td><td>−31</td>
+            <td class="says"><span class="v watch">stretch</span>The full four-slot basket. Realistic ceiling, not a target.</td></tr>
+        </tbody>
+        <tfoot><tr><td>Missing slot, ranked</td><td colspan="3">Side (60%) &nbsp;›&nbsp; Add-on (80%) &nbsp;›&nbsp; Drink (10%)</td>
+          <td class="says">Train the side, not the drink</td></tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <!-- ASSOCIATION RULES -->
+  <section>
+    <div class="hd"><h2>What genuinely pairs — ranked by lift, not by count</h2><span class="new">new</span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th class="l">Category set</th><th>Bills</th><th>Support</th><th>Lift</th><th class="l">What it says</th></tr></thead>
+        <tbody>
+          <tr><td class="l">Rice Bowls + Sides + Soft Drinks + Wok &amp; Sizzling</td><td>9</td><td>7%</td><td class="strong" style="color:var(--good)">10.7</td>
+            <td class="says"><span class="v good">real</span>Strongest set in the data. Likely a sharing table — check guest count before acting.</td></tr>
+          <tr><td class="l">Rice Bowls + Sides + Wok &amp; Sizzling</td><td>10</td><td>8%</td><td class="strong" style="color:var(--good)">8.0</td>
+            <td class="says"><span class="v good">real</span>These two kitchens sell together far beyond chance.</td></tr>
+          <tr><td class="l">Dumplings + Noodles + Sides + Soft Drinks</td><td>4</td><td>3%</td><td class="strong" style="color:var(--good)">7.1</td>
+            <td class="says"><span class="v thin">real but thin</span>4 bills. Watch it, do not build a combo on it yet.</td></tr>
+          <tr><td class="l">Grill + Mocktails + Sides</td><td>9</td><td>7%</td><td class="strong" style="color:var(--good)">5.0</td>
+            <td class="says"><span class="v good">real</span>The grill table orders the full spread. This is the combo to name.</td></tr>
+          <tr><td class="l">Grill + Sides + Soft Drinks</td><td>16</td><td>13%</td><td class="strong" style="color:var(--good)">3.1</td>
+            <td class="says"><span class="v good">real</span>Good count <em>and</em> good lift — the rare one that is both.</td></tr>
+          <tr><td class="l">Grill + Sides</td><td>20</td><td>16%</td><td class="strong" style="color:var(--good)">2.5</td>
+            <td class="says"><span class="v good">real</span>Your benchmark pairing, confirmed as genuine affinity.</td></tr>
+          <tr><td class="l">Sides + Soft Drinks</td><td class="strong">33</td><td>26%</td><td class="strong" style="color:var(--warn)">1.2</td>
+            <td class="says"><span class="v watch">popularity</span>Most common set on the menu &mdash; and almost meaningless. Both are just everywhere.</td></tr>
+          <tr><td class="l">Burgers + Soft Drinks</td><td class="strong">29</td><td>23%</td><td class="strong" style="color:var(--warn)">1.1</td>
+            <td class="says"><span class="v watch">popularity</span>Ranked #2 by count today. Lift says it is <b>chance</b>, not a pairing.</td></tr>
+          <tr><td class="l">Mocktails + Soft Drinks</td><td>16</td><td>13%</td><td class="strong" style="color:var(--bad)">0.8</td>
+            <td class="says"><span class="v fix">substitutes</span>Below 1.0 — guests pick one <em>or</em> the other. Never bundle these.</td></tr>
+        </tbody>
+        <tfoot><tr><td>Lift = how much more often than chance</td><td colspan="3">1.0 = coincidence · 2.0+ = real · under 1.0 = they repel</td>
+          <td class="says">Today&rsquo;s report has no lift, so it ranks soda first every time</td></tr></tfoot>
+      </table>
+    </div>
+  </section>
+
+  <!-- WAITERS -->
+  <section>
+    <div class="hd"><h2>By waiter</h2><span class="old">today</span><span class="new">+ category column</span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th class="l">Waiter</th><th>Bills</th><th>Drink attach</th><th>Add-on</th><th>Best category</th><th>Weakest</th><th class="l">What it says</th></tr></thead>
+        <tbody>
+          <tr><td class="l">Kevine</td><td>44</td><td><span class="r hi">82%</span></td><td>41%</td><td>Grill + Sides 91%</td><td>Burgers + Sides 24%</td>
+            <td class="says"><span class="v good">benchmark</span>Sets the house rate on grills. Same blind spot on burgers as everyone.</td></tr>
+          <tr><td class="l">Mimi</td><td>21</td><td><span class="r mid">67%</span></td><td>29%</td><td>Rice Bowls + Mocktails 44%</td><td>Burgers + Sides 11%</td>
+            <td class="says"><span class="v watch">coach</span>Best mocktail seller you have. Put her on the burger section.</td></tr>
+          <tr class="dim"><td class="l">Kenny</td><td>7</td><td><span class="r na">—</span></td><td>—</td><td>—</td><td>—</td>
+            <td class="says"><span class="v thin">too thin</span>Under 20 bills, so not ranked against the house.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <details class="about">
+    <summary>What these numbers do and do not prove</summary>
+    <ul>
+      <li><b>Attachment, not conversion.</b> Nothing records a guest saying no.</li>
+      <li><b>126 bills.</b> Rates built on 13–40 bills move with a handful of orders.</li>
+      <li><b>Revenue, not profit.</b> Menu price before discount and food cost; the live report subtracts FIFO cost.</li>
+      <li><b>Waiter rows are illustrative</b> — names and bill counts are real, the per-category splits are shaped, not measured.</li>
+      <li><b>Party size confounds every attach rate.</b> A 6-guest table buys four things because it is six people, not because anyone upsold. Brochette (5.1 guests) and Plancha (6.1) top the table for that reason. Rates should be read per cover, not per bill.</li>
+      <li><b>262 paid orders exist in total.</b> Association mining normally wants thousands; the structure works now, the numbers get trustworthy later.</li>
+      <li><b>Before any of this, Sirocco needs fixing:</b> 43 of its 62 drinks are read as food, so its attach rates are wrong today.</li>
+    </ul>
+  </details>
+
+</div>
