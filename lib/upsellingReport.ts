@@ -126,6 +126,13 @@ export type UpsellPairing = {
   attachDishId: string
   attachName: string
   attachGroup: Exclude<UpsellGroup, 'food' | 'unknown'>
+  /**
+   * Where the attached item lives on the menu — its named category and its
+   * section. Carried so a pairing can be narrowed to "what goes with this, in
+   * Drinks" without the client having to fetch and join the menu itself.
+   */
+  attachCategory: string | null
+  attachMenuType: string | null
   baseBills: number
   together: number
   attachRate: number
@@ -535,6 +542,9 @@ type PairAccumulator = {
   attachDishId: string
   attachName: string
   attachGroup: 'addon' | 'drink'
+  /** Where the attached item lives, so a pairing can be narrowed to a section. */
+  attachCategory: string | null
+  attachMenuType: string | null
   together: number
   qty: number
   revenue: number
@@ -546,6 +556,17 @@ export type UpsellReportOptions = {
   hourFrom?: number | null
   /** Inclusive end of the service window, 0–23. May be lower than hourFrom for late service. */
   hourTo?: number | null
+  /**
+   * Narrow the ANSWER, not the question. The subject stays whatever dish was
+   * asked about; these cut the list of things it is paired WITH down to one
+   * menu section, and then to one named category inside it.
+   *
+   * This is the opposite of how the pickers used to work, where choosing a
+   * category replaced the dish as the subject — so "what goes with the lamb,
+   * in Drinks" could not be asked at all. Null means no narrowing.
+   */
+  partnerMenuType?: string | null
+  partnerCategory?: string | null
 }
 
 // ─── PAIRING EXPLORER ──────────────────────────────────────────────────────
@@ -571,6 +592,8 @@ export type PairingExplorerRow = {
   dishId: string
   dishName: string
   category: string | null
+  /** The menu section this item sits in, so the table can say where it lives. */
+  menuType: string | null
   group: UpsellGroup
   /** Bills carrying both the subject and this item. */
   together: number
@@ -623,7 +646,7 @@ export function buildPairingExplorer(
   subject: PairingSubject,
   options: UpsellReportOptions = {},
 ): PairingExplorer {
-  const { hourFrom = null, hourTo = null } = options
+  const { hourFrom = null, hourTo = null, partnerMenuType = null, partnerCategory = null } = options
 
   const matchesSubject = (item: UpsellLineItem) =>
     subject.kind === 'dish'
@@ -648,6 +671,7 @@ export function buildPairingExplorer(
   type Acc = {
     dishName: string
     category: string | null
+    menuType: string | null
     group: UpsellGroup
     together: number
     qty: number
@@ -708,6 +732,7 @@ export function buildPairingExplorer(
       const acc = pairs.get(dishId) ?? {
         dishName: line.item.dishName,
         category: line.item.category ?? null,
+        menuType: line.item.menuType ?? null,
         group: classifyItem(line.item),
         together: 0, qty: 0, revenue: 0, cost: 0, uncostedLines: 0,
       }
@@ -730,6 +755,7 @@ export function buildPairingExplorer(
       dishId,
       dishName: a.dishName,
       category: a.category,
+      menuType: a.menuType,
       group: a.group,
       together: a.together,
       attachBills,
@@ -744,12 +770,21 @@ export function buildPairingExplorer(
     }
   })
 
-  // Ranked by money, because that is what a manager acts on; lift is carried
-  // alongside so a fat number with no affinity behind it is visibly marked
-  // rather than silently promoted.
+  // Narrowing happens here, on the ANSWER, after every rate and lift has been
+  // computed against the full set of bills. Filtering earlier would change the
+  // denominators and quietly inflate every percentage in a narrowed view.
+  const wantMenuType = normalizeCategory(partnerMenuType ?? '') ? normalizeDishMenuType(partnerMenuType) : null
+  const wantCategory = normalizeCategory(partnerCategory ?? '')
+
+  // Ranked by how often the two actually sold together, then by revenue when
+  // that ties. Gross profit used to rank this list, which reads oddly next to a
+  // "sold together" column that is not in order; lift is still carried so a fat
+  // number with no affinity behind it stays visibly marked.
   const rows = all
     .filter((r) => r.together >= EXPLORER_MIN_TOGETHER)
-    .sort((a, b) => b.profit - a.profit)
+    .filter((r) => !wantMenuType || normalizeDishMenuType(r.menuType) === wantMenuType)
+    .filter((r) => !wantCategory || normalizeCategory(r.category) === wantCategory)
+    .sort((a, b) => (b.together - a.together) || (b.revenue - a.revenue))
 
   return {
     subject: subjectBills > 0
@@ -832,7 +867,7 @@ export function buildUpsellingReport(
     // Deduplicated per bill: a dish ordered twice on one check is still one
     // opportunity to attach something, not two.
     const foodOnCheck = new Map<string, string>()
-    const attachOnCheck = new Map<string, { name: string; group: 'addon' | 'drink'; qty: number; revenue: number; cost: number }>()
+    const attachOnCheck = new Map<string, { name: string; group: 'addon' | 'drink'; category: string | null; menuType: string | null; qty: number; revenue: number; cost: number }>()
     /** Attach dishes already counted against this bill, so `checks` stays a bill count. */
     const attachSeenOnCheck = new Set<string>()
 
@@ -872,6 +907,11 @@ export function buildUpsellingReport(
         attachOnCheck.set(item.dishId, {
           name: item.dishName,
           group,
+          // Carried so the pairing tables can say where an attached item lives,
+          // and so the explorer can narrow an answer to one section or one
+          // category without a second round trip for the menu.
+          category: item.category ?? null,
+          menuType: item.menuType ?? null,
           qty: (prev?.qty ?? 0) + qty,
           revenue: (prev?.revenue ?? 0) + lineRevenue,
           cost: (prev?.cost ?? 0) + lineCost,
@@ -955,6 +995,7 @@ export function buildUpsellingReport(
         const pairKey = `${baseDishId} ${attachDishId}`
         const acc = pairs.get(pairKey) ?? {
           baseDishId, baseName, attachDishId, attachName: a.name, attachGroup: a.group,
+          attachCategory: a.category, attachMenuType: a.menuType,
           together: 0, qty: 0, revenue: 0, cost: 0,
         }
         acc.together += 1
@@ -1014,6 +1055,8 @@ export function buildUpsellingReport(
       attachDishId: p.attachDishId,
       attachName: p.attachName,
       attachGroup: p.attachGroup,
+      attachCategory: p.attachCategory,
+      attachMenuType: p.attachMenuType,
       baseBills: base,
       together: p.together,
       attachRate: base > 0 ? round1((p.together / base) * 100) : 0,

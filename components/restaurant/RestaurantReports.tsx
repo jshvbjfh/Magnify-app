@@ -2,6 +2,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange, Store, Share2, ArrowUpRight, Ban, Gift, Layers } from 'lucide-react'
 import { fmtDesc } from '@/lib/displayId'
+import { MENU_TYPE_OPTIONS, getDishMenuTypeKey } from '@/lib/menuMetadata'
 import AccountsReceivable from '@/components/restaurant/AccountsReceivable'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -44,12 +45,16 @@ type UpsellPairing = {
   baseName: string
   attachDishId: string
   attachName: string
+  /** Where the attached item lives, so the pickers can narrow by it. */
+  attachCategory: string | null
+  attachMenuType: string | null
   baseBills: number
   together: number
   attachRate: number
   attachBills: number
   /** How much more often the two land together than chance. See lib/upsellingReport.ts. */
   lift: number | null
+  revenue: number
   profit: number
   margin: number
   confidence: 'high' | 'medium' | 'low'
@@ -59,6 +64,7 @@ type PairingExplorerRow = {
   dishId: string
   dishName: string
   category: string | null
+  menuType: string | null
   group: 'food' | 'drink' | 'addon' | 'unknown'
   together: number
   attachBills: number
@@ -66,6 +72,7 @@ type PairingExplorerRow = {
   lift: number | null
   affinity: 'real' | 'mild' | 'coincidence' | 'substitutes' | 'unknown'
   qty: number
+  revenue: number
   profit: number
   uncostedLines: number
 }
@@ -1363,9 +1370,15 @@ function NoChargeTable({ data }: { data: NoChargeData | null }) {
 // to reply "a red wine", which the pairings table above can never do because a
 // main is not an "attach". The category and item pickers narrow the QUESTION,
 // never the answer.
-function PairingExplorer({ range, hourWindow, defaultDishId }: {
+function PairingExplorer({ range, hourWindow, defaultDishId, topPairings }: {
   range: { start: string; end: string }
   hourWindow: HourWindow
+  /**
+   * The period's pairings, already loaded by the report above. Used for the
+   * no-item state so the explorer opens with the best pairings instead of an
+   * empty panel, and without a second round trip for data already on screen.
+   */
+  topPairings: UpsellPairing[]
   /**
    * The base dish of the strongest pairing, used to open the explorer already
    * answering something.
@@ -1376,9 +1389,12 @@ function PairingExplorer({ range, hourWindow, defaultDishId }: {
    */
   defaultDishId?: string
 }) {
-  const [menu, setMenu] = useState<{ id: string; name: string; category: string | null }[]>([])
-  const [category, setCategory] = useState<string>('')
+  const [menu, setMenu] = useState<{ id: string; name: string; category: string | null; menuType: string | null }[]>([])
+  // The item is the QUESTION. The two below narrow the ANSWER — what it is
+  // paired with — and never replace the item as the subject.
   const [dishId, setDishId] = useState<string>('')
+  const [section, setSection] = useState<string>('')
+  const [subCategory, setSubCategory] = useState<string>('')
   const [data, setData] = useState<PairingExplorerData | null>(null)
   const [loading, setLoading] = useState(false)
   // Once the manager touches a picker the default stops applying, so a
@@ -1398,65 +1414,104 @@ function PairingExplorer({ range, hourWindow, defaultDishId }: {
       .then((res) => (res.ok ? res.json() : []))
       .then((rows) => {
         if (cancelled || !Array.isArray(rows)) return
-        setMenu(rows.map((d: any) => ({ id: d.id, name: d.name, category: d.category ?? null })))
+        setMenu(rows.map((d: any) => ({ id: d.id, name: d.name, category: d.category ?? null, menuType: d.menuType ?? null })))
       })
       .catch(() => { if (!cancelled) setMenu([]) })
     return () => { cancelled = true }
   }, [])
 
-  const categories = Array.from(new Set(menu.map((d) => (d.category ?? '').trim()).filter(Boolean))).sort()
-  const itemsInCategory = category ? menu.filter((d) => (d.category ?? '').trim() === category) : menu
+  // Sections come from the fixed menu-type list, not from whatever happens to
+  // be on the menu, so the picker reads the same on every restaurant.
+  const sections = MENU_TYPE_OPTIONS.filter((o) =>
+    menu.some((d) => getDishMenuTypeKey(d.menuType, d.category) === o.value))
+  // Sub-categories are the named categories inside the chosen section.
+  const subCategories = Array.from(new Set(
+    menu
+      .filter((d) => !section || getDishMenuTypeKey(d.menuType, d.category) === section)
+      .map((d) => (d.category ?? '').trim())
+      .filter(Boolean)
+  )).sort()
 
   useEffect(() => {
-    // Asking about nothing would return a cross-join of the menu, so the
-    // explorer stays empty until a subject is chosen.
-    if (!dishId && !category) { setData(null); return }
-    const subject = dishId ? `dishId=${encodeURIComponent(dishId)}` : `category=${encodeURIComponent(category)}`
-    const hours = hourWindow ? `&hourFrom=${hourWindow.from}&hourTo=${hourWindow.to}` : ''
+    // No item chosen: the table falls back to the period's best pairings, which
+    // the report has already loaded, so nothing is fetched here.
+    if (!dishId) { setData(null); return }
+    const params = new URLSearchParams({ dishId, from: range.start, to: range.end })
+    if (section) params.set('partnerMenuType', section)
+    if (subCategory) params.set('partnerCategory', subCategory)
+    if (hourWindow) { params.set('hourFrom', String(hourWindow.from)); params.set('hourTo', String(hourWindow.to)) }
     let cancelled = false
     setLoading(true)
-    fetch(`/api/restaurant/reports/upselling/pairings?${subject}&from=${range.start}&to=${range.end}${hours}`, FRESH_FETCH_OPTIONS)
+    fetch(`/api/restaurant/reports/upselling/pairings?${params.toString()}`, FRESH_FETCH_OPTIONS)
       .then((res) => (res.ok ? res.json() : null))
       .then((d) => { if (!cancelled) setData(d) })
       .catch(() => { if (!cancelled) setData(null) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [dishId, category, range.start, range.end, hourWindow])
+  }, [dishId, section, subCategory, range.start, range.end, hourWindow])
 
-  const subjectLabel = data?.subject?.label ?? (dishId ? menu.find((d) => d.id === dishId)?.name : category) ?? ''
+  const subjectLabel = data?.subject?.label ?? menu.find((d) => d.id === dishId)?.name ?? ''
+  const scopeLabel = [
+    sections.find((s) => s.value === section)?.label ?? null,
+    subCategory || null,
+  ].filter(Boolean).join(' · ')
+
+  // With no item chosen a "pairing" is two dishes, so the table shows the
+  // period's strongest pairs — narrowed by the same two pickers, which filter
+  // the item each pair ATTACHED, not the dish it started from.
+  const topPairs = (!dishId ? topPairings : [])
+    .filter((p) => !section || getDishMenuTypeKey(p.attachMenuType ?? null, p.attachCategory ?? null) === section)
+    .filter((p) => !subCategory || (p.attachCategory ?? '').trim() === subCategory)
+    .slice()
+    .sort((a, b) => (b.together - a.together) || (b.revenue - a.revenue))
+    .slice(0, 5)
 
   return (
     <div className="mb-5">
       <h4 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Pairing explorer</h4>
 
       <div className="rounded-xl border border-gray-200 bg-white p-3 flex flex-wrap gap-3 items-end">
-        <div className="flex-1 min-w-[180px]">
-          <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Category</label>
-          <select
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
-            value={category}
-            onChange={(e) => { setTouched(true); setCategory(e.target.value); setDishId('') }}
-          >
-            <option value="">All categories</option>
-            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
+        {/* The item comes first because it is the question being asked. The two
+            pickers after it narrow the answer. */}
         <div className="flex-1 min-w-[200px]">
-          <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Item</label>
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-orange-500 mb-1">Item</label>
           <select
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
+            className="w-full border border-orange-200 bg-orange-50/50 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
             value={dishId}
             onChange={(e) => { setTouched(true); setDishId(e.target.value) }}
             disabled={menu.length === 0}
           >
-            <option value="">{category ? `Whole category (${category})` : 'Choose an item…'}</option>
-            {itemsInCategory.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            <option value="">All items — best pairings</option>
+            {menu.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
         </div>
-        {(dishId || category) && (
+        <div className="flex-1 min-w-[160px]">
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Category</label>
+          <select
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400"
+            value={section}
+            onChange={(e) => { setTouched(true); setSection(e.target.value); setSubCategory('') }}
+          >
+            <option value="">All categories</option>
+            {sections.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+        </div>
+        <div className="flex-1 min-w-[160px]">
+          <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">Sub-category</label>
+          <select
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-400 disabled:bg-gray-50 disabled:text-gray-400"
+            value={subCategory}
+            onChange={(e) => { setTouched(true); setSubCategory(e.target.value) }}
+            disabled={!section}
+          >
+            <option value="">All sub-categories</option>
+            {subCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        {(dishId || section || subCategory) && (
           <button
             type="button"
-            onClick={() => { setTouched(true); setCategory(''); setDishId('') }}
+            onClick={() => { setTouched(true); setSection(''); setSubCategory(''); setDishId('') }}
             className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold text-gray-600 hover:bg-gray-50"
           >
             Clear
@@ -1464,10 +1519,56 @@ function PairingExplorer({ range, hourWindow, defaultDishId }: {
         )}
       </div>
 
-      {!dishId && !category ? (
-        <p className="mt-2 text-xs text-gray-400">
-          Pick a category or an item to see what sells alongside it. Answers can come from anywhere on the menu, not just add-ons and drinks.
-        </p>
+      {!dishId ? (
+        // No item chosen — show the period's strongest pairs rather than an
+        // empty panel, so the table teaches what it is for before anyone picks
+        // anything. Both items are named, because with no anchor a pairing is
+        // two dishes.
+        <>
+          <div className="mt-3 rounded-t-xl border border-b-0 border-gray-200 bg-orange-50/40 px-4 py-3">
+            <p className="text-base font-bold text-gray-900">
+              Best pairings{scopeLabel ? ` in ${scopeLabel}` : ''}
+            </p>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              Choose an item above to ask what sells alongside one dish.
+            </p>
+          </div>
+          {topPairs.length === 0 ? (
+            <div className="rounded-b-xl border border-gray-200 px-4 py-6 text-center text-xs text-gray-400">
+              No pairings{scopeLabel ? ` in ${scopeLabel}` : ''} reached the 3-bill floor in this period.
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-b-xl border border-gray-200">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="bg-orange-500 text-white">
+                    {['Pairing', 'Where it lives', 'Sold together', 'Real pairing?', 'Revenue (RWF)'].map((h, i) => (
+                      <th key={h} className={`px-3 py-2.5 text-xs font-bold uppercase tracking-wide whitespace-nowrap ${i <= 1 || i === 3 ? 'text-left' : 'text-right'}`}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {topPairs.map((p, i) => (
+                    <tr key={p.key} className={i % 2 === 0 ? 'bg-white' : 'bg-orange-50/40'}>
+                      <td className="px-3 py-2 text-xs border-b border-gray-100 text-gray-800 whitespace-nowrap">
+                        <span className="font-semibold">{p.baseName}</span>
+                        <span className="text-gray-300 px-1.5">+</span>
+                        <span className="font-semibold">{p.attachName}</span>
+                      </td>
+                      <td className="px-3 py-2 text-xs border-b border-gray-100 text-gray-400 whitespace-nowrap">{p.attachCategory ?? '—'}</td>
+                      <td className="px-3 py-2 text-xs text-right border-b border-gray-100 tabular-nums">{p.together}</td>
+                      <td className="px-3 py-2 text-xs text-left border-b border-gray-100"><AffinityChip lift={p.lift} /></td>
+                      <td className="px-3 py-2 text-xs text-right border-b border-gray-100 font-bold text-green-700 tabular-nums">{fmt(p.revenue)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="mt-2 text-xs text-gray-400">
+            Ranked by how often the two sold together, then by revenue.
+          </p>
+        </>
       ) : loading ? (
         <p className="mt-3 text-xs text-gray-400">Loading pairings…</p>
       ) : !data || data.subjectBills === 0 ? (
@@ -1508,7 +1609,7 @@ function PairingExplorer({ range, hourWindow, defaultDishId }: {
               <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="bg-orange-500 text-white">
-                    {['Paired item', 'Where it lives', 'Together', 'Pair rate', 'Real pairing?', 'Gross profit (RWF)'].map((h, i) => (
+                    {['Paired item', 'Where it lives', 'Sold together', 'Pair rate', 'Real pairing?', 'Revenue (RWF)'].map((h, i) => (
                       <th key={h} className={`px-3 py-2.5 text-xs font-bold uppercase tracking-wide whitespace-nowrap ${i <= 1 || i === 4 ? 'text-left' : 'text-right'}`}>{h}</th>
                     ))}
                   </tr>
@@ -1521,7 +1622,7 @@ function PairingExplorer({ range, hourWindow, defaultDishId }: {
                       <td className="px-3 py-2 text-xs text-right border-b border-gray-100 tabular-nums">{r.together} of {data.subjectBills}</td>
                       <td className="px-3 py-2 text-xs text-right border-b border-gray-100 tabular-nums">{r.pairRate.toFixed(0)}%</td>
                       <td className="px-3 py-2 text-xs text-left border-b border-gray-100"><AffinityChip lift={r.lift} /></td>
-                      <td className="px-3 py-2 text-xs text-right border-b border-gray-100 font-bold text-green-700 tabular-nums">{fmt(r.profit)}</td>
+                      <td className="px-3 py-2 text-xs text-right border-b border-gray-100 font-bold text-green-700 tabular-nums">{fmt(r.revenue)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1530,7 +1631,7 @@ function PairingExplorer({ range, hourWindow, defaultDishId }: {
           )}
 
           <p className="mt-2 text-xs text-gray-400">
-            Ranked by gross profit; &ldquo;real pairing?&rdquo; is what says whether the money is a genuine attachment or just a popular item.
+            Ranked by how often the two sold together, then by revenue; &ldquo;real pairing?&rdquo; is what says whether it is a genuine attachment or just a popular item.
             {data.meta.belowFloor > 0 && <> {data.meta.belowFloor} more fell under the 3-bill floor.</>}
             {data.meta.uncostedLines > 0 && <> {data.meta.uncostedLines} line{data.meta.uncostedLines === 1 ? ' was' : 's were'} never costed, so profit is understated.</>}
           </p>
@@ -1734,7 +1835,7 @@ function UpsellingTable({ data, hourWindow, onHourWindowChange, range }: {
 
       {/* Opens on the base dish of the most profitable pairing in the period, so
           the table arrives already showing a manager what it is for. */}
-      <PairingExplorer range={range} hourWindow={hourWindow} defaultDishId={pairings[0]?.baseDishId} />
+      <PairingExplorer range={range} hourWindow={hourWindow} defaultDishId={pairings[0]?.baseDishId} topPairings={pairings} />
 
       <div className="mb-5">
         <h4 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Who sells it</h4>

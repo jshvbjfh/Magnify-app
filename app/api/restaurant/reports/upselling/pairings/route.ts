@@ -66,6 +66,11 @@ export async function GET(req: Request) {
     buildPairingExplorer(checks, subject, {
       hourFrom: parseHour(searchParams.get('hourFrom')),
       hourTo: parseHour(searchParams.get('hourTo')),
+      // These narrow the ANSWER — what the subject is paired with — and never
+      // the subject itself. "What goes with the lamb, in Drinks" is the whole
+      // reason they exist.
+      partnerMenuType: searchParams.get('partnerMenuType')?.trim() || null,
+      partnerCategory: searchParams.get('partnerCategory')?.trim() || null,
     })
   )
 }
