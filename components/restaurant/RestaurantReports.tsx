@@ -908,9 +908,27 @@ function PaymentMethodsTable({ txs }: { txs: any[] }) {
   )
 }
 
+/**
+ * The line items on an order, as one readable cell: "2x Lamb Tagine, House Red".
+ * Long bills are truncated rather than wrapped into an unreadable column — the
+ * full detail lives on the bill itself, and this only has to make the row
+ * recognisable. Falls back to the older dishNames array, and finally to the
+ * dish name, so a cached response from before items existed still renders.
+ */
+function itemSummary(row: any): string {
+  const items: any[] = Array.isArray(row?.items) ? row.items : []
+  const names: string[] = items.length > 0
+    ? items.map((i) => (Number(i.qty) > 1 ? `${i.qty}x ${i.dishName}` : i.dishName))
+    : Array.isArray(row?.dishNames) ? row.dishNames : []
+  if (names.length === 0) return row?.dishName ?? '—'
+  if (names.length <= 3) return names.join(', ')
+  return `${names.slice(0, 3).join(', ')} +${names.length - 3} more`
+}
+
 function DishProfitTable({ data }: { data: any }) {
   if (!data) return <div className="py-10 text-center text-gray-400 text-sm">Loading orders report data…</div>
   const dishes: any[] = data.orders ?? data.dishes ?? []
+  const byCategory: any[] = data.byCategory ?? []
   const totals: any = data.totals ?? {}
   return (
     <>
@@ -921,13 +939,39 @@ function DishProfitTable({ data }: { data: any }) {
         <StatCard label="Total Profit" value={`${totals.totalProfit >= 0 ? '+' : ''}${fmt(totals.totalProfit ?? 0)} RWF`}
           color={(totals.totalProfit ?? 0) >= 0 ? 'bg-green-100 border-green-300' : 'bg-red-100 border-red-300'} />
       </div>
+      {/* What sold, by category. An order spans categories — a main, a side and
+          a drink on one bill — so this is totalled from the lines, not the
+          order rows, and reads the same way Transactions groups a day. */}
+      {byCategory.length > 0 && (
+        <div className="mb-4 overflow-hidden rounded-xl border border-gray-200">
+          <div className="px-3 py-2 bg-gray-50 border-b border-gray-200">
+            <p className="text-xs font-bold text-gray-700 uppercase tracking-wide">What sold, by category</p>
+          </div>
+          <table className="w-full text-sm">
+            <tbody>
+              {byCategory.map((c: any, i: number) => (
+                <tr key={c.category} className={i % 2 === 0 ? 'bg-white' : 'bg-orange-50/40'}>
+                  <td className="px-3 py-2 text-xs font-semibold text-gray-800 border-b border-gray-100">{c.category}</td>
+                  <td className="px-3 py-2 text-xs text-right text-gray-500 border-b border-gray-100 tabular-nums w-32">{fmt(c.qty)} sold</td>
+                  <td className="px-3 py-2 text-xs text-right text-gray-400 border-b border-gray-100 tabular-nums w-32">{fmt(c.orders)} order{c.orders === 1 ? '' : 's'}</td>
+                  <td className="px-3 py-2 text-xs text-right font-bold text-green-700 border-b border-gray-100 tabular-nums w-36">{fmt(c.revenue)} RWF</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {dishes.length === 0 ? (
         <div className="py-8 text-center text-gray-400 text-sm">No orders found for this period.</div>
       ) : (
         <DataTable
-          head={['Order', 'Waiter', 'Status', 'Qty Sold', 'Cost', 'Price', 'Total Price', 'Profit']}
+          head={['Order', 'Items', 'Waiter', 'Status', 'Qty Sold', 'Cost', 'Price', 'Total Price', 'Profit']}
           rows={dishes.map((d:any) => [
+            // The order number alone told a manager nothing about what was on
+            // the bill; the names are what makes a row recognisable.
             d.orderLabel ?? d.dishName,
+            itemSummary(d),
             d.waiterName ?? 'Unknown',
             statusLabel(d.status),
             d.qtySold,
@@ -936,7 +980,7 @@ function DishProfitTable({ data }: { data: any }) {
             fmt(d.totalPrice ?? d.totalRevenue),
             (d.totalProfit >= 0 ? '' : '-') + fmt(Math.abs(d.totalProfit)),
           ])}
-          foot={['TOTALS', '', '', totals.totalQtySold ?? '', fmt(totals.totalCost ?? 0), '', fmt(totals.totalPrice ?? totals.totalRevenue ?? 0), fmt(totals.totalProfit ?? 0)]}
+          foot={['TOTALS', '', '', '', totals.totalQtySold ?? '', fmt(totals.totalCost ?? 0), '', fmt(totals.totalPrice ?? totals.totalRevenue ?? 0), fmt(totals.totalProfit ?? 0)]}
         />
       )}
       {dishes.length > 0 && (

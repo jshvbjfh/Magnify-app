@@ -181,6 +181,25 @@ export async function GET(req: Request) {
       tableName: order.table?.name ?? order.tableName ?? 'Takeaway',
       waiterName: order.createdByName ?? null,
       dishNames: stationItems.map((item) => item.dishName),
+      // The lines themselves, so the report can name what was actually sold
+      // rather than only the order number, and can total a period by category.
+      // Category comes off the dish, falling back to the line's own snapshot so
+      // a dish deleted since the sale still reports under something.
+      items: stationItems.map((item) => {
+        const dish = dishById.get(item.dishId)
+        return {
+          dishId: item.dishId,
+          dishName: item.dishName,
+          qty: Number(item.qty ?? 0),
+          category: (dish?.category ?? '').trim() || 'Uncategorized',
+          menuType: dish?.menuType ?? null,
+          revenue: calculateLineNetAmount({
+            dishPrice: Number(item.dishPrice ?? 0),
+            qty: Number(item.qty ?? 0),
+            discountPercent: item.discountPercent,
+          }),
+        }
+      }),
       status,
       qtySold,
       unitCost,
@@ -201,10 +220,35 @@ export async function GET(req: Request) {
     totalProfit: acc.totalProfit + r.totalProfit,
   }), { qtySold: 0, totalRevenue: 0, totalCost: 0, totalProfit: 0 })
 
+  // What sold, by category, across the whole period. An order routinely spans
+  // categories — a main, a side and a drink on one bill — so this cannot be
+  // derived from the order rows above without double-counting; it is totalled
+  // from the lines. Same shape a manager already reads on Transactions.
+  const categoryTotals = new Map<string, { category: string; menuType: string | null; qty: number; revenue: number; orders: Set<string> }>()
+  for (const row of rows) {
+    for (const item of row.items) {
+      const bucket = categoryTotals.get(item.category) ?? {
+        category: item.category,
+        menuType: item.menuType,
+        qty: 0,
+        revenue: 0,
+        orders: new Set<string>(),
+      }
+      bucket.qty += item.qty
+      bucket.revenue += item.revenue
+      bucket.orders.add(row.orderId)
+      categoryTotals.set(item.category, bucket)
+    }
+  }
+  const byCategory = Array.from(categoryTotals.values())
+    .map((c) => ({ category: c.category, menuType: c.menuType, qty: c.qty, revenue: c.revenue, orders: c.orders.size }))
+    .sort((a, b) => b.revenue - a.revenue)
+
   return NextResponse.json({
     rows,
     dishes: rows,
     orders: rows,
+    byCategory,
     totals: {
       qtySold: totals.qtySold,
       totalQtySold: totals.qtySold,
