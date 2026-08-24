@@ -4,7 +4,7 @@ import { calculateLineNetAmount } from '@/lib/restaurantOrders'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
-import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
+import { endOfRestaurantDay, isRestaurantHourInWindow, parseHourWindow, restaurantHourOfDay, startOfRestaurantDay } from '@/lib/restaurantDay'
 import { getRestaurantOrderDisplayStatus } from '@/lib/restaurantOrders'
 import { categoryGroupKey } from '@/lib/menuMetadata'
 
@@ -143,7 +143,14 @@ export async function GET(req: Request) {
     ])
   )
 
+  // Time-of-day filter. Applied on the restaurant's clock, never the server's,
+  // so a lunch window means lunch in Kigali and not whatever hour it is in UTC.
+  // An order is placed at the moment it was settled, falling back to when it
+  // was rung up for anything still open.
+  const { hourFrom, hourTo } = parseHourWindow(searchParams)
+
   const rows = orders.flatMap((order) => {
+    if (!isRestaurantHourInWindow(restaurantHourOfDay(order.paidAt ?? order.createdAt), hourFrom, hourTo)) return []
     // This station's slice of the order — dishes belonging to other stations
     // in the same order are reported by those stations, not here. Main takes
     // every item, since it reports the restaurant as a whole.

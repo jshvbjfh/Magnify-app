@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react'
 import { Plus, ArrowDownLeft, ArrowUpRight, RefreshCw, Search, X, Calendar, TrendingUp, TrendingDown, Layers, Check, Trash2, AlertTriangle } from 'lucide-react'
 import { fmtDesc } from '@/lib/displayId'
 import { categoryGroupKey } from '@/lib/menuMetadata'
+import { RESTAURANT_HOUR_PRESETS, isRestaurantHourInWindow, restaurantHourOfDay, type RestaurantHourWindow } from '@/lib/restaurantDay'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 import { fetchWithWakeup } from '@/lib/fetchWithWakeup'
@@ -160,6 +161,9 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
   const [connecting, setConnecting] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string>(todayStr())
+  // Time of day within the chosen date. The sales for the whole day are already
+  // loaded, so this narrows what is on screen rather than re-asking the server.
+  const [hourWindow, setHourWindow] = useState<RestaurantHourWindow>(null)
   const [search, setSearch] = useState('')
   const [newTxRow, setNewTxRow] = useState<NewTxRowState | null>(null)
   const [saving, setSaving] = useState(false)
@@ -304,6 +308,9 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
     const categories = new Map<string, { category: string; qty: number; amount: number; items: Map<string, { dishName: string; qty: number; amount: number }> }>()
     for (const sale of dishSales) {
       if (sale?.deletedAt) continue
+      // Time of day, on the restaurant's clock rather than the browser's, so a
+      // manager abroad still sees their own lunch service.
+      if (hourWindow && !isRestaurantHourInWindow(restaurantHourOfDay(sale?.saleDate ?? sale?.createdAt), hourWindow.from, hourWindow.to)) continue
       const dishName = String(sale?.dishName ?? 'Unknown')
       if (search && !dishName.toLowerCase().includes(search.toLowerCase())) continue
       // Category is typed by hand, so "Mains dish", "Main Dish" and "Mains Dish"
@@ -715,15 +722,37 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
                   <p className="text-sm font-bold text-gray-800">{dateLabel}</p>
                   <p className="text-xs text-gray-400">{groupedByCategory.length} {groupedByCategory.length === 1 ? 'category' : 'categories'} &middot; {groupedItemCount} {groupedItemCount === 1 ? 'item' : 'items'} sold</p>
                 </div>
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
-                  <input
-                    type="text"
-                    placeholder="Search dish&hellip;"
-                    value={search}
-                    onChange={e => setSearch(e.target.value)}
-                    className="pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm w-40 focus:outline-none focus:ring-2 focus:ring-orange-300"
-                  />
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  {/* Time of day within the chosen date. Same named services
+                      the reports offer, from RESTAURANT_HOUR_PRESETS, so lunch
+                      here and lunch there mean the same hours. */}
+                  <div className="flex items-center gap-1">
+                    {RESTAURANT_HOUR_PRESETS.map((p) => {
+                      const active = p.window === null
+                        ? hourWindow === null
+                        : hourWindow !== null && hourWindow.from === p.window.from && hourWindow.to === p.window.to
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setHourWindow(p.window)}
+                          className={`px-2 py-1 rounded-md text-[11px] font-semibold transition-colors ${active ? 'bg-orange-500 text-white' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                        >
+                          {p.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      placeholder="Search dish&hellip;"
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      className="pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm w-40 focus:outline-none focus:ring-2 focus:ring-orange-300"
+                    />
+                  </div>
                 </div>
               </div>
               {groupedByCategory.length === 0 ? (

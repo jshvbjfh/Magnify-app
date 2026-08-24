@@ -57,3 +57,65 @@ export function restaurantHourOfDay(value: Date | string | number): number {
   if (Number.isNaN(time)) return Number.NaN
   return new Date(time + RESTAURANT_OFFSET_MINUTES * 60_000).getUTCHours()
 }
+
+/**
+ * Is this hour inside the chosen service window?
+ *
+ * Wraps past midnight on purpose: a window of 18→02 is one evening's service,
+ * not an empty range, so `from > to` reads as "either side of midnight" rather
+ * than nothing. Both ends are inclusive — a manager picking 18 to 22 means the
+ * whole of the 22:00 hour, not up to 22:00 exactly.
+ *
+ * An unplaceable hour (NaN, from a row with no usable timestamp) is excluded
+ * whenever a window is set: it cannot be shown to be inside one. With no window
+ * everything passes, so callers can apply this unconditionally.
+ */
+export function isRestaurantHourInWindow(
+  hour: number,
+  from?: number | null,
+  to?: number | null,
+): boolean {
+  if (from === null || from === undefined || to === null || to === undefined) return true
+  if (!Number.isInteger(hour)) return false
+  if (from <= to) return hour >= from && hour <= to
+  return hour >= from || hour <= to
+}
+
+/** A chosen service window. Null is the whole trading day. */
+export type RestaurantHourWindow = { from: number; to: number } | null
+
+/**
+ * Named services, because a manager reaches for "dinner" rather than for "18".
+ * Both ends are inclusive hour blocks, so Dinner covers 18:00 through 22:59.
+ *
+ * Shared so every screen offering a time filter offers the SAME services — two
+ * screens each with their own idea of when lunch starts produce two different
+ * lunch figures, and nothing on either says why.
+ */
+export const RESTAURANT_HOUR_PRESETS: { id: string; label: string; window: RestaurantHourWindow }[] = [
+  { id: 'all', label: 'All day', window: null },
+  { id: 'breakfast', label: 'Breakfast', window: { from: 6, to: 10 } },
+  { id: 'lunch', label: 'Lunch', window: { from: 11, to: 15 } },
+  { id: 'dinner', label: 'Dinner', window: { from: 18, to: 22 } },
+  // Wraps past midnight on purpose — late service is one window, not two.
+  { id: 'late', label: 'Late night', window: { from: 22, to: 2 } },
+]
+
+/**
+ * Read ?hourFrom=&hourTo= off a report request. Anything that is not a whole
+ * hour 0–23 is treated as absent, so a malformed value widens the report to the
+ * whole day rather than silently returning nothing.
+ */
+export function parseHourWindow(searchParams: URLSearchParams): { hourFrom: number | null; hourTo: number | null } {
+  const parse = (raw: string | null): number | null => {
+    if (raw === null || raw.trim() === '') return null
+    const hour = Number(raw)
+    return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : null
+  }
+  const hourFrom = parse(searchParams.get('hourFrom'))
+  const hourTo = parse(searchParams.get('hourTo'))
+  // Half a window is not a window — one end alone would silently cut the report
+  // at midnight in whichever direction happened to be supplied.
+  if (hourFrom === null || hourTo === null) return { hourFrom: null, hourTo: null }
+  return { hourFrom, hourTo }
+}

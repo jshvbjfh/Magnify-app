@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
-import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
+import { endOfRestaurantDay, isRestaurantHourInWindow, parseHourWindow, restaurantHourOfDay, startOfRestaurantDay } from '@/lib/restaurantDay'
 import { MENU_TYPE_OPTIONS, MENU_TYPE_SECTION_ORDER, categoryGroupKey, getDishMenuTypeKey } from '@/lib/menuMetadata'
 
 // Money must never be served from a cache — see dish-sales/route.ts for why.
@@ -64,15 +64,22 @@ export async function GET(req: Request) {
       dishName: true,
       quantitySold: true,
       totalSaleAmount: true,
+      saleDate: true,
       dish: { select: { category: true, menuType: true } },
     },
   })
+
+  // Time-of-day filter, on the restaurant's clock rather than the server's.
+  const { hourFrom, hourTo } = parseHourWindow(searchParams)
+  const salesInWindow = hourFrom === null
+    ? sales
+    : sales.filter((sale) => isRestaurantHourInWindow(restaurantHourOfDay(sale.saleDate), hourFrom, hourTo))
 
   // dishId -> aggregated row. Falls back to the sale's own dishName/category
   // when the dish has since been deleted, so a discontinued item still shows
   // up under the category it sold in rather than vanishing from the report.
   const byDish = new Map<string, { dishName: string; category: string | null; menuType: string | null; qty: number; amount: number }>()
-  for (const sale of sales) {
+  for (const sale of salesInWindow) {
     const key = sale.dishId
     const existing = byDish.get(key)
     const qty = Number(sale.quantitySold ?? 0)

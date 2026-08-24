@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { Sparkles, Loader2, BookOpen, TrendingUp, CreditCard, ArrowLeftRight, BarChart3, FileText, RefreshCw, Download, Utensils, Package, CalendarRange, Store, Share2, ArrowUpRight, Ban, Gift, Layers } from 'lucide-react'
 import { fmtDesc } from '@/lib/displayId'
 import { MENU_TYPE_OPTIONS, getDishMenuTypeKey } from '@/lib/menuMetadata'
+import { RESTAURANT_HOUR_PRESETS, type RestaurantHourWindow } from '@/lib/restaurantDay'
 import AccountsReceivable from '@/components/restaurant/AccountsReceivable'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -157,18 +158,11 @@ type UpsellingData = {
 }
 
 /** Inclusive hour blocks at the restaurant, or null for the whole day. */
-type HourWindow = { from: number; to: number } | null
-
-// Named services, because a manager reaches for "dinner" rather than for "18".
-// Both ends are inclusive hour blocks, so Dinner covers 18:00 through 22:59.
-const HOUR_PRESETS: { id: string; label: string; window: HourWindow }[] = [
-  { id: 'all', label: 'All day', window: null },
-  { id: 'breakfast', label: 'Breakfast', window: { from: 6, to: 10 } },
-  { id: 'lunch', label: 'Lunch', window: { from: 11, to: 15 } },
-  { id: 'dinner', label: 'Dinner', window: { from: 18, to: 22 } },
-  // Wraps past midnight on purpose — late service is one window, not two.
-  { id: 'late', label: 'Late night', window: { from: 22, to: 2 } },
-]
+// Both live in lib/restaurantDay so Transactions offers the same services as
+// the reports do — two screens with different ideas of when lunch starts give
+// two different lunch figures and no clue why.
+type HourWindow = RestaurantHourWindow
+const HOUR_PRESETS = RESTAURANT_HOUR_PRESETS
 
 // Mirrors MIN_BILLS_FOR_HOURLY_RATE in lib/upsellingReport.ts. The server is
 // what decides an hour is too thin to rate — this copy only explains why the
@@ -2152,8 +2146,20 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
   const [upsellingData, setUpsellingData] = useState<UpsellingData | null>(null)
   const [canceledData, setCanceledData] = useState<CanceledOrdersData | null>(null)
   const [noChargeData, setNoChargeData] = useState<NoChargeData | null>(null)
-  // Service window for the upsell report. Null is the whole trading day.
+  // Service window, applied across every report that counts sales — not just
+  // the upsell one it started on. A manager comparing lunch against dinner
+  // wants the same cut on revenue, on what sold and on which orders it came
+  // from. Null is the whole trading day.
   const [hourWindow, setHourWindow] = useState<HourWindow>(null)
+  // Both hours or neither: a half-window is ignored server-side, and the picker
+  // would then disagree with the figures it produced.
+  const hoursParam = hourWindow ? `&hourFrom=${hourWindow.from}&hourTo=${hourWindow.to}` : ''
+  // Read through a ref inside fetchReportRange: that callback is deliberately
+  // identity-stable (empty deps) because the initial period probe keys off it,
+  // and adding the window to its deps would restart that probe every time a
+  // manager touched the picker. The ref keeps the value current without it.
+  const hoursParamRef = useRef(hoursParam)
+  hoursParamRef.current = hoursParam
   const [loadedPeriod, setLoadedPeriod] = useState<string>('')
   const [exporting, setExporting] = useState(false)
   const branchCtx = useRestaurantBranch()
@@ -2178,7 +2184,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
     try {
       const [txRes, dpRes, imRes, tiRes] = await Promise.all([
         fetch(`/api/transactions?startDate=${start}&endDate=${end}`, FRESH_FETCH_OPTIONS),
-        fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+        fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}${hoursParamRef.current}`, FRESH_FETCH_OPTIONS),
         fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
         fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
       ])
@@ -2256,7 +2262,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
             }
             // Background-load heavy reports without blocking the UI
             Promise.all([
-              fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+              fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}${hoursParamRef.current}`, FRESH_FETCH_OPTIONS),
               fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
               fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
             ]).then(async ([dpRes, imRes, tiRes]) => {
@@ -2296,6 +2302,21 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
     fetchReport(period)
   }, [draftFrom, draftTo, period, rangeMode, fetchReport, fetchReportRange])
 
+  // Changing the service window has to re-ask the server, because the filter is
+  // applied there — the rows for 18:00–22:00 were never sent for a whole-day
+  // fetch, so there is nothing on the client to narrow.
+  const lastHoursParam = useRef(hoursParam)
+  useEffect(() => {
+    if (lastHoursParam.current === hoursParam) return
+    lastHoursParam.current = hoursParam
+    if (!initialPeriodReady) return
+    if (rangeMode === 'custom') {
+      fetchReportRange(draftFrom, draftTo, `${draftFrom} - ${draftTo}`)
+      return
+    }
+    fetchReport(period)
+  }, [hoursParam, initialPeriodReady, period, rangeMode, draftFrom, draftTo, fetchReport, fetchReportRange])
+
   // Auto-refresh when transactions are added/updated
   useEffect(() => {
     const handler = () => {
@@ -2333,7 +2354,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
         : getDateRange(cached.period)
       Promise.all([
         fetch(`/api/transactions?startDate=${start}&endDate=${end}`, FRESH_FETCH_OPTIONS),
-        fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+        fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}${hoursParamRef.current}`, FRESH_FETCH_OPTIONS),
         fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
         fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
       ]).then(async ([txRes, dpRes, imRes, tiRes]) => {
@@ -2361,7 +2382,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
           const rows = normalizeTransactions(Array.isArray(d) ? d : (d.transactions ?? d.data ?? []))
           setTxData(rows); setPeriodTxData(rows); setLoadedPeriod(label)
           Promise.all([
-            fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+            fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}${hoursParamRef.current}`, FRESH_FETCH_OPTIONS),
             fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
             fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
           ]).then(async ([dpRes, imRes, tiRes]) => {
@@ -2402,12 +2423,12 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
     const { start, end } = rangeMode === 'custom' ? { start: draftFrom, end: draftTo } : getDateRange(period)
     const branchParam = branchId ? `&branchId=${encodeURIComponent(branchId)}` : ''
     let cancelled = false
-    fetch(`/api/restaurant/reports/sales-by-category?from=${start}&to=${end}${branchParam}`, FRESH_FETCH_OPTIONS)
+    fetch(`/api/restaurant/reports/sales-by-category?from=${start}&to=${end}${branchParam}${hoursParam}`, FRESH_FETCH_OPTIONS)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (!cancelled) setSalesByCategoryData(data) })
       .catch(() => { if (!cancelled) setSalesByCategoryData(null) })
     return () => { cancelled = true }
-  }, [activeTab, period, rangeMode, draftFrom, draftTo, initialPeriodReady, branchId])
+  }, [activeTab, period, rangeMode, draftFrom, draftTo, initialPeriodReady, branchId, hoursParam])
 
   // Upselling is restaurant-account-wide for the same reason the General Report
   // is: one bill routinely spans stations, and slicing it per station would
@@ -2541,7 +2562,7 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
       const [txRes, dashRes, dpRes, imRes, tiRes] = await Promise.all([
         fetch(`/api/transactions?startDate=${start}&endDate=${end}`, FRESH_FETCH_OPTIONS),
         fetch(rangeMode === 'custom' ? `/api/restaurant/dashboard?from=${start}&to=${end}` : `/api/restaurant/dashboard?period=${period}`, FRESH_FETCH_OPTIONS),
-        fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
+        fetch(`/api/restaurant/reports/dish-profitability?from=${start}&to=${end}${hoursParamRef.current}`, FRESH_FETCH_OPTIONS),
         fetch(`/api/restaurant/reports/inventory-movement?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
         fetch(`/api/restaurant/reports/theoretical-inventory?from=${start}&to=${end}`, FRESH_FETCH_OPTIONS),
       ])
@@ -2843,6 +2864,17 @@ export default function RestaurantReports({ onAskJesse }: { onAskJesse?: () => v
                 </button>
               </div>
             </div>
+            {/* Time of day, alongside the date. Shown only where the report
+                actually applies it — a picker that silently does nothing is
+                worse than no picker, because the manager believes the number.
+                Upselling keeps its own, which sits beside the hourly profile
+                chart and writes to this same window. */}
+            {(activeTab === 'dish_profit' || activeTab === 'sales_by_category') && (
+              <div className="w-full mt-2 flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Time of day</span>
+                <HourWindowPicker value={hourWindow} onChange={setHourWindow} />
+              </div>
+            )}
           </div>
         </div>
 
