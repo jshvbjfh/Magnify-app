@@ -58,3 +58,29 @@ export function getDishMenuTypeLabel(value?: string | null, category?: string | 
 export function getDishMenuTypeKey(value?: string | null, category?: string | null) {
   return resolveDishMenuType(value, category) ?? 'other'
 }
+
+/**
+ * The grouping key for a free-typed menu category.
+ *
+ * Category is typed by hand, so one real category reaches the database under
+ * several spellings and every report that groups on the raw text splits it into
+ * several rows. On the live menu "Mains dish", "Main Dish" and "Mains Dish" are
+ * three rows covering 35 dishes, and "Starters / Meze", "Starters/meze" and
+ * "Starters/Meze" another three covering 22 — a manager reading either report
+ * sees a third of the real total and no hint that the rest exists.
+ *
+ * Case, punctuation, spacing and a trailing plural all get folded, which
+ * collapses 37 categories to 32 on the current menu. Genuine typos survive it
+ * ("Mains dishe" stays apart from "Mains dish") — this is a read-side
+ * workaround, not a substitute for fixing the menu.
+ *
+ * Group on this; show the spelling staff actually use, never this key.
+ */
+export function categoryGroupKey(raw?: string | null): string {
+  return String(raw ?? '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map((word) => (word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word))
+    .join(' ')
+}

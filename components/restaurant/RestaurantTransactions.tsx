@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import { Plus, ArrowDownLeft, ArrowUpRight, RefreshCw, Search, X, Calendar, TrendingUp, TrendingDown, Layers, Check, Trash2, AlertTriangle } from 'lucide-react'
 import { fmtDesc } from '@/lib/displayId'
+import { categoryGroupKey } from '@/lib/menuMetadata'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { buildRestaurantSnapshotScope, loadRestaurantDeviceSnapshot, mergeRestaurantDeviceSnapshot } from '@/lib/restaurantDeviceSnapshot'
 import { fetchWithWakeup } from '@/lib/fetchWithWakeup'
@@ -305,14 +306,18 @@ export default function RestaurantTransactions({ onAskJesse }: { onAskJesse?: ()
       if (sale?.deletedAt) continue
       const dishName = String(sale?.dishName ?? 'Unknown')
       if (search && !dishName.toLowerCase().includes(search.toLowerCase())) continue
+      // Category is typed by hand, so "Mains dish", "Main Dish" and "Mains Dish"
+      // all reach us as different strings for one category. Group on the folded
+      // key so they are one row, and keep the raw spelling for the label.
       const categoryName = String(sale?.dish?.category ?? '').trim() || 'Uncategorized'
+      const categoryKey = categoryGroupKey(categoryName) || categoryName.toLowerCase()
       const qty = Number(sale?.quantitySold ?? 0)
       const amount = Number(sale?.totalSaleAmount ?? 0)
 
-      let category = categories.get(categoryName)
+      let category = categories.get(categoryKey)
       if (!category) {
         category = { category: categoryName, qty: 0, amount: 0, items: new Map() }
-        categories.set(categoryName, category)
+        categories.set(categoryKey, category)
       }
       category.qty += qty
       category.amount += amount

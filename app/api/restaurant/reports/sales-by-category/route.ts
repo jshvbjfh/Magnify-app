@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
-import { MENU_TYPE_OPTIONS, MENU_TYPE_SECTION_ORDER, getDishMenuTypeKey } from '@/lib/menuMetadata'
+import { MENU_TYPE_OPTIONS, MENU_TYPE_SECTION_ORDER, categoryGroupKey, getDishMenuTypeKey } from '@/lib/menuMetadata'
 
 // Money must never be served from a cache — see dish-sales/route.ts for why.
 export const dynamic = 'force-dynamic'
@@ -91,7 +91,10 @@ export async function GET(req: Request) {
     }
   }
 
-  type CategoryGroup = { name: string; qty: number; revenue: number; items: { dishId: string; dishName: string; qty: number; amount: number }[] }
+  // Keyed on the folded spelling so one hand-typed category is one row, but
+  // labelled with the spelling the most dishes actually use — a manager should
+  // read their own words back, not a normalised key.
+  type CategoryGroup = { name: string; qty: number; revenue: number; spellings: Map<string, number>; items: { dishId: string; dishName: string; qty: number; amount: number }[] }
   type SectionGroup = { key: string; label: string; qty: number; revenue: number; categories: Map<string, CategoryGroup> }
 
   const sections = new Map<string, SectionGroup>()
@@ -105,11 +108,13 @@ export async function GET(req: Request) {
       sections.set(sectionKey, section)
     }
 
-    let category = section.categories.get(categoryName)
+    const categoryKey = categoryGroupKey(categoryName) || categoryName.toLowerCase()
+    let category = section.categories.get(categoryKey)
     if (!category) {
-      category = { name: categoryName, qty: 0, revenue: 0, items: [] }
-      section.categories.set(categoryName, category)
+      category = { name: categoryName, qty: 0, revenue: 0, spellings: new Map(), items: [] }
+      section.categories.set(categoryKey, category)
     }
+    category.spellings.set(categoryName, (category.spellings.get(categoryName) ?? 0) + 1)
 
     category.items.push({ dishId, dishName: row.dishName, qty: row.qty, amount: row.amount })
     category.qty += row.qty
@@ -133,7 +138,11 @@ export async function GET(req: Request) {
       categories: Array.from(section.categories.values())
         .sort((a, b) => b.revenue - a.revenue)
         .map((category) => ({
-          ...category,
+          // Whichever spelling covers the most dishes wins the label.
+          name: Array.from(category.spellings.entries())
+            .sort((a, b) => b[1] - a[1])[0]?.[0] ?? category.name,
+          qty: category.qty,
+          revenue: category.revenue,
           items: category.items.sort((a, b) => b.amount - a.amount),
         })),
     }))

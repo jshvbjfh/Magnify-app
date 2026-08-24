@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
 import { getRestaurantOrderDisplayStatus } from '@/lib/restaurantOrders'
+import { categoryGroupKey } from '@/lib/menuMetadata'
 
 // Money must never be served from a cache. Without this, Next can cache the
 // GET response and keep returning figures from before a correction landed —
@@ -224,10 +225,14 @@ export async function GET(req: Request) {
   // categories — a main, a side and a drink on one bill — so this cannot be
   // derived from the order rows above without double-counting; it is totalled
   // from the lines. Same shape a manager already reads on Transactions.
+  // Keyed on the folded spelling, because category is typed by hand and one
+  // real category arrives under several — grouping on the raw text splits it
+  // into rows that each show a fraction of the truth.
   const categoryTotals = new Map<string, { category: string; menuType: string | null; qty: number; revenue: number; orders: Set<string> }>()
   for (const row of rows) {
     for (const item of row.items) {
-      const bucket = categoryTotals.get(item.category) ?? {
+      const key = categoryGroupKey(item.category) || item.category.toLowerCase()
+      const bucket = categoryTotals.get(key) ?? {
         category: item.category,
         menuType: item.menuType,
         qty: 0,
@@ -237,7 +242,7 @@ export async function GET(req: Request) {
       bucket.qty += item.qty
       bucket.revenue += item.revenue
       bucket.orders.add(row.orderId)
-      categoryTotals.set(item.category, bucket)
+      categoryTotals.set(key, bucket)
     }
   }
   const byCategory = Array.from(categoryTotals.values())
