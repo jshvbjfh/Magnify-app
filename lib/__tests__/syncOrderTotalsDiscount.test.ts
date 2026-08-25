@@ -24,8 +24,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
 
 const STORED_ITEMS = [
-  { dishPrice: 10000, qty: 1, discountPercent: 10, status: 'ACTIVE' },
-  { dishPrice: 5000, qty: 2, discountPercent: null, status: 'ACTIVE' },
+  { dishPrice: 10000, qty: 1, discountPercent: 10, taxCategory: null, status: 'ACTIVE' },
+  { dishPrice: 5000, qty: 2, discountPercent: null, taxCategory: null, status: 'ACTIVE' },
 ]
 
 /** A db whose findMany projects exactly the columns asked for, as Prisma does. */
@@ -87,5 +87,31 @@ describe('syncRestaurantOrderTotals', () => {
     await syncRestaurantOrderTotals(db as never, 'ord-2')
 
     expect(update.mock.calls[0][0].data.totalAmount).toBe(12000)
+  })
+
+  it('writes only money columns, never the derived tax breakdown', async () => {
+    const { db, update } = makeDb()
+
+    await syncRestaurantOrderTotals(db as never, 'ord-1', { fiscalMode: true })
+
+    // taxLines is derived per line and is not a column on the order. Passing the
+    // totals object through verbatim would make Prisma reject the write at
+    // runtime — which no type check catches, because it is not an object literal.
+    expect(Object.keys(update.mock.calls[0][0].data).sort()).toEqual([
+      'subtotalAmount',
+      'totalAmount',
+      'vatAmount',
+    ])
+  })
+
+  it('still charges the guest the same total in fiscal mode', async () => {
+    const { db, update } = makeDb()
+
+    await syncRestaurantOrderTotals(db as never, 'ord-1', { fiscalMode: true })
+
+    const written = update.mock.calls[0][0].data
+    expect(written.totalAmount).toBe(19000)
+    expect(written.subtotalAmount + written.vatAmount).toBe(19000)
+    expect(written.vatAmount).toBeGreaterThan(0)
   })
 })

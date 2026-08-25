@@ -66,6 +66,19 @@ model Restaurant {
   // with. Some venues hand it over as the receipt; most do not want a second
   // slip per table, so it is off unless a manager asks for it.
   printPaymentConfirmation Boolean @default(false)
+  // Rwanda EBM fiscalisation. OFF for every existing restaurant and off by
+  // default for new ones: switched on, this venue starts extracting VAT from
+  // its menu prices, issuing numbered fiscal receipts, and refusing to delete a
+  // settled bill. None of that suits a venue outside Rwanda, and none of it
+  // should arrive because someone shipped a release.
+  //
+  // Read it wherever tax is computed and pass it down — never infer it from the
+  // presence of a TIN, which a venue may fill in long before it is certified.
+  rraFiscalMode      Boolean   @default(false)
+  // The taxpayer's TIN, printed on every fiscal receipt. Null until the venue
+  // is registered; a null here with rraFiscalMode on is a misconfiguration the
+  // settings screen must not allow.
+  tin                String?
   // Hides financial history before this date from the Transactions page without
   // deleting anything — the entries stay in the database (so stock, purchase
   // records and audits remain intact) and clearing this field restores them.
@@ -134,6 +147,22 @@ model Branch {
   address            String?
   billHeader         String?
   qrMenuHeroImageUrl String?
+  // ── RRA fiscal identity ──────────────────────────────────────────────────
+  // Issued by RRA when the outlet is registered, and printed on its receipts.
+  // Per BRANCH, not per restaurant: a taxpayer with several outlets is issued
+  // separate identifiers for each, and a receipt carrying the wrong outlet's
+  // SDC is as wrong as one carrying no SDC at all.
+  //
+  // All nullable, and meaningless until Restaurant.rraFiscalMode is on.
+  rraBranchCode      String?
+  sdcId              String?
+  mrc                String?
+  // Where this outlet reaches the sales-data controller. Stored per branch
+  // because RRA issues credentials per outlet — NOT because the controller is
+  // on the local network. RRA hosts it, and the spec requires the invoicing
+  // system to be online to reach it.
+  vsdcUrl            String?
+  deviceSerial       String?
   createdAt          DateTime   @default(now())
   updatedAt          DateTime   @updatedAt
   deletedAt          DateTime?
@@ -378,6 +407,16 @@ model OrderItem {
   // calculateLineNetAmount, so a discounted line is worth exactly one thing.
   discountPercent Float?
   totalPrice      Float           @default(0)
+  // ── RRA per-line tax ─────────────────────────────────────────────────────
+  // Snapshotted at sale time, for the same reason dishName and dishPrice are:
+  // reclassifying a dish next month must not rewrite the tax on a receipt
+  // already issued and already declared.
+  //
+  // taxableAmount + taxAmount always equals what the guest was charged for this
+  // line after its discount. Null on every line taken outside fiscal mode.
+  taxCategory     String?
+  taxableAmount   Float?
+  taxAmount       Float?
   kitchenStatus   String          @default("new")
   status          String          @default("ACTIVE")
   cancelReason    String?
@@ -432,6 +471,44 @@ model KitchenTicket {
   @@map("kitchen_tickets")
 }
 
+// A fiscal receipt sequence: gap-free, never repeating, one per receipt type
+// per outlet.
+//
+// Read the note on KitchenTicket.seq above and then read this, because they
+// resolve the same conflict in opposite directions ON PURPOSE.
+//
+// A kitchen slip may repeat its number rather than fail to sync: a duplicate
+// slip number confuses one cook for one second, and a push that will not sync
+// loses an order. A fiscal receipt is the reverse. A repeated or skipped
+// receipt number is exactly what RRA audits for, so here a collision must fail
+// loudly and be retried rather than be quietly tolerated.
+//
+// Which is also why this cannot reuse the order-number generator: that reads
+// the newest order and adds one, so deleting an order frees its number for
+// reuse, and two offline tills reach the same number independently.
+//
+// The number is claimed by incrementing nextValue inside the settlement
+// transaction and taking the value BEFORE the increment. Under Postgres and
+// SQLite alike that is atomic against concurrent claims, so two tills settling
+// at the same instant cannot be issued the same receipt number.
+model FiscalCounter {
+  id           String   @id @default(cuid())
+  restaurantId String
+  branchId     String
+  // NS normal sale · NR refund · CS copy · TS training · PS proforma.
+  // Each type carries its own sequence — a refund is not the next sale.
+  receiptType  String
+  // The next number to hand out. Never decremented, never reset: a counter that
+  // restarts each day would repeat last week's numbers within the month.
+  nextValue    Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([branchId, receiptType])
+  @@index([restaurantId])
+  @@map("fiscal_counters")
+}
+
 // ─── MENU ──────────────────────────────────────────────────────────────────
 
 model Dish {
@@ -448,6 +525,25 @@ model Dish {
   // MEP (mise en place): batch-cooked portions ready to serve; sales consume these first
   preparedPortions    Float     @default(0)
   preparedPortionCost Float     @default(0)
+  // ── RRA item registration ────────────────────────────────────────────────
+  // itemCode is what RRA knows this dish as, and it is PERMANENT once issued —
+  // it appears on receipts already handed to guests and in declarations already
+  // filed. Renaming the dish must never change it. That is why it is stored
+  // rather than derived from the name, which is otherwise this row's identity.
+  //
+  // Not marked unique yet: dishes are keyed per branch, so the same drink sold
+  // at two stations is two rows today, and whether those share one code or take
+  // two is an open decision. Add the constraint once that is settled — adding
+  // it later is a migration; removing a wrong one is a data cleanup.
+  itemCode              String?
+  // RRA's classification for what this item IS, from their published code list.
+  rraClassificationCode String?
+  // Tax bracket: A exempt, B standard 18%, C zero-rated, D special. Null falls
+  // back to the standard rate at calculation time rather than to exempt —
+  // under-declaring is the expensive direction to be wrong in.
+  taxCategory           String?
+  unitOfMeasure         String?
+  packagingUnit         String?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
   deletedAt           DateTime?
