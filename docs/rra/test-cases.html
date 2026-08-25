@@ -1,0 +1,700 @@
+<title>Magnify EBM Test Cases</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+  :root {
+    --paper:     #FBFAF7;
+    --surface:   #FFFFFF;
+    --sunk:      #F2F0EA;
+    --ink:       #1A1A17;
+    --ink-soft:  #43413B;
+    --muted:     #6E6B63;
+    --faint:     #9B978D;
+    --rule:      #DDD9CF;
+    --rule-hard: #C6C1B4;
+    --accent:    #24507A;
+    --accent-bg: #E8EEF5;
+    --brick:     #A33A2E;
+    --brick-bg:  #F7E9E6;
+    --moss:      #3F6B4A;
+    --moss-bg:   #E7EFE8;
+    --amber:     #8A6414;
+    --amber-bg:  #F6EEDC;
+
+    --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --f-body:    "Source Serif 4", Georgia, "Times New Roman", serif;
+    --f-mono:    "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #141311; --surface: #1C1B18; --sunk: #232120;
+      --ink: #EDEAE3; --ink-soft: #C9C5BC; --muted: #98938A; --faint: #6E6A62;
+      --rule: #33302C; --rule-hard: #474339;
+      --accent: #8FB4DA; --accent-bg: #1B2733;
+      --brick: #D98878; --brick-bg: #2E1E1B;
+      --moss: #8FBE9C; --moss-bg: #1A241C;
+      --amber: #D6AC5E; --amber-bg: #2A2216;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #141311; --surface: #1C1B18; --sunk: #232120;
+    --ink: #EDEAE3; --ink-soft: #C9C5BC; --muted: #98938A; --faint: #6E6A62;
+    --rule: #33302C; --rule-hard: #474339;
+    --accent: #8FB4DA; --accent-bg: #1B2733;
+    --brick: #D98878; --brick-bg: #2E1E1B;
+    --moss: #8FBE9C; --moss-bg: #1A241C;
+    --amber: #D6AC5E; --amber-bg: #2A2216;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 16.5px;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 24px 96px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 940px; margin: 0 auto; }
+
+  /* ── masthead ─────────────────────────────────────── */
+  .mast { padding: 60px 0 0; }
+  .eyebrow {
+    font-family: var(--f-mono);
+    font-size: 11.5px; font-weight: 500;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 16px;
+  }
+  h1 {
+    font-family: var(--f-display); font-weight: 700;
+    font-size: clamp(32px, 5vw, 46px);
+    line-height: 1.05; letter-spacing: -0.022em;
+    text-wrap: balance; margin: 0 0 16px;
+  }
+  .standfirst {
+    font-size: 18.5px; line-height: 1.55;
+    color: var(--ink-soft); max-width: 62ch; margin: 0 0 32px;
+  }
+
+  /* ── identity block ───────────────────────────────── */
+  .identity {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px; background: var(--rule);
+    border: 1px solid var(--rule); margin-bottom: 10px;
+  }
+  .idcell { background: var(--surface); padding: 14px 16px; }
+  .idcell dt {
+    font-family: var(--f-mono); font-size: 10px;
+    letter-spacing: 0.11em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 6px;
+  }
+  .idcell dd {
+    font-family: var(--f-mono); font-size: 14px;
+    font-weight: 500; margin: 0; word-break: break-word;
+  }
+
+  /* ── legend ───────────────────────────────────────── */
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin: 26px 0 0; }
+  .pill {
+    font-family: var(--f-mono); font-size: 11px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 5px 10px; border-radius: 2px; white-space: nowrap;
+  }
+  .pill.built   { background: var(--moss-bg);  color: var(--moss); }
+  .pill.part    { background: var(--amber-bg); color: var(--amber); }
+  .pill.todo    { background: var(--brick-bg); color: var(--brick); }
+  .pill.na      { background: var(--sunk);     color: var(--muted); }
+
+  /* ── sections ─────────────────────────────────────── */
+  section { padding: 46px 0 0; }
+  h2 {
+    font-family: var(--f-display); font-weight: 700;
+    font-size: 14.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 4px;
+  }
+  .sec-lede { font-size: 16px; color: var(--ink-soft); max-width: 64ch; margin: 0 0 22px; }
+  p { max-width: 66ch; }
+
+  /* ── test table ───────────────────────────────────── */
+  .scroll { overflow-x: auto; border: 1px solid var(--rule-hard); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 760px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font-family: var(--f-mono); font-size: 10px;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted); font-weight: 500;
+    background: var(--sunk); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.id, td.clause { font-family: var(--f-mono); font-size: 12.5px; white-space: nowrap; color: var(--accent); }
+  td.clause { color: var(--muted); }
+  td.st { white-space: nowrap; }
+
+  code {
+    font-family: var(--f-mono); font-size: 0.85em;
+    background: var(--sunk); padding: 1.5px 5px; border-radius: 2px;
+    color: var(--ink-soft); word-break: break-word;
+  }
+  pre {
+    font-family: var(--f-mono); font-size: 12.5px; line-height: 1.55;
+    background: var(--sunk); border: 1px solid var(--rule);
+    padding: 14px 16px; overflow-x: auto; margin: 0;
+  }
+
+  .note {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-bg);
+    padding: 14px 18px; margin: 22px 0 0;
+  }
+  .note p { margin: 0; font-size: 15.5px; color: var(--ink-soft); max-width: none; }
+  .note strong { font-family: var(--f-display); color: var(--ink); }
+
+  footer { margin-top: 52px; padding-top: 20px; border-top: 1.5px dashed var(--rule-hard); }
+  footer p { font-family: var(--f-mono); font-size: 11.5px; color: var(--faint); line-height: 1.7; max-width: none; }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  /* ── print / PDF ──────────────────────────────────────────────────────────
+     This document is submitted on paper as well as read on screen, so the
+     print rules are part of the design rather than an afterthought. The light
+     palette is forced: a dark-themed reader must not produce a black-page PDF
+     for a government submission. */
+  @media print {
+    :root {
+      --paper: #FFFFFF; --surface: #FFFFFF; --sunk: #F2F0EA;
+      --ink: #14140F; --ink-soft: #3A3833; --muted: #5E5B54; --faint: #85817A;
+      --rule: #D5D1C6; --rule-hard: #B4AFA1;
+      --accent: #1D4468; --accent-bg: #EDF2F7;
+      --brick: #8E3025; --brick-bg: #F7E9E6;
+      --moss: #355C3F;  --moss-bg: #E7EFE8;
+      --amber: #74540F; --amber-bg: #F6EEDC;
+    }
+
+    body { padding: 0; font-size: 9.6pt; line-height: 1.45; }
+    .wrap { max-width: none; }
+
+    .mast { padding-top: 0; }
+    h1 { font-size: 26pt; }
+    .standfirst { font-size: 11pt; margin-bottom: 20px; }
+
+    /* A heading stranded at the foot of a page, with its table overleaf, is
+       the classic printed-document failure. Keep each heading with its lede
+       and the first rows of what it introduces. */
+    section { padding-top: 26px; break-inside: auto; }
+    h2, .sec-lede { break-after: avoid; }
+    h2 { font-size: 10.5pt; }
+    .sec-lede { font-size: 10pt; margin-bottom: 12px; }
+
+    .scroll { overflow: visible; }
+    table { min-width: 0; font-size: 8.2pt; }
+    th, td { padding: 6px 8px; }
+    /* Repeat column headers on every page a table spans — otherwise page two
+       of a table is unreadable. */
+    thead { display: table-header-group; }
+    tr, .note, .legend, .identity, pre { break-inside: avoid; }
+
+    .pill { font-size: 7.6pt; padding: 3px 6px; }
+    .idcell { padding: 9px 11px; }
+    .idcell dd { font-size: 10pt; }
+
+    footer { break-inside: avoid; }
+    a { color: var(--ink); text-decoration: none; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <p class="eyebrow">Rwanda Revenue Authority · CIS Certification</p>
+    <h1>Magnify test cases</h1>
+    <p class="standfirst">Every requirement of the Certified Invoicing System specification, the test that demonstrates it, and the result expected. Clause numbers refer to RRA's <em>Technical Specification of CIS for VSDC, Ver. 1.0</em> and the <em>VSDC API Specification v1.0.4</em>.</p>
+
+    <dl class="identity">
+      <div class="idcell"><dt>System</dt><dd>Magnify</dd></div>
+      <div class="idcell"><dt>Vendor</dt><dd>YoFinder Ltd</dd></div>
+      <div class="idcell"><dt>Version</dt><dd>1.0.50</dd></div>
+      <div class="idcell"><dt>Components</dt><dd>Manager · Till · Tablet</dd></div>
+      <div class="idcell"><dt>SDC route</dt><dd>Local VSDC</dd></div>
+      <div class="idcell"><dt>Document</dt><dd>Draft 1</dd></div>
+    </dl>
+
+    <div class="legend">
+      <span class="pill built">Built — ready to demonstrate</span>
+      <span class="pill part">Partial — foundation exists</span>
+      <span class="pill todo">Not built</span>
+      <span class="pill na">Environmental</span>
+    </div>
+  </header>
+
+  <div class="note">
+    <p><strong>Read the status column as a build plan, not a claim.</strong> Clause §7.10 requires that the system have no functions beyond those its documentation states, and that the documentation track every change. Anything marked <em>Not built</em> must be either finished or removed from the accompanying Software Documentation before submission — an overstatement here is a certification failure, not a rounding error.</p>
+  </div>
+
+  <section>
+    <h2>A · Connection to the VSDC</h2>
+    <p class="sec-lede">The clauses that decide whether a receipt may exist at all. Everything else is downstream of these.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>ID</th><th>Clause</th><th>Requirement</th><th>Test</th><th>Expected</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="id">A-01</td><td class="clause">§10, §7.8</td>
+            <td>No receipt may print without a VSDC response.</td>
+            <td>Stop the local VSDC service. Settle a bill.</td>
+            <td>No receipt prints. The till states the VSDC is unavailable.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">A-02</td><td class="clause">§7.9</td>
+            <td>The system detects VSDC status independently and informs the user on error.</td>
+            <td>Stop the VSDC while the till is idle, without attempting a sale.</td>
+            <td>The till shows the fault on its own, before anyone tries to bill.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">A-03</td><td class="clause">§24.7.9</td>
+            <td>Operation stops on communication error or power interruption; printing resumes once cleared.</td>
+            <td>Kill the VSDC mid-service, then restart it.</td>
+            <td>Billing halts, then resumes without data loss or a skipped number.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">A-04</td><td class="clause">§7.15</td>
+            <td>A sale amount cannot be registered without simultaneously printing a receipt.</td>
+            <td>Attempt to close a bill with the printer offline.</td>
+            <td>The sale is not registered. No orphaned record is created.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">A-05</td><td class="clause">VSDC §2.2(4)</td>
+            <td>After 24 hours with no internet, the VSDC stops issuing receipt numbers.</td>
+            <td>Disconnect the internet, leaving the VSDC running. Bill normally, then exceed 24 hours.</td>
+            <td>Billing continues during the window; stops cleanly at expiry with a stated reason.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>B · Numbering and the journal</h2>
+    <p class="sec-lede">What RRA audits hardest. A repeated or skipped number is the defect these clauses exist to catch.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>ID</th><th>Clause</th><th>Requirement</th><th>Test</th><th>Expected</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="id">B-01</td><td class="clause">§7.3</td>
+            <td>Consecutive numbering, one ascending sequence per receipt type, no gaps.</td>
+            <td>Issue 50 mixed receipts. Export the journal and check every sequence.</td>
+            <td>Each type runs 1..n with no gap and no repeat.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">B-02</td><td class="clause">§7.3</td>
+            <td>Two tills billing simultaneously cannot take the same number.</td>
+            <td>Settle concurrently from two terminals against one outlet, repeatedly.</td>
+            <td>Numbers are consecutive across both. No duplicate at any load.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">B-03</td><td class="clause">§7.24.4, §7.25</td>
+            <td>Both counters print as <code>A/B RT</code> — per type, and across all types.</td>
+            <td>Issue a sale after several refunds and copies. Read the printed line.</td>
+            <td>e.g. <code>RECEIPT NUMBER: 168/258 NS</code>, both advancing correctly.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">B-04</td><td class="clause">§7.3</td>
+            <td>A number claimed by an abandoned sale must not leave a gap.</td>
+            <td>Force a failure after the number is claimed but before the sale commits.</td>
+            <td>The number is released with the transaction. The next sale takes it.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">B-05</td><td class="clause">§7.14</td>
+            <td>An electronic journal records every receipt; the system will not operate without it.</td>
+            <td>Inspect the journal after a full trading day.</td>
+            <td>Every receipt present, in order, with its amounts and signature.</td>
+            <td class="st"><span class="pill part">Partial</span></td>
+          </tr>
+          <tr>
+            <td class="id">B-06</td><td class="clause">§6.5</td>
+            <td>Complete journal data for NS and NR is sent to the VSDC in text form.</td>
+            <td>Issue sales and refunds, then inspect what reached the VSDC.</td>
+            <td>Journal text transmitted for every NS and NR receipt.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>C · Tax calculation</h2>
+    <p class="sec-lede">Verified against RRA's own worked examples rather than against our reading of them — both the JSON sample in the API specification and the printed receipt in the CIS specification.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>ID</th><th>Clause</th><th>Requirement</th><th>Test</th><th>Expected</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="id">C-01</td><td class="clause">§4.1</td>
+            <td>Tax rates labelled A, B, C, D at indexes 1–4; B is 18%, A is exempt.</td>
+            <td>Sell one item in each bracket on a single bill.</td>
+            <td>Each line carries its label. Only B attracts tax.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">C-02</td><td class="clause">API sample</td>
+            <td>Tax is extracted from a VAT-inclusive price, not added to it.</td>
+            <td>Sell one item at 200,000.</td>
+            <td><code>taxblAmt 200000</code>, <code>taxAmt 30508</code>. Total charged stays 200,000.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">C-03</td><td class="clause">§13.1</td>
+            <td>The specification's own sample bill reproduces exactly.</td>
+            <td>Ring up bread 1,000 exempt; gouda 33,600 × 0.2 less 25%; gum 60 × 5.</td>
+            <td><code>TOTAL 6340.00</code> · <code>A-EX 1000.00</code> · <code>B 5340.00</code> · <code>TAX B 814.58</code></td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">C-04</td><td class="clause">§13.1</td>
+            <td>Per-bracket tax is computed from the bracket total, not by summing rounded lines.</td>
+            <td>Bill two standard-rated lines whose individual taxes round down.</td>
+            <td>814.58 from the bracket, not 814.57 from the lines.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">C-05</td><td class="clause">§7.5</td>
+            <td>Amounts display and print to two decimal places.</td>
+            <td>Inspect the till display and a printed receipt.</td>
+            <td>Two decimals throughout, dot separator.</td>
+            <td class="st"><span class="pill part">Partial</span></td>
+          </tr>
+          <tr>
+            <td class="id">C-06</td><td class="clause">§7.22, §7.23</td>
+            <td>Every programmed rate above zero prints on every receipt, used or not. A zero rate prints only when used.</td>
+            <td>Sell a single exempt item. Then a single standard-rated item.</td>
+            <td>B appears on both. A appears only on the bill that used it.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">C-07</td><td class="clause">§13</td>
+            <td>Discounts reduce taxable amount and tax proportionally, and are declared per line.</td>
+            <td>Apply 25% to one line of a mixed bill.</td>
+            <td><code>dcRt 25</code>, <code>dcAmt</code> and charge reconcile to the supply amount exactly.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>D · Receipt content</h2>
+    <p class="sec-lede">The printed article. Clause §7.24 fixes the SDC block precisely, including how the QR code is composed.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>ID</th><th>Clause</th><th>Requirement</th><th>Test</th><th>Expected</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="id">D-01</td><td class="clause">§13.1</td>
+            <td>Header carries trade name, address and TIN.</td>
+            <td>Print any receipt.</td>
+            <td>All three present above the item list.</td>
+            <td class="st"><span class="pill part">Partial</span></td>
+          </tr>
+          <tr>
+            <td class="id">D-02</td><td class="clause">§7.24.1–.3</td>
+            <td>SDC block: the designation, VSDC date and time as <code>dd/mm/yyyy hh:mm:ss</code>, and <code>SDC ID</code>.</td>
+            <td>Print a normal sale.</td>
+            <td>Block present, times taken from the VSDC and not the till.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">D-03</td><td class="clause">§7.24.5–.6</td>
+            <td>Internal data and signature printed in groups of four separated by dashes.</td>
+            <td>Print a normal sale and inspect both strings.</td>
+            <td><code>TE68-SLA2-34J5-EAV3-…</code> — dash after every fourth character.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">D-04</td><td class="clause">§7.24.7</td>
+            <td>QR code composed exactly as specified.</td>
+            <td>Scan the printed QR and compare against the receipt fields.</td>
+            <td>Decodes to the format shown below the table.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">D-05</td><td class="clause">§7.29</td>
+            <td>The official RRA logo prints on every receipt, of every type.</td>
+            <td>Print one of each receipt type.</td>
+            <td>Logo present on all five.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">D-06</td><td class="clause">§7.27</td>
+            <td>An item counter shows the number of items on the receipt, excluding voids.</td>
+            <td>Bill three items, void one, print.</td>
+            <td><code>ITEMS NUMBER 2</code>.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">D-07</td><td class="clause">§7.28</td>
+            <td>The last line continues or reprints after power failure or paper-out recovery.</td>
+            <td>Remove paper mid-print, reload. Repeat with power.</td>
+            <td>Receipt completes without loss or duplication.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">D-08</td><td class="clause">§7.4, §7.7</td>
+            <td>MRC and a unique software version print, and the version is verifiable by RRA staff.</td>
+            <td>Print a receipt; check the version shown in the application.</td>
+            <td>MRC on the receipt; version reads <code>1.0.50</code> and matches the build.</td>
+            <td class="st"><span class="pill part">Partial</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:20px"><strong style="font-family:var(--f-display)">QR payload, per §7.24.7</strong></p>
+    <pre>invoice_date(ddmmyyyy) # time(hhmmss) # sdc_number # sdc_receipt_number
+    # internal_data # receipt_signature</pre>
+  </section>
+
+  <section>
+    <h2>E · Receipt types</h2>
+    <p class="sec-lede">Five types, and strict rules about which may be issued when. The refund rules are the operationally surprising ones.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>ID</th><th>Clause</th><th>Requirement</th><th>Test</th><th>Expected</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="id">E-01</td><td class="clause">§13</td>
+            <td>Normal sale (NS) is the ordinary receipt offered to the client.</td>
+            <td>Settle a bill.</td>
+            <td>Receipt labelled NS, signed, handed over.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">E-02</td><td class="clause">§7.17</td>
+            <td>A transaction cannot be corrected without cancelling the original, which must be referenced.</td>
+            <td>Refund a settled bill.</td>
+            <td>Refund receipt prints <code>REF. NORMAL RECEIPT#</code> naming the original.</td>
+            <td class="st"><span class="pill part">Partial</span></td>
+          </tr>
+          <tr>
+            <td class="id">E-03</td><td class="clause">§7.17</td>
+            <td>An original may be cancelled only once.</td>
+            <td>Refund a bill, then attempt to refund it again.</td>
+            <td>The second attempt is refused, and says why.</td>
+            <td class="st"><span class="pill part">Partial</span></td>
+          </tr>
+          <tr>
+            <td class="id">E-04</td><td class="clause">§13.2</td>
+            <td>Refund amounts print negative throughout — lines, totals, tax and tender.</td>
+            <td>Refund a mixed-bracket bill.</td>
+            <td>Every figure negative, including per-bracket tax.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">E-05</td><td class="clause">§7.18, §11</td>
+            <td>Only one original prints. A reprint is a COPY, watermarked, with the disclaimer.</td>
+            <td>Reprint an issued receipt.</td>
+            <td>COPY above the items and as a watermark; <code>THIS IS NOT AN OFFICIAL RECEIPT</code> below totals, at least twice the size of the amount text.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">E-06</td><td class="clause">§11</td>
+            <td>Training and proforma tickets carry the same designation and disclaimer.</td>
+            <td>Issue one of each.</td>
+            <td>TRAINING / PROFORMA marked as above. Neither is signed.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">E-07</td><td class="clause">§6.3.6</td>
+            <td>Training and proforma receipts are not digitally signed.</td>
+            <td>Inspect a training ticket.</td>
+            <td>No signature block. Not counted as a sale.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">E-08</td><td class="clause">§12</td>
+            <td>All corrections are made before the receipt is approved.</td>
+            <td>Amend a bill before settling, then settle.</td>
+            <td>Amendments possible before approval, impossible after.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>F · Reports</h2>
+    <p class="sec-lede">Clause §18 lists twenty items the daily report must contain. Each is a separate line of evidence.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>ID</th><th>Clause</th><th>Requirement</th><th>Test</th><th>Expected</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="id">F-01</td><td class="clause">§7.6</td>
+            <td>Z daily report — the full day, 00:00:00 to 23:59:59.</td>
+            <td>Trade a full day, then produce the Z report.</td>
+            <td>Report covers the whole day and closes it.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">F-02</td><td class="clause">§7.6</td>
+            <td>X daily report — from the last Z report to now.</td>
+            <td>Produce X mid-service, twice.</td>
+            <td>Second X includes everything since the last Z, not since the last X.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">F-03</td><td class="clause">§18.1.5–.9</td>
+            <td>NS totals and count, NR totals and count, all tax-inclusive.</td>
+            <td>Trade a day containing sales and refunds. Read the report.</td>
+            <td>Four figures present and reconciling to the journal.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">F-04</td><td class="clause">§18.1.10–.11</td>
+            <td>Taxable and tax amounts per rate, split between NS and NR.</td>
+            <td>As above, with mixed brackets.</td>
+            <td>Per-bracket split shown separately for sales and refunds.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">F-05</td><td class="clause">§18.1.14–.16</td>
+            <td>Counts and amounts for copies, training and proforma receipts.</td>
+            <td>Issue several of each, then report.</td>
+            <td>Each type counted separately with its total.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">F-06</td><td class="clause">§18.1.17–.18</td>
+            <td>Sales split by means of payment, and all discounts.</td>
+            <td>Trade using cash, card, mobile money and credit, with discounts.</td>
+            <td>Each tender totalled separately; discounts totalled.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">F-07</td><td class="clause">§18.1.12, .20</td>
+            <td>Opening deposit and number of incomplete sales.</td>
+            <td>Open with a float; abandon a bill; report.</td>
+            <td>Both figures present.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">F-08</td><td class="clause">§7.26</td>
+            <td>An audit interface exposing software settings and the database.</td>
+            <td>Demonstrate the interface to an auditor.</td>
+            <td>Settings and records viewable without developer tools.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>G · Stock and operations</h2>
+    <p class="sec-lede">Clause §7.30 carries an exemption that matters for a restaurant: prepared dishes registered as service items are not blocked by stock.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>ID</th><th>Clause</th><th>Requirement</th><th>Test</th><th>Expected</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="id">G-01</td><td class="clause">§7.11</td>
+            <td>Inventory control with input, removal, and independent status reports.</td>
+            <td>Receive stock, consume it, report.</td>
+            <td>Movements recorded; status report produced independently of sales.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">G-02</td><td class="clause">§7.30</td>
+            <td>No receipt for goods when stock is short. Service items are exempt.</td>
+            <td>Attempt to sell a stocked good below its quantity, then a service item.</td>
+            <td>Goods refused; service item permitted.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">G-03</td><td class="clause">§7.31</td>
+            <td>Closing stock for any date chosen by the user.</td>
+            <td>Request closing stock for a past date.</td>
+            <td>Figures returned for that date, not today.</td>
+            <td class="st"><span class="pill part">Partial</span></td>
+          </tr>
+          <tr>
+            <td class="id">G-04</td><td class="clause">§7.12</td>
+            <td>Cash deposits and withdrawals can be registered.</td>
+            <td>Record an opening float and a mid-service withdrawal.</td>
+            <td>Both recorded and reflected in the daily report.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">G-05</td><td class="clause">§7.13</td>
+            <td>A payment can be registered using different means.</td>
+            <td>Settle using each supported tender.</td>
+            <td>Each maps to its RRA payment code and prints correctly.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">G-06</td><td class="clause">§7.16</td>
+            <td>An amount cannot be registered without identifying the good or service.</td>
+            <td>Attempt to ring up a bare amount with no item.</td>
+            <td>Impossible — every line references a catalogue item.</td>
+            <td class="st"><span class="pill built">Built</span></td>
+          </tr>
+          <tr>
+            <td class="id">G-07</td><td class="clause">API §4.17</td>
+            <td>Every item carries a unique item code.</td>
+            <td>Export the catalogue and check for duplicates.</td>
+            <td>No code appears twice, including the same product sold at two stations.</td>
+            <td class="st"><span class="pill part">Partial</span></td>
+          </tr>
+          <tr>
+            <td class="id">G-08</td><td class="clause">§7.2</td>
+            <td>TIN is reprogrammable only in service mode, and only via a reset that deletes all data held under the previous TIN.</td>
+            <td>Attempt to change the TIN in normal operation, then via service mode.</td>
+            <td>Refused in normal operation; permitted only with a full reset.</td>
+            <td class="st"><span class="pill todo">Not built</span></td>
+          </tr>
+          <tr>
+            <td class="id">G-09</td><td class="clause">§9</td>
+            <td>Functionality is unaffected by other equipment on the same host.</td>
+            <td>Run alongside other software and peripherals on the till.</td>
+            <td>No interruption to billing or printing.</td>
+            <td class="st"><span class="pill na">Environmental</span></td>
+          </tr>
+          <tr>
+            <td class="id">G-10</td><td class="clause">§8</td>
+            <td>Host device approved by RURA or compliant with international safety standards.</td>
+            <td>Supply the till hardware's certification.</td>
+            <td>Documentation provided for the deployed hardware.</td>
+            <td class="st"><span class="pill na">Environmental</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <p>Draft 1 · Magnify 1.0.50 · YoFinder Ltd · compiled 25 August 2026<br>
+    Clause references: RRA Technical Specification of CIS for VSDC Ver. 1.0 (March 2018); RRA VSDC API Specification v1.0.4 (2022).<br>
+    Status reflects the build at time of writing and must be re-verified before submission.</p>
+  </footer>
+
+</div>

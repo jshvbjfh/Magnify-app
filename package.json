@@ -45,6 +45,7 @@
     "cap:sync": "npx cap sync android",
     "cap:open": "npx cap open android",
     "cap:run": "npx cap run android",
+    "docs:rra": "node scripts/render-pdf.mjs docs/rra/test-cases.html \"docs/rra/Magnify-1.0.50-Test-Cases.pdf\" \"Magnify 1.0.50 - Test Cases - YoFinder Ltd\"",
     "test": "vitest run",
     "test:watch": "vitest"
   },
