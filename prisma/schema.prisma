@@ -66,18 +66,16 @@ model Restaurant {
   // with. Some venues hand it over as the receipt; most do not want a second
   // slip per table, so it is off unless a manager asks for it.
   printPaymentConfirmation Boolean @default(false)
-  // Rwanda EBM fiscalisation. OFF for every existing restaurant and off by
-  // default for new ones: switched on, this venue starts extracting VAT from
-  // its menu prices, issuing numbered fiscal receipts, and refusing to delete a
-  // settled bill. None of that suits a venue outside Rwanda, and none of it
-  // should arrive because someone shipped a release.
+  // The taxpayer's TIN, printed on every fiscal receipt.
   //
-  // Read it wherever tax is computed and pass it down — never infer it from the
-  // presence of a TIN, which a venue may fill in long before it is certified.
-  rraFiscalMode      Boolean   @default(false)
-  // The taxpayer's TIN, printed on every fiscal receipt. Null until the venue
-  // is registered; a null here with rraFiscalMode on is a misconfiguration the
-  // settings screen must not allow.
+  // There is deliberately NO "fiscal mode" column beside this. Whether VAT is
+  // charged is decided by which BUILD is installed, not by a row anyone can
+  // edit — see lib/fiscalMode.ts. A certified system must have no off switch,
+  // and a switch sitting in the database is one, whatever it is called.
+  //
+  // Null means this venue has not been registered with RRA yet. On a fiscal
+  // build that is not "VAT off" — it is "not configured", and the till refuses
+  // to trade until it is filled in.
   tin                String?
   // Hides financial history before this date from the Transactions page without
   // deleting anything — the entries stay in the database (so stock, purchase
@@ -153,7 +151,8 @@ model Branch {
   // separate identifiers for each, and a receipt carrying the wrong outlet's
   // SDC is as wrong as one carrying no SDC at all.
   //
-  // All nullable, and meaningless until Restaurant.rraFiscalMode is on.
+  // All nullable, and only read by a fiscal build. A fiscal build refuses to
+  // trade until they are set — it never falls back to trading without them.
   rraBranchCode      String?
   sdcId              String?
   mrc                String?

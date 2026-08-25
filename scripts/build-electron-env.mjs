@@ -28,6 +28,10 @@ const allowedKeys = [
 	'DEV_ADMIN_KEY',
 	'ELECTRON_DATA_MODE',
 	'ELECTRON_AUTO_UPDATE',
+	// Baked in at build time so the installed app cannot be switched out of
+	// fiscal mode. A certified system must have no off switch — see
+	// lib/fiscalMode.ts. Never expose this in a settings screen.
+	'RRA_FISCAL_MODE',
 	'OWNER_SYNC_TARGET_URL',
 	'OWNER_SYNC_EMAIL',
 	'OWNER_SYNC_SHARED_SECRET',

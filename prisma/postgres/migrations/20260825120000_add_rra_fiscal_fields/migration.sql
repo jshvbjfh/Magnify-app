@@ -1,16 +1,23 @@
 -- Rwanda EBM (RRA) fiscalisation — structure only.
 --
--- Every column here is nullable or defaulted, and nothing reads any of it until
--- a restaurant has "rraFiscalMode" switched on, which nothing does by default.
--- Applying this migration changes no venue's behaviour and no venue's figures.
+-- Every column here is nullable or defaulted, and only a fiscal BUILD reads any
+-- of it. Applying this migration changes no venue's behaviour and no venue's
+-- figures.
+--
+-- Note what is NOT here: there is no "fiscal mode" column. Whether VAT is
+-- charged is decided by which build is installed (lib/fiscalMode.ts), never by
+-- a row. A certified system must have no off switch, and a boolean in the
+-- database is one — reachable by anyone with database access, and invisible on
+-- the receipt when someone flips it.
 --
 -- Additive and idempotent throughout: no column is dropped, renamed or
 -- retyped, so a build running against a database that already has these is a
 -- no-op rather than a failure.
 
 -- ── Taxpayer identity ───────────────────────────────────────────────────────
--- The switch, and the TIN that goes on every fiscal receipt.
-ALTER TABLE "restaurants" ADD COLUMN IF NOT EXISTS "rraFiscalMode" BOOLEAN NOT NULL DEFAULT false;
+-- The TIN printed on every fiscal receipt. Null means "not registered with RRA
+-- yet", which on a fiscal build stops the till trading rather than letting it
+-- trade untaxed.
 ALTER TABLE "restaurants" ADD COLUMN IF NOT EXISTS "tin" TEXT;
 
 -- ── Per-outlet fiscal identity ──────────────────────────────────────────────

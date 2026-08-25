@@ -1,17 +1,19 @@
 // ─── VAT ────────────────────────────────────────────────────────────────────
 //
-// Two modes live here, and which one runs is decided per restaurant by
-// Restaurant.rraFiscalMode.
+// Two modes live here, and which one runs is decided by which BUILD is
+// installed — see lib/fiscalMode.ts. There is no setting, no database column
+// and no screen that turns VAT off, because a certified system must not have
+// one.
 //
-// OFF (every venue today): no VAT is counted anywhere. Total = sum of net
-// prices. The three legacy helpers below are unchanged and un-rounded on
-// purpose — a venue that has not been switched over must produce figures
-// identical to the ones it produced before any of this existed.
+// NON-FISCAL build: no VAT is counted anywhere. Total = sum of net prices. The
+// three legacy helpers below are unchanged and un-rounded on purpose — a venue
+// on a non-fiscal build must produce figures identical to the ones it produced
+// before any of this existed.
 //
-// ON (Rwanda, RRA/EBM): menu prices INCLUDE VAT, so tax is split out of the
-// price rather than added on top. A 5,000 Rwf plate stays 5,000 Rwf to the
-// guest; 4,237.29 is the taxable amount and 762.71 is the tax. Adding 18% on
-// top instead would silently reprice the entire menu.
+// FISCAL build (Rwanda, RRA/EBM): menu prices INCLUDE VAT, so tax is split out
+// of the price rather than added on top. A 5,000 Rwf plate stays 5,000 Rwf to
+// the guest; 4,237.29 is the taxable amount and 762.71 is the tax. Adding 18%
+// on top instead would silently reprice the entire menu.
 
 /** Legacy rate. Deliberately 0 — see the note above. */
 export const RESTAURANT_VAT_RATE = 0

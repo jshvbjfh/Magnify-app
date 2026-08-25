@@ -20,13 +20,15 @@ type TotalsInput = Array<{
 }>
 
 /**
- * Whether this restaurant issues RRA fiscal receipts.
+ * Whether VAT is charged on these totals.
  *
- * Passed in rather than looked up, because the totals are computed in eight
- * places — including two that run inside a settlement transaction — and a
- * database round-trip in each of them to answer one boolean would be paid on
- * every order, forever, at every venue including the ones that will never
- * switch it on.
+ * Sourced from `isFiscalBuild()` — which build is installed — never from a
+ * database column or a setting. See lib/fiscalMode.ts for why a certified
+ * system must have no off switch.
+ *
+ * Still passed as an argument rather than read inside these functions so the
+ * arithmetic stays pure and both modes can be tested side by side. The value
+ * comes from one place; this parameter is how it gets here.
  */
 export type OrderTotalsOptions = { fiscalMode?: boolean }
 
