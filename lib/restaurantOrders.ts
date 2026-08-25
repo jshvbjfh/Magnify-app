@@ -126,7 +126,17 @@ export function isRestaurantOrderNumberConflict(error: unknown) {
 export async function syncRestaurantOrderTotals(db: PrismaDb, orderId: string) {
   const activeItems = await db.orderItem.findMany({
     where: { orderId, status: 'ACTIVE' },
-    select: { dishPrice: true, qty: true },
+    // discountPercent is NOT optional here, however tempting it looks.
+    //
+    // calculateLineNetAmount reads it, and a column that was not selected
+    // arrives as undefined — which that function treats as "no discount" by
+    // design, because a mistyped percentage must not block a waiter mid-service.
+    // Both behaviours are right on their own and catastrophic together: this
+    // runs at the top of every settlement, so a discounted bill was rewritten
+    // back to full menu price. The guest pays the discounted amount printed on
+    // their bill while the order, the revenue and the books record the full one,
+    // and nothing surfaces the difference until the till fails to reconcile.
+    select: { dishPrice: true, qty: true, discountPercent: true },
   })
 
   const totals = calculateRestaurantOrderTotals(activeItems)
