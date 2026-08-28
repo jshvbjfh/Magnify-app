@@ -448,6 +448,21 @@ CREATE TABLE IF NOT EXISTS item_moves (
 CREATE INDEX IF NOT EXISTS item_moves_undone_idx ON item_moves (undone, moved_at);
 `,
   },
+  {
+    // Whether the move emptied the bill it came from.
+    //
+    // Moving the last line off a bill used to leave a 0 RWF card sitting on the
+    // table with nothing on it. That bill is not cancelled — its money went to
+    // another table — so it is retired as MERGED, the status this app already
+    // uses for "absorbed into another order" and already keeps out of the
+    // pending list and the end-of-shift check.
+    //
+    // Recorded per move so undo can put it back: taking the line back has to
+    // revive the bill it was taken from, or the line returns to somewhere the
+    // waiter can no longer see.
+    version: 16,
+    run: (database) => addColumnIfMissing(database, 'item_moves', 'source_emptied', 'INTEGER NOT NULL DEFAULT 0'),
+  },
 ]
 
 function addColumnIfMissing(database, table, column, definition) {
