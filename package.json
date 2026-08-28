@@ -1,6 +1,6 @@
 {
   "name": "restaurant-app",
-  "version": "1.0.50",
+  "version": "1.1.50",
   "description": "Magnify — Restaurant Management",
   "author": "Magnify",
   "private": true,
@@ -27,7 +27,7 @@
     "build:electron:local": "cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=local-first node scripts/build-electron-env.mjs && cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=local-first PRISMA_FORCE_PROVIDER=sqlite npm run prisma:generate && cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=local-first DATABASE_URL=file:./dev.db next build && node scripts/copy-standalone.mjs",
     "build:electron:updater": "cross-env ELECTRON_AUTO_UPDATE=true npm run build:electron",
     "build:electron:fiscal": "cross-env RRA_FISCAL_MODE=on ELECTRON_AUTO_UPDATE=true npm run build:electron:cloud",
-    "electron:build:fiscal": "npm run clean:electron && npm run build:electron:fiscal && electron-builder --publish never",
+    "electron:build:fiscal": "npm run clean:electron && npm run build:electron:fiscal && electron-builder --publish never -c.appId=com.magnify.restaurant.fiscal -c.productName=\"Magnify Fiscal\" -c.publish.repo=magnify-fiscal-releases",
     "clean:electron": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "start": "next start -p $PORT -H 0.0.0.0",
     "postinstall": "npm run prisma:generate",
@@ -45,7 +45,7 @@
     "cap:sync": "npx cap sync android",
     "cap:open": "npx cap open android",
     "cap:run": "npx cap run android",
-    "docs:rra": "node scripts/render-pdf.mjs docs/rra/test-cases.html \"docs/rra/Magnify-1.0.50-Test-Cases.pdf\" \"Magnify 1.0.50 - Test Cases - YoFinder Ltd\"",
+    "docs:rra": "node scripts/render-pdf.mjs docs/rra/test-cases.html \"docs/rra/Magnify-1.1.50-Test-Cases.pdf\" \"Magnify 1.1.50 - Test Cases - YoFinder Ltd\"",
     "test": "vitest run",
     "test:watch": "vitest"
   },
