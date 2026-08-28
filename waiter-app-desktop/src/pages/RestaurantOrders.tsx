@@ -8,7 +8,7 @@ import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
   getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, markTicketsPushed,
   setItemDiscount, mergeOrdersLocal, lineNetAmount,
-  recordKitchenTicket, moveOrderItemToNewOrder, moveOrderItemToExistingOrder, recordItemMove, getMovedItemIds, findOpenOrderForTable,
+  recordKitchenTicket, moveOrderItemToNewOrder, moveOrderItemToExistingOrder, recordItemMove, getMovedItemIds, findOpenOrderForTable, removeOrderItemLocal,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import SupervisorPinDialog from './SupervisorPinDialog'
@@ -473,6 +473,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
   const [moveTarget,        setMoveTarget]        = useState<{ orderId: string; item: OrderItem } | null>(null)
   const [moveTableId,       setMoveTableId]       = useState<string>('')
   const [moveAwaitingPin,   setMoveAwaitingPin]   = useState(false)
+  // Removing one already-sent line from the order being edited. Supervisor-only:
+  // the food may already be on the stove, and only a person can check that.
+  const [removeTarget,      setRemoveTarget]      = useState<OrderItem | null>(null)
   // Lines sitting on a bill because someone moved them there. Screen only —
   // the printed bill and the kitchen ticket never mention it.
   const [movedItemIds,      setMovedItemIds]      = useState<Set<string>>(new Set())
@@ -1299,6 +1302,39 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
     } catch (err) {
       setMoveAwaitingPin(false)
       setSubmitError(`Could not move the item: ${(err as Error).message}`)
+    }
+  }
+
+  // Take an approved line off the bill being edited.
+  //
+  // No waste is recorded and no stock moves: the supervisor approving this is
+  // expected to have checked with the kitchen that the dish was never started.
+  // A dish that WAS cooked belongs in the manager portal's waste flow instead,
+  // where the stock is actually accounted for.
+  async function applyApprovedItemRemoval(approvedBy: string) {
+    if (!editingOrder || !removeTarget) return
+    const removed = removeTarget
+    try {
+      await removeOrderItemLocal(editingOrder.id, removed.id)
+      await recomputeOrderTotals(editingOrder.id)
+      // Re-read rather than filtering the array on screen, so the panel shows
+      // exactly what the bill now holds.
+      setEditingItems(await getOrderItems(editingOrder.id))
+      await logInfo('order', 'Sent item removed from order', {
+        orderId: editingOrder.id,
+        orderNumber: editingOrder.order_number,
+        item: removed.dish_name,
+        qty: removed.qty,
+        approvedBy,
+      })
+      setRemoveTarget(null)
+      await loadPOS()
+      setConfirmSuccess(`${removed.dish_name} removed from ${editingOrder.order_number} · approved by ${approvedBy}`)
+      setTimeout(() => setConfirmSuccess(null), 4000)
+      pushSync().catch(() => {})
+    } catch (err) {
+      setRemoveTarget(null)
+      setSubmitError(`Could not remove the item: ${(err as Error).message}`)
     }
   }
 
@@ -2540,6 +2576,21 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
 
   return (
     <div className="flex h-full overflow-hidden">
+      {/* Removing a dish the kitchen already has is the supervisor's call, not
+          the waiter's — the prompt says so plainly, because the person typing
+          the PIN is the one who has to check the stove.
+          Mounted in the POS render: the already-sent panel it belongs to is on
+          this screen, not the pending list. */}
+      {removeTarget && (
+        <SupervisorPinDialog
+          title="Remove this dish"
+          prompt={`Remove ${removeTarget.dish_name}${removeTarget.qty > 1 ? ` ×${removeTarget.qty}` : ''} from this order. Check the kitchen has not started it. Enter the supervisor PIN to approve.`}
+          confirmLabel="Remove"
+          busyLabel="Removing…"
+          onClose={() => setRemoveTarget(null)}
+          onApproved={applyApprovedItemRemoval}
+        />
+      )}
 
       {/* ── LEFT PANEL: categories + dish grid ── */}
       <div className={`flex-1 flex flex-col min-w-0 overflow-hidden bg-gray-50 ${
@@ -2753,14 +2804,25 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
             <div className="mb-3 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 space-y-1">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">Already sent to kitchen</p>
               {editingItems.map(item => (
-                <div key={item.id} className="flex items-start justify-between">
+                // Tapping a sent line asks for a supervisor PIN to take it off
+                // the bill. Deliberately the whole row: these lines are small
+                // grey text, and a tiny delete icon beside them would be both
+                // hard to hit on a touch till and easy to hit by accident.
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setRemoveTarget(item)}
+                  title={`Remove ${item.dish_name} from this order — needs a supervisor PIN`}
+                  className="flex w-full items-start justify-between rounded-lg px-1 py-0.5 text-left transition-colors hover:bg-red-50"
+                >
                   <span className="text-xs text-gray-500 leading-snug flex-1 min-w-0">
                     {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
                     {item.notes ? <span className="italic text-orange-400"> &gt; {item.notes}</span> : null}
                   </span>
                   <span className="text-xs text-gray-500 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)}</span>
-                </div>
+                </button>
               ))}
+              <p className="pt-0.5 text-[10px] text-gray-400">Tap a dish to remove it — needs a supervisor PIN.</p>
             </div>
           )}
           {cartItems.length === 0 ? (

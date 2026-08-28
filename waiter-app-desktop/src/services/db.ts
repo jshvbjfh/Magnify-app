@@ -546,6 +546,26 @@ export async function moveOrderItemToNewOrder(params: {
   ])
 }
 
+// Take one already-sent line off a bill.
+//
+// A guest changes their mind about one dish after it has gone to the kitchen.
+// The supervisor's PIN is the control on it: they are expected to check with
+// the kitchen that it has not been started before approving, which is why this
+// records no waste and moves no stock. If it HAS been cooked, the right action
+// is the manager portal's waste flow, not this.
+//
+// CANCELED rather than deleted, for the same reason a moved line is: the row
+// has to survive to reach the server, and every total on both sides counts
+// ACTIVE lines only.
+export async function removeOrderItemLocal(orderId: string, itemId: string): Promise<void> {
+  const db = getDB()
+  const now = new Date().toISOString()
+  await db.executeSet([
+    { statement: 'UPDATE order_items SET status = ?, updated_at = ? WHERE id = ?', values: ['CANCELED', now, itemId] },
+    { statement: 'UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?', values: [now, orderId] },
+  ])
+}
+
 // Move a line onto a bill that is ALREADY open at the target table.
 //
 // A table with a bill open should end up with one bill, not two cards side by
@@ -774,9 +794,30 @@ export async function getOrders(filter?: { status?: string; statuses?: string[];
   return (rows ?? []) as unknown as Order[]
 }
 
+// The lines still ON this bill — ACTIVE only.
+//
+// A line that was moved to another table stays in the table as CANCELED,
+// because that is the only way the change reaches the server. It is no longer
+// part of this bill though, and returning it here is what made a move look like
+// a copy: the dish appeared on the destination AND stayed on the original, with
+// the original's total still counting it. Undo had the same symptom in reverse
+// — the line stayed on the destination after being taken back.
+//
+// Every caller wants it this way: the pending cards, their totals, the printed
+// bill, the payment slip and the edit-order cart.
+//
+// The push path deliberately does NOT come through here. getUnsyncedOrders
+// reads order_items directly, because a cancellation only ever reaches the
+// server by being sent to it.
+//
+// COALESCE, not `status = 'ACTIVE'`: rows written before the column had a
+// default carry NULL, and those are live lines, not cancelled ones.
 export async function getOrderItems(orderId: string): Promise<OrderItem[]> {
   const db = getDB()
-  const rows = await db.query('SELECT * FROM order_items WHERE order_id = ?', [orderId])
+  const rows = await db.query(
+    "SELECT * FROM order_items WHERE order_id = ? AND COALESCE(status, 'ACTIVE') = 'ACTIVE'",
+    [orderId],
+  )
   return (rows ?? []) as unknown as OrderItem[]
 }
 
