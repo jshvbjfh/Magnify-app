@@ -9,6 +9,7 @@ import {
   getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, markTicketsPushed,
   setItemDiscount, mergeOrdersLocal, lineNetAmount,
   recordKitchenTicket, moveOrderItemToNewOrder, moveOrderItemToExistingOrder, recordItemMove, getMovedItemIds, findOpenOrderForTable, removeOrderItemLocal,
+  retireEmptiedOrder, countActiveItems,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import SupervisorPinDialog from './SupervisorPinDialog'
@@ -626,10 +627,28 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
     }
   }, [tablePickerOpen])
 
+  // A dialog is open when the waiter is typing into one — a cancellation
+  // reason, a discount, an A/R customer name, a supervisor PIN.
+  const aModalIsOpen = Boolean(
+    cancelingOrderId || payingOrderId || discountTarget || moveTarget || removeTarget || showCodeModal,
+  )
+
   useEffect(() => {
-    if (mode === 'history') loadHistory()
-    else loadPOS()
-  }, [mode, loadPOS, loadHistory, syncVersion])
+    if (mode === 'history') { loadHistory(); return }
+    // Do not refresh the floor underneath an open dialog.
+    //
+    // The shell re-syncs every 10 seconds, and each sync replaces the orders,
+    // dishes and tables in one go. Typing a cancellation reason on a touch till
+    // takes longer than that, so the screen was rebuilding mid-sentence: the
+    // Windows on-screen keyboard closes the moment its input loses focus, which
+    // is why it shut after almost every letter.
+    //
+    // Nothing is lost by waiting — the dialog is closed within seconds and the
+    // next sync refreshes everything then. And a list that reshuffles under a
+    // half-finished decision is wrong on its own terms, keyboard or not.
+    if (aModalIsOpen) return
+    loadPOS()
+  }, [mode, loadPOS, loadHistory, syncVersion, aModalIsOpen])
 
   // Load device-local printer routing for kitchen/bar tickets and bills.
   useEffect(() => {
@@ -1202,6 +1221,11 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         })
         await recomputeOrderTotals(existing.id)
         await recomputeOrderTotals(source.id)
+        // Moving the last line off a bill leaves nothing to charge for. Retire
+        // it rather than leaving a 0 RWF card on the table — the money went to
+        // another bill, it was not cancelled, so MERGED is what it is.
+        const emptied = (await countActiveItems(source.id)) === 0
+        if (emptied) await retireEmptiedOrder(source.id, existing.id)
         await recordItemMove({
           id: crypto.randomUUID(),
           source_order_id: source.id,
@@ -1211,6 +1235,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
           target_order_number: existing.order_number,
           target_item_id: movedItem.id,
           target_created: 0,
+          source_emptied: emptied ? 1 : 0,
           table_name: table.name,
           dish_name: moveTarget.item.dish_name,
           qty: moveTarget.item.qty,
@@ -1267,6 +1292,8 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       // The source bill has to be re-totalled: its retired line must stop being
       // charged for. recomputeOrderTotals counts ACTIVE lines only.
       await recomputeOrderTotals(source.id)
+      const emptiedSource = (await countActiveItems(source.id)) === 0
+      if (emptiedSource) await retireEmptiedOrder(source.id, newId)
       await recordItemMove({
         id: crypto.randomUUID(),
         source_order_id: source.id,
@@ -1278,6 +1305,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         // This bill exists only because the line was moved here, so undoing the
         // move has to take the bill away with it.
         target_created: 1,
+        source_emptied: emptiedSource ? 1 : 0,
         table_name: table.name,
         dish_name: moveTarget.item.dish_name,
         qty: moveTarget.item.qty,
@@ -1317,6 +1345,29 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
     try {
       await removeOrderItemLocal(editingOrder.id, removed.id)
       await recomputeOrderTotals(editingOrder.id)
+      // Removing the last dish leaves a bill with nothing on it. Unlike a move,
+      // nothing was carried to another table — the order really is void — so it
+      // is cancelled outright rather than retired as MERGED, and the reason
+      // says how it emptied so the cancellation report is not a mystery.
+      if ((await countActiveItems(editingOrder.id)) === 0) {
+        await updateOrder(editingOrder.id, {
+          status: 'CANCELED',
+          canceled_at: new Date().toISOString(),
+          cancel_reason: `Last item removed (${removed.dish_name}) · approved by ${approvedBy}`,
+        })
+        await logInfo('order', 'Order emptied by item removal — cancelled', {
+          orderId: editingOrder.id, orderNumber: editingOrder.order_number, approvedBy,
+        })
+        setRemoveTarget(null)
+        await loadPOS()
+        setConfirmSuccess(`${editingOrder.order_number} cancelled — its last item was removed · approved by ${approvedBy}`)
+        setTimeout(() => setConfirmSuccess(null), 4000)
+        // Nothing left to edit, so leave the edit view rather than sitting on a
+        // bill that no longer exists.
+        onEditDone?.()
+        pushSync().catch(() => {})
+        return
+      }
       // Re-read rather than filtering the array on screen, so the panel shows
       // exactly what the bill now holds.
       setEditingItems(await getOrderItems(editingOrder.id))
@@ -2820,6 +2871,10 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                     {item.notes ? <span className="italic text-orange-400"> &gt; {item.notes}</span> : null}
                   </span>
                   <span className="text-xs text-gray-500 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)}</span>
+                  {/* Red, and always visible rather than appearing on hover:
+                      this is a touch till, there is nothing to hover with, and
+                      an action that needs a supervisor should look like one. */}
+                  <Trash2 className="ml-2 h-3.5 w-3.5 flex-shrink-0 text-red-500" />
                 </button>
               ))}
               <p className="pt-0.5 text-[10px] text-gray-400">Tap a dish to remove it — needs a supervisor PIN.</p>

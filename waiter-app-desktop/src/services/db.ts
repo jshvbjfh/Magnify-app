@@ -611,6 +611,9 @@ export interface ItemMove {
   target_order_number: string | null
   target_item_id: string
   target_created: number
+  // 1 when the move took the LAST line off the source bill, so that bill was
+  // retired as MERGED. Undo has to revive it.
+  source_emptied?: number
   table_name: string | null
   dish_name: string | null
   qty: number | null
@@ -619,16 +622,44 @@ export interface ItemMove {
   undone: number
 }
 
+// Retire a bill the move emptied.
+//
+// MERGED, not CANCELED: the money did not vanish, it went to another table, and
+// MERGED is the status this app already uses for "absorbed into another order".
+// It is outside both the active and the unsettled sets, so the bill leaves the
+// pending list and stops blocking an end-of-shift, while the row stays for the
+// audit and for undo to revive.
+export async function retireEmptiedOrder(orderId: string, mergedIntoId: string): Promise<void> {
+  const db = getDB()
+  const now = new Date().toISOString()
+  await db.run(
+    'UPDATE orders SET status = ?, merged_into_id = ?, updated_at = ?, synced = 0 WHERE id = ?',
+    ['MERGED', mergedIntoId, now, orderId],
+  )
+}
+
+// How many lines are still live on a bill — used right after a move to decide
+// whether anything is left on it at all.
+export async function countActiveItems(orderId: string): Promise<number> {
+  const db = getDB()
+  const rows = await db.query(
+    "SELECT COUNT(*) AS n FROM order_items WHERE order_id = ? AND COALESCE(status,'ACTIVE') = 'ACTIVE'",
+    [orderId],
+  )
+  return Number((rows?.[0] as { n?: number } | undefined)?.n ?? 0)
+}
+
 export async function recordItemMove(move: Omit<ItemMove, 'undone'>): Promise<void> {
   const db = getDB()
   await db.run(
     `INSERT INTO item_moves
       (id, source_order_id, source_order_number, source_item_id, target_order_id, target_order_number,
-       target_item_id, target_created, table_name, dish_name, qty, approved_by, moved_at, undone)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+       target_item_id, target_created, source_emptied, table_name, dish_name, qty, approved_by, moved_at, undone)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     [
       move.id, move.source_order_id, move.source_order_number, move.source_item_id,
       move.target_order_id, move.target_order_number, move.target_item_id, move.target_created,
+      move.source_emptied ?? 0,
       move.table_name, move.dish_name, move.qty, move.approved_by, move.moved_at,
     ],
   )
@@ -678,7 +709,20 @@ export async function getUndoableMoves(limit = 20): Promise<ItemMove[]> {
        JOIN orders src ON src.id = m.source_order_id
        JOIN orders tgt ON tgt.id = m.target_order_id
       WHERE m.undone = 0
-        AND src.status IN ('PENDING', 'UNCONFIRMED')
+        -- MERGED is allowed on the source, but ONLY when this move is the reason
+        -- it is merged. A move that took the last line off a bill retires that
+        -- bill, and excluding it here would make exactly those moves — the ones
+        -- most worth taking back — impossible to undo.
+        --
+        -- The source_emptied test is what keeps that narrow. A bill can also
+        -- reach MERGED through mergeOrdersLocal, when a waiter deliberately
+        -- merges it into another. Undoing an older move against such a bill
+        -- would put the line back onto an order the waiter can no longer see,
+        -- because nothing revives it — the revive only runs for source_emptied.
+        AND (
+          src.status IN ('PENDING', 'UNCONFIRMED')
+          OR (src.status = 'MERGED' AND m.source_emptied = 1)
+        )
         AND tgt.status IN ('PENDING', 'UNCONFIRMED')
       ORDER BY m.moved_at DESC
       LIMIT ${Math.max(1, Math.floor(limit))}`,
@@ -707,7 +751,15 @@ export async function undoItemMove(moveId: string): Promise<ItemMove> {
     [move.source_order_id, move.target_order_id],
   )
   for (const row of (guard ?? []) as unknown as Array<{ id: string; status: string }>) {
-    if (!['PENDING', 'UNCONFIRMED'].includes(row.status)) {
+    // MERGED counts as undoable on the source only when THIS move is why it is
+    // merged — same reasoning as getUndoableMoves. A bill merged by the ordinary
+    // merge flow carries source_emptied = 0, and reviving it is not this undo's
+    // business: putting the line back there would hide it on an order the waiter
+    // cannot see.
+    const allowed = row.id === move.source_order_id && Number(move.source_emptied) === 1
+      ? ['PENDING', 'UNCONFIRMED', 'MERGED']
+      : ['PENDING', 'UNCONFIRMED']
+    if (!allowed.includes(row.status)) {
       throw new Error('One of these bills has already been settled — the move cannot be undone.')
     }
   }
@@ -720,6 +772,15 @@ export async function undoItemMove(moveId: string): Promise<ItemMove> {
     { statement: 'UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?', values: [now, move.target_order_id] },
     { statement: 'UPDATE item_moves SET undone = 1 WHERE id = ?', values: [moveId] },
   ]
+  if (Number(move.source_emptied) === 1) {
+    // The bill was retired because this move emptied it. Putting the line back
+    // has to bring the bill back too, or the line returns somewhere the waiter
+    // can no longer see.
+    statements.push({
+      statement: 'UPDATE orders SET status = ?, merged_into_id = NULL, updated_at = ?, synced = 0 WHERE id = ?',
+      values: ['PENDING', now, move.source_order_id],
+    })
+  }
   if (Number(move.target_created) === 1) {
     // This bill only ever existed to hold the moved line. Leaving it behind
     // empty would sit on the floor as a 0 RWF card and block an end-of-shift.
