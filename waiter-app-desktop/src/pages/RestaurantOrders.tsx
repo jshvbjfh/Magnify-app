@@ -1419,7 +1419,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       await addOrderItems(newItems)
 
       const combined = [
-        ...editingItems.map(i => ({ dishPrice: i.dish_price, qty: i.qty })),
+        ...editingItems.map(i => ({ dishPrice: i.dish_price, qty: i.qty, discountPercent: i.discount_percent })),
         ...cart.map(i => ({ dishPrice: i.dishPrice, qty: i.qty })),
       ]
       const { subtotal, vatAmount, totalAmount } = calcTotals(combined)
@@ -2758,7 +2758,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                     {item.dish_name}{item.qty > 1 ? ` ×${item.qty}` : ''}
                     {item.notes ? <span className="italic text-orange-400"> &gt; {item.notes}</span> : null}
                   </span>
-                  <span className="text-xs text-gray-500 ml-3 flex-shrink-0">{fmtRWF(item.dish_price * item.qty)}</span>
+                  <span className="text-xs text-gray-500 ml-3 flex-shrink-0">{fmtRWF(lineNetAmount(item))}</span>
                 </div>
               ))}
             </div>
@@ -2855,7 +2855,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
             {editingOrder && (
               <div className="flex justify-between text-xs font-semibold text-gray-500">
                 <span>Order total after update</span>
-                <span>{fmtRWF(editingItems.reduce((s, i) => s + i.dish_price * i.qty, 0) + totalAmount)} RWF</span>
+                <span>{fmtRWF(editingItems.reduce((s, i) => s + lineNetAmount(i), 0) + totalAmount)} RWF</span>
               </div>
             )}
             <button
