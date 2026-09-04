@@ -161,10 +161,18 @@ function buildBillEscPos(data) {
     const pct = Number.isFinite(rawPct) && rawPct > 0 && rawPct <= 100 ? rawPct : 0
     const gross = unit * qty
     const net = gross * (1 - pct / 100)
-    for (const s of cols(`${qty} ${ascii(item.name).toUpperCase()}`, fmtNum(net))) parts.push(t(s))
+    // A discounted line prints its three figures in the order they happen: the
+    // menu price, what came off, what it now costs. Printing the net price on
+    // the item line and the discount underneath — which is what this did — puts
+    // a subtraction in front of a guest that has already been made, so the only
+    // arithmetic the bill invites is wrong: 10,019 less 9,781 reads as 238, and
+    // the TOTAL then looks inflated by the whole discount. A bill the person
+    // holding it cannot verify is a broken bill even when its total is right.
+    for (const s of cols(`${qty} ${ascii(item.name).toUpperCase()}`, fmtNum(pct ? gross : net))) parts.push(t(s))
     if (qty > 1) parts.push(t(`  @ ${fmtNum(unit)} each`))
     if (pct) {
       for (const s of cols(`  less ${pct}%`, `-${fmtNum(gross - net)}`)) parts.push(t(s))
+      for (const s of cols('  after discount', fmtNum(net))) parts.push(t(s))
     }
     if (item.notes) parts.push(t(`  > ${ascii(item.notes)}`))
   }

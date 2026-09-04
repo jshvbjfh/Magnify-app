@@ -771,9 +771,13 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     if (!isTakeaway) divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`))
     divLines.push(ln(rule))
     for (const i of items) {
-      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(lineNetAmount(i)))) divLines.push(ln(s))
+      // Menu price, what came off, what it now costs — in that order, so the
+      // subtraction on the bill is one the guest can follow to the TOTAL rather
+      // than one they are invited to make a second time.
+      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.discount_percent ? i.dish_price * i.qty : lineNetAmount(i)))) divLines.push(ln(s))
       if (i.discount_percent) {
         for (const s of cols(`  less ${i.discount_percent}%`, `-${fmt2(i.dish_price * i.qty - lineNetAmount(i))}`)) divLines.push(ln(s))
+        for (const s of cols('  after discount', fmt2(lineNetAmount(i)))) divLines.push(ln(s))
       }
       if (i.notes) divLines.push(ln(`  > ${i.notes}`))
     }

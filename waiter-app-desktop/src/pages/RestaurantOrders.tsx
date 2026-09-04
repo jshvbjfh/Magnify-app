@@ -869,12 +869,15 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
     for (const { item: i, hidePrice } of billLines) {
       // A hidden buffet gets no amount at all — passing '' to cols() drops the
       // whole right-hand column for that line.
-      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, hidePrice ? '' : fmt2(lineNetAmount(i)))) divLines.push(ln(s))
-      // The discount prints under its line so the guest can see what came off
-      // and why the figure is not the menu price. Suppressed on a hidden buffet
-      // line, which shows no amount at all.
-      if (i.discount_percent && !hidePrice) {
+      // A discounted line prints menu price, what came off, and what it now
+      // costs — in that order, so the guest can follow the subtraction to the
+      // figure that reaches the TOTAL. Showing the net price here and the
+      // discount underneath invites the subtraction to be made a second time.
+      const discounted = Boolean(i.discount_percent) && !hidePrice
+      for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, hidePrice ? '' : fmt2(discounted ? i.dish_price * i.qty : lineNetAmount(i)))) divLines.push(ln(s))
+      if (discounted) {
         for (const s of cols(`  less ${i.discount_percent}%`, `-${fmt2(i.dish_price * i.qty - lineNetAmount(i))}`)) divLines.push(ln(s))
+        for (const s of cols('  after discount', fmt2(lineNetAmount(i)))) divLines.push(ln(s))
       }
       if (i.notes) divLines.push(ln(`  > ${i.notes}`))
     }
