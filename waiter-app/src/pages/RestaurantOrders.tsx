@@ -1397,7 +1397,24 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
 
   // ── Pay modal ──
 
-  function PayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
+  // A RENDER HELPER, called as renderPayModal({...}) — deliberately NOT a
+  // component, and it must not become one again while it lives in here.
+  //
+  // Its inputs (the No Charge reason, the credit customer's name and phone)
+  // are bound to state on THIS component, so every keystroke re-renders it.
+  // Declared in here, a component is a new function on every one of those
+  // renders — a new type as far as React is concerned — so the whole modal was
+  // unmounted and rebuilt per letter. The text survived, because it lives out
+  // here, but the <input> was a brand-new DOM node each time and focus went
+  // with the old one. On a tablet that closes the on-screen keyboard: staff
+  // typed a cancellation reason one letter at a time, re-tapping the field
+  // between every character.
+  //
+  // Called as a plain function, these elements belong to this component's own
+  // tree, so React updates the input in place and the focus — and the keyboard
+  // — stay put. If it ever needs its own hooks, move it to module scope with
+  // props instead; do not nest it as a component again.
+  function renderPayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
     const order   = pendingOrders.find(o => o.id === orderId)
     const items   = order ? (orderItemsMap[order.id] ?? []) : []
     const tot     = items.reduce((s, i) => s + lineNetAmount(i), 0)
@@ -1722,9 +1739,10 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
           </div>
         )}
 
-        {payingOrderId && (
-          <PayModal orderId={payingOrderId} onClose={() => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') }} />
-        )}
+        {payingOrderId && renderPayModal({
+          orderId: payingOrderId,
+          onClose: () => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') },
+        })}
         {cancelingOrderId && (
           <CancelModal
             order={pendingOrders.find(o => o.id === cancelingOrderId)}
@@ -2094,12 +2112,10 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         </div>
       )}
 
-      {payingOrderId && (
-        <PayModal
-          orderId={payingOrderId}
-          onClose={() => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') }}
-        />
-      )}
+      {payingOrderId && renderPayModal({
+        orderId: payingOrderId,
+        onClose: () => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') },
+      })}
 
       {cancelingOrderId && (
         <CancelModal
