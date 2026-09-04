@@ -508,6 +508,94 @@ model FiscalCounter {
   @@map("fiscal_counters")
 }
 
+// One row per fiscal receipt issued. The permanent record of what was declared.
+//
+// Every figure here is STORED as declared, never derived later. That is the
+// opposite of the rule used for ordinary orders, where the per-bracket split is
+// computed from the lines on demand — and the reason is that these numbers were
+// signed. The VSDC's signature covers the amounts we sent it; recomputing them
+// next year, after a rounding rule or a tax bracket has moved, could produce a
+// figure that no longer matches the signature on the paper in the guest's hand.
+// A fiscal record has to say what WAS declared, not what would be declared now.
+//
+// It is also what the Z and X daily reports read (§18). Those must reconcile
+// with the receipts they summarise, which they cannot do if the two are
+// computed by different routes.
+model FiscalReceipt {
+  id           String   @id @default(cuid())
+  restaurantId String
+  branchId     String
+  // Null for a receipt with no order behind it — a training ticket, or a
+  // report-only entry.
+  orderId      String?
+
+  // NS sale · NR refund · CS copy · TS training · PS proforma.
+  receiptType  String
+  // The number we claimed and sent to the VSDC.
+  invoiceNumber Int
+  // The invoice this one reverses. Refunds only (§7.17), and an original may be
+  // reversed exactly once — enforced by the unique index below.
+  originalInvoiceNumber Int?
+
+  // ── Returned by the VSDC ────────────────────────────────────────────────
+  // All nullable: a training or proforma ticket is never signed (§6.3.6), and a
+  // queued receipt has not been answered yet.
+  sdcId                String?
+  sdcDateTime          DateTime?
+  receiptNumberForType Int?
+  receiptNumberTotal   Int?
+  internalData         String?
+  receiptSignature     String?
+
+  // ── What was declared ───────────────────────────────────────────────────
+  paymentTypeCode    String?
+  totalAmount        Float
+  totalTaxableAmount Float
+  totalTaxAmount     Float
+  taxableAmtA        Float @default(0)
+  taxableAmtB        Float @default(0)
+  taxableAmtC        Float @default(0)
+  taxableAmtD        Float @default(0)
+  taxAmtA            Float @default(0)
+  taxAmtB            Float @default(0)
+  taxAmtC            Float @default(0)
+  taxAmtD            Float @default(0)
+  // §18.1.13 and §18.1.18 — the report needs both, per receipt.
+  itemCount          Int   @default(0)
+  discountTotal      Float @default(0)
+
+  // ── Transmission ────────────────────────────────────────────────────────
+  // PENDING until the VSDC answers, SENT once it has, FAILED when it refused.
+  // A receipt may exist as PENDING and still not be printable: §10 forbids
+  // printing before the VSDC responds.
+  status    String    @default("PENDING")
+  sentAt    DateTime?
+  lastError String?
+
+  // The trading day this belongs to, so a sale at 1am lands on the night that
+  // opened rather than the calendar date — the same rule the shift uses.
+  businessDate DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // The invoice number is ours and must never repeat within an outlet.
+  @@unique([branchId, invoiceNumber])
+  // §7.17 — an original may be reversed only once — is enforced in code, inside
+  // the settlement transaction, NOT by a unique index here.
+  //
+  // A unique on (branchId, receiptType, originalInvoiceNumber) looks right and
+  // is wrong: a COPY also references the invoice it copies, and §7.18 places no
+  // limit on how many copies may be printed. That index would silently cap
+  // reprints at one. The rule belongs only to refunds, which needs a partial
+  // index, and a partial index cannot be written the same way for SQLite and
+  // Postgres — so the check stays in code where it can say what it means.
+  @@index([branchId, originalInvoiceNumber])
+  @@index([restaurantId, businessDate])
+  @@index([branchId, businessDate, receiptType])
+  @@index([status])
+  @@map("fiscal_receipts")
+}
+
 // ─── MENU ──────────────────────────────────────────────────────────────────
 
 model Dish {
