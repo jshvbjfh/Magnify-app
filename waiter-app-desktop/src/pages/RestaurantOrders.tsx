@@ -7,7 +7,7 @@ import {
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
   getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, markTicketsPushed,
-  setItemDiscount, mergeOrdersLocal, lineNetAmount,
+  setItemDiscount, mergeOrdersLocal, lineNetAmount, groupBillItems,
   recordKitchenTicket, moveOrderItemToNewOrder, moveOrderItemToExistingOrder, recordItemMove, getMovedItemIds, findOpenOrderForTable,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
@@ -777,10 +777,16 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
     // amount, and the printed total is what the guest actually hands over. A
     // buffet on its own prints and totals normally — that slip is the record of
     // the cover the hotel is being charged for.
-    const hidden = hotelBuffetPriceHidden(order.restaurant_id, items.map(i => ({
+    // Identical lines collapse for the bill — three beers ordered one at a time
+    // read as "3 HEINEKEN 15,000 / @ 5,000 each", not three lines of 5,000. The
+    // order keeps its rows; only this printout groups them. Done before the
+    // total is computed, so what the lines add up to and what TOTAL says cannot
+    // drift apart.
+    const printItems = groupBillItems(items)
+    const hidden = hotelBuffetPriceHidden(order.restaurant_id, printItems.map(i => ({
       name: i.dish_name, category: dishes.find(d => d.id === i.dish_id)?.category,
     })))
-    const billLines = items.map((i, idx) => ({ item: i, hidePrice: hidden[idx] }))
+    const billLines = printItems.map((i, idx) => ({ item: i, hidePrice: hidden[idx] }))
     const { totalAmount } = calcTotals(
       billLines.map(l => ({
         dishPrice: l.hidePrice ? 0 : l.item.dish_price,
@@ -885,6 +891,11 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
       // discount underneath invites the subtraction to be made a second time.
       const discounted = Boolean(i.discount_percent) && !hidePrice
       for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, hidePrice ? '' : fmt2(discounted ? i.dish_price * i.qty : lineNetAmount(i)))) divLines.push(ln(s))
+      // Spell out the unit price whenever the line covers more than one, so the
+      // guest can check the line against the menu without doing the division.
+      // The thermal renderer has always done this; grouping makes multi-qty
+      // lines the norm rather than the exception, so this one had to catch up.
+      if (i.qty > 1 && !hidePrice) divLines.push(ln(`  @ ${fmt2(i.dish_price)} each`))
       if (discounted) {
         for (const s of cols(`  less ${i.discount_percent}%`, `-${fmt2(i.dish_price * i.qty - lineNetAmount(i))}`)) divLines.push(ln(s))
         for (const s of cols('  after discount', fmt2(lineNetAmount(i)))) divLines.push(ln(s))

@@ -384,6 +384,55 @@ export function lineNetAmount(item: { dish_price: number; qty: number; discount_
   return gross * (1 - pct / 100)
 }
 
+/**
+ * Collapse identical lines for the bill: three beers ordered one at a time
+ * print as "3 HEINEKEN" at 15,000, not as three lines of 5,000.
+ *
+ * The order itself is NOT touched. A round ordered at 4pm and another at 6pm
+ * are two rows, two kitchen tickets and two entries in the history, and they
+ * stay that way — the guest simply should not have to read the timeline of
+ * their own evening off a bill. Grouping only at print time keeps both facts.
+ *
+ * Two lines merge only when they are genuinely the same line. Price, discount
+ * and note are all part of the key: a beer at happy-hour price and one at full
+ * price, or one with "no ice" against one without, are different things to the
+ * guest and to the kitchen, and merging them would print a figure that cannot
+ * be checked against the menu. The first occurrence keeps its place, so the
+ * bill still reads in the order the table ordered in.
+ */
+export function groupBillItems<T extends {
+  dish_id?: string | null
+  dish_name: string
+  dish_price: number
+  qty: number
+  discount_percent?: number | null
+  notes?: string | null
+}>(items: T[]): T[] {
+  const out: T[] = []
+  const seen = new Map<string, T>()
+  for (const item of items) {
+    // NUL-joined: no dish name, note or id can contain it, so no two different
+    // lines can collide on a key by accident of punctuation.
+    const key = [
+      item.dish_id ?? `name:${item.dish_name}`,
+      item.dish_price,
+      item.discount_percent ?? '',
+      item.notes?.trim() ?? '',
+    ].join('\u0000')
+    const match = seen.get(key)
+    if (match) {
+      match.qty += Number(item.qty) || 0
+      continue
+    }
+    // A copy: the rows handed in belong to the order and must not gain qty
+    // because a bill was printed.
+    const copy = { ...item, qty: Number(item.qty) || 0 }
+    seen.set(key, copy)
+    out.push(copy)
+  }
+  return out
+}
+
 export async function createOrder(order: Order, items: OrderItem[]): Promise<void> {
   const db = getDB()
   const statements: StatementSet = [

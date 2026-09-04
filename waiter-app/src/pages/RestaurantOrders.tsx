@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
-  getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, lineNetAmount,
+  getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, lineNetAmount, groupBillItems,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
@@ -716,7 +716,12 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     const rule = '-'.repeat(LINE)
 
     const { topText, bottomText, footer2Text } = parseBillTemplate(billHeaderTpl)
-    const { totalAmount } = calcTotals(items.map(i => ({
+    // Identical lines collapse for the bill — three beers ordered one at a time
+    // read as "3 HEINEKEN 15,000 / @ 5,000 each", not three lines of 5,000. The
+    // order keeps its rows; only this printout groups them. Done before the
+    // total, so the lines and TOTAL cannot drift apart.
+    const printItems = groupBillItems(items)
+    const { totalAmount } = calcTotals(printItems.map(i => ({
       dishPrice: i.dish_price, qty: i.qty, discountPercent: i.discount_percent,
     })))
     const now = new Date()
@@ -770,11 +775,14 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', active
     for (const s of cols(`Order #: ${orderNo}`, orderType)) divLines.push(ln(s))
     if (!isTakeaway) divLines.push(ln(`Table: ${order.table_name ?? 'Table'}`))
     divLines.push(ln(rule))
-    for (const i of items) {
+    for (const i of printItems) {
       // Menu price, what came off, what it now costs — in that order, so the
       // subtraction on the bill is one the guest can follow to the TOTAL rather
       // than one they are invited to make a second time.
       for (const s of cols(`${i.qty} ${i.dish_name.toUpperCase()}`, fmt2(i.discount_percent ? i.dish_price * i.qty : lineNetAmount(i)))) divLines.push(ln(s))
+      // Spell out the unit price whenever the line covers more than one, so the
+      // guest can check it against the menu without doing the division.
+      if (i.qty > 1) divLines.push(ln(`  @ ${fmt2(i.dish_price)} each`))
       if (i.discount_percent) {
         for (const s of cols(`  less ${i.discount_percent}%`, `-${fmt2(i.dish_price * i.qty - lineNetAmount(i))}`)) divLines.push(ln(s))
         for (const s of cols('  after discount', fmt2(lineNetAmount(i)))) divLines.push(ln(s))
