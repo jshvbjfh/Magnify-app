@@ -210,6 +210,18 @@ function buildBillEscPos(data) {
     parts.push(bold(true))
     parts.push(t('*** PAID ***'))
     parts.push(t(`Paid with: ${ascii(data.paidWith)}`))
+    // Who the tab belongs to. A credit settlement takes no money now, so this
+    // slip is the only paper record of whose debt it is — printed with the
+    // tender rather than below the timestamps, because on a credit bill the
+    // name is half the settlement. Wrapped on spaces: a long name must not be
+    // cut mid-word on the one document that says who owes. Phone only when it
+    // was given; it is optional at the till and a blank "Tel:" says nothing.
+    if (data.clientName) {
+      for (const s of wrapWords(`Client: ${ascii(data.clientName)}`, LINE)) parts.push(t(s))
+    }
+    if (data.clientPhone) {
+      for (const s of wrapWords(`Tel: ${ascii(data.clientPhone)}`, LINE)) parts.push(t(s))
+    }
     parts.push(bold(false))
     // When the guests sat down and when they settled. Left-aligned in padded
     // columns rather than centred: they are two facts to be read off, not a

@@ -803,6 +803,14 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
     // is anything to say about settlement.
     const openedAt  = paidWith ? stamp(order.created_at) : ''
     const settledAt = paidWith ? (stamp(order.paid_at) || dt) : ''
+    // A credit tab is collected later, from a person — so the slip that records
+    // it has to name them. Both are stored on the order at settlement and only
+    // for Credit (every other tender clears them), so carrying whatever is there
+    // is enough: a cash bill has nothing to print and prints nothing. Rides with
+    // the tender, so it appears on the confirmation slip and never on the
+    // ordinary bill handed over before the guest has settled.
+    const clientName  = paidWith ? (order.ar_customer_name?.trim() || '') : ''
+    const clientPhone = paidWith ? (order.ar_customer_phone?.trim() || '') : ''
     const isTakeaway = !order.table_id
     const orderType  = isTakeaway ? 'Take Away' : 'Dine In'
     const server     = order.created_by_name ?? '—'
@@ -834,6 +842,8 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
         })),
         totalAmount,
         paidWith: paidWith ?? null,
+        clientName: clientName || null,
+        clientPhone: clientPhone || null,
         openedAt: openedAt || null,
         settledAt: settledAt || null,
         columns: LINE,
@@ -886,6 +896,10 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
     if (paidWith) {
       divLines.push(ln(center(`*** PAID ***`), true))
       for (const s of cols('Paid with:', paidWith)) divLines.push(ln(s, true))
+      // Whose tab this is — see the note by clientName above. Bold with the
+      // tender: on a credit bill the name is half the settlement.
+      if (clientName)  for (const s of cols('Client:', clientName))  divLines.push(ln(s, true))
+      if (clientPhone) for (const s of cols('Tel:', clientPhone))    divLines.push(ln(s, true))
       if (openedAt)  for (const s of cols('Opened:', openedAt))   divLines.push(ln(s))
       if (settledAt) for (const s of cols('Settled:', settledAt)) divLines.push(ln(s))
     }
