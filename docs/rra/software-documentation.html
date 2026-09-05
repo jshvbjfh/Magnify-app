@@ -1,0 +1,405 @@
+<title>Magnify Software Documentation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+  :root {
+    --paper: #FBFAF7; --surface: #FFFFFF; --sunk: #F2F0EA;
+    --ink: #1A1A17; --ink-soft: #43413B; --muted: #6E6B63; --faint: #9B978D;
+    --rule: #DDD9CF; --rule-hard: #C6C1B4;
+    --accent: #24507A; --accent-bg: #E8EEF5;
+    --brick: #A33A2E; --brick-bg: #F7E9E6;
+    --moss: #3F6B4A; --moss-bg: #E7EFE8;
+    --amber: #8A6414; --amber-bg: #F6EEDC;
+    --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --f-body: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --f-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #141311; --surface: #1C1B18; --sunk: #232120;
+      --ink: #EDEAE3; --ink-soft: #C9C5BC; --muted: #98938A; --faint: #6E6A62;
+      --rule: #33302C; --rule-hard: #474339;
+      --accent: #8FB4DA; --accent-bg: #1B2733;
+      --brick: #D98878; --brick-bg: #2E1E1B;
+      --moss: #8FBE9C; --moss-bg: #1A241C;
+      --amber: #D6AC5E; --amber-bg: #2A2216;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #141311; --surface: #1C1B18; --sunk: #232120;
+    --ink: #EDEAE3; --ink-soft: #C9C5BC; --muted: #98938A; --faint: #6E6A62;
+    --rule: #33302C; --rule-hard: #474339;
+    --accent: #8FB4DA; --accent-bg: #1B2733;
+    --brick: #D98878; --brick-bg: #2E1E1B;
+    --moss: #8FBE9C; --moss-bg: #1A241C;
+    --amber: #D6AC5E; --amber-bg: #2A2216;
+  }
+
+  * { box-sizing: border-box; }
+  body { background: var(--paper); color: var(--ink); font-family: var(--f-body);
+         font-size: 16.5px; line-height: 1.6; margin: 0; padding: 0 24px 96px;
+         -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 900px; margin: 0 auto; }
+
+  .mast { padding: 60px 0 0; }
+  .eyebrow { font-family: var(--f-mono); font-size: 11.5px; font-weight: 500;
+             letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+  h1 { font-family: var(--f-display); font-weight: 700; font-size: clamp(32px, 5vw, 46px);
+       line-height: 1.05; letter-spacing: -0.022em; text-wrap: balance; margin: 0 0 16px; }
+  .standfirst { font-size: 18.5px; line-height: 1.55; color: var(--ink-soft); max-width: 62ch; margin: 0 0 32px; }
+
+  .identity { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+              gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin-bottom: 10px; }
+  .idcell { background: var(--surface); padding: 14px 16px; }
+  .idcell dt { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.11em;
+               text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+  .idcell dd { font-family: var(--f-mono); font-size: 13.5px; font-weight: 500; margin: 0; word-break: break-word; }
+
+  section { padding: 44px 0 0; }
+  h2 { font-family: var(--f-display); font-weight: 700; font-size: 14.5px;
+       letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0 0 6px; }
+  h3 { font-family: var(--f-display); font-weight: 600; font-size: 19px;
+       letter-spacing: -0.01em; margin: 26px 0 6px; text-wrap: balance; }
+  .sec-lede { font-size: 16px; color: var(--ink-soft); max-width: 64ch; margin: 0 0 20px; }
+  p { max-width: 66ch; }
+  ul { max-width: 66ch; padding-left: 20px; }
+  li { margin-bottom: 5px; }
+
+  .scroll { overflow-x: auto; border: 1px solid var(--rule-hard); background: var(--surface); margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 620px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+             color: var(--muted); font-weight: 500; background: var(--sunk); white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.k { font-family: var(--f-display); font-weight: 600; font-size: 14px; }
+  td.c { font-family: var(--f-mono); font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+
+  code { font-family: var(--f-mono); font-size: 0.85em; background: var(--sunk);
+         padding: 1.5px 5px; border-radius: 2px; color: var(--ink-soft); word-break: break-word; }
+  pre { font-family: var(--f-mono); font-size: 12.5px; line-height: 1.55; background: var(--sunk);
+        border: 1px solid var(--rule); padding: 14px 16px; overflow-x: auto; margin: 14px 0; }
+
+  .note { border-left: 3px solid var(--accent); background: var(--accent-bg); padding: 14px 18px; margin: 20px 0; }
+  .note.warn { border-left-color: var(--brick); background: var(--brick-bg); }
+  .note p { margin: 0; font-size: 15.5px; color: var(--ink-soft); max-width: none; }
+  .note strong { font-family: var(--f-display); color: var(--ink); }
+
+  footer { margin-top: 52px; padding-top: 20px; border-top: 1.5px dashed var(--rule-hard); }
+  footer p { font-family: var(--f-mono); font-size: 11.5px; color: var(--faint); line-height: 1.7; max-width: none; }
+
+  @media print {
+    :root { --paper:#FFF; --surface:#FFF; --sunk:#F2F0EA; --ink:#14140F; --ink-soft:#3A3833;
+            --muted:#5E5B54; --faint:#85817A; --rule:#D5D1C6; --rule-hard:#B4AFA1;
+            --accent:#1D4468; --accent-bg:#EDF2F7; --brick:#8E3025; --brick-bg:#F7E9E6;
+            --moss:#355C3F; --moss-bg:#E7EFE8; --amber:#74540F; --amber-bg:#F6EEDC; }
+    body { padding: 0; font-size: 9.8pt; line-height: 1.45; }
+    .wrap { max-width: none; }
+    .mast { padding-top: 0; }
+    h1 { font-size: 26pt; }
+    .standfirst { font-size: 11pt; margin-bottom: 18px; }
+    section { padding-top: 24px; }
+    h2, h3, .sec-lede { break-after: avoid; }
+    h2 { font-size: 10.5pt; } h3 { font-size: 12pt; }
+    .scroll { overflow: visible; }
+    table { min-width: 0; font-size: 8.4pt; }
+    th, td { padding: 6px 8px; }
+    thead { display: table-header-group; }
+    tr, .note, .identity, pre { break-inside: avoid; }
+    footer { break-inside: avoid; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <p class="eyebrow">Certified Invoicing System · Software Documentation</p>
+    <h1>Magnify</h1>
+    <p class="standfirst">The documentation required by clause 7.10 of the Technical Specification of CIS for VSDC. It states every function the system performs, so that the system performs no function beyond those stated.</p>
+
+    <dl class="identity">
+      <div class="idcell"><dt>Product</dt><dd>Magnify</dd></div>
+      <div class="idcell"><dt>Version</dt><dd>1.1.50</dd></div>
+      <div class="idcell"><dt>Vendor</dt><dd>YoFinder Ltd</dd></div>
+      <div class="idcell"><dt>TIN</dt><dd>149047989</dd></div>
+      <div class="idcell"><dt>SDC route</dt><dd>Local VSDC</dd></div>
+      <div class="idcell"><dt>Document</dt><dd>Draft 1</dd></div>
+    </dl>
+  </header>
+
+  <div class="note warn">
+    <p><strong>Draft — not for submission.</strong> Clause 7.10 requires this document to match the software exactly and to be revised for every change. The VSDC connection described in section 6 is specified but not yet implemented, and is marked as such throughout. No section of this document may be submitted while it describes behaviour the software does not yet have.</p>
+  </div>
+
+  <section>
+    <h2>1 · Purpose and scope</h2>
+    <p>Magnify is a point-of-sale and inventory management system for restaurants. It records orders, settles bills, prints receipts, tracks stock and produces management and fiscal reports.</p>
+    <p>This document covers Magnify 1.1.50, the fiscal build, which operates as a Certified Invoicing System connected to a Virtual Sales Data Controller. Non-fiscal builds of Magnify exist for use outside Rwanda; they are a different product and are not covered here.</p>
+
+    <h3>Intended users</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Role</th><th>Uses</th><th>Can</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Waiter</td><td>Tablet or till</td><td>Take orders, send to kitchen, present bills</td></tr>
+          <tr><td class="k">Supervisor</td><td>Till</td><td>All of the above, plus approve cancellations, discounts, refunds and cash withdrawals</td></tr>
+          <tr><td class="k">Manager</td><td>Manager application</td><td>Menu, stock, staff, reports, fiscal configuration</td></tr>
+          <tr><td class="k">Owner</td><td>Manager application</td><td>All of the above across every station</td></tr>
+          <tr><td class="k">Auditor</td><td>Audit interface</td><td>Read software settings, records and counter state</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · System architecture</h2>
+    <p>Magnify is three applications sharing one database. Only one of them issues receipts.</p>
+
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Application</th><th>Platform</th><th>Role in the CIS</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="k">Till<br><span style="font-weight:400">Magnify POS</span></td>
+            <td class="c">Windows · Electron</td>
+            <td><strong>This is the Certified Invoicing System.</strong> It settles bills, calls the VSDC and prints receipts. It is the only component that issues a receipt.</td>
+          </tr>
+          <tr>
+            <td class="k">Manager</td><td class="c">Web · Electron</td>
+            <td>Configuration, menu, stock, staff and reports. Does not issue receipts.</td>
+          </tr>
+          <tr>
+            <td class="k">Tablet</td><td class="c">Android</td>
+            <td>Order entry only. Has no printer and issues no receipt. Orders are sent to a till, which settles them.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <p><strong>The certified surface is the till alone.</strong> The tablet cannot print and therefore cannot issue a receipt; the manager application does not settle bills. Confining receipt issuance to one component keeps the certified boundary unambiguous.</p>
+    </div>
+
+    <h3>Data flow for a sale</h3>
+    <pre>Waiter enters order  ->  Kitchen ticket printed
+                     ->  Bill presented (proforma)
+                     ->  Till settles the bill
+                         -> journal entry written (PENDING)
+                         -> sale sent to local VSDC
+                         -> VSDC returns SDC id, receipt numbers,
+                            internal data and signature
+                         -> journal entry confirmed (SENT)
+                         -> fiscal receipt printed
+                     ->  VSDC relays to the RRA EBM server</pre>
+    <p>The receipt is printed only after the VSDC has answered (clause 10). Should the VSDC not answer, no receipt is printed and the sale is not completed.</p>
+  </section>
+
+  <section>
+    <h2>3 · Installation and fiscal configuration</h2>
+    <p>The fiscal build is installed from a signed installer under its own application identity, separate from non-fiscal builds of Magnify. The two cannot update into one another.</p>
+
+    <h3>Required configuration</h3>
+    <p>Until every field below is set, the till refuses to trade. It does not fall back to trading without VAT.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Setting</th><th>Level</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td class="k">TIN</td><td class="c">Taxpayer</td><td>Printed on every receipt</td></tr>
+          <tr><td class="k">MRC</td><td class="c">Outlet</td><td>Machine Registration Code (clause 7.4)</td></tr>
+          <tr><td class="k">SDC ID</td><td class="c">Outlet</td><td>Identifies the controller on the receipt</td></tr>
+          <tr><td class="k">Branch code</td><td class="c">Outlet</td><td>Outlet identifier issued by RRA</td></tr>
+          <tr><td class="k">VSDC address</td><td class="c">Outlet</td><td>Where the till reaches the controller</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Changing the taxpayer</h3>
+    <p>The TIN cannot be edited. It may be changed only in service mode, and only as part of a reset which erases every fiscal receipt, all receipt numbering and the cash drawer history held under the previous TIN (clause 7.2). Receipt numbering then recommences from 1 (clause 7.3). The operation requires a named approver and an explicit confirmation of the erasure.</p>
+  </section>
+
+  <section>
+    <h2>4 · Functions</h2>
+    <p class="sec-lede">Clause 7.10 requires that the system have no functions beyond those stated here. This section is therefore exhaustive, including functions unrelated to invoicing.</p>
+
+    <h3>4.1 Sales and service</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Function</th><th>Where</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Take an order</td><td class="c">Till, tablet</td><td>Against a table or as takeaway</td></tr>
+          <tr><td class="k">Send to kitchen or bar</td><td class="c">Till, tablet</td><td>Prints a numbered preparation slip per station</td></tr>
+          <tr><td class="k">Amend an unsettled order</td><td class="c">Till, tablet</td><td>Add, remove or move lines before settlement</td></tr>
+          <tr><td class="k">Move a line between bills</td><td class="c">Till</td><td>Supervisor approval; reversible</td></tr>
+          <tr><td class="k">Remove a sent dish</td><td class="c">Till</td><td>Supervisor approval; records no waste</td></tr>
+          <tr><td class="k">Join bills</td><td class="c">Till</td><td>Supervisor approval when waiters differ</td></tr>
+          <tr><td class="k">Apply a line discount</td><td class="c">Till</td><td>Supervisor approval; 0–100 per cent</td></tr>
+          <tr><td class="k">Cancel an unsettled order</td><td class="c">Till, tablet</td><td>Supervisor approval and a reason</td></tr>
+          <tr><td class="k">Settle a bill</td><td class="c">Till</td><td>Issues the fiscal receipt</td></tr>
+          <tr><td class="k">Refund a settled bill</td><td class="c">Till</td><td>Supervisor approval; once per bill</td></tr>
+          <tr><td class="k">Reprint a receipt</td><td class="c">Till</td><td>Prints as a marked COPY</td></tr>
+          <tr><td class="k">Open and close a service shift</td><td class="c">Till</td><td>Supervisor; sets the business date</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>4.2 Cash</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Function</th><th>Where</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Record an opening float</td><td class="c">Till</td><td>Reported as the opening deposit</td></tr>
+          <tr><td class="k">Record a cash deposit</td><td class="c">Till</td><td>Clause 7.12</td></tr>
+          <tr><td class="k">Record a cash withdrawal</td><td class="c">Till</td><td>Supervisor approval required</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>4.3 Menu and stock</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Function</th><th>Where</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Maintain dishes and prices</td><td class="c">Manager</td><td>Item code, classification, tax type, unit</td></tr>
+          <tr><td class="k">Classify an item as goods or service</td><td class="c">Manager</td><td>Governs the stock check (clause 7.30)</td></tr>
+          <tr><td class="k">Maintain recipes</td><td class="c">Manager</td><td>Links a dish to its ingredients</td></tr>
+          <tr><td class="k">Receive stock</td><td class="c">Manager</td><td>Purchases, with FIFO batches</td></tr>
+          <tr><td class="k">Record waste</td><td class="c">Manager</td><td>With reason</td></tr>
+          <tr><td class="k">Stock take</td><td class="c">Manager</td><td>Counted against expected</td></tr>
+          <tr><td class="k">Mise en place</td><td class="c">Manager, till</td><td>Batch preparation consumed before ingredients</td></tr>
+          <tr><td class="k">Closing stock at a date</td><td class="c">Manager</td><td>Clause 7.31</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>4.4 Reporting</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Function</th><th>Where</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Z daily report</td><td class="c">Till, manager</td><td>Closes the day (clause 7.6)</td></tr>
+          <tr><td class="k">X daily report</td><td class="c">Till, manager</td><td>Since the last Z</td></tr>
+          <tr><td class="k">Sales and item reports</td><td class="c">Manager</td><td>Management information</td></tr>
+          <tr><td class="k">Transactions and accounts</td><td class="c">Manager</td><td>Journal entries, receivable and payable</td></tr>
+          <tr><td class="k">Audit interface</td><td class="c">Manager</td><td>Clause 7.26</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>4.5 Administration</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Function</th><th>Where</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Staff and roles</td><td class="c">Manager</td><td>Including supervisor approval PINs</td></tr>
+          <tr><td class="k">Tables and stations</td><td class="c">Manager</td><td>Floor plan</td></tr>
+          <tr><td class="k">Printer configuration</td><td class="c">Till, manager</td><td>Per device</td></tr>
+          <tr><td class="k">Fiscal configuration</td><td class="c">Manager</td><td>Section 3</td></tr>
+          <tr><td class="k">Backup and restore</td><td class="c">Manager</td><td>Excludes images and chat history</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>4.6 Functions unrelated to invoicing</h3>
+    <p>Stated here because clause 7.10 admits no undocumented function, whether or not it touches a receipt.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Function</th><th>Where</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Analytics dashboard</td><td class="c">Manager</td><td>Charts over sales already recorded</td></tr>
+          <tr><td class="k">Assistant</td><td class="c">Manager</td><td>Answers questions about recorded figures. Reads only; cannot alter a sale, a receipt or stock</td></tr>
+          <tr><td class="k">Marketing</td><td class="c">Manager</td><td>Campaign suggestions. No fiscal effect</td></tr>
+          <tr><td class="k">QR menu studio</td><td class="c">Manager</td><td>Publishes a guest-facing menu</td></tr>
+          <tr><td class="k">Guest QR ordering</td><td class="c">Guest browser</td><td>Creates an unconfirmed order a waiter must confirm. Cannot settle or print</td></tr>
+          <tr><td class="k">Upselling report</td><td class="c">Manager</td><td>Suggests item pairings. No fiscal effect</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <p><strong>None of the functions in 4.6 can create, alter or delete a fiscal receipt</strong>, change a declared amount, or affect receipt numbering. They read recorded data or produce material outside the invoicing path.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>5 · Fiscal operation</h2>
+
+    <h3>5.1 Tax</h3>
+    <p>Menu prices include VAT. Tax is extracted from the price rather than added to it, so the amount a guest is charged is the amount shown on the menu. Each item carries a tax type of A, B, C or D; unclassified items are treated as standard rated.</p>
+    <p>Each line is rounded to two decimal places and the order total is the sum of the rounded lines. Per-bracket tax is computed from the bracket total rather than by summing rounded lines, so the printed figures reconcile with one another.</p>
+
+    <h3>5.2 Receipt numbering</h3>
+    <p>Two counters are maintained per outlet: one per receipt type and one across all types, printed as <code>A/B RT</code> (clause 7.24.4). Numbers are claimed inside the settlement transaction, so a sale that fails leaves no gap. Counters never reset except on a total reset of the system, when they recommence from 1.</p>
+
+    <h3>5.3 Receipt types</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Code</th><th>Type</th><th>Behaviour</th></tr></thead>
+        <tbody>
+          <tr><td class="c">NS</td><td class="k">Normal sale</td><td>Signed. One original only</td></tr>
+          <tr><td class="c">NR</td><td class="k">Refund</td><td>Signed. References the original; permitted once per original</td></tr>
+          <tr><td class="c">CS</td><td class="k">Copy</td><td>Marked COPY with the disclaimer</td></tr>
+          <tr><td class="c">TS</td><td class="k">Training</td><td>Unsigned, marked, excluded from sales</td></tr>
+          <tr><td class="c">PS</td><td class="k">Proforma</td><td>Unsigned, marked, excluded from sales</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>5.4 Immutability</h3>
+    <p>A settled bill cannot be cancelled, deleted or edited. The only means of reversing a sale is a refund receipt referencing the original, and an original may be reversed once only.</p>
+
+    <h3>5.5 Journal</h3>
+    <p>Every receipt is recorded before it is printed. Should the journal be unwritable, or should any printed receipt be unrecorded, the till stops trading (clause 7.14).</p>
+
+    <h3>5.6 Stock</h3>
+    <p>A receipt is not issued for goods when the recorded stock is less than the quantity requested. Service items are exempt (clause 7.30). Items whose stock has never been counted are not treated as out of stock.</p>
+  </section>
+
+  <section>
+    <h2>6 · Connection to the VSDC</h2>
+    <div class="note warn">
+      <p><strong>Specified, not yet implemented.</strong> This section describes intended behaviour and must not be submitted until the implementation is complete and verified against a VSDC instance.</p>
+    </div>
+    <p>The till communicates with a Virtual Sales Data Controller deployed on the local network over REST. Sales are sent to <code>/trnsSales/saveSales</code>; the response supplies the SDC identifier, both receipt counters, internal data and the receipt signature, which are printed in the SDC information block.</p>
+    <p>No receipt of any type is printed before the controller has responded. The till detects the controller's availability independently and reports its status. On a communication failure the till stops operating and resumes when the fault clears.</p>
+  </section>
+
+  <section>
+    <h2>7 · Access control</h2>
+    <p>Staff sign in by PIN on shared terminals or by username and password for personal accounts. Both are stored as one-way hashes and cannot be recovered; a forgotten PIN is reset, not retrieved.</p>
+    <p>Supervisor approval, entered as a separate PIN and recorded by name, is required to cancel an order, remove a sent dish, apply a discount, move a line between bills, take cash out of the till, issue a refund, and change the TIN.</p>
+  </section>
+
+  <section>
+    <h2>8 · Data, retention and audit</h2>
+    <p>Fiscal receipts, cash movements and counter state are retained indefinitely and are never deleted by any function available to a user. Ordinary orders may be hidden from management views by date without being removed from the database.</p>
+    <p>The audit interface presents software identity and version, fiscal configuration, tax rates as programmed, record counts by receipt type, the state of each counter, and any receipt awaiting or having failed transmission.</p>
+  </section>
+
+  <section>
+    <h2>9 · Support and updates</h2>
+    <p>The software version is shown in the application, transmitted with every request to the server, and printed on the receipt. Certified installations do not update automatically; a new version is installed deliberately, so that an installation cannot move past the version RRA approved.</p>
+    <p>This documentation is revised for every change to the software, as clause 7.7 requires of the version and clause 7.10 requires of the documentation.</p>
+  </section>
+
+  <section>
+    <h2>10 · What the system does not do</h2>
+    <ul>
+      <li>It does not register a sale without printing a receipt.</li>
+      <li>It does not print a receipt without a response from the controller.</li>
+      <li>It does not permit a sale amount to be entered without identifying an item.</li>
+      <li>It does not allow VAT to be disabled by any setting or user action.</li>
+      <li>It does not allow a settled bill to be cancelled, edited or deleted.</li>
+      <li>It does not allow an original transaction to be reversed more than once.</li>
+      <li>It does not reset or reuse a receipt number.</li>
+      <li>It does not issue receipts from the tablet or the manager application.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>Draft 1 · Magnify 1.1.50 · YoFinder Ltd · TIN 149047989<br>
+    Prepared under clause 7.10 of the Technical Specification of CIS for VSDC, Ver. 1.0 (March 2018).<br>
+    Not for submission while section 6 remains unimplemented.</p>
+  </footer>
+
+</div>

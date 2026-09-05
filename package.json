@@ -47,7 +47,9 @@
     "cap:run": "npx cap run android",
     "docs:rra": "node scripts/render-pdf.mjs docs/rra/test-cases.html \"docs/rra/Magnify-1.1.50-Test-Cases.pdf\" \"Magnify 1.1.50 - Test Cases - YoFinder Ltd\"",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "docs:rra:sw": "node scripts/render-pdf.mjs docs/rra/software-documentation.html \"docs/rra/Magnify-1.1.50-Software-Documentation.pdf\" \"Magnify 1.1.50 - Software Documentation - YoFinder Ltd\"",
+    "docs:rra:all": "npm run docs:rra && npm run docs:rra:sw"
   },
   "dependencies": {
     "@capacitor/android": "^8.2.0",
