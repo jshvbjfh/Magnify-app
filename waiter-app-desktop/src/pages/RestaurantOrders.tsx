@@ -13,6 +13,7 @@ import {
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
 import SupervisorPinDialog from './SupervisorPinDialog'
+import { TouchField } from './TouchKeyboard'
 import UndoMoveDialog from './UndoMoveDialog'
 import { logError, logInfo, logWarn, normalizeErrorForLog } from '../services/logger'
 import { pushSync, cancelOrderOnServer, validateCancellationPinOffline, validateOrderCode, type BranchInfo } from '../services/sync'
@@ -263,6 +264,9 @@ function CancelModal({ order, onClose, onCanceled }: {
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState<string | null>(null)
+  // Which box the app's own keyboard is currently typing into. One at a time,
+  // so two keyboards can never be on screen together.
+  const [activeField, setActiveField] = useState<'pin' | 'reason' | null>(null)
 
   const tableKey  = order ? (order.table_id ?? 'takeaway') : 'takeaway'
   const tableName = order?.table_name ?? 'Order'
@@ -305,7 +309,12 @@ function CancelModal({ order, onClose, onCanceled }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+      {/* Widened while the letter keyboard is up, or the keys come out too
+          narrow to hit with a thumb. Scrolls rather than overflowing a short
+          till screen. */}
+      <div className={`bg-white rounded-2xl shadow-2xl w-full p-6 space-y-4 max-h-[95vh] overflow-y-auto ${
+        activeField === 'reason' ? 'max-w-2xl' : 'max-w-sm'
+      }`}>
         <div className="flex items-center justify-between">
           <h3 className="font-bold text-gray-900 flex items-center gap-2">
             <ShieldAlert className="h-5 w-5 text-red-500" />
@@ -320,29 +329,34 @@ function CancelModal({ order, onClose, onCanceled }: {
           A supervisor must enter their 5-digit PIN to approve this cancellation.
         </p>
 
-        <div>
-          <label className="text-xs font-semibold text-gray-600 mb-1 block">Supervisor PIN</label>
-          <input
-            type="password"
-            inputMode="numeric"
-            maxLength={5}
-            value={pin}
-            onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 5)); setError(null) }}
-            placeholder="● ● ● ● ●"
-            className="w-full border border-gray-300 rounded-xl px-3 py-3 text-center text-2xl tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-red-400"
-          />
-        </div>
+        {/* The PIN is here too, not just the reason: a supervisor cannot reach
+            the reason box without typing five digits first, so leaving the PIN
+            on the Windows keyboard would have left the cancel flow just as
+            unusable as before. */}
+        <TouchField
+          label="Supervisor PIN"
+          masked
+          layout="numeric"
+          maxLength={5}
+          value={pin}
+          onChange={next => { setPin(next.replace(/\D/g, '').slice(0, 5)); setError(null) }}
+          placeholder="● ● ● ● ●"
+          active={activeField === 'pin'}
+          onActivate={() => setActiveField('pin')}
+          onDone={() => setActiveField(null)}
+          inputClassName="py-3 text-center text-2xl tracking-[0.5em]"
+        />
 
-        <div>
-          <label className="text-xs font-semibold text-gray-600 mb-1 block">Reason</label>
-          <input
-            type="text"
-            value={reason}
-            onChange={e => { setReason(e.target.value); setError(null) }}
-            placeholder="e.g. Customer changed mind"
-            className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-          />
-        </div>
+        <TouchField
+          label="Reason"
+          layout="text"
+          value={reason}
+          onChange={next => { setReason(next); setError(null) }}
+          placeholder="e.g. Customer changed mind"
+          active={activeField === 'reason'}
+          onActivate={() => setActiveField('reason')}
+          onDone={() => setActiveField(null)}
+        />
 
         {error && (
           <div className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 font-medium">
@@ -460,6 +474,9 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
   // Credit sales only: who owes for the tab. Name is required, phone optional.
   const [arCustomerName,    setArCustomerName]    = useState('')
   const [arCustomerPhone,   setArCustomerPhone]   = useState('')
+  // Which settle box the app's own keyboard is typing into. Parent state,
+  // because renderPayModal is a plain function and holds none of its own.
+  const [payActiveField, setPayActiveField] = useState<'name' | 'phone' | 'reason' | null>(null)
   const [payingSaving,      setPayingSaving]      = useState(false)
   const [cancelingOrderId,  setCancelingOrderId]  = useState<string | null>(null)
   // Discount being entered on one line. Held until a supervisor approves it —
@@ -637,15 +654,17 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
     if (mode === 'history') { loadHistory(); return }
     // Do not refresh the floor underneath an open dialog.
     //
-    // The shell re-syncs every 10 seconds, and each sync replaces the orders,
-    // dishes and tables in one go. Typing a cancellation reason on a touch till
-    // takes longer than that, so the screen was rebuilding mid-sentence: the
-    // Windows on-screen keyboard closes the moment its input loses focus, which
-    // is why it shut after almost every letter.
+    // The shell re-syncs every 10 seconds and each sync replaces the orders,
+    // dishes and tables in one go, so a list could reshuffle under a waiter's
+    // half-finished decision. Nothing is lost by waiting: the dialog closes
+    // within seconds and the next sync refreshes everything then.
     //
-    // Nothing is lost by waiting — the dialog is closed within seconds and the
-    // next sync refreshes everything then. And a list that reshuffles under a
-    // half-finished decision is wrong on its own terms, keyboard or not.
+    // This is NOT what was closing the on-screen keyboard, despite what this
+    // comment claimed when it was written. A re-render leaves a focused input
+    // in place; only a remount destroys it. The keyboard bug was renderPayModal
+    // being rendered as an element — see the note on its declaration. Kept
+    // because a list that moves under an open decision is wrong on its own
+    // terms, keyboard or not.
     if (aModalIsOpen) return
     loadPOS()
   }, [mode, loadPOS, loadHistory, syncVersion, aModalIsOpen])
@@ -1956,7 +1975,22 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
 
   // ── Pay modal ──
 
-  function PayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
+  // Called as a plain function — renderPayModal({...}) — NOT rendered as
+  // <PayModal />, and named "render*" so it stays that way.
+  //
+  // It is declared inside the component, so every parent render creates a new
+  // function object. As an element type that makes it a DIFFERENT component to
+  // React on every render, which threw the whole dialog away and built a fresh
+  // one: new <input> nodes, focus lost. Its text lives in the parent's state
+  // (arCustomerName, arCustomerPhone, noChargeReason), so typing a single
+  // letter re-rendered the parent and remounted the dialog — and the Windows
+  // touch keyboard closes the instant its input loses focus. One letter per
+  // keyboard, on the tills that need it most.
+  //
+  // Called rather than rendered, the JSX is simply part of the parent's own
+  // output: same DOM nodes, focus kept, keyboard stays up until the waiter
+  // closes it. Uses no hooks, and must not gain any — it is not a component.
+  function renderPayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
     const order   = pendingOrders.find(o => o.id === orderId)
     const items   = order ? (orderItemsMap[order.id] ?? []) : []
     // Discounts included — the figure collected here must be the one on the bill.
@@ -1969,7 +2003,11 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
     const name    = order?.table_name ?? (order?.table_id ? (tables.find(t => t.id === order.table_id)?.name ?? 'Table') : 'Takeaway')
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+        {/* Widened for the letter keyboard, and scrollable so a long bill plus a
+            keyboard cannot run off the bottom of a short till screen. */}
+        <div className={`bg-white rounded-2xl shadow-2xl w-full p-6 space-y-4 max-h-[95vh] overflow-y-auto ${
+          payActiveField === 'name' || payActiveField === 'reason' ? 'max-w-2xl' : 'max-w-sm'
+        }`}>
           <div className="flex items-center justify-between">
             <h3 className="font-bold text-gray-900">Collect Payment — {name}</h3>
             <button onClick={onClose}><X className="h-5 w-5 text-gray-400 hover:text-gray-600" /></button>
@@ -1999,6 +2037,8 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                     setPayMethod(m)
                     if (m !== 'Credit') { setArCustomerName(''); setArCustomerPhone('') }
                     if (m !== NO_CHARGE) setNoChargeReason('')
+                    // The box the keyboard was typing into may no longer exist.
+                    setPayActiveField(null)
                   }}
                   className={`py-2.5 rounded-lg text-sm font-medium border transition-all ${
                     payMethod === m
@@ -2019,31 +2059,37 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
               whose it is — the name is required. Amber throughout, to keep it
               visually distinct from the tenders that actually put cash in the till. */}
           {payMethod === 'Credit' && (
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1.5 block">
-                Customer name <span className="text-red-500">*</span>
-              </label>
-              <input
+            <div className="space-y-3">
+              {/* The name is typed on the app's keyboard as well as the phone.
+                  It sits directly above it and is the required one of the two,
+                  so fixing only the phone would have left the credit flow
+                  fighting Windows anyway. */}
+              <TouchField
+                label="Customer name *"
+                layout="text"
                 value={arCustomerName}
-                onChange={e => setArCustomerName(e.target.value)}
+                onChange={setArCustomerName}
                 placeholder="Who is this tab for?"
-                className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-amber-300 ${
-                  arCustomerName.trim() ? 'border-gray-300' : 'border-red-300'
-                }`}
+                active={payActiveField === 'name'}
+                onActivate={() => setPayActiveField('name')}
+                onDone={() => setPayActiveField(null)}
+                inputClassName={arCustomerName.trim() ? '' : 'border-red-300'}
               />
-              <label className="text-xs font-semibold text-gray-600 mb-1.5 mt-3 block">
-                Phone <span className="font-normal text-gray-400">(optional)</span>
-              </label>
-              <input
+              <TouchField
+                label="Phone (optional)"
+                layout="numeric"
                 value={arCustomerPhone}
-                onChange={e => setArCustomerPhone(e.target.value)}
-                inputMode="tel"
+                onChange={setArCustomerPhone}
                 placeholder="e.g. 0788123456"
-                className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                active={payActiveField === 'phone'}
+                onActivate={() => setPayActiveField('phone')}
+                onDone={() => setPayActiveField(null)}
+                hint={
+                  <p className="mt-1 text-xs text-amber-700">
+                    No money is taken now — this is recorded as money owed, and collected later.
+                  </p>
+                }
               />
-              <p className="mt-1 text-xs text-amber-700">
-                No money is taken now — this is recorded as money owed, and collected later.
-              </p>
             </div>
           )}
 
@@ -2051,22 +2097,22 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
               the reason is the whole audit trail. Required, and it follows the
               order all the way to the manager's No Charge report. */}
           {payMethod === NO_CHARGE && (
-            <div>
-              <label className="text-xs font-semibold text-gray-600 mb-1.5 block">
-                Reason <span className="text-red-500">*</span>
-              </label>
-              <input
-                value={noChargeReason}
-                onChange={e => setNoChargeReason(e.target.value)}
-                placeholder="e.g. Owner's guests, staff meal, sent back"
-                className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-300 ${
-                  noChargeReason.trim() ? 'border-gray-300' : 'border-red-300'
-                }`}
-              />
-              <p className="mt-1 text-xs text-purple-700">
-                Nothing is charged. The food still comes off stock, and {fmtRWF(compValue)} RWF is recorded as comped.
-              </p>
-            </div>
+            <TouchField
+              label="Reason *"
+              layout="text"
+              value={noChargeReason}
+              onChange={setNoChargeReason}
+              placeholder="e.g. Owner's guests, staff meal, sent back"
+              active={payActiveField === 'reason'}
+              onActivate={() => setPayActiveField('reason')}
+              onDone={() => setPayActiveField(null)}
+              inputClassName={noChargeReason.trim() ? '' : 'border-red-300'}
+              hint={
+                <p className="mt-1 text-xs text-purple-700">
+                  Nothing is charged. The food still comes off stock, and {fmtRWF(compValue)} RWF is recorded as comped.
+                </p>
+              }
+            />
           )}
 
           <div className="flex gap-2 pt-1">
@@ -2595,7 +2641,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         )}
 
         {payingOrderId && (
-          <PayModal orderId={payingOrderId} onClose={() => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') }} />
+          renderPayModal({ orderId: payingOrderId, onClose: () => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone(''); setPayActiveField(null) } })
         )}
         {cancelingOrderId && (
           <CancelModal
@@ -3004,10 +3050,10 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       </div>
 
       {payingOrderId && (
-        <PayModal
-          orderId={payingOrderId}
-          onClose={() => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') }}
-        />
+        renderPayModal({
+          orderId: payingOrderId,
+          onClose: () => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone(''); setPayActiveField(null) },
+        })
       )}
 
       {cancelingOrderId && (
