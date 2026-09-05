@@ -596,6 +596,46 @@ model FiscalReceipt {
   @@map("fiscal_receipts")
 }
 
+// Money into and out of the till that is not a sale (§7.12).
+//
+// The opening float a supervisor counts in before service, cash dropped to the
+// safe mid-shift, a payout to a supplier at the door. The daily report has to
+// state the opening deposit (§18.1.12), and a manager counting the drawer at
+// close needs to know what SHOULD be in it.
+//
+// `amount` is ALWAYS POSITIVE and `kind` carries the direction. Storing a
+// withdrawal as a negative number reads fine until someone writes a positive
+// one by mistake and it quietly adds money to the till instead of removing it —
+// a sign error in a cash figure is silent, and this shape makes it impossible.
+//
+// Corrections are new rows, never edits. A float counted wrong is fixed by
+// adding the difference, so the drawer's history stays readable rather than
+// being rewritten.
+model CashMovement {
+  id           String   @id @default(cuid())
+  restaurantId String
+  branchId     String
+  // The service session this belongs to, where the venue runs shifts.
+  shiftId      String?
+  businessDate DateTime
+
+  // OPENING_FLOAT · DEPOSIT · WITHDRAWAL
+  kind           String
+  amount         Float
+  reason         String?
+  recordedByName String?
+  // Taking cash OUT needs a supervisor, the same control a cancellation takes.
+  // Null on a float or a deposit, which only ever add.
+  approvedByName String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([branchId, businessDate])
+  @@index([restaurantId, businessDate])
+  @@map("cash_movements")
+}
+
 // ─── MENU ──────────────────────────────────────────────────────────────────
 
 model Dish {
@@ -631,6 +671,22 @@ model Dish {
   taxCategory           String?
   unitOfMeasure         String?
   packagingUnit         String?
+  // GOODS or SERVICE, and it decides whether a sale can be blocked for stock.
+  //
+  // §7.30: a certified system may not issue a receipt for GOODS when the
+  // corresponding stock is short — "However, CIS can issue a receipt for
+  // service item regardless the stock."
+  //
+  // Defaults to SERVICE because that is what a restaurant mostly sells: a plate
+  // of food is prepared to order, and its ingredients are tracked, not the
+  // plate itself. A manager marks the genuine goods — bottled drinks, packaged
+  // items bought and resold as they are.
+  //
+  // This default is also what keeps the 211 Sirocco dishes with no recipe from
+  // blocking service on day one. It is a real distinction, not a loophole: the
+  // exemption exists in the clause precisely because prepared food cannot be
+  // counted the way a bottle can.
+  itemType              String    @default("SERVICE")
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
   deletedAt           DateTime?

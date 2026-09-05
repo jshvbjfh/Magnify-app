@@ -1,0 +1,18 @@
+-- GOODS or SERVICE, which decides whether a sale can be blocked for stock.
+--
+-- §7.30 forbids issuing a receipt for GOODS when the corresponding stock is
+-- short, and then exempts services outright: "However, CIS can issue a receipt
+-- for service item regardless the stock."
+--
+-- Defaults to SERVICE because that is what a restaurant mostly sells. A plate
+-- of food is prepared to order — its ingredients are tracked, the plate is not
+-- a counted thing. A manager marks the genuine goods: bottled drinks, packaged
+-- items bought and resold as they are.
+--
+-- The default is also what keeps venues with incomplete recipes trading on the
+-- day this ships. That is the clause working as written, not a loophole:
+-- prepared food cannot be counted the way a bottle can, which is why the
+-- exemption exists.
+--
+-- Additive with a default, so no existing row changes behaviour.
+ALTER TABLE "dishes" ADD COLUMN IF NOT EXISTS "itemType" TEXT NOT NULL DEFAULT 'SERVICE';
