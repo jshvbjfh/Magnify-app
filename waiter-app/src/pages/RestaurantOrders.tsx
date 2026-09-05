@@ -1385,7 +1385,13 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
 
   // ── Pay modal ──
 
-  function PayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
+  // Called as a plain function, never rendered as <PayModal />. Kept in step
+  // with the desktop app, where the full reasoning lives: declared inside the
+  // component, it is a new function object on every parent render, so as an
+  // element type React remounted the whole dialog and the inputs lost focus.
+  // Its text lives in the parent's state, so that happened on every keystroke.
+  // Uses no hooks, and must not gain any — it is not a component.
+  function renderPayModal({ orderId, onClose }: { orderId: string; onClose: () => void }) {
     const order   = pendingOrders.find(o => o.id === orderId)
     const items   = order ? (orderItemsMap[order.id] ?? []) : []
     const tot     = items.reduce((s, i) => s + lineNetAmount(i), 0)
@@ -1711,7 +1717,7 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
         )}
 
         {payingOrderId && (
-          <PayModal orderId={payingOrderId} onClose={() => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') }} />
+          renderPayModal({ orderId: payingOrderId, onClose: () => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') } })
         )}
         {cancelingOrderId && (
           <CancelModal
@@ -2083,10 +2089,10 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
       )}
 
       {payingOrderId && (
-        <PayModal
-          orderId={payingOrderId}
-          onClose={() => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') }}
-        />
+        renderPayModal({
+          orderId: payingOrderId,
+          onClose: () => { setPayingOrderId(null); setPayMethod('Cash'); setArCustomerName(''); setArCustomerPhone('') },
+        })
       )}
 
       {cancelingOrderId && (
