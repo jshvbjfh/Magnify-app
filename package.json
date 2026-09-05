@@ -49,7 +49,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "docs:rra:sw": "node scripts/render-pdf.mjs docs/rra/software-documentation.html \"docs/rra/Magnify-1.1.50-Software-Documentation.pdf\" \"Magnify 1.1.50 - Software Documentation - YoFinder Ltd\"",
-    "docs:rra:all": "npm run docs:rra && npm run docs:rra:sw"
+    "docs:rra:all": "npm run docs:rra && npm run docs:rra:sw && npm run docs:rra:sla && npm run docs:rra:sla:user && npm run docs:rra:sla:rra",
+    "docs:rra:sla": "node scripts/render-pdf.mjs docs/rra/sla-support.html \"docs/rra/Magnify-1.1.50-Support-SLA.pdf\" \"Magnify 1.1.50 - Support SLA - YOFINDER Ltd\"",
+    "docs:rra:sla:user": "node scripts/render-pdf.mjs docs/rra/sla-user-template.html \"docs/rra/Magnify-1.1.50-Support-Agreement-Template.pdf\" \"Magnify 1.1.50 - Support Agreement - YOFINDER Ltd\"",
+    "docs:rra:sla:rra": "node scripts/render-pdf.mjs docs/rra/sla-rra-template.html \"docs/rra/Magnify-1.1.50-RRA-Support-Undertaking.pdf\" \"Magnify 1.1.50 - RRA Support Undertaking - YOFINDER Ltd\""
   },
   "dependencies": {
     "@capacitor/android": "^8.2.0",

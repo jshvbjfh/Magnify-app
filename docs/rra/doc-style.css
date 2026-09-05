@@ -1,0 +1,133 @@
+/* Shared styling for the RRA document pack.
+   One file so the documents cannot drift apart in appearance. */
+
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;700&display=swap");
+
+:root {
+  --paper: #FBFAF7; --surface: #FFFFFF; --sunk: #F2F0EA;
+  --ink: #1A1A17; --ink-soft: #43413B; --muted: #6E6B63; --faint: #9B978D;
+  --rule: #DDD9CF; --rule-hard: #C6C1B4;
+  --accent: #24507A; --accent-bg: #E8EEF5;
+  --brick: #A33A2E; --brick-bg: #F7E9E6;
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --f-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #141311; --surface: #1C1B18; --sunk: #232120;
+    --ink: #EDEAE3; --ink-soft: #C9C5BC; --muted: #98938A; --faint: #6E6A62;
+    --rule: #33302C; --rule-hard: #474339;
+    --accent: #8FB4DA; --accent-bg: #1B2733;
+    --brick: #D98878; --brick-bg: #2E1E1B;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #141311; --surface: #1C1B18; --sunk: #232120;
+  --ink: #EDEAE3; --ink-soft: #C9C5BC; --muted: #98938A; --faint: #6E6A62;
+  --rule: #33302C; --rule-hard: #474339;
+  --accent: #8FB4DA; --accent-bg: #1B2733;
+  --brick: #D98878; --brick-bg: #2E1E1B;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--paper); color: var(--ink); font-family: var(--f-body);
+  font-size: 16.5px; line-height: 1.6; margin: 0; padding: 0 24px 96px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 880px; margin: 0 auto; }
+
+.mast { padding: 60px 0 0; }
+.eyebrow {
+  font-family: var(--f-mono); font-size: 11.5px; font-weight: 500;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); margin: 0 0 16px;
+}
+h1 {
+  font-family: var(--f-display); font-weight: 700; font-size: clamp(30px, 4.6vw, 42px);
+  line-height: 1.06; letter-spacing: -0.02em; text-wrap: balance; margin: 0 0 16px;
+}
+.standfirst { font-size: 18px; line-height: 1.55; color: var(--ink-soft); max-width: 62ch; margin: 0 0 30px; }
+
+.identity {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin-bottom: 10px;
+}
+.idcell { background: var(--surface); padding: 14px 16px; }
+.idcell dt {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.11em;
+  text-transform: uppercase; color: var(--muted); margin: 0 0 6px;
+}
+.idcell dd { font-family: var(--f-mono); font-size: 13.5px; font-weight: 500; margin: 0; word-break: break-word; }
+
+section { padding: 40px 0 0; }
+h2 {
+  font-family: var(--f-display); font-weight: 700; font-size: 14.5px;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0 0 8px;
+}
+h3 { font-family: var(--f-display); font-weight: 600; font-size: 18px; margin: 24px 0 6px; text-wrap: balance; }
+.sec-lede { font-size: 16px; color: var(--ink-soft); max-width: 64ch; margin: 0 0 18px; }
+p { max-width: 66ch; }
+ul, ol { max-width: 66ch; padding-left: 20px; }
+li { margin-bottom: 5px; }
+
+.scroll { overflow-x: auto; border: 1px solid var(--rule-hard); background: var(--surface); margin: 16px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 560px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+thead th {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted); font-weight: 500; background: var(--sunk); white-space: nowrap;
+}
+tbody tr:last-child td { border-bottom: 0; }
+td.k { font-family: var(--f-display); font-weight: 600; font-size: 14px; white-space: nowrap; }
+td.c { font-family: var(--f-mono); font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+
+code {
+  font-family: var(--f-mono); font-size: 0.85em; background: var(--sunk);
+  padding: 1.5px 5px; border-radius: 2px; color: var(--ink-soft);
+}
+
+.note { border-left: 3px solid var(--accent); background: var(--accent-bg); padding: 14px 18px; margin: 20px 0; }
+.note.warn { border-left-color: var(--brick); background: var(--brick-bg); }
+.note p { margin: 0; font-size: 15.5px; color: var(--ink-soft); max-width: none; }
+.note strong { font-family: var(--f-display); color: var(--ink); }
+
+/* Signature blocks for the two template agreements. */
+.sign { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 26px; }
+.sign .party { border-top: 1.5px solid var(--rule-hard); padding-top: 12px; }
+.sign .party h4 {
+  font-family: var(--f-display); font-size: 13px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); margin: 0 0 14px; font-weight: 600;
+}
+.sign .party .line { border-bottom: 1px solid var(--rule-hard); height: 26px; margin-bottom: 6px; }
+.sign .party .lbl { font-family: var(--f-mono); font-size: 10.5px; color: var(--muted); margin-bottom: 16px; }
+.fill { border-bottom: 1px solid var(--rule-hard); display: inline-block; min-width: 200px; }
+
+footer { margin-top: 48px; padding-top: 20px; border-top: 1.5px dashed var(--rule-hard); }
+footer p { font-family: var(--f-mono); font-size: 11.5px; color: var(--faint); line-height: 1.7; max-width: none; }
+
+@media print {
+  :root {
+    --paper:#FFF; --surface:#FFF; --sunk:#F2F0EA; --ink:#14140F; --ink-soft:#3A3833;
+    --muted:#5E5B54; --faint:#85817A; --rule:#D5D1C6; --rule-hard:#B4AFA1;
+    --accent:#1D4468; --accent-bg:#EDF2F7; --brick:#8E3025; --brick-bg:#F7E9E6;
+  }
+  body { padding: 0; font-size: 9.8pt; line-height: 1.45; }
+  .wrap { max-width: none; }
+  .mast { padding-top: 0; }
+  h1 { font-size: 24pt; }
+  .standfirst { font-size: 11pt; margin-bottom: 16px; }
+  section { padding-top: 22px; }
+  h2, h3, .sec-lede { break-after: avoid; }
+  h2 { font-size: 10.5pt; } h3 { font-size: 11.5pt; }
+  .scroll { overflow: visible; }
+  table { min-width: 0; font-size: 8.4pt; }
+  th, td { padding: 6px 8px; }
+  thead { display: table-header-group; }
+  tr, .note, .identity, .sign { break-inside: avoid; }
+  footer { break-inside: avoid; }
+}
