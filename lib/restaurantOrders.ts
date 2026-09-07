@@ -160,6 +160,19 @@ export function calculateRestaurantOrderTotals(items: TotalsInput, options: Orde
   })
 
   const totalAmount = round2(taxLines.reduce((sum, line) => sum + line.grossAmount, 0))
+  // Summed from the LINES here, deliberately — unlike summarizeTaxByCategory,
+  // which sums from the brackets because that is what RRA prints and declares.
+  //
+  // The two differ by at most a franc, on bills where a bracket holds several
+  // lines. This one keeps the invariant below exact: subtotal is the remainder
+  // after tax, so subtotal + vat is the total to the last franc, which every
+  // report in the app relies on. The bracket figure cannot promise that across
+  // several brackets and does not need to — the receipt prints per bracket.
+  //
+  // So the order's own stored tax may sit a franc under the declared tax on
+  // such a bill. That is a difference between two internal figures, not
+  // between anything RRA reads: the receipt and the declaration both take
+  // their tax from summarizeTaxByCategory and therefore agree with each other.
   const vatAmount = round2(taxLines.reduce((sum, line) => sum + line.taxAmount, 0))
   // Derived, not summed: subtotal + vat must equal what the guest paid, and
   // taking the remainder is the only way that holds for every combination of
@@ -184,17 +197,34 @@ export function summarizeTaxByCategory(taxLines: OrderTaxLine[]) {
   for (const line of taxLines) {
     const row = byCategory.get(line.category)
     if (row) {
-      row.taxableAmount = round2(row.taxableAmount + line.taxableAmount)
-      row.taxAmount = round2(row.taxAmount + line.taxAmount)
       row.grossAmount = round2(row.grossAmount + line.grossAmount)
     } else {
       byCategory.set(line.category, {
         category: line.category,
-        taxableAmount: line.taxableAmount,
-        taxAmount: line.taxAmount,
+        taxableAmount: 0,
+        taxAmount: 0,
         grossAmount: line.grossAmount,
       })
     }
+  }
+
+  // Tax is taken from the BRACKET total, never by summing the rounded lines.
+  //
+  // The two disagree by a franc often enough to matter, and RRA's own printed
+  // receipt takes the bracket. Their §13.1 sample has a 5,040 line and a 300
+  // line, both standard-rated:
+  //
+  //   per line, then summed : 768.81 + 45.76 = 814.57
+  //   from the bracket total: 5,340 × 18/118 = 814.58   ← what RRA prints
+  //
+  // lib/vsdc/salesPayload computes it the second way for the declaration. This
+  // has to match it exactly, because the receipt signature covers the printed
+  // figures and the declared ones together — a receipt printing 814.57 beside a
+  // declaration of 814.58 is a discrepancy in a signed document.
+  for (const row of byCategory.values()) {
+    const split = splitTaxInclusive(row.grossAmount, row.category)
+    row.taxableAmount = split.taxableAmount
+    row.taxAmount = split.taxAmount
   }
 
   return [...byCategory.values()].sort((a, b) => a.category.localeCompare(b.category))
