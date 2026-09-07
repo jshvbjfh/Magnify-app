@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
 import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
-import { NO_CHARGE_METHOD_VALUES } from '@/lib/restaurantOrders'
+import { ACTIVE_RESTAURANT_ORDER_STATUSES, NO_CHARGE_METHOD_VALUES } from '@/lib/restaurantOrders'
 import { loadFiscalOutlet } from '@/lib/fiscalContext'
 import {
   buildDailyReport,
@@ -95,14 +95,27 @@ export async function GET(req: Request) {
       where: { branchId, kind: 'OPENING_FLOAT', businessDate: { gte: windowStart, lte: windowEnd } },
       select: { amount: true },
     }),
-    // §18.1.20 — bills opened and never settled. Cancelled bills are not
-    // incomplete: they were concluded, by being cancelled.
+    // §18.1.20 — bills opened and never settled.
+    //
+    // Named by what an incomplete sale IS, not by excluding the settled ones.
+    // The exclusion list is the trap here: the status is spelled CANCELED with
+    // one L, there is also MERGED, and a QR order sits at UNCONFIRMED before a
+    // waiter has accepted it. Every one of those is a concluded or not-yet-
+    // started bill, and any missed from a `notIn` would be reported to RRA as
+    // an unfinished sale. ACTIVE_RESTAURANT_ORDER_STATUSES is the set the rest
+    // of the app already means by "still open".
     prisma.restaurantOrder.count({
       where: {
         branchId,
         deletedAt: null,
-        status: { notIn: ['PAID', 'CANCELLED'] },
-        businessDate: { gte: windowStart, lte: windowEnd },
+        status: { in: [...ACTIVE_RESTAURANT_ORDER_STATUSES] },
+        // businessDate is null where the venue runs no shifts. An unsettled
+        // bill has no paidAt to fall back on either, so it falls to when it
+        // was opened.
+        OR: [
+          { businessDate: { gte: windowStart, lte: windowEnd } },
+          { businessDate: null, createdAt: { gte: windowStart, lte: windowEnd } },
+        ],
       },
     }),
     // §18.1.19 — food that left the kitchen against no money. A comped bill
@@ -114,7 +127,13 @@ export async function GET(req: Request) {
         deletedAt: null,
         status: 'PAID',
         paymentMethod: { in: NO_CHARGE_METHOD_VALUES },
-        businessDate: { gte: windowStart, lte: windowEnd },
+        // Same null-businessDate fallback the No Charge report uses, for the
+        // same reason: a venue running no shifts stamps none, and those comps
+        // would otherwise vanish from the day they were given away on.
+        OR: [
+          { businessDate: { gte: windowStart, lte: windowEnd } },
+          { businessDate: null, paidAt: { gte: windowStart, lte: windowEnd } },
+        ],
       },
       select: { orderNumber: true, compedAmount: true },
     }),
