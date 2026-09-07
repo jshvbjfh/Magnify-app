@@ -608,15 +608,15 @@ model OperatingEquipment {
 // another `kind` here rather than as a new table, and every quantity already
 // recorded stays valid.
 model OperatingEquipmentMovement {
-  id           String             @id @default(cuid())
-  equipmentId  String
-  equipment    OperatingEquipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
-  restaurantId String
-  branchId     String
+  id                   String             @id @default(cuid())
+  equipmentId          String
+  equipment            OperatingEquipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  restaurantId         String
+  branchId             String
   // 'purchase' — bought, stock goes up.
   // 'issue'    — handed out to the floor, stock goes down.
   // 'adjustment' — a stock take corrected the number, either direction.
-  kind         String
+  kind                 String
   // Groups the lines that arrived together — one delivery, one invoice, one
   // date. Nullable because a lone issue or correction belongs to no delivery,
   // and because every movement recorded before batches existed has none.
@@ -624,24 +624,39 @@ model OperatingEquipmentMovement {
   // Plain text rather than a Batch table: a batch here has no life of its own
   // beyond the lines that quote it, exactly as on the stock screen, and a table
   // would add a row to keep in step for no question it helps answer.
-  batchId      String?
+  batchId              String?
   // SIGNED, and the sign is the single source of truth for direction: positive
   // adds to stock, negative removes. Storing an unsigned magnitude plus a kind
   // would mean every reader re-deriving the sign from the kind, and one reader
   // getting it backwards is a stock level that drifts silently.
-  quantity     Float
-  unitCost     Float              @default(0)
-  totalCost    Float              @default(0)
-  supplier     String?
-  note         String?
+  // ── What was actually bought, in the unit it was bought in ───────────────
+  // "2 bottles at 3000 each, one bottle is 500 ml" — kept beside the converted
+  // figures rather than instead of them, so the delivery reads back the way it
+  // was entered while stock stays counted in one unit.
+  //
+  // On the MOVEMENT, not the item, and deliberately: the pack size changes
+  // between deliveries. The same bleach arrives in a 500 ml bottle one week and
+  // a 750 ml bottle the next, and pinning it to the item would silently
+  // re-value every earlier delivery the day someone corrected it.
+  purchaseUnit         String?
+  unitsPerPurchaseUnit Float?
+  purchaseQuantity     Float?
+  purchaseUnitCost     Float?
+  // Always in the item's own unit — the one stock is counted in. Everything
+  // downstream reads these two and never has to know a pack size existed.
+  quantity             Float
+  unitCost             Float              @default(0)
+  totalCost            Float              @default(0)
+  supplier             String?
+  note                 String?
   // Free text, not a Staff relation: whoever typed it. Equipment is recorded by
   // a manager at a desk, and tying it to a Staff row would imply a custody
   // trail this feature does not yet have.
-  recordedBy   String?
-  occurredAt   DateTime           @default(now())
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
-  deletedAt    DateTime?
+  recordedBy           String?
+  occurredAt           DateTime           @default(now())
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  deletedAt            DateTime?
 
   @@index([equipmentId, occurredAt])
   @@index([restaurantId, branchId, occurredAt])

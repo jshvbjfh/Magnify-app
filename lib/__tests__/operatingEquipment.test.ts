@@ -6,7 +6,47 @@ import {
   normalizeEquipmentName,
   sanitizeEquipmentName,
   signedMovementQuantity,
+  toStockUnits,
 } from '@/lib/operatingEquipment'
+
+describe('toStockUnits', () => {
+  // The example this was built for: bought in bottles, counted in ml.
+  it('converts a pack into the unit stock is counted in', () => {
+    const result = toStockUnits({ purchaseQuantity: 2, purchaseUnitCost: 3000, unitsPerPurchaseUnit: 500 })
+    expect(result.quantity).toBe(1000)
+    expect(result.unitCost).toBe(6)
+    expect(result.factor).toBe(500)
+  })
+
+  // Buying 6 mop sticks and counting 6 mop sticks: nothing to convert.
+  it('leaves a plain purchase alone', () => {
+    const result = toStockUnits({ purchaseQuantity: 6, purchaseUnitCost: 1500, unitsPerPurchaseUnit: 1 })
+    expect(result.quantity).toBe(6)
+    expect(result.unitCost).toBe(1500)
+  })
+
+  // A missing or nonsense factor must not wipe the quantity out or divide by
+  // zero — it falls back to treating the pack as one unit.
+  it('falls back to a pack of one when the factor is missing or invalid', () => {
+    for (const factor of [null, undefined, 0, -5, Number.NaN]) {
+      const result = toStockUnits({ purchaseQuantity: 4, purchaseUnitCost: 200, unitsPerPurchaseUnit: factor as number })
+      expect(result.quantity).toBe(4)
+      expect(result.unitCost).toBe(200)
+      expect(result.factor).toBe(1)
+    }
+  })
+
+  it('handles a cost that divides unevenly without trailing dust', () => {
+    const result = toStockUnits({ purchaseQuantity: 1, purchaseUnitCost: 1000, unitsPerPurchaseUnit: 3 })
+    expect(result.unitCost).toBe(333.333)
+  })
+
+  it('copes with a missing cost', () => {
+    const result = toStockUnits({ purchaseQuantity: 3, purchaseUnitCost: null, unitsPerPurchaseUnit: 750 })
+    expect(result.quantity).toBe(2250)
+    expect(result.unitCost).toBe(0)
+  })
+})
 
 describe('equipment name matching', () => {
   // The delivery recorder resolves a typed line to an item by this key. If it

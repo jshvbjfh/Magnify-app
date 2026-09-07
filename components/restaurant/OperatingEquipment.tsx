@@ -4,7 +4,13 @@ import { BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { Boxes, X, ArrowDownToLine, ArrowUpFromLine, SlidersHorizontal, Pencil, Trash2, History, AlertTriangle } from 'lucide-react'
 import { createInventoryBatchSuffix, formatInventoryBatchId } from '@/lib/inventoryBatch'
 import { findItemNameCompletion } from '@/lib/inventorySuggestions'
-import { normalizeEquipmentName } from '@/lib/operatingEquipment'
+import { normalizeEquipmentName, toStockUnits } from '@/lib/operatingEquipment'
+import {
+  DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT,
+  getKnownUnitConversion,
+  INVENTORY_UNITS,
+  isSameInventoryUnit,
+} from '@/lib/inventoryUnits'
 
 // Operating equipments: the non-food supplies a venue buys to run itself.
 //
@@ -34,6 +40,10 @@ type Movement = {
   equipmentId: string
   kind: 'purchase' | 'issue' | 'adjustment'
   batchId: string | null
+  purchaseUnit: string | null
+  unitsPerPurchaseUnit: number | null
+  purchaseQuantity: number | null
+  purchaseUnitCost: number | null
   quantity: number
   unitCost: number
   totalCost: number
@@ -54,11 +64,23 @@ const MOVEMENT_LABEL: Record<Movement['kind'], string> = {
   adjustment: 'Correction',
 }
 
-const DELIVERY_COLUMN_LABELS = ['Item', 'Supplier', 'Quantity', 'Unit', 'Unit cost', 'Total', ''] as const
+const DELIVERY_COLUMN_LABELS = ['Item', 'Supplier', 'Bought in', 'Qty bought', 'Pack size', 'Counted in', 'Cost per pack', 'Total', ''] as const
 
 const EMPTY_ITEM_FORM = { name: '', unit: 'piece', category: '', unitCost: '', reorderLevel: '', notes: '' }
 const EMPTY_MOVE_FORM = { kind: 'purchase' as Movement['kind'], quantity: '', unitCost: '', supplier: '', note: '', recordedBy: '' }
-const emptyLineForm = () => ({ itemName: '', supplier: '', quantity: '', unit: 'piece', unitCost: '', category: '' })
+// purchaseUnit is what it is bought in ("bottle"); unit is what stock is
+// counted in ("ml"); unitsPerPurchaseUnit is how many of the second are in one
+// of the first. Equal units mean a plain purchase and the pack size is 1.
+const emptyLineForm = () => ({
+  itemName: '',
+  supplier: '',
+  purchaseUnit: 'piece',
+  purchaseQuantity: '',
+  unitsPerPurchaseUnit: '',
+  unit: 'piece',
+  purchaseUnitCost: '',
+  category: '',
+})
 
 function todayInputValue() {
   const now = new Date()
@@ -82,7 +104,6 @@ export default function OperatingEquipment() {
   const [movements, setMovements] = useState<Movement[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [view, setView] = useState<'items' | 'deliveries'>('items')
   const [activeCategory, setActiveCategory] = useState<string | null>(null)
 
   const [itemForm, setItemForm] = useState(EMPTY_ITEM_FORM)
@@ -194,15 +215,55 @@ export default function OperatingEquipment() {
     const item = items.find(i => normalizeEquipmentName(i.name) === target)
     const lastLine = suggestionSource.find(entry => normalizeEquipmentName(entry.ingredient.name) === target)?.movement
     if (!item && !lastLine) return null
+    // The pack size comes from the last delivery, not the item, because that is
+    // where it lives — and it is only a starting point: a bottle that changed
+    // size is exactly the case the recorder has to let you correct.
+    const unit = item?.unit ?? lastLine?.equipment?.unit ?? 'piece'
     return {
       fields: {
-        unit: item?.unit ?? lastLine?.equipment?.unit ?? 'piece',
-        unitCost: item?.unitCost ? String(item.unitCost) : lastLine?.unitCost ? String(lastLine.unitCost) : '',
+        unit,
+        purchaseUnit: lastLine?.purchaseUnit ?? unit,
+        unitsPerPurchaseUnit: lastLine?.unitsPerPurchaseUnit ? String(lastLine.unitsPerPurchaseUnit) : '',
+        purchaseUnitCost: lastLine?.purchaseUnitCost
+          ? String(lastLine.purchaseUnitCost)
+          : item?.unitCost ? String(item.unitCost) : '',
         supplier: lastLine?.supplier ?? '',
         category: item?.category ?? '',
       },
       notice: `Filled from your last ${item?.name ?? lastLine?.equipment?.name} entry — edit any field before saving.`,
     }
+  }
+
+  /**
+   * Choosing what it was bought in proposes how it is counted.
+   *
+   * A bottle is almost always counted in ml and a box in pieces, and where the
+   * pair is a fixed metric one (ltr→ml, kg→g) the factor is filled in too — a
+   * thousand typed by hand is a thousand that can be mistyped. All of it stays
+   * editable: these are the common cases, not rules.
+   */
+  function handlePurchaseUnitChange(nextPurchaseUnit: string) {
+    const proposedUsage = DEFAULT_USAGE_UNIT_BY_PURCHASE_UNIT[nextPurchaseUnit.toLowerCase()] ?? nextPurchaseUnit
+    const known = getKnownUnitConversion(nextPurchaseUnit, proposedUsage)
+    setLineForm(current => ({
+      ...current,
+      purchaseUnit: nextPurchaseUnit,
+      unit: proposedUsage,
+      unitsPerPurchaseUnit: known != null
+        ? String(known)
+        : isSameInventoryUnit(nextPurchaseUnit, proposedUsage) ? '1' : current.unitsPerPurchaseUnit,
+    }))
+  }
+
+  function handleUsageUnitChange(nextUsageUnit: string) {
+    const known = getKnownUnitConversion(lineForm.purchaseUnit, nextUsageUnit)
+    setLineForm(current => ({
+      ...current,
+      unit: nextUsageUnit,
+      unitsPerPurchaseUnit: known != null
+        ? String(known)
+        : isSameInventoryUnit(current.purchaseUnit, nextUsageUnit) ? '1' : current.unitsPerPurchaseUnit,
+    }))
   }
 
   function handleLineNameChange(nextName: string) {
@@ -275,7 +336,6 @@ export default function OperatingEquipment() {
     setRecorderOpen(true)
     setLineForm(emptyLineForm())
     setError(null)
-    setView('deliveries')
   }
 
   function openRecorderForBatch(existingBatchId: string, occurredAt: string) {
@@ -309,7 +369,7 @@ export default function OperatingEquipment() {
 
   async function saveLine() {
     if (!lineForm.itemName.trim()) { setError('Type an item name'); return }
-    if (lineForm.quantity === '' || Number(lineForm.quantity) === 0) { setError('Enter a quantity'); return }
+    if (lineForm.purchaseQuantity === '' || Number(lineForm.purchaseQuantity) === 0) { setError('Enter a quantity'); return }
     setSaving(true)
     try {
       const res = await fetch('/api/restaurant/operating-equipment/movements', {
@@ -319,10 +379,14 @@ export default function OperatingEquipment() {
           itemName: lineForm.itemName.trim(),
           kind: 'purchase',
           batchId: activeBatchId || null,
-          quantity: Number(lineForm.quantity),
+          // Sent in the unit it was bought in; the server converts to the unit
+          // stock is counted in, so the two can never drift apart.
+          purchaseUnit: lineForm.purchaseUnit.trim() || null,
+          purchaseQuantity: Number(lineForm.purchaseQuantity),
+          unitsPerPurchaseUnit: lineForm.unitsPerPurchaseUnit === '' ? 1 : Number(lineForm.unitsPerPurchaseUnit),
+          purchaseUnitCost: lineForm.purchaseUnitCost === '' ? null : Number(lineForm.purchaseUnitCost),
           unit: lineForm.unit.trim() || 'piece',
           category: lineForm.category.trim() || null,
-          unitCost: lineForm.unitCost === '' ? null : Number(lineForm.unitCost),
           supplier: lineForm.supplier.trim() || null,
           occurredAt: `${batchDate}T00:00:00`,
         }),
@@ -343,13 +407,8 @@ export default function OperatingEquipment() {
     }
   }
 
-  function openAdd() {
-    setEditingId(null)
-    setItemForm(EMPTY_ITEM_FORM)
-    setError(null)
-    setShowItemModal(true)
-  }
-
+  // Edit only — an item is never created here. See the header comment on the
+  // delivery button for why there is no counterpart to this.
   function openEdit(item: Equipment) {
     setEditingId(item.id)
     setItemForm({
@@ -365,14 +424,15 @@ export default function OperatingEquipment() {
   }
 
   async function saveItem() {
+    if (!editingId) return
     if (!itemForm.name.trim()) { setError('Name is required'); return }
     setSaving(true)
     try {
       const res = await fetch('/api/restaurant/operating-equipment', {
-        method: editingId ? 'PUT' : 'POST',
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...(editingId ? { id: editingId } : {}),
+          id: editingId,
           name: itemForm.name.trim(),
           unit: itemForm.unit.trim() || 'piece',
           category: itemForm.category.trim() || null,
@@ -444,9 +504,19 @@ export default function OperatingEquipment() {
     [movements, historyFor],
   )
 
-  const lineTotal = lineForm.quantity && lineForm.unitCost
-    ? Number(lineForm.quantity) * Number(lineForm.unitCost)
+  const lineTotal = lineForm.purchaseQuantity && lineForm.purchaseUnitCost
+    ? Number(lineForm.purchaseQuantity) * Number(lineForm.purchaseUnitCost)
     : null
+  // What the line will actually add to stock, shown while it is being typed so
+  // a wrong pack size is caught before it is saved rather than after.
+  const linePreview = lineForm.purchaseQuantity
+    ? toStockUnits({
+        purchaseQuantity: Number(lineForm.purchaseQuantity),
+        purchaseUnitCost: lineForm.purchaseUnitCost === '' ? null : Number(lineForm.purchaseUnitCost),
+        unitsPerPurchaseUnit: lineForm.unitsPerPurchaseUnit === '' ? 1 : Number(lineForm.unitsPerPurchaseUnit),
+      })
+    : null
+  const showsPackConversion = Boolean(linePreview && linePreview.factor !== 1)
 
   if (loading) {
     return <div className="p-6 text-sm text-gray-500">Loading operating equipments…</div>
@@ -467,9 +537,25 @@ export default function OperatingEquipment() {
       <tr key={move.id} className="hover:bg-gray-50/60">
         <td className="px-3 py-2 font-medium text-gray-900">{move.equipment?.name ?? '—'}</td>
         <td className="px-3 py-2 text-gray-500">{move.supplier || '—'}</td>
-        <td className="px-3 py-2 text-right text-gray-900">{fmtQty(move.quantity)}</td>
-        <td className="px-3 py-2 text-gray-500">{move.equipment?.unit}</td>
-        <td className="px-3 py-2 text-right text-gray-500">{move.unitCost > 0 ? fmt(move.unitCost) : '—'}</td>
+        <td className="px-3 py-2 text-gray-500">{move.purchaseUnit || move.equipment?.unit}</td>
+        <td className="px-3 py-2 text-right text-gray-900">
+          {fmtQty(move.purchaseQuantity ?? move.quantity)}
+        </td>
+        {/* The pack size, and what it worked out to. A line bought and counted
+            in the same unit has nothing to explain, so it shows a dash. */}
+        <td className="px-3 py-2 text-gray-500">
+          {move.unitsPerPurchaseUnit && move.unitsPerPurchaseUnit !== 1
+            ? `1 ${move.purchaseUnit} = ${fmtQty(move.unitsPerPurchaseUnit)} ${move.equipment?.unit}`
+            : '—'}
+        </td>
+        <td className="px-3 py-2 text-gray-500">
+          {fmtQty(move.quantity)} <span className="text-xs text-gray-400">{move.equipment?.unit}</span>
+        </td>
+        <td className="px-3 py-2 text-right text-gray-500">
+          {move.purchaseUnitCost != null && move.purchaseUnitCost > 0
+            ? fmt(move.purchaseUnitCost)
+            : move.unitCost > 0 ? fmt(move.unitCost) : '—'}
+        </td>
         <td className="px-3 py-2 text-right text-gray-700">{move.totalCost > 0 ? fmt(move.totalCost) : '—'}</td>
         <td className="px-3 py-2" />
       </tr>
@@ -483,20 +569,17 @@ export default function OperatingEquipment() {
           <h1 className="text-lg font-bold text-gray-900">Operating Equipments</h1>
           <BranchBadge />
         </div>
-        <div className="flex items-center gap-2">
-          {view === 'deliveries' && !batchOpen && (
-            <button type="button" onClick={openBatch}
-              className="rounded-lg bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600">
-              + Record new delivery
-            </button>
-          )}
-          {view === 'items' && (
-            <button type="button" onClick={openAdd}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50">
-              + Add item
-            </button>
-          )}
-        </div>
+        {/* One way in, from either view. There is deliberately no "create item"
+            button: an item comes into being by being named on a delivery line,
+            exactly as stock does. A separate create step would let an item exist
+            that nothing ever arrived for, and would ask the person recording a
+            delivery to know which items the database has already seen. */}
+        {!batchOpen && (
+          <button type="button" onClick={openBatch}
+            className="rounded-lg bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600">
+            + Record new delivery
+          </button>
+        )}
       </div>
 
       <p className="text-sm text-gray-500">
@@ -507,19 +590,7 @@ export default function OperatingEquipment() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
       )}
 
-      <div className="flex gap-1 border-b border-gray-200">
-        <button type="button" onClick={() => setView('items')}
-          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${view === 'items' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-          Items
-        </button>
-        <button type="button" onClick={() => setView('deliveries')}
-          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${view === 'deliveries' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-          Deliveries
-        </button>
-      </div>
-
-      {view === 'items' && (<>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
             <p className="text-xs text-gray-500">Total Items</p>
             <p className="text-2xl font-bold text-gray-900 mt-1">{items.length}</p>
@@ -556,7 +627,7 @@ export default function OperatingEquipment() {
             <div className="p-10 text-center">
               <Boxes className="h-8 w-8 text-gray-300 mx-auto" />
               <p className="mt-3 text-sm font-semibold text-gray-700">Nothing here yet</p>
-              <p className="mt-1 text-xs text-gray-500">Go to Deliveries and record what came in — items are created as you type them.</p>
+              <p className="mt-1 text-xs text-gray-500">Record a delivery below — items are created as you type them.</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -684,9 +755,11 @@ export default function OperatingEquipment() {
             </div>
           )}
         </div>
-      </>)}
 
-      {view === 'deliveries' && (
+      {/* Deliveries — the same table shape the stock screen uses, and the only
+          way an item comes into existence here. */}
+      <h2 className="text-sm font-bold text-gray-900 pt-2">Deliveries</h2>
+      {(
         deliveryGroups.length === 0 && !batchOpen ? (
           <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
             <Boxes className="h-8 w-8 text-gray-300 mx-auto" />
@@ -695,7 +768,7 @@ export default function OperatingEquipment() {
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto"><table className="w-full text-sm min-w-[860px]">
+            <div className="overflow-x-auto"><table className="w-full text-sm min-w-[1180px]">
               <tbody className="divide-y divide-gray-50">
                 {batchOpen && (
                   <>
@@ -752,18 +825,42 @@ export default function OperatingEquipment() {
                               onKeyDown={handleLineKeyDown} placeholder="Supplier"
                               className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"/>
                           </td>
+                          {/* Bought in — what a delivery arrives as. */}
                           <td className="px-3 py-2 align-top">
-                            <input type="number" value={lineForm.quantity} onChange={e => setLineForm(f => ({ ...f, quantity: e.target.value }))}
+                            <select value={lineForm.purchaseUnit} onChange={e => handlePurchaseUnitChange(e.target.value)}
+                              onKeyDown={handleLineKeyDown}
+                              className="w-full rounded-md border border-gray-200 bg-white px-2 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300">
+                              {INVENTORY_UNITS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <input type="number" value={lineForm.purchaseQuantity}
+                              onChange={e => setLineForm(f => ({ ...f, purchaseQuantity: e.target.value }))}
                               onKeyDown={handleLineKeyDown} placeholder="0"
                               className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-right outline-none focus:ring-2 focus:ring-emerald-300"/>
                           </td>
+                          {/* Pack size — "1 bottle = 500 ml". Left at 1 when a
+                              thing is bought and counted the same way. */}
                           <td className="px-3 py-2 align-top">
-                            <input value={lineForm.unit} onChange={e => setLineForm(f => ({ ...f, unit: e.target.value }))}
-                              onKeyDown={handleLineKeyDown} placeholder="piece"
-                              className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"/>
+                            <div className="flex items-center gap-1 whitespace-nowrap">
+                              <span className="text-xs text-gray-500">1 {lineForm.purchaseUnit} =</span>
+                              <input type="number" value={lineForm.unitsPerPurchaseUnit}
+                                onChange={e => setLineForm(f => ({ ...f, unitsPerPurchaseUnit: e.target.value }))}
+                                onKeyDown={handleLineKeyDown} placeholder="1"
+                                className="w-20 rounded-md border border-gray-200 bg-white px-2 py-2 text-sm text-right outline-none focus:ring-2 focus:ring-emerald-300"/>
+                            </div>
+                          </td>
+                          {/* Counted in — the unit stock is held and issued in. */}
+                          <td className="px-3 py-2 align-top">
+                            <select value={lineForm.unit} onChange={e => handleUsageUnitChange(e.target.value)}
+                              onKeyDown={handleLineKeyDown}
+                              className="w-full rounded-md border border-gray-200 bg-white px-2 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300">
+                              {INVENTORY_UNITS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
+                            </select>
                           </td>
                           <td className="px-3 py-2 align-top">
-                            <input type="number" value={lineForm.unitCost} onChange={e => setLineForm(f => ({ ...f, unitCost: e.target.value }))}
+                            <input type="number" value={lineForm.purchaseUnitCost}
+                              onChange={e => setLineForm(f => ({ ...f, purchaseUnitCost: e.target.value }))}
                               onKeyDown={handleLineKeyDown} placeholder="0"
                               className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-right outline-none focus:ring-2 focus:ring-emerald-300"/>
                           </td>
@@ -772,7 +869,7 @@ export default function OperatingEquipment() {
                           </td>
                           <td className="px-3 py-2 align-top">
                             <div className="flex items-center gap-1">
-                              <button type="button" onClick={() => void saveLine()} disabled={saving || !lineForm.itemName.trim() || lineForm.quantity === ''}
+                              <button type="button" onClick={() => void saveLine()} disabled={saving || !lineForm.itemName.trim() || lineForm.purchaseQuantity === ''}
                                 className="rounded-md bg-emerald-600 px-2.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
                                 {saving ? 'Saving…' : 'Save'}
                               </button>
@@ -793,6 +890,15 @@ export default function OperatingEquipment() {
                               <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Enter</span>
                               <span className="ml-2">Save and start the next line</span>
                             </>) : (<>
+                              {/* What the pack size works out to, before it is
+                                  saved — the moment a wrong factor is cheap to
+                                  notice rather than expensive to unpick. */}
+                              {showsPackConversion && linePreview && (
+                                <span className="mr-4 font-semibold text-emerald-800">
+                                  Adds {fmtQty(linePreview.quantity)} {lineForm.unit} to stock
+                                  {linePreview.unitCost > 0 && ` at ${fmt(linePreview.unitCost)} per ${lineForm.unit}`}
+                                </span>
+                              )}
                               {autofillNotice && <span className="mr-4 font-medium">{autofillNotice}</span>}
                               <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Enter</span>
                               <span className="ml-2 mr-4">Save and start the next line</span>
@@ -840,7 +946,7 @@ export default function OperatingEquipment() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white shadow-xl">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h2 className="text-base font-bold text-gray-900">{editingId ? 'Edit item' : 'Add item'}</h2>
+              <h2 className="text-base font-bold text-gray-900">Edit item</h2>
               <button type="button" onClick={() => setShowItemModal(false)} className="text-gray-400 hover:text-gray-600">
                 <X className="h-5 w-5" />
               </button>
@@ -885,7 +991,8 @@ export default function OperatingEquipment() {
                   className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200" />
               </div>
               <p className="text-xs text-gray-400">
-                Stock starts at zero — record what came in from the Deliveries tab.
+                Quantity is not edited here — it only moves through a recorded delivery,
+                issue or correction, so every number has a reason behind it.
               </p>
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
@@ -893,7 +1000,7 @@ export default function OperatingEquipment() {
                 className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
               <button type="button" onClick={() => void saveItem()} disabled={saving || !itemForm.name.trim()}
                 className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-50">
-                {saving ? 'Saving…' : editingId ? 'Save' : 'Add'}
+                {saving ? 'Saving…' : 'Save'}
               </button>
             </div>
           </div>

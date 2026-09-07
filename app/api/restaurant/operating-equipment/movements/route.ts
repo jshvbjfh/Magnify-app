@@ -9,6 +9,7 @@ import {
   nextUnitCost,
   normalizeEquipmentName,
   sanitizeEquipmentName,
+  toStockUnits,
 } from '@/lib/operatingEquipment'
 
 // Every change to an equipment quantity goes through here. Nothing else writes
@@ -74,7 +75,20 @@ export async function POST(req: Request) {
   }
   const kind = body.kind
 
-  const rawQuantity = parseOptionalNumber(body?.quantity)
+  // A delivery may be entered in the unit it was bought in — "2 bottles, one
+  // bottle is 500 ml" — and is converted to the item's own unit before anything
+  // else looks at it. Everything downstream deals in one unit only.
+  const purchaseUnit = cleanText(body?.purchaseUnit)
+  const unitsPerPurchaseUnit = parseOptionalNumber(body?.unitsPerPurchaseUnit)
+  const purchaseQuantity = parseOptionalNumber(body?.purchaseQuantity)
+  const purchaseUnitCost = parseOptionalNumber(body?.purchaseUnitCost)
+  const usesPackSize = purchaseQuantity !== null
+
+  const converted = usesPackSize
+    ? toStockUnits({ purchaseQuantity, purchaseUnitCost, unitsPerPurchaseUnit })
+    : null
+
+  const rawQuantity = converted ? converted.quantity : parseOptionalNumber(body?.quantity)
   if (rawQuantity === null) return NextResponse.json({ error: 'Enter a quantity' }, { status: 400 })
 
   const occurredAtRaw = cleanText(body?.occurredAt)
@@ -141,7 +155,7 @@ export async function POST(req: Request) {
       if (!outcome.ok) throw Object.assign(new Error(outcome.error), { status: 400 })
       const { delta, nextQuantity } = outcome
 
-      const submittedUnitCost = parseOptionalNumber(body?.unitCost)
+      const submittedUnitCost = converted ? converted.unitCost : parseOptionalNumber(body?.unitCost)
       const resolvedUnitCost = nextUnitCost({
         kind,
         submittedUnitCost,
@@ -158,6 +172,12 @@ export async function POST(req: Request) {
           branchId,
           kind,
           batchId: cleanText(body?.batchId),
+          // Kept beside the converted figures, never instead of them, so the
+          // delivery reads back the way it was entered.
+          purchaseUnit,
+          unitsPerPurchaseUnit: converted ? converted.factor : null,
+          purchaseQuantity,
+          purchaseUnitCost,
           quantity: delta,
           unitCost: resolvedUnitCost,
           totalCost: resolvedUnitCost * Math.abs(delta),

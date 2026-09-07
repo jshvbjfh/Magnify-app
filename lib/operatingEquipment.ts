@@ -20,6 +20,38 @@ export function sanitizeEquipmentName(name: string) {
   return name.trim().replace(/\s+/g, ' ')
 }
 
+/**
+ * Turn "2 bottles at 3000 each, one bottle is 500 ml" into what stock is
+ * counted in: 1000 ml at 6 each.
+ *
+ * The pack size belongs to the delivery, not the item, because it changes
+ * between deliveries — the same bleach arrives in a 500 ml bottle one week and
+ * a 750 ml bottle the next. Converting here means every reader downstream sees
+ * one unit and never has to know a pack existed.
+ *
+ * A missing or nonsense pack size falls back to 1, which makes the purchase
+ * unit and the stock unit the same thing — the plain case of buying 6 mop
+ * sticks and counting 6 mop sticks.
+ */
+export function toStockUnits(params: {
+  purchaseQuantity: number
+  purchaseUnitCost?: number | null
+  unitsPerPurchaseUnit?: number | null
+}) {
+  const perPack = Number(params.unitsPerPurchaseUnit)
+  const factor = Number.isFinite(perPack) && perPack > 0 ? perPack : 1
+  const packs = Number(params.purchaseQuantity) || 0
+  const packCost = Number(params.purchaseUnitCost) || 0
+
+  return {
+    factor,
+    // Rounded the way the stock screen rounds, so a third of a litre does not
+    // accumulate a trail of floating-point dust across a year of deliveries.
+    quantity: Math.round(packs * factor * 1000) / 1000,
+    unitCost: Math.round((packCost / factor) * 1000) / 1000,
+  }
+}
+
 export const MOVEMENT_KINDS = ['purchase', 'issue', 'adjustment'] as const
 export type MovementKind = (typeof MOVEMENT_KINDS)[number]
 
