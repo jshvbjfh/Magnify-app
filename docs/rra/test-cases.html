@@ -234,15 +234,25 @@
       <span class="pill todo">Not built</span>
       <span class="pill na">Environmental</span>
     </div>
+
+    <div class="note">
+      <p><strong>Six of the fifty-two requirements are not built.</strong> They are the whole of section A, together with B-06, and each describes behaviour that takes place between Magnify and a Sales Data Controller — waiting for its response before printing, recognising that it is unavailable, ceasing operation when communication fails.</p>
+      <p style="margin-top:10px">We are not able to implement or demonstrate these without access to a controller, and we would be grateful for the Authority's guidance on obtaining a test instance so that we can complete them. Everything else in this document is built or in progress.</p>
+    </div>
   </header>
 
   <div class="note">
-    <p><strong>Read the status column as a build plan, not a claim.</strong> Clause §7.10 requires that the system have no functions beyond those its documentation states, and that the documentation track every change. Anything marked <em>Not built</em> must be either finished or removed from the accompanying Software Documentation before submission — an overstatement here is a certification failure, not a rounding error.</p>
+    <p><strong>The status against each requirement is stated as it stands, not as we would wish it.</strong> Clause §7.10 requires the system to have no function beyond those its documentation states, and we would rather show the Authority an accurate position than a flattering one. Where something is incomplete this document says so, and says why.</p>
   </div>
 
   <section>
-    <h2>A · Connection to the VSDC</h2>
+    <h2>A · Connection to the Sales Data Controller</h2>
     <p class="sec-lede">The clauses that decide whether a receipt may exist at all. Everything else is downstream of these.</p>
+
+    <div class="note">
+      <p><strong>Every requirement in this section describes behaviour between Magnify and a Sales Data Controller.</strong> Waiting for its response before printing, recognising that it is unavailable, ceasing operation when communication fails — none of which we are able to implement or demonstrate without access to a controller.</p>
+      <p style="margin-top:10px">The work that does not depend on one has been done: the sales message is built in the format the API specification defines and reproduces the worked example in that document, and the receipt carries the SDC information block, the internal data and signature grouped in fours, and the QR payload composed as clause 7.24.7 sets out. We would welcome the Authority's guidance on obtaining a test instance so that this section can be completed.</p>
+    </div>
     <div class="scroll">
       <table>
         <thead><tr><th>ID</th><th>Clause</th><th>Requirement</th><th>Test</th><th>Expected</th><th>Status</th></tr></thead>
@@ -752,7 +762,7 @@
   </section>
 
   <footer>
-    <p>Draft 4 · Magnify 1.1.50 · YoFinder Ltd · compiled 28 August 2026<br>
+    <p>Draft 5 · Magnify 1.1.50 · YoFinder Ltd · compiled 28 August 2026<br>
     Clause references: RRA Technical Specification of CIS for VSDC Ver. 1.0 (March 2018); RRA VSDC API Specification v1.0.4 (2022).<br>
     Status reflects the build at time of writing and must be re-verified before submission.</p>
   </footer>
