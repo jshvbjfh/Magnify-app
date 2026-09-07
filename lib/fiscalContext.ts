@@ -18,8 +18,39 @@
 
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { describeFiscalConfigurationGap, isFiscalBuild } from '@/lib/fiscalMode'
+import { restaurantDayKey, startOfRestaurantDay } from '@/lib/restaurantDay'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
+
+/**
+ * The trading day anything recorded right now belongs to.
+ *
+ * Follows the open shift where the venue runs shifts, so a movement recorded at
+ * 01:00 lands on the night that opened rather than on the new calendar date —
+ * the same rule the orders already follow, and the reason the Z report
+ * reconciles with the drawer.
+ *
+ * Where no shift is open — a venue with shifts turned off, or one that has not
+ * opened today's yet — it falls back to the calendar day AT THE RESTAURANT,
+ * never the server's UTC day.
+ *
+ * Shifts are restaurant-scoped, not branch-scoped; that is the existing model,
+ * not a choice made here.
+ */
+export async function resolveCurrentBusinessDate(
+  db: PrismaDb,
+  restaurantId: string,
+): Promise<{ businessDate: Date; shiftId: string | null }> {
+  const shift = await db.shift.findFirst({
+    where: { restaurantId, status: 'OPEN', deletedAt: null },
+    orderBy: { openedAt: 'desc' },
+    select: { id: true, businessDate: true },
+  })
+
+  if (shift) return { businessDate: shift.businessDate, shiftId: shift.id }
+
+  return { businessDate: startOfRestaurantDay(restaurantDayKey())!, shiftId: null }
+}
 
 /**
  * The software's own designation (§7.7, §18.1.4).
