@@ -135,7 +135,7 @@
   <section>
     <h2>1 · Purpose and scope</h2>
     <p>Magnify is a point-of-sale and inventory management system for restaurants. It records orders, settles bills, prints receipts, tracks stock and produces management and fiscal reports.</p>
-    <p>This document covers Magnify 1.1.50, the fiscal build, which operates as a Certified Invoicing System connected to a Virtual Sales Data Controller. Non-fiscal builds of Magnify exist for use outside Rwanda; they are a different product and are not covered here.</p>
+    <p>This document covers Magnify 1.1.50, the fiscal build, which operates as a Certified Invoicing System connected to a Sales Data Controller. Non-fiscal builds of Magnify exist for use outside Rwanda; they are a different product and are not covered here.</p>
 
     <h3>Intended users</h3>
     <div class="scroll">
@@ -215,7 +215,12 @@
     </div>
 
     <h3>Changing the taxpayer</h3>
-    <p>The TIN cannot be edited. It may be changed only in service mode, and only as part of a reset which erases every fiscal receipt, all receipt numbering and the cash drawer history held under the previous TIN (clause 7.2). Receipt numbering then recommences from 1 (clause 7.3). The operation requires a named approver and an explicit confirmation of the erasure.</p>
+    <p>The TIN cannot be edited. It may be changed only in service mode, and only as part of a reset which erases every fiscal receipt, all receipt numbering and the cash drawer history held under the previous TIN (clause 7.2). Receipt numbering then recommences from 1 (clause 7.3).</p>
+    <p>The operation is refused unless four conditions are met: the system is in service mode, the fiscal records have been <strong>exported and delivered to the taxpayer</strong>, a named supervisor approves, and the erasure is explicitly confirmed. Re-entering the TIN already in use is refused, so that saving an unchanged settings form cannot trigger a reset.</p>
+
+    <div class="note">
+      <p><strong>The export is what reconciles this reset with the retention rule.</strong> Fiscal records are not removable by any other function. This one is required by clause 7.2 for a transfer of ownership, and it destroys records the taxpayer remains obliged to produce — so nothing is erased that has not first been placed in the taxpayer's own hands.</p>
+    </div>
   </section>
 
   <section>
@@ -361,7 +366,7 @@
       <p><strong>This section is stated separately because it is the one part not yet verified.</strong> The message format and everything that surrounds it are built and tested. The transport and its failure behaviour require a controller instance, which has been requested from the Authority.</p>
     </div>
 
-    <p>The till communicates with a Virtual Sales Data Controller over REST. Sales are sent to <code>/trnsSales/saveSales</code>. The response supplies the SDC identifier, the per-type and total receipt counters, the internal data and the receipt signature, which are printed in the SDC information block.</p>
+    <p>The till communicates with a Sales Data Controller over REST. Sales are sent to <code>/trnsSales/saveSales</code>. The response supplies the SDC identifier, the per-type and total receipt counters, the internal data and the receipt signature, which are printed in the SDC information block.</p>
 
     <h3>Built and verified</h3>
     <ul>
@@ -411,7 +416,8 @@
       <li>It does not allow VAT to be disabled by any setting or user action.</li>
       <li>It does not allow a settled bill to be cancelled, edited or deleted.</li>
       <li>It does not allow an original transaction to be reversed more than once.</li>
-      <li>It does not reset or reuse a receipt number.</li>
+      <li>It does not reset or reuse a receipt number, except on the clause 7.2 transfer-of-ownership reset, after which numbering recommences from 1 as clause 7.3 requires.</li>
+      <li>It does not remove a fiscal record by any function other than that reset, and that reset is refused until the records have been exported to the taxpayer.</li>
       <li>It does not issue receipts from the tablet or the manager application.</li>
     </ul>
   </section>

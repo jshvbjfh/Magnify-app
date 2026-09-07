@@ -11,7 +11,7 @@
     <dl class="identity">
       <div class="idcell"><dt>Provider</dt><dd>YoFinder Ltd</dd></div>
       <div class="idcell"><dt>TIN</dt><dd>149047989</dd></div>
-      <div class="idcell"><dt>Product</dt><dd>Magnify 1.1.50</dd></div>
+      <div class="idcell"><dt>Product</dt><dd>Magnify</dd></div>
       <div class="idcell"><dt>Form</dt><dd>Template</dd></div>
     </dl>
   </header>
@@ -40,28 +40,43 @@
 
   <section>
     <h2>1 · What is supplied</h2>
-    <p>YoFinder Ltd licenses Magnify to the User for the premises and terminals listed above, and supports it on the terms below.</p>
+    <p>YoFinder Ltd licenses Magnify — currently version 1.1.50, and any later version certified by RRA — to the User for the premises and terminals listed above, and supports it on the terms below.</p>
     <p>Magnify operates as a Certified Invoicing System connected to a Sales Data Controller. The User is the taxpayer and remains responsible for its own tax obligations; YoFinder Ltd supplies and supports the software by which invoices are issued.</p>
+
+    <h3>The licence</h3>
+    <ul>
+      <li>Non-exclusive, non-transferable, and limited to the premises and terminals listed above.</li>
+      <li>Additional premises or terminals require a written variation and may carry additional charges.</li>
+      <li>The User will not copy, modify, decompile, reverse engineer, or attempt to derive the source code of Magnify, nor permit another to do so.</li>
+      <li>The User will not alter the software, its database or its fiscal configuration except through the application itself.</li>
+      <li>Magnify and all intellectual property in it remain the property of YoFinder Ltd. The User's data remains the User's — see section 6.</li>
+    </ul>
   </section>
 
   <section>
     <h2>2 · Support</h2>
-    <p><strong>Hours.</strong> 08:00 to 23:00, seven days a week, including public holidays.</p>
+    <p><strong>Hours.</strong> 08:00 to 23:00 Central Africa Time (Kigali), seven days a week, including public holidays.</p>
     <p><strong>Contact.</strong> +250 783 714 720 for anything urgent; info@yofinder.com otherwise. A terminal out of service should always be reported by phone.</p>
 
     <div class="scroll">
       <table>
         <thead><tr><th>Severity</th><th>Meaning</th><th>First response</th><th>Target resolution</th></tr></thead>
         <tbody>
-          <tr><td class="k">Critical</td><td>Cannot trade — bills cannot be settled or receipts issued</td><td class="c">30 minutes</td><td class="c">4 hours</td></tr>
-          <tr><td class="k">High</td><td>Trading continues, an important function unavailable</td><td class="c">2 hours</td><td class="c">Same day</td></tr>
+          <tr><td class="k">Critical</td><td>Cannot trade — bills cannot be settled or receipts issued, for a reason within Magnify</td><td class="c">30 minutes</td><td class="c">4 hours</td></tr>
+          <tr><td class="k">High</td><td>Trading continues, an important function unavailable</td><td class="c">2 hours</td><td class="c">8 support hours, or by 12:00 the next support day where reported after 18:00</td></tr>
           <tr><td class="k">Medium</td><td>Impaired, with a workaround</td><td class="c">1 business day</td><td class="c">5 business days</td></tr>
           <tr><td class="k">Low</td><td>Cosmetic, or a request</td><td class="c">2 business days</td><td class="c">By agreement</td></tr>
         </tbody>
       </table>
     </div>
 
-    <p>Times are measured within support hours from when the fault is reported. YoFinder Ltd will use reasonable endeavours to meet them. Support is provided remotely where possible and on site at the User's premises within Kigali where it is not.</p>
+    <p>Times are measured within support hours from when the fault is reported. They are <strong>targets pursued with reasonable endeavours, not warranties</strong>. Support is provided remotely where possible and on site at the User's premises within Kigali where it is not.</p>
+
+    <h3>When the clock stops</h3>
+    <p>Time does not count toward the times above while YoFinder Ltd is waiting on information, access or a decision from the User, on access to the premises, on restoration of anything excluded under section 3, or on restoration of an outage at a hosting provider used by YoFinder Ltd.</p>
+
+    <h3>On-site attendance</h3>
+    <p>Attendance within Kigali to diagnose or correct a software fault is included. Where a visit establishes that the cause is hardware, power or the internet connection, that item remains outside cover under section 3 and the visit may be charged at rates agreed in advance. Attendance outside Kigali is by prior arrangement and at the User's cost.</p>
   </section>
 
   <section>
@@ -73,9 +88,11 @@
       <li>Third-party software or services on the same equipment</li>
       <li>The Sales Data Controller and RRA's systems</li>
       <li>Loss or corruption caused by unauthorised changes to the software, database or configuration</li>
+      <li>Training beyond initial handover, unless separately agreed</li>
       <li>Data entry, including menu setup and stock counting</li>
     </ul>
     <p>A certified system stops trading when it cannot reach the Sales Data Controller. That is required by the specification and is not a fault in Magnify.</p>
+    <p>Outages at a hosting or infrastructure provider used by YoFinder Ltd are <strong>not</strong> excluded from cover — restoring service remains YoFinder Ltd's responsibility — but the times in section 2 are suspended for their duration.</p>
   </section>
 
   <section>
@@ -95,35 +112,96 @@
   <section>
     <h2>5 · Updates</h2>
     <p>A certified installation does not update automatically. Each version is installed deliberately, so that the installation cannot move past the version approved by RRA.</p>
-    <p>Where RRA requires a change for continued compliance, YoFinder Ltd will supply the updated version and the User will install it promptly. Such an update is treated as critical.</p>
+    <p>Where RRA requires a change for continued compliance, YoFinder Ltd will supply the updated version and the User will install it promptly. Such a change carries critical priority for response and communication; the version is delivered within the timeframe RRA sets.</p>
   </section>
 
   <section>
     <h2>6 · Data</h2>
-    <p>The User's data belongs to the User. YoFinder Ltd processes it only to provide and support the software, and discloses it to no one except where the law or RRA requires.</p>
-    <p>Fiscal records — receipts, receipt numbering and cash movements — are retained and are not deleted by any function available to a user. On termination YoFinder Ltd will supply an export of the User's data in a readable format.</p>
+    <p class="sec-lede">Set out at length because the User is the data controller in law and needs to know where its data goes.</p>
+
+    <h3>Roles</h3>
+    <p>The User is the <strong>data controller</strong>. YoFinder Ltd is a <strong>data processor</strong>, and processes personal data only on the User's documented instructions, which this agreement constitutes, and only to provide and support Magnify.</p>
+
+    <h3>Where the data is held</h3>
+    <p>Magnify stores data with third-party providers <strong>outside Rwanda</strong>. The User authorises the following sub-processors by signing this agreement:</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Sub-processor</th><th>Purpose</th><th>Location</th></tr></thead>
+        <tbody>
+          <tr><td class="k">Neon</td><td>Database hosting</td><td>London, United Kingdom (AWS eu-west-2)</td></tr>
+          <tr><td class="k">Vercel</td><td>Application hosting</td><td>Outside Rwanda</td></tr>
+          <tr><td class="k">Google</td><td>Marketing suggestions, only when a manager uses that feature</td><td>Outside Rwanda</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>YoFinder Ltd will give the User not less than 30 days' notice before adding or changing a sub-processor, and the User may terminate under section 9 if it objects.</p>
+
+    <h3>The Marketing feature</h3>
+    <p>Where a manager uses the Marketing feature, aggregated business figures — revenue totals, order counts and dish performance — are sent to Google's generative AI service to produce campaign suggestions. <strong>No personal data is sent</strong>: no customer names, no staff names, no individual transactions. The feature is used only when a manager chooses to use it.</p>
+
+    <h3>Disclosure</h3>
+    <p>YoFinder Ltd discloses the User's data to no one other than the sub-processors above, except where required by law or by RRA.</p>
+
+    <h3>Security and breaches</h3>
+    <p>YoFinder Ltd maintains appropriate technical and organisational measures to protect the data. Credentials are stored as one-way hashes and cannot be recovered.</p>
+    <p>YoFinder Ltd will notify the User <strong>within 24 hours</strong> of becoming aware of a personal data breach affecting the User's data, with what is known at that time, so that the User can meet its own notification obligations.</p>
+
+    <h3>Return and deletion</h3>
+    <p>On termination YoFinder Ltd will supply an export of the User's data as CSV and PDF within 30 days, and will delete personal data held for the User within 30 days of that export.</p>
+    <p><strong>Fiscal records are excepted</strong> from deletion. Receipts, receipt numbering and cash movements are retained as the law requires and are not deleted by any function available to a user.</p>
+
+    <h3>Compliance</h3>
+    <p>Each party will comply with Law No. 058/2021 relating to the protection of personal data and privacy, and with any implementing instruction of the National Cyber Security Authority.</p>
   </section>
 
   <section>
     <h2>7 · Charges</h2>
-    <p>Support is provided for <span class="fill">&nbsp;</span> per <span class="fill">&nbsp;</span>, payable <span class="fill">&nbsp;</span>.</p>
+    <p>Support is provided for <span class="fill">&nbsp;</span> per <span class="fill">&nbsp;</span>, <strong>exclusive of VAT</strong>, payable <span class="fill">&nbsp;</span> in advance.</p>
+    <p>Invoices are due within 30 days. Where an invoice remains unpaid 30 days after its due date, YoFinder Ltd may suspend support on 7 days' written notice until it is paid. Suspension is not termination, and the licence continues during it.</p>
+    <p>Charges may be reviewed annually on 60 days' written notice. Where the User does not accept a revision, it may terminate under section 9 without penalty.</p>
     <p>Attendance outside Kigali, work outside support hours, and services excluded under section 3 may be charged separately, at rates agreed in advance.</p>
   </section>
 
   <section>
     <h2>8 · Liability</h2>
-    <p>The response and resolution times in section 2 are targets pursued with reasonable endeavours. They are not warranties, and failure to meet one does not of itself create liability for loss of profit, loss of trade or other indirect loss.</p>
+    <p>The response and resolution times in section 2 are targets pursued with reasonable endeavours. They are not warranties, and failure to meet one does not of itself create liability.</p>
+    <p>Neither party is liable to the other for loss of profit, loss of trade, loss of data, or other indirect loss. YoFinder Ltd is not liable for <strong>any penalty, interest or assessment imposed on the User by RRA</strong>, nor for the User's own compliance with its tax obligations.</p>
     <p>Any liability that does arise is limited to the support charges paid by the User in the preceding twelve months. Nothing here limits liability where the law does not permit it to be limited.</p>
+
+    <h3>Events beyond either party's control</h3>
+    <p>Neither party is in breach where performance is prevented by an event beyond its reasonable control, including power failure, failure of a telecommunications or internet provider, an act of a public authority, civil disturbance, fire, flood or epidemic. The affected party will notify the other and resume as soon as it is able. Where such an event continues beyond 60 days, either party may terminate on written notice.</p>
   </section>
 
   <section>
     <h2>9 · Term and termination</h2>
-    <p>This agreement begins on the start date above and continues until terminated. Either party may terminate on 30 days' written notice.</p>
-    <p>Where YoFinder Ltd repeatedly fails to meet the response times in section 2, the User may terminate immediately on written notice, without penalty.</p>
+    <p>This agreement begins on the start date above and continues for an initial term of <strong>12 months</strong>, and thereafter until terminated.</p>
+    <p>After the initial term, the <strong>User</strong> may terminate on 30 days' written notice. <strong>YoFinder Ltd</strong> may terminate on 90 days' written notice, and in no case on shorter notice than it owes RRA in respect of that installation.</p>
+
+    <h3>Termination for repeated failure</h3>
+    <p><strong>Repeated failure</strong> means three or more Critical or High targets missed within any rolling 90-day period, each notified to YoFinder Ltd in writing at the time it occurred.</p>
+    <p>On repeated failure the User may escalate to the Managing Director and, if the failures continue, terminate on 30 days' written notice without penalty, at any time including during the initial term.</p>
+    <p>Either party may terminate immediately where the other commits a material breach and fails to remedy it within 30 days of written notice, or becomes insolvent.</p>
   </section>
 
   <section>
-    <h2>10 · Governing law</h2>
+    <h2>10 · General</h2>
+
+    <h3>Confidentiality</h3>
+    <p>Each party will keep confidential the other's non-public information and use it only for this agreement. This does not apply to information already public, independently obtained, or required to be disclosed by law or by RRA. It survives termination by three years.</p>
+
+    <h3>Assignment</h3>
+    <p>Neither party may assign this agreement without the other's written consent, which will not be unreasonably withheld — save that YoFinder Ltd may assign to a successor of its business on notice, provided the successor is certified by RRA.</p>
+
+    <h3>Precedence</h3>
+    <p>Where this agreement and the Software Support SLA conflict, this agreement prevails.</p>
+
+    <h3>Entire agreement</h3>
+    <p>This agreement and the Software Support SLA are the whole of what is agreed between the parties on this subject, and replace any earlier understanding. A variation is effective only in writing, signed by both.</p>
+
+    <h3>Notices</h3>
+    <p>Notices are given in writing to the addresses on the first page, by hand, by courier, or by email to the addresses stated. An emailed notice is treated as received on the next business day.</p>
+
+    <h3>Governing law</h3>
     <p>This agreement is governed by the laws of the Republic of Rwanda. The parties will attempt to resolve any dispute in good faith before resorting to the courts of Rwanda.</p>
   </section>
 
@@ -148,9 +226,9 @@
   </section>
 
   <footer>
-    <p>Template · Magnify 1.1.50 · YoFinder Ltd · TIN 149047989<br>
-    Rukiri I, Remera, Gasabo, Kigali City · +250 783 714 720 · info@yofinder.com<br>
-    Prepared for RRA CIS certification. For legal review before issue.</p>
+    <p>Template · YoFinder Ltd · Rukiri I, Remera, Gasabo, Kigali City<br>
+    +250 783 714 720 · info@yofinder.com<br>
+    For legal review before issue.</p>
   </footer>
 
 </div>

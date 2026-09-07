@@ -11,7 +11,7 @@
     <dl class="identity">
       <div class="idcell"><dt>Provider</dt><dd>YoFinder Ltd</dd></div>
       <div class="idcell"><dt>TIN</dt><dd>149047989</dd></div>
-      <div class="idcell"><dt>Product</dt><dd>Magnify 1.1.50</dd></div>
+      <div class="idcell"><dt>Product</dt><dd>Magnify</dd></div>
       <div class="idcell"><dt>Support</dt><dd>08:00–23:00 daily</dd></div>
       <div class="idcell"><dt>Document</dt><dd>Draft 1</dd></div>
     </dl>
@@ -23,7 +23,7 @@
 
   <section>
     <h2>1 · Scope</h2>
-    <p>This agreement covers Magnify as installed at a user's premises: the till application, the manager application and the waiter tablet application, together with the configuration required for them to operate as a Certified Invoicing System.</p>
+    <p>This agreement covers Magnify — currently version 1.1.50, and any later version certified by RRA — as installed at a user's premises: the till application, the manager application and the waiter tablet application, together with the configuration required for them to operate as a Certified Invoicing System.</p>
     <p>It covers the software only. Section 6 states what it does not cover.</p>
   </section>
 
@@ -40,7 +40,7 @@
     </div>
 
     <h3>Support hours</h3>
-    <p><strong>08:00 to 23:00, seven days a week</strong>, including public holidays.</p>
+    <p><strong>08:00 to 23:00 Central Africa Time (Kigali), seven days a week</strong>, including public holidays.</p>
     <p>These hours are set to match when restaurants trade. A point-of-sale fault matters most during service, and service is largely evenings and weekends — support that stopped at six on a Friday would be of little use to a user.</p>
     <p>A fault reported outside these hours is treated as reported at 08:00 the following day.</p>
   </section>
@@ -55,7 +55,7 @@
           <tr>
             <td class="k">Critical</td>
             <td>The user cannot trade. Bills cannot be settled or receipts cannot be issued.</td>
-            <td>Till will not start; receipts will not print; the system cannot reach the sales data controller</td>
+            <td>Till will not start; receipts will not print; the till cannot reach the Sales Data Controller <em>for a reason within Magnify</em>, such as a software or configuration fault — as distinct from an outage of the controller or the connection itself, which section 6 excludes</td>
           </tr>
           <tr>
             <td class="k">High</td>
@@ -85,7 +85,7 @@
         <thead><tr><th>Level</th><th>First response</th><th>Target resolution</th></tr></thead>
         <tbody>
           <tr><td class="k">Critical</td><td class="c">30 minutes</td><td class="c">4 hours</td></tr>
-          <tr><td class="k">High</td><td class="c">2 hours</td><td class="c">Same day</td></tr>
+          <tr><td class="k">High</td><td class="c">2 hours</td><td class="c">8 support hours, or by 12:00 the next support day where reported after 18:00</td></tr>
           <tr><td class="k">Medium</td><td class="c">1 business day</td><td class="c">5 business days</td></tr>
           <tr><td class="k">Low</td><td class="c">2 business days</td><td class="c">By agreement</td></tr>
         </tbody>
@@ -95,6 +95,16 @@
     <h3>What resolution means</h3>
     <p>A fault is resolved when the user can trade normally. That may be by correcting the fault or by providing a workable alternative while a correction is prepared. Where a workaround is used, the underlying fault remains open until corrected.</p>
 
+    <h3>When the clock stops</h3>
+    <p>Time does not count toward the times above while YoFinder Ltd is waiting on:</p>
+    <ul>
+      <li>information, access or a decision from the user</li>
+      <li>access to the premises where attendance is required</li>
+      <li>restoration of anything excluded under section 6</li>
+      <li>restoration of an outage at a hosting or infrastructure provider used by YoFinder Ltd — see section 6</li>
+    </ul>
+    <p>The clock resumes when the obstruction is cleared.</p>
+
     <div class="note">
       <p><strong>Targets, not guarantees.</strong> YoFinder Ltd will use reasonable endeavours to meet the times above. They are not warranties, and failure to meet one does not itself create a financial liability — see section 8.</p>
     </div>
@@ -103,7 +113,8 @@
   <section>
     <h2>5 · How support is delivered</h2>
     <p><strong>Remotely first.</strong> Most faults are diagnosed and corrected remotely, which is faster than travelling.</p>
-    <p><strong>On site where remote work cannot resolve it.</strong> Where a fault requires attendance — and many do, since a till is a physical machine with cables, printers and power — YoFinder Ltd will attend the user's premises within Kigali. Attendance outside Kigali is by prior arrangement.</p>
+    <p><strong>On site where remote work cannot resolve it.</strong> Where a software fault cannot be diagnosed or corrected remotely, YoFinder Ltd will attend the user's premises within Kigali, at no additional charge, to establish whether the fault lies in Magnify and to correct it if so.</p>
+    <p>Attendance does not extend cover to hardware. Where the visit establishes that the cause is a printer, a cable, a computer, the power supply or the internet connection, repair or replacement of that item remains outside this agreement under section 6, and the visit may be charged at rates agreed in advance. Attendance outside Kigali is by prior arrangement and at the user's cost.</p>
 
     <h3>Escalation</h3>
     <p>A critical fault not resolved within its target is escalated to the Managing Director, who will contact the user directly with a plan and an expected time.</p>
@@ -117,7 +128,7 @@
       <li>Computers, tablets, printers, cabling, power supply and any other hardware</li>
       <li>Electrical supply, including outages and damage caused by them</li>
       <li>Third-party software or services on the same equipment</li>
-      <li>The Virtual Sales Data Controller and RRA's own systems</li>
+      <li>The Sales Data Controller and RRA's own systems</li>
       <li>Loss or corruption caused by unauthorised changes to the software, its database or its configuration</li>
       <li>Training beyond initial handover, unless separately agreed</li>
       <li>Data entry, including menu setup and stock counting</li>
@@ -126,6 +137,13 @@
     <div class="note">
       <p><strong>A certified system will stop trading when the controller is unreachable.</strong> That is required by the specification, not a fault in Magnify. YoFinder Ltd will assist in diagnosing the cause, but a controller or connection outside its control is outside this agreement.</p>
     </div>
+
+    <h3>YoFinder Ltd's own hosting</h3>
+    <p>Magnify uses third-party hosting and database providers. Their outages are <strong>not</strong> excluded from cover — the user pays for a working system, and restoring it is YoFinder Ltd's responsibility. But such an outage is not within its power to shorten, so the times in section 4 are suspended for its duration, and YoFinder Ltd will restore service as soon as the provider does.</p>
+
+    <h3>Trading without a connection is not a fault</h3>
+    <p>On a non-fiscal installation, Magnify continues to operate when the internet is unavailable and synchronises when it returns. That is the intended design, not a defect, and it is not a fault to be reported.</p>
+    <p>On a certified installation the position differs, because the specification requires a response from the Sales Data Controller before a receipt may be issued.</p>
   </section>
 
   <section>
@@ -144,22 +162,30 @@
 
   <section>
     <h2>8 · Remedies and limits</h2>
-    <p>Where YoFinder Ltd repeatedly fails to meet the response times in section 4, the user may escalate to the Managing Director and, if the failures continue, terminate on 30 days' written notice without penalty.</p>
-    <p>The response and resolution times are targets pursued with reasonable endeavours. They do not create liability for loss of profit, loss of trade or other indirect loss. Any liability that does arise is limited to the support fees paid in the preceding twelve months.</p>
+    <p><strong>Repeated failure</strong> means three or more Critical or High targets missed within any rolling 90-day period, each notified to YoFinder Ltd in writing at the time it occurred.</p>
+    <p>On repeated failure the user may escalate to the Managing Director and, if the failures continue, terminate on 30 days' written notice without penalty.</p>
+    <p>The response and resolution times are targets pursued with reasonable endeavours. They do not create liability for loss of profit, loss of trade or other indirect loss, nor for <strong>any penalty, interest or assessment imposed on the user by RRA</strong>.</p>
+    <p>Any liability that does arise is limited to the support fees paid in the preceding twelve months.</p>
     <p>Nothing in this agreement limits liability where the law does not permit it to be limited.</p>
+
+    <h3>Events beyond either party's control</h3>
+    <p>Neither party is in breach where performance is prevented by an event beyond its reasonable control, including power failure, failure of a telecommunications or internet provider, an act of a public authority, civil disturbance, fire, flood or epidemic. The affected party will notify the other and resume as soon as it is able.</p>
+
+    <h3>Which document prevails</h3>
+    <p>Where this SLA and a signed Software Support Agreement conflict, the Agreement prevails.</p>
   </section>
 
   <section>
     <h2>9 · Updates and versions</h2>
     <p>Corrections and improvements are issued as new versions of Magnify. A certified installation does <strong>not</strong> update automatically: each version is installed deliberately, so that an installation cannot move past the version RRA has approved.</p>
-    <p>Where RRA requires a change for continued compliance, YoFinder Ltd will provide the updated version and the user will install it. Where a change is required urgently, it is treated as a critical item.</p>
+    <p>Where RRA requires a change for continued compliance, YoFinder Ltd will provide the updated version and the user will install it. Where a change is required urgently, it is treated as being of critical priority for response and communication; the updated version is delivered within the timeframe RRA sets, which the times in section 4 do not govern.</p>
     <p>The software documentation accompanying Magnify is revised for every change, as the specification requires.</p>
   </section>
 
   <section>
     <h2>10 · Term</h2>
-    <p>This agreement runs alongside the user's licence for Magnify and continues for as long as that licence is in force. Either party may terminate on 30 days' written notice.</p>
-    <p>On termination, YoFinder Ltd will provide the user with an export of their data in a readable format. Fiscal records are retained by the user as the law requires.</p>
+    <p>This agreement runs alongside the user's licence for Magnify and continues for as long as that licence is in force. The user may terminate on 30 days' written notice. YoFinder Ltd may terminate on 90 days' written notice, and in no case on shorter notice than it owes RRA in respect of that installation.</p>
+    <p>On termination, YoFinder Ltd will provide the user with an export of their data as CSV and PDF within 30 days. Fiscal records are retained by the user as the law requires.</p>
   </section>
 
   <footer>

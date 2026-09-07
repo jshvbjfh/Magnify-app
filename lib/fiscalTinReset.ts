@@ -33,6 +33,20 @@ export type TinChangeRequest = {
    * a deliberate second act, not a saved form.
    */
   resetConfirmed: boolean
+  /**
+   * Whether the fiscal records have been exported and handed to the taxpayer
+   * BEFORE the erasure.
+   *
+   * This is the condition that keeps the undertaking given to RRA true. That
+   * undertaking says fiscal records are not removable by any function available
+   * to a user — and this reset is such a function, mandated by clause 7.2. The
+   * two only reconcile if nothing is destroyed without first being preserved
+   * somewhere the taxpayer keeps it.
+   *
+   * A tax record erased with no copy is gone from the taxpayer's own hands as
+   * well as ours, and they remain obliged to produce it.
+   */
+  recordsExported: boolean
   /** The supervisor or owner authorising it. */
   approvedByName?: string | null
 }
@@ -65,6 +79,13 @@ export function describeTinChangeRefusal(request: TinChangeRequest): string | nu
     // Not an error worth a reset. Refusing here prevents an accidental wipe
     // triggered by re-saving a settings form unchanged.
     return 'That is already the current TIN'
+  }
+
+  // Export before erasure, always. See the note on `recordsExported`: this is
+  // what keeps the retention undertaking to RRA true while still permitting the
+  // reset clause 7.2 requires.
+  if (!request.recordsExported) {
+    return 'Export the fiscal records to the taxpayer before changing the TIN'
   }
 
   if (!request.resetConfirmed) {

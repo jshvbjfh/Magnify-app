@@ -15,6 +15,7 @@ const VALID_CHANGE = {
   currentTin: '999999991',
   newTin: '888888882',
   inServiceMode: true,
+  recordsExported: true,
   resetConfirmed: true,
   approvedByName: 'Marie',
 }
@@ -27,6 +28,14 @@ describe('§7.2 — TIN changes', () => {
   it('refuses outside service mode', () => {
     expect(describeTinChangeRefusal({ ...VALID_CHANGE, inServiceMode: false }))
       .toBe('The TIN can only be changed in service mode')
+  })
+
+  it('refuses until the records have been exported to the taxpayer', () => {
+    // The condition that keeps the retention undertaking to RRA true: this
+    // reset is a user-reachable function that destroys fiscal records, so
+    // nothing may be destroyed that has not first been preserved.
+    expect(describeTinChangeRefusal({ ...VALID_CHANGE, recordsExported: false }))
+      .toBe('Export the fiscal records to the taxpayer before changing the TIN')
   })
 
   it('refuses without confirmation of the erasure', () => {
