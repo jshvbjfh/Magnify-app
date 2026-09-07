@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Image from 'next/image'
-import { LayoutDashboard, UtensilsCrossed, Layout, ClipboardList, ChefHat, Package, BarChart3, Users, LogOut, Sparkles, Bell, X, ArrowLeftRight, BrainCircuit, Settings, Radio, Menu, RefreshCw, Plus, Edit2 } from 'lucide-react'
+import { LayoutDashboard, UtensilsCrossed, Layout, ClipboardList, ChefHat, Package, BarChart3, Users, LogOut, Sparkles, Bell, X, ArrowLeftRight, BrainCircuit, Settings, Radio, Menu, RefreshCw, Plus, Edit2, Boxes } from 'lucide-react'
 import { signOut, useSession, signIn } from 'next-auth/react'
 import { fetchWithWakeup } from '@/lib/fetchWithWakeup'
 import AIChat from '@/components/AIChat'
@@ -12,6 +12,7 @@ import RestaurantTables from '@/components/restaurant/RestaurantTables'
 import RestaurantOrders from '@/components/restaurant/RestaurantOrders'
 import RestaurantKitchen from '@/components/restaurant/RestaurantKitchen'
 import RestaurantInventory from '@/components/restaurant/RestaurantInventory'
+import OperatingEquipment from '@/components/restaurant/OperatingEquipment'
 import RestaurantReports from '@/components/restaurant/RestaurantReports'
 import RestaurantStaff from '@/components/restaurant/RestaurantStaff'
 import RestaurantTransactions from '@/components/restaurant/RestaurantTransactions'
@@ -22,7 +23,7 @@ import RestaurantLive from '@/components/restaurant/RestaurantLive'
 import { RestaurantBranchProvider } from '@/contexts/RestaurantBranchContext'
 import { AI_ANALYTICS_ENABLED } from '@/lib/aiAnalyticsFeature'
 
-type TabId = 'dashboard' | 'live' | 'menu' | 'tables' | 'orders' | 'kitchen' | 'inventory' | 'reports' | 'staff' | 'transactions' | 'analytics' | 'settings'
+type TabId = 'dashboard' | 'live' | 'menu' | 'tables' | 'orders' | 'kitchen' | 'inventory' | 'equipment' | 'reports' | 'staff' | 'transactions' | 'analytics' | 'settings'
 type BranchTab = {
   id: string
   name: string
@@ -39,6 +40,7 @@ const pageMeta: Record<TabId, { title: string; sub: string }> = {
   tables:    { title: 'Tables', sub: 'Floor plan & table status' },
   menu:      { title: 'Menu', sub: 'Dishes & recipe builder' },
   inventory: { title: 'Inventory', sub: 'Ingredients & stock levels' },
+  equipment: { title: 'Operating Equipments', sub: 'Non-food supplies — soap, slippers, mop sticks' },
   reports:   { title: 'Reports', sub: 'Financial reports & AI analysis' },
   staff:        { title: 'Staff', sub: 'Employees & shift tracker' },
   transactions:  { title: 'Transactions', sub: 'Journal entries & financial records' },
@@ -63,6 +65,7 @@ const navGroups: { section?: string; items: NavItem[] }[] = [
   { section: 'Management', items: [
     { id: 'menu', label: 'Menu', icon: <UtensilsCrossed className="h-4 w-4" /> },
     { id: 'inventory', label: 'Stock', icon: <Package className="h-4 w-4" /> },
+    { id: 'equipment', label: 'Operating Equipments', icon: <Boxes className="h-4 w-4" /> },
     { id: 'reports', label: 'Reports', icon: <BarChart3 className="h-4 w-4" /> },
     { id: 'analytics', label: 'AI Analytics', icon: <BrainCircuit className="h-4 w-4" /> },
     { id: 'staff', label: 'Staff', icon: <Users className="h-4 w-4" /> },
@@ -80,6 +83,7 @@ const mobileTabMeta: Record<TabId, { label: string; icon: React.ReactNode }> = {
   tables: { label: 'Tables', icon: <Layout className="h-4 w-4" /> },
   menu: { label: 'Menu', icon: <UtensilsCrossed className="h-4 w-4" /> },
   inventory: { label: 'Stock', icon: <Package className="h-4 w-4" /> },
+  equipment: { label: 'Supplies', icon: <Boxes className="h-4 w-4" /> },
   reports: { label: 'Reports', icon: <BarChart3 className="h-4 w-4" /> },
   staff: { label: 'Staff', icon: <Users className="h-4 w-4" /> },
   transactions: { label: 'Money', icon: <ArrowLeftRight className="h-4 w-4" /> },
@@ -107,6 +111,10 @@ export default function RestaurantShell() {
   const [activeBranchId, setActiveBranchId] = useState<string | null>(null)
   const [branchesLoaded, setBranchesLoaded] = useState(false)
   const [sharedStock, setSharedStock] = useState(false)
+  // Whether this venue tracks its non-food supplies. Starts false so the tab
+  // never flashes into view for the venues that do not, then flips once the
+  // branches call answers.
+  const [operatingEquipmentEnabled, setOperatingEquipmentEnabled] = useState(false)
   const [branchConnecting, setBranchConnecting] = useState(false)
   const [branchSwitchingId, setBranchSwitchingId] = useState<string | null>(null)
   const [branchError, setBranchError] = useState<string | null>(null)
@@ -150,6 +158,17 @@ export default function RestaurantShell() {
     }
   }, [activeTab])
 
+  // The saved tab is restored before the server has said whether this venue
+  // tracks operating equipments, so the check above cannot cover it. Wait for
+  // that answer — branchesLoaded is what carries it — and only then move a
+  // manager off a tab that is switched off, rather than bouncing them on every
+  // first render while the flag still reads its default false.
+  useEffect(() => {
+    if (!branchesLoaded) return
+    if (activeTab === 'equipment' && !operatingEquipmentEnabled) handleTabChange('inventory')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchesLoaded, operatingEquipmentEnabled, activeTab])
+
   useEffect(() => {
     if (status !== 'authenticated') return
     if (userRole === 'admin') return
@@ -190,6 +209,7 @@ useEffect(() => {
         setBranches(Array.isArray(data?.branches) ? data.branches : [])
         setActiveBranchId(nextActiveBranchId)
         setSharedStock(Boolean(data?.sharedStock))
+        setOperatingEquipmentEnabled(Boolean(data?.operatingEquipmentEnabled))
         setBranchError(null)
         setBranchConnecting(false)
       } catch (error) {
@@ -480,6 +500,9 @@ useEffect(() => {
     items: group.items.filter(item => {
       if (!isDishTracking && (item.id === 'orders' || item.id === 'kitchen' || item.id === 'menu' || item.id === 'tables')) return false
       if (!AI_ANALYTICS_ENABLED && item.id === 'analytics') return false
+      // Opt-in per restaurant: most venues track no supplies at all, and a tab
+      // nobody uses is a tab in the way.
+      if (!operatingEquipmentEnabled && item.id === 'equipment') return false
       return true
     })
   })).filter(group => group.items.length > 0)
@@ -514,6 +537,7 @@ useEffect(() => {
       {mountedTabs.has('orders') && <div style={{ display: activeTab === 'orders' ? undefined : 'none' }}><RestaurantOrders onAskJesse={() => setShowJesse(true)} /></div>}
       {mountedTabs.has('kitchen') && <div style={{ display: activeTab === 'kitchen' ? undefined : 'none' }}><RestaurantKitchen onAskJesse={() => setShowJesse(true)} /></div>}
       {mountedTabs.has('inventory') && <div style={{ display: activeTab === 'inventory' ? undefined : 'none' }}><RestaurantInventory onAskJesse={() => setShowJesse(true)} /></div>}
+      {mountedTabs.has('equipment') && operatingEquipmentEnabled && <div style={{ display: activeTab === 'equipment' ? undefined : 'none' }}><OperatingEquipment /></div>}
       {mountedTabs.has('reports') && <div style={{ display: activeTab === 'reports' ? undefined : 'none' }}><RestaurantReports onAskJesse={() => setShowJesse(true)} /></div>}
       {mountedTabs.has('staff') && <div style={{ display: activeTab === 'staff' ? undefined : 'none' }}><RestaurantStaff onAskJesse={() => setShowJesse(true)} /></div>}
       {mountedTabs.has('transactions') && <div style={{ display: activeTab === 'transactions' ? undefined : 'none' }}><RestaurantTransactions onAskJesse={() => setShowJesse(true)} /></div>}

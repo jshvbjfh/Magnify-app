@@ -46,6 +46,7 @@ async function getAuthorizedBranchContext() {
       branches: [] as Array<{ id: string; name: string; code: string; type: string; isMain: boolean; isActive: boolean }>,
       activeBranchId: null as string | null,
       sharedStock: false,
+      operatingEquipmentEnabled: false,
     }
   }
 
@@ -56,7 +57,12 @@ async function getAuthorizedBranchContext() {
     // Shared stock rides along here rather than costing its own round trip: the
     // shell already waits on this call before it can render anything, and the
     // whole workspace needs to know whether stations hold stock of their own.
-    prisma.restaurant.findUnique({ where: { id: restaurantId }, select: { sharedStock: true } }),
+    // The operating-equipment switch rides along for the same reason — the shell
+    // has to know before it can decide which tabs to draw.
+    prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+      select: { sharedStock: true, operatingEquipmentEnabled: true },
+    }),
   ])
 
   const activeBranchId = branches.some(b => b.id === sessionBranchId)
@@ -69,6 +75,7 @@ async function getAuthorizedBranchContext() {
     branches,
     activeBranchId,
     sharedStock: Boolean(restaurant?.sharedStock),
+    operatingEquipmentEnabled: Boolean(restaurant?.operatingEquipmentEnabled),
   }
 }
 
@@ -98,6 +105,7 @@ export async function GET() {
     activeBranchId: result.activeBranchId,
     branches: result.branches,
     sharedStock: result.sharedStock ?? false,
+    operatingEquipmentEnabled: result.operatingEquipmentEnabled ?? false,
   }, 15, 60), result.restaurantId, result.activeBranchId)
 }
 

@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Cloud, RefreshCw, Download, Upload, ShieldCheck, ChevronDown, Briefcase, AlertTriangle, Clock, Printer } from 'lucide-react'
+import { Save, CheckCircle2, FileText, ReceiptText, UtensilsCrossed, Layers, Cloud, RefreshCw, Download, Upload, ShieldCheck, ChevronDown, Briefcase, AlertTriangle, Clock, Printer, Boxes } from 'lucide-react'
 import { FIFO_FEATURE_AVAILABLE } from '@/lib/fifoFeature'
 import { getOwnerSyncRetryDelayMs, loadOwnerSyncConfig, loadOwnerSyncStatus, loadServerOwnerSyncConfig, loadSyncConflicts, resolveSyncConflict, retryStalledSyncOutbox, saveOwnerSyncConfig, syncOwnerCloud, type OwnerSyncConfig, type OwnerSyncStatus, type ServerOwnerSyncConfig, type SyncConflictEntry } from '@/lib/ownerSyncBrowser'
 import { composeRestaurantBillTemplate, parseRestaurantBillTemplate } from '@/lib/restaurantBillTemplate'
@@ -180,6 +180,8 @@ export default function RestaurantSettings() {
   const [shiftsEnabled, setShiftsEnabled] = useState(true)
   // Print a confirmation slip on every settlement — off unless a venue asks.
   const [printPaymentConfirmation, setPrintPaymentConfirmation] = useState(false)
+  // Show the Operating Equipments tab — off unless a venue tracks its supplies.
+  const [operatingEquipmentEnabled, setOperatingEquipmentEnabled] = useState(false)
   // What the server last told us. The card marks a choice "Active", so it must
   // never show a selection the server rejected — on a failed save we snap back
   // to this and say why, rather than leaving the UI claiming a setting that
@@ -417,6 +419,7 @@ export default function RestaurantSettings() {
           else if (setupData.restaurant?.qrOrderingMode === 'order') setQrOrderingMode('order')
           else setQrOrderingMode('disabled')
           setPrintPaymentConfirmation(setupData.restaurant?.printPaymentConfirmation === true)
+          setOperatingEquipmentEnabled(setupData.restaurant?.operatingEquipmentEnabled === true)
           setShiftsEnabled(setupData.restaurant?.shiftsEnabled !== false)
           setSavedShiftsEnabled(setupData.restaurant?.shiftsEnabled !== false)
         }
@@ -534,7 +537,7 @@ export default function RestaurantSettings() {
       // fifoConfiguredAt is set, re-sending it on every unrelated settings save (name, bill
       // header, printer IP, QR mode) would re-trigger the strict FIFO integrity gate and block
       // saving anything else until a full inventory reconciliation is done.
-      const body: Record<string, unknown> = { name: restaurantName, billHeader, billPrinterIp: billPrinterIp.trim() || null, billPrinterPort: billPrinterPort.trim() ? parseInt(billPrinterPort) || 9100 : null, qrOrderingMode, shiftsEnabled, printPaymentConfirmation }
+      const body: Record<string, unknown> = { name: restaurantName, billHeader, billPrinterIp: billPrinterIp.trim() || null, billPrinterPort: billPrinterPort.trim() ? parseInt(billPrinterPort) || 9100 : null, qrOrderingMode, shiftsEnabled, printPaymentConfirmation, operatingEquipmentEnabled }
       if (!fifoConfiguredAt) body.fifoEnabled = true
       const response = await fetch('/api/restaurant/setup', {
         method: 'POST',
@@ -572,6 +575,7 @@ export default function RestaurantSettings() {
         else if (savedRestaurant.qrOrderingMode === 'order') setQrOrderingMode('order')
         else setQrOrderingMode('disabled')
         setPrintPaymentConfirmation(savedRestaurant.printPaymentConfirmation === true)
+        setOperatingEquipmentEnabled(savedRestaurant.operatingEquipmentEnabled === true)
         setShiftsEnabled(savedRestaurant.shiftsEnabled !== false)
         setSavedShiftsEnabled(savedRestaurant.shiftsEnabled !== false)
         setFifoEnabled(true)
@@ -1379,6 +1383,36 @@ export default function RestaurantSettings() {
               </div>
               <p className="text-xs text-gray-500 mt-1 leading-relaxed">
                 The same bill the guest already has, with the tender printed on it — &ldquo;Paid with: Cash&rdquo;, &ldquo;Paid with: Card&rdquo;, and so on. Leave this off and the till prints a bill only when a waiter asks for one, which is what most venues want: switching it on means a second slip for every settled table.
+              </p>
+            </div>
+          </div>
+        </button>
+      </div>
+
+      {/* ── Operating equipments ───────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl border border-gray-200 p-6 space-y-5">
+        <div>
+          <h2 className="text-base font-bold text-gray-900">Operating Equipments</h2>
+          <p className="text-sm text-gray-500 mt-1">Track the non-food supplies this venue buys to run itself.</p>
+        </div>
+
+        <button type="button" onClick={() => setOperatingEquipmentEnabled(!operatingEquipmentEnabled)}
+          className={`w-full text-left rounded-xl border-2 p-4 transition-all ${
+            operatingEquipmentEnabled ? 'border-orange-500 bg-orange-50' : 'border-gray-200 bg-white hover:border-gray-300'
+          }`}>
+          <div className="flex items-start gap-3">
+            <div className={`p-2 rounded-lg flex-shrink-0 ${operatingEquipmentEnabled ? 'bg-orange-100' : 'bg-gray-100'}`}>
+              <Boxes className={`h-5 w-5 ${operatingEquipmentEnabled ? 'text-orange-600' : 'text-gray-500'}`} />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className={`text-sm font-bold ${operatingEquipmentEnabled ? 'text-orange-700' : 'text-gray-800'}`}>
+                  Show the Operating Equipments tab
+                </p>
+                {operatingEquipmentEnabled && <span className="text-[10px] font-bold bg-orange-500 text-white px-2 py-0.5 rounded-full">On</span>}
+              </div>
+              <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                Soap, work slippers, mop sticks, bin liners — the things you buy to run the place but never sell. Kept completely apart from Stock, so none of it can ever reach food cost or a recipe. Switching this off later only hides the tab; every item and its history stays put.
               </p>
             </div>
           </div>

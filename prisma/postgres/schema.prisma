@@ -33,47 +33,53 @@ model User {
 // ─── RESTAURANT / BRANCH ───────────────────────────────────────────────────
 
 model Restaurant {
-  id                 String    @id @default(cuid())
-  name               String
-  ownerId            String
-  owner              User      @relation("RestaurantOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  managerId          String?
-  manager            User?     @relation("RestaurantManager", fields: [managerId], references: [id], onDelete: SetNull)
-  joinCode           String    @unique
-  billHeader         String?
-  billPrinterIp      String?
-  billPrinterPort    Int?
-  qrOrderingMode     String    @default("order")
-  licenseExpiry      DateTime?
-  licenseActive      Boolean   @default(true)
-  fifoEnabled        Boolean   @default(true)
-  fifoConfiguredAt   DateTime?
+  id                        String    @id @default(cuid())
+  name                      String
+  ownerId                   String
+  owner                     User      @relation("RestaurantOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  managerId                 String?
+  manager                   User?     @relation("RestaurantManager", fields: [managerId], references: [id], onDelete: SetNull)
+  joinCode                  String    @unique
+  billHeader                String?
+  billPrinterIp             String?
+  billPrinterPort           Int?
+  qrOrderingMode            String    @default("order")
+  licenseExpiry             DateTime?
+  licenseActive             Boolean   @default(true)
+  fifoEnabled               Boolean   @default(true)
+  fifoConfiguredAt          DateTime?
   // One stock for the whole restaurant, held by the main station, instead of
   // every station keeping its own. Off by default: it only suits venues whose
   // stations share a physical store, so a customer whose "stations" are
   // separate premises keeps stock per station. Flipping it back restores the
   // per-station behaviour without touching data.
-  sharedStock        Boolean   @default(false)
+  sharedStock               Boolean   @default(false)
   // Whether this venue runs service shifts. On by default, so every existing
   // restaurant keeps the supervisor-opens-the-day flow. Switched off, the
   // waiter app stops gating on a shift and stops stamping orders with one —
   // those orders fall back to paidAt for reporting, exactly as the nullable
   // shiftId/businessDate columns were always designed to allow. Orders already
   // stamped keep their shift, so history stays intact either way.
-  shiftsEnabled      Boolean   @default(true)
+  shiftsEnabled             Boolean   @default(true)
   // Print a payment-confirmation slip automatically every time a bill is
   // settled: the same bill the guest already got, plus the tender it was paid
   // with. Some venues hand it over as the receipt; most do not want a second
   // slip per table, so it is off unless a manager asks for it.
-  printPaymentConfirmation Boolean @default(false)
+  printPaymentConfirmation  Boolean   @default(false)
+  // Whether the manager app shows the Operating Equipments tab: the non-food
+  // supplies a venue buys to run itself — soap, slippers, mop sticks, bin
+  // liners. Off by default because most venues track none of this, and a tab
+  // nobody uses is a tab in the way. Flipping it off only hides the tab; the
+  // items and their movement history stay exactly as they were.
+  operatingEquipmentEnabled Boolean   @default(false)
   // Hides financial history before this date from the Transactions page without
   // deleting anything — the entries stay in the database (so stock, purchase
   // records and audits remain intact) and clearing this field restores them.
-  historyVisibleFrom DateTime?
-  syncRestaurantId   String?   @unique
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  deletedAt          DateTime?
+  historyVisibleFrom        DateTime?
+  syncRestaurantId          String?   @unique
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+  deletedAt                 DateTime?
 
   branches       Branch[]
   staff          Staff[]
@@ -138,20 +144,21 @@ model Branch {
   updatedAt          DateTime   @updatedAt
   deletedAt          DateTime?
 
-  tables         RestaurantTable[]
-  orders         RestaurantOrder[]
-  dishes         Dish[]
-  inventoryItems InventoryItem[]
-  purchases      InventoryPurchase[]
-  dishSales      DishSale[]
-  wasteLogs      WasteLog[]
-  stockTakes     StockTake[]
-  adjustmentLogs InventoryAdjustmentLog[]
-  staffBranches  StaffBranch[]
-  shifts         EmployeeShift[]
-  kitchenTickets KitchenTicket[]
-  syncCursors    SyncCursor[]
-  syncOutbox     SyncOutbox[]
+  tables             RestaurantTable[]
+  orders             RestaurantOrder[]
+  dishes             Dish[]
+  inventoryItems     InventoryItem[]
+  purchases          InventoryPurchase[]
+  dishSales          DishSale[]
+  wasteLogs          WasteLog[]
+  stockTakes         StockTake[]
+  adjustmentLogs     InventoryAdjustmentLog[]
+  staffBranches      StaffBranch[]
+  shifts             EmployeeShift[]
+  kitchenTickets     KitchenTicket[]
+  syncCursors        SyncCursor[]
+  syncOutbox         SyncOutbox[]
+  operatingEquipment OperatingEquipment[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId])
@@ -299,7 +306,7 @@ model RestaurantOrder {
   // still belong to the waiter who took it. Null on every order settled before
   // this existed, and on orders closed by their own waiter, so read it as
   // "nobody other than the waiter", never as "nobody".
-  settledByName  String?
+  settledByName String?
 
   // The supervisor whose PIN approved the cancellation. cancelReason says why;
   // this says who authorised it, which is the half the cancellation report
@@ -543,6 +550,94 @@ model PrepIngredient {
   @@unique([prepItemId, ingredientItemId])
   @@index([prepItemId])
   @@map("prep_ingredients")
+}
+
+// ─── OPERATING EQUIPMENT ───────────────────────────────────────────────────
+
+// The non-food supplies a venue buys to run itself: soap, work slippers, mop
+// sticks, bin liners, cleaning cloths.
+//
+// Deliberately NOT an InventoryItem with a third `type`. That table is wired
+// into recipes, FIFO layers, food cost, stock reconciliation, the owner
+// dashboard's stock value and Jesse's purchase totals — and most of those read
+// every row for a restaurant without filtering on type at all, because until
+// now they never had to. A bar of soap arriving in that table would silently
+// land in food cost, and the only defence would be remembering to exclude it
+// in ~27 separate places forever. Here, it cannot reach any of them.
+//
+// The cost of the split is that equipment gets no FIFO layering, no shared-stock
+// pooling and no inter-station transfers. None of those mean anything for soap:
+// you buy it, it sits in a cupboard, it runs out.
+model OperatingEquipment {
+  id           String    @id @default(cuid())
+  restaurantId String
+  branchId     String
+  branch       Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  name         String
+  // Free text on purpose — "piece", "bar", "roll", "litre", "pair". Equipment
+  // is never converted between units the way an ingredient is, so there is
+  // nothing here for a unit table to protect.
+  unit         String    @default("piece")
+  quantity     Float     @default(0)
+  // What one unit last cost. Used to value what is on the shelf; it is not a
+  // costing input to anything else, and nothing downstream reads it.
+  unitCost     Float     @default(0)
+  // Warn below this. Zero means never warn.
+  reorderLevel Float     @default(0)
+  category     String?
+  notes        String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  movements OperatingEquipmentMovement[]
+
+  @@unique([restaurantId, branchId, name])
+  @@index([branchId, deletedAt])
+  @@map("operating_equipment")
+}
+
+// Every change to an equipment quantity, in one ledger: stock received, stock
+// handed out, stock-take corrections.
+//
+// How equipment gets consumed is an open question — nobody has decided yet
+// whether soap is drawn down per shift, per stock take, or issued to a named
+// employee. So this table records only what a human actually did, with no rule
+// inferring anything. When the consumption rule is settled it arrives as
+// another `kind` here rather than as a new table, and every quantity already
+// recorded stays valid.
+model OperatingEquipmentMovement {
+  id           String             @id @default(cuid())
+  equipmentId  String
+  equipment    OperatingEquipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  restaurantId String
+  branchId     String
+  // 'purchase' — bought, stock goes up.
+  // 'issue'    — handed out to the floor, stock goes down.
+  // 'adjustment' — a stock take corrected the number, either direction.
+  kind         String
+  // SIGNED, and the sign is the single source of truth for direction: positive
+  // adds to stock, negative removes. Storing an unsigned magnitude plus a kind
+  // would mean every reader re-deriving the sign from the kind, and one reader
+  // getting it backwards is a stock level that drifts silently.
+  quantity     Float
+  unitCost     Float              @default(0)
+  totalCost    Float              @default(0)
+  supplier     String?
+  note         String?
+  // Free text, not a Staff relation: whoever typed it. Equipment is recorded by
+  // a manager at a desk, and tying it to a Staff row would imply a custody
+  // trail this feature does not yet have.
+  recordedBy   String?
+  occurredAt   DateTime           @default(now())
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  deletedAt    DateTime?
+
+  @@index([equipmentId, occurredAt])
+  @@index([restaurantId, branchId, occurredAt])
+  @@map("operating_equipment_movements")
 }
 
 // A user-made tab for grouping stock on the inventory screen. Purely a lens:
