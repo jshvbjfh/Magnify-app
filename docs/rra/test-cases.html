@@ -251,6 +251,29 @@
   </div>
 
   <section>
+    <h2>Approach</h2>
+    <p class="sec-lede">How the work was done, so that the statuses which follow can be weighed.</p>
+
+    <h3>Checked against the Authority's own figures, not against our reading of the rules</h3>
+    <p>The worked example in clause 13.1 is reproduced exactly. Ringing up the same bill — bread at 1,000 exempt, gouda at 33,600 × 0.2 less 25%, gum at 60 × 5 — Magnify prints:</p>
+    <pre>TOTAL              6340.00
+TOTAL A-EX         1000.00
+TOTAL B-18.00%     5340.00
+TOTAL TAX B         814.58</pre>
+    <p>That last figure is the one worth naming. Taking 18% out of each line and adding the results gives 814.57. Taking it from the bracket total gives 814.58, which is what clause 13.1 prints. Magnify computes per-bracket tax from the bracket total for that reason.</p>
+    <p>The JSON sample in the VSDC API specification is likewise reproduced. It shows <code>prc 200000</code> with <code>taxAmt 30508</code>, which is 18% taken <em>out</em> of the price rather than added to it. Menu prices in Magnify are treated as tax-inclusive on the same basis, so certification does not change what a guest is charged.</p>
+
+    <h3>Where the specification says stop, the system stops</h3>
+    <p>A journal that cannot be written stops the till, rather than allowing receipts nothing records (clause 7.14). A receipt left half-printed stops further sales, rather than leaving a sale registered without one (clause 7.15). A settled bill cannot be cancelled, edited or deleted; the only reversal is a refund referencing the original, permitted once (clause 7.17). There is no setting anywhere by which VAT can be turned off — the decision is made when the installer is built.</p>
+
+    <h3>Covered by test</h3>
+    <p>170 automated tests cover the fiscal behaviour and run on every change to the software: the tax arithmetic in every bracket and at rounding boundaries, receipt numbering under two terminals settling simultaneously, the message sent to the controller, the receipt layout, the daily reports against each of the twenty items in clause 18.1, and the refusals above.</p>
+
+    <h3>Reported as it stands</h3>
+    <p>Where a requirement is incomplete this document says so and says why. Three contradictions between these documents were found and corrected before submission rather than left to be discovered.</p>
+  </section>
+
+  <section>
     <h2>A · Connection to the Sales Data Controller</h2>
     <p class="sec-lede">The clauses that decide whether a receipt may exist at all. Everything else is downstream of these.</p>
 
