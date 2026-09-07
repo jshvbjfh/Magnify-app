@@ -3,6 +3,23 @@
 // Pulled out of the route so the rules that decide a stock level are testable
 // on their own. Everything here is pure: no Prisma, no session, no I/O.
 
+/**
+ * The key two spellings of the same item must agree on.
+ *
+ * "Hand Soap", "hand  soap" and " Hand soap " are one thing in a cupboard, so
+ * they have to be one row in the table. Without this the delivery recorder
+ * quietly creates a second item every time someone capitalises differently, and
+ * the stock level splits in two with no sign that it happened.
+ */
+export function normalizeEquipmentName(name: string) {
+  return name.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+/** The spelling actually stored — tidied, but as the user capitalised it. */
+export function sanitizeEquipmentName(name: string) {
+  return name.trim().replace(/\s+/g, ' ')
+}
+
 export const MOVEMENT_KINDS = ['purchase', 'issue', 'adjustment'] as const
 export type MovementKind = (typeof MOVEMENT_KINDS)[number]
 

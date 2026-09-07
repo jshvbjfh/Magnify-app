@@ -1,14 +1,21 @@
 'use client'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { BranchBadge } from '@/contexts/RestaurantBranchContext'
-import { Boxes, Plus, X, ArrowDownToLine, ArrowUpFromLine, SlidersHorizontal, Pencil, Trash2, History, AlertTriangle } from 'lucide-react'
+import { Boxes, X, ArrowDownToLine, ArrowUpFromLine, SlidersHorizontal, Pencil, Trash2, History, AlertTriangle } from 'lucide-react'
+import { createInventoryBatchSuffix, formatInventoryBatchId } from '@/lib/inventoryBatch'
+import { findItemNameCompletion } from '@/lib/inventorySuggestions'
+import { normalizeEquipmentName } from '@/lib/operatingEquipment'
 
 // Operating equipments: the non-food supplies a venue buys to run itself.
 //
 // Nothing here talks to Stock, recipes or costing. That is the whole point of
 // the feature — a bar of soap must never be able to reach food cost — so this
-// screen has its own endpoints and its own tables and shares no helper with the
-// inventory screen beyond formatting.
+// screen has its own endpoints and its own tables, and shares only the batch-id
+// and name-completion helpers with the stock screen.
+//
+// Deliveries are recorded the same way stock is: open a dated batch, then type
+// each line straight into the table. Naming an item that does not exist yet
+// creates it, so there is no separate "make the item first" step.
 
 type Equipment = {
   id: string
@@ -26,6 +33,7 @@ type Movement = {
   id: string
   equipmentId: string
   kind: 'purchase' | 'issue' | 'adjustment'
+  batchId: string | null
   quantity: number
   unitCost: number
   totalCost: number
@@ -33,6 +41,7 @@ type Movement = {
   note: string | null
   recordedBy: string | null
   occurredAt: string
+  createdAt: string
   equipment?: { id: string; name: string; unit: string }
 }
 
@@ -45,14 +54,35 @@ const MOVEMENT_LABEL: Record<Movement['kind'], string> = {
   adjustment: 'Correction',
 }
 
-const EMPTY_ITEM_FORM = { name: '', unit: 'piece', category: '', quantity: '', unitCost: '', reorderLevel: '', notes: '' }
+const DELIVERY_COLUMN_LABELS = ['Item', 'Supplier', 'Quantity', 'Unit', 'Unit cost', 'Total', ''] as const
+
+const EMPTY_ITEM_FORM = { name: '', unit: 'piece', category: '', unitCost: '', reorderLevel: '', notes: '' }
 const EMPTY_MOVE_FORM = { kind: 'purchase' as Movement['kind'], quantity: '', unitCost: '', supplier: '', note: '', recordedBy: '' }
+const emptyLineForm = () => ({ itemName: '', supplier: '', quantity: '', unit: 'piece', unitCost: '', category: '' })
+
+function todayInputValue() {
+  const now = new Date()
+  const offset = now.getTimezoneOffset()
+  return new Date(now.getTime() - offset * 60_000).toISOString().slice(0, 10)
+}
+
+function parseDateInput(value: string) {
+  const parsed = new Date(`${value}T00:00:00`)
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed
+}
+
+function formatBatchDateLabel(value: string) {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleDateString('en-RW', { day: 'numeric', month: 'short', year: 'numeric' })
+}
 
 export default function OperatingEquipment() {
   const [items, setItems] = useState<Equipment[]>([])
   const [movements, setMovements] = useState<Movement[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [view, setView] = useState<'items' | 'deliveries'>('items')
   const [activeCategory, setActiveCategory] = useState<string | null>(null)
 
   const [itemForm, setItemForm] = useState(EMPTY_ITEM_FORM)
@@ -64,11 +94,24 @@ export default function OperatingEquipment() {
   const [moveForm, setMoveForm] = useState(EMPTY_MOVE_FORM)
   const [historyFor, setHistoryFor] = useState<Equipment | null>(null)
 
+  // ── Delivery recorder ────────────────────────────────────────────────────
+  // A batch is a suffix plus a date, exactly as on the stock screen: the id is
+  // derived from both, so changing the date of an empty batch renames it rather
+  // than stranding rows under an id nobody will look for again.
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchSuffix, setBatchSuffix] = useState('')
+  const [batchDate, setBatchDate] = useState(todayInputValue())
+  const [recorderOpen, setRecorderOpen] = useState(false)
+  const [lineForm, setLineForm] = useState(emptyLineForm)
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false)
+  const [autofillNotice, setAutofillNotice] = useState<string | null>(null)
+  const [autofillMatchKey, setAutofillMatchKey] = useState('')
+
   const load = useCallback(async () => {
     try {
       const [itemsRes, movesRes] = await Promise.all([
         fetch('/api/restaurant/operating-equipment').then(r => r.json()),
-        fetch('/api/restaurant/operating-equipment/movements?limit=200').then(r => r.json()),
+        fetch('/api/restaurant/operating-equipment/movements?limit=300').then(r => r.json()),
       ])
       setItems(Array.isArray(itemsRes) ? itemsRes : [])
       setMovements(Array.isArray(movesRes) ? movesRes : [])
@@ -103,6 +146,203 @@ export default function OperatingEquipment() {
     [items],
   )
 
+  const activeBatchId = batchOpen && batchSuffix
+    ? formatInventoryBatchId(parseDateInput(batchDate), batchSuffix)
+    : ''
+
+  const deliveries = useMemo(() => movements.filter(m => m.kind === 'purchase'), [movements])
+  const activeBatchLines = useMemo(
+    () => (activeBatchId ? deliveries.filter(m => m.batchId === activeBatchId) : []),
+    [deliveries, activeBatchId],
+  )
+
+  // Every other delivery, newest batch first.
+  const deliveryGroups = useMemo(() => {
+    const groups = new Map<string, { batchId: string; occurredAt: string; lines: Movement[] }>()
+    for (const move of deliveries) {
+      if (activeBatchId && move.batchId === activeBatchId) continue
+      const key = move.batchId || `single:${move.id}`
+      const existing = groups.get(key)
+      if (existing) {
+        existing.lines.push(move)
+        if (move.occurredAt < existing.occurredAt) existing.occurredAt = move.occurredAt
+      } else {
+        groups.set(key, { batchId: move.batchId || '', occurredAt: move.occurredAt, lines: [move] })
+      }
+    }
+    return Array.from(groups.entries())
+      .map(([key, group]) => ({ key, ...group }))
+      .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())
+  }, [deliveries, activeBatchId])
+
+  // What the recorder offers to complete while a name is being typed. Fed from
+  // recorded deliveries so a repeat order is a keystroke, not a retyped line.
+  const suggestionSource = useMemo(
+    () => deliveries
+      .filter(m => m.equipment?.name)
+      .map(m => ({ ingredient: { name: m.equipment!.name }, createdAt: m.createdAt, movement: m })),
+    [deliveries],
+  )
+  const itemSuggestion = useMemo(() => {
+    if (!recorderOpen || suggestionDismissed) return null
+    return findItemNameCompletion(suggestionSource, lineForm.itemName)
+  }, [recorderOpen, suggestionDismissed, suggestionSource, lineForm.itemName])
+
+  function presetFromName(name: string) {
+    const target = normalizeEquipmentName(name)
+    if (!target) return null
+    const item = items.find(i => normalizeEquipmentName(i.name) === target)
+    const lastLine = suggestionSource.find(entry => normalizeEquipmentName(entry.ingredient.name) === target)?.movement
+    if (!item && !lastLine) return null
+    return {
+      fields: {
+        unit: item?.unit ?? lastLine?.equipment?.unit ?? 'piece',
+        unitCost: item?.unitCost ? String(item.unitCost) : lastLine?.unitCost ? String(lastLine.unitCost) : '',
+        supplier: lastLine?.supplier ?? '',
+        category: item?.category ?? '',
+      },
+      notice: `Filled from your last ${item?.name ?? lastLine?.equipment?.name} entry — edit any field before saving.`,
+    }
+  }
+
+  function handleLineNameChange(nextName: string) {
+    const normalized = normalizeEquipmentName(nextName)
+    const preset = presetFromName(nextName)
+    const shouldAutofill = Boolean(preset && normalized && autofillMatchKey !== normalized)
+
+    // Every edit re-opens the door to a completion: a dismissal only ever
+    // applies to the name that was showing when it was dismissed.
+    setSuggestionDismissed(false)
+    setLineForm(current => ({ ...current, ...(shouldAutofill ? preset!.fields : {}), itemName: nextName }))
+
+    if (shouldAutofill) {
+      setAutofillMatchKey(normalized)
+      setAutofillNotice(preset!.notice)
+      return
+    }
+    if (!preset || !normalized) {
+      setAutofillMatchKey('')
+      setAutofillNotice(null)
+    }
+  }
+
+  function applySuggestion(name: string) {
+    const preset = presetFromName(name)
+    setLineForm(current => ({ ...current, ...(preset?.fields ?? {}), itemName: name }))
+    setAutofillMatchKey(normalizeEquipmentName(name))
+    setAutofillNotice(`Filled from your last ${name} entry — edit any field before saving.`)
+    setSuggestionDismissed(false)
+  }
+
+  function handleLineNameKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (itemSuggestion) {
+      // Enter is never taken from the line: it records, suggestion showing or
+      // not. Space takes the completion instead, except where the completion
+      // carries on into another word — there a space is far more likely to be
+      // what is being typed ("Hand" on the way to "Hand towel").
+      const spaceAccepts = event.key === ' ' && !itemSuggestion.remainder.startsWith(' ')
+      if (event.key === 'Tab' || spaceAccepts) {
+        event.preventDefault()
+        applySuggestion(itemSuggestion.itemName)
+        return
+      }
+      if (event.key === 'Escape') {
+        // Drop the completion only — Esc must not also close the recorder and
+        // take the half-typed line down with it.
+        event.preventDefault()
+        setSuggestionDismissed(true)
+        return
+      }
+    }
+    handleLineKeyDown(event)
+  }
+
+  function handleLineKeyDown(event: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      void saveLine()
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeRecorder()
+    }
+  }
+
+  function openBatch() {
+    setBatchOpen(true)
+    setBatchSuffix(createInventoryBatchSuffix())
+    setBatchDate(todayInputValue())
+    setRecorderOpen(true)
+    setLineForm(emptyLineForm())
+    setError(null)
+    setView('deliveries')
+  }
+
+  function openRecorderForBatch(existingBatchId: string, occurredAt: string) {
+    if (!existingBatchId) return
+    const suffix = existingBatchId.split('-').pop() ?? ''
+    if (!suffix) return
+    setBatchOpen(true)
+    setBatchSuffix(suffix)
+    setBatchDate(new Date(occurredAt).toISOString().slice(0, 10))
+    setRecorderOpen(true)
+    setLineForm(emptyLineForm())
+    setAutofillNotice(null)
+    setAutofillMatchKey('')
+    setError(null)
+  }
+
+  function closeRecorder() {
+    setRecorderOpen(false)
+    setLineForm(emptyLineForm())
+    setAutofillNotice(null)
+    setAutofillMatchKey('')
+    setSuggestionDismissed(false)
+  }
+
+  function closeBatch() {
+    closeRecorder()
+    setBatchOpen(false)
+    setBatchSuffix('')
+    setBatchDate(todayInputValue())
+  }
+
+  async function saveLine() {
+    if (!lineForm.itemName.trim()) { setError('Type an item name'); return }
+    if (lineForm.quantity === '' || Number(lineForm.quantity) === 0) { setError('Enter a quantity'); return }
+    setSaving(true)
+    try {
+      const res = await fetch('/api/restaurant/operating-equipment/movements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemName: lineForm.itemName.trim(),
+          kind: 'purchase',
+          batchId: activeBatchId || null,
+          quantity: Number(lineForm.quantity),
+          unit: lineForm.unit.trim() || 'piece',
+          category: lineForm.category.trim() || null,
+          unitCost: lineForm.unitCost === '' ? null : Number(lineForm.unitCost),
+          supplier: lineForm.supplier.trim() || null,
+          occurredAt: `${batchDate}T00:00:00`,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data?.error || 'Could not record'); return }
+      setError(null)
+      // Straight into a fresh line: a delivery is many items, and reopening the
+      // recorder by hand for each one is the thing this screen exists to avoid.
+      setLineForm({ ...emptyLineForm(), supplier: lineForm.supplier })
+      setAutofillNotice(null)
+      setAutofillMatchKey('')
+      await load()
+    } catch {
+      setError('Could not record')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   function openAdd() {
     setEditingId(null)
     setItemForm(EMPTY_ITEM_FORM)
@@ -116,9 +356,6 @@ export default function OperatingEquipment() {
       name: item.name,
       unit: item.unit,
       category: item.category ?? '',
-      // Quantity is not editable on an existing item — it moves only through the
-      // ledger, so the field is hidden rather than pre-filled in edit mode.
-      quantity: '',
       unitCost: item.unitCost ? String(item.unitCost) : '',
       reorderLevel: item.reorderLevel ? String(item.reorderLevel) : '',
       notes: item.notes ?? '',
@@ -131,20 +368,18 @@ export default function OperatingEquipment() {
     if (!itemForm.name.trim()) { setError('Name is required'); return }
     setSaving(true)
     try {
-      const payload = {
-        ...(editingId ? { id: editingId } : {}),
-        name: itemForm.name.trim(),
-        unit: itemForm.unit.trim() || 'piece',
-        category: itemForm.category.trim() || null,
-        unitCost: itemForm.unitCost === '' ? null : Number(itemForm.unitCost),
-        reorderLevel: itemForm.reorderLevel === '' ? null : Number(itemForm.reorderLevel),
-        notes: itemForm.notes.trim() || null,
-        ...(editingId ? {} : { quantity: itemForm.quantity === '' ? 0 : Number(itemForm.quantity) }),
-      }
       const res = await fetch('/api/restaurant/operating-equipment', {
         method: editingId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          ...(editingId ? { id: editingId } : {}),
+          name: itemForm.name.trim(),
+          unit: itemForm.unit.trim() || 'piece',
+          category: itemForm.category.trim() || null,
+          unitCost: itemForm.unitCost === '' ? null : Number(itemForm.unitCost),
+          reorderLevel: itemForm.reorderLevel === '' ? null : Number(itemForm.reorderLevel),
+          notes: itemForm.notes.trim() || null,
+        }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data?.error || 'Could not save'); return }
@@ -209,8 +444,36 @@ export default function OperatingEquipment() {
     [movements, historyFor],
   )
 
+  const lineTotal = lineForm.quantity && lineForm.unitCost
+    ? Number(lineForm.quantity) * Number(lineForm.unitCost)
+    : null
+
   if (loading) {
     return <div className="p-6 text-sm text-gray-500">Loading operating equipments…</div>
+  }
+
+  function renderDeliveryColumnLabels() {
+    return (
+      <tr className="bg-white border-b border-gray-200">
+        {DELIVERY_COLUMN_LABELS.map((label, index) => (
+          <th key={`${label}-${index}`} className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{label}</th>
+        ))}
+      </tr>
+    )
+  }
+
+  function renderDeliveryRow(move: Movement) {
+    return (
+      <tr key={move.id} className="hover:bg-gray-50/60">
+        <td className="px-3 py-2 font-medium text-gray-900">{move.equipment?.name ?? '—'}</td>
+        <td className="px-3 py-2 text-gray-500">{move.supplier || '—'}</td>
+        <td className="px-3 py-2 text-right text-gray-900">{fmtQty(move.quantity)}</td>
+        <td className="px-3 py-2 text-gray-500">{move.equipment?.unit}</td>
+        <td className="px-3 py-2 text-right text-gray-500">{move.unitCost > 0 ? fmt(move.unitCost) : '—'}</td>
+        <td className="px-3 py-2 text-right text-gray-700">{move.totalCost > 0 ? fmt(move.totalCost) : '—'}</td>
+        <td className="px-3 py-2" />
+      </tr>
+    )
   }
 
   return (
@@ -220,10 +483,20 @@ export default function OperatingEquipment() {
           <h1 className="text-lg font-bold text-gray-900">Operating Equipments</h1>
           <BranchBadge />
         </div>
-        <button type="button" onClick={openAdd}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600">
-          <Plus className="h-4 w-4" /> Add item
-        </button>
+        <div className="flex items-center gap-2">
+          {view === 'deliveries' && !batchOpen && (
+            <button type="button" onClick={openBatch}
+              className="rounded-lg bg-orange-500 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-600">
+              + Record new delivery
+            </button>
+          )}
+          {view === 'items' && (
+            <button type="button" onClick={openAdd}
+              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50">
+              + Add item
+            </button>
+          )}
+        </div>
       </div>
 
       <p className="text-sm text-gray-500">
@@ -234,171 +507,334 @@ export default function OperatingEquipment() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
-          <p className="text-xs text-gray-500">Total Items</p>
-          <p className="text-2xl font-bold text-gray-900 mt-1">{items.length}</p>
-        </div>
-        <div className={`bg-white rounded-xl border p-4 shadow-sm text-center ${lowStock.length > 0 ? 'border-red-200' : 'border-gray-200'}`}>
-          <p className="text-xs text-gray-500">Low Stock Alerts</p>
-          <p className={`text-2xl font-bold mt-1 ${lowStock.length > 0 ? 'text-red-600' : 'text-gray-900'}`}>{lowStock.length}</p>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
-          <p className="text-xs text-gray-500">Value On Hand</p>
-          <p className="text-2xl font-bold text-gray-900 mt-1">{fmt(totalValue)} RWF</p>
-        </div>
+      <div className="flex gap-1 border-b border-gray-200">
+        <button type="button" onClick={() => setView('items')}
+          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${view === 'items' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+          Items
+        </button>
+        <button type="button" onClick={() => setView('deliveries')}
+          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${view === 'deliveries' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+          Deliveries
+        </button>
       </div>
 
-      {categories.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 px-3 py-2 shadow-sm">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button type="button" onClick={() => setActiveCategory(null)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${activeCategory === null ? 'bg-orange-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
-              All <span className="opacity-70">{items.length}</span>
-            </button>
-            {categories.map(cat => (
-              <button key={cat} type="button" onClick={() => setActiveCategory(cat)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${activeCategory === cat ? 'bg-orange-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
-                {cat} <span className="opacity-70">{items.filter(i => i.category === cat).length}</span>
-              </button>
-            ))}
+      {view === 'items' && (<>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
+            <p className="text-xs text-gray-500">Total Items</p>
+            <p className="text-2xl font-bold text-gray-900 mt-1">{items.length}</p>
+          </div>
+          <div className={`bg-white rounded-xl border p-4 shadow-sm text-center ${lowStock.length > 0 ? 'border-red-200' : 'border-gray-200'}`}>
+            <p className="text-xs text-gray-500">Low Stock Alerts</p>
+            <p className={`text-2xl font-bold mt-1 ${lowStock.length > 0 ? 'text-red-600' : 'text-gray-900'}`}>{lowStock.length}</p>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm text-center">
+            <p className="text-xs text-gray-500">Value On Hand</p>
+            <p className="text-2xl font-bold text-gray-900 mt-1">{fmt(totalValue)} RWF</p>
           </div>
         </div>
-      )}
 
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        {visibleItems.length === 0 ? (
-          <div className="p-10 text-center">
+        {categories.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 px-3 py-2 shadow-sm">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button type="button" onClick={() => setActiveCategory(null)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${activeCategory === null ? 'bg-orange-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
+                All <span className="opacity-70">{items.length}</span>
+              </button>
+              {categories.map(cat => (
+                <button key={cat} type="button" onClick={() => setActiveCategory(cat)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${activeCategory === cat ? 'bg-orange-500 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
+                  {cat} <span className="opacity-70">{items.filter(i => i.category === cat).length}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          {visibleItems.length === 0 ? (
+            <div className="p-10 text-center">
+              <Boxes className="h-8 w-8 text-gray-300 mx-auto" />
+              <p className="mt-3 text-sm font-semibold text-gray-700">Nothing here yet</p>
+              <p className="mt-1 text-xs text-gray-500">Go to Deliveries and record what came in — items are created as you type them.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                  <tr>
+                    <th className="text-left font-semibold px-4 py-2.5">Item</th>
+                    <th className="text-right font-semibold px-4 py-2.5">On hand</th>
+                    <th className="text-right font-semibold px-4 py-2.5">Reorder at</th>
+                    <th className="text-right font-semibold px-4 py-2.5">Unit cost</th>
+                    <th className="text-right font-semibold px-4 py-2.5">Value</th>
+                    <th className="text-right font-semibold px-4 py-2.5">Record</th>
+                    <th className="px-4 py-2.5" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {visibleItems.map(item => {
+                    const isLow = item.reorderLevel > 0 && item.quantity <= item.reorderLevel
+                    return (
+                      <tr key={item.id} className="hover:bg-gray-50/60">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-gray-900">{item.name}</span>
+                            {isLow && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-red-50 border border-red-200 px-2 py-0.5 text-[10px] font-bold text-red-600">
+                                <AlertTriangle className="h-3 w-3" /> Low
+                              </span>
+                            )}
+                          </div>
+                          {item.category && <p className="text-xs text-gray-400 mt-0.5">{item.category}</p>}
+                        </td>
+                        <td className={`px-4 py-3 text-right font-bold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
+                          {fmtQty(item.quantity)} <span className="font-normal text-gray-400 text-xs">{item.unit}</span>
+                        </td>
+                        <td className="px-4 py-3 text-right text-gray-500">
+                          {item.reorderLevel > 0 ? fmtQty(item.reorderLevel) : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-right text-gray-500">{item.unitCost > 0 ? fmt(item.unitCost) : '—'}</td>
+                        <td className="px-4 py-3 text-right text-gray-700">{fmt(item.quantity * item.unitCost)}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-end gap-1">
+                            <button type="button" onClick={() => openMove(item, 'purchase')} title="Received"
+                              className="rounded-lg border border-gray-200 p-1.5 text-green-600 hover:bg-green-50 hover:border-green-200">
+                              <ArrowDownToLine className="h-4 w-4" />
+                            </button>
+                            <button type="button" onClick={() => openMove(item, 'issue')} title="Issued"
+                              className="rounded-lg border border-gray-200 p-1.5 text-orange-600 hover:bg-orange-50 hover:border-orange-200">
+                              <ArrowUpFromLine className="h-4 w-4" />
+                            </button>
+                            <button type="button" onClick={() => openMove(item, 'adjustment')} title="Correction"
+                              className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-100">
+                              <SlidersHorizontal className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-end gap-1">
+                            <button type="button" onClick={() => setHistoryFor(item)} title="History"
+                              className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+                              <History className="h-4 w-4" />
+                            </button>
+                            <button type="button" onClick={() => openEdit(item)} title="Edit"
+                              className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button type="button" onClick={() => void removeItem(item)} title="Remove"
+                              className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600">
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Recent activity — the ledger is the only thing that moves a quantity,
+            so this doubles as the explanation for every number above. */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <h2 className="text-sm font-bold text-gray-900">
+              {historyFor ? `History — ${historyFor.name}` : 'Recent activity'}
+            </h2>
+            {historyFor && (
+              <button type="button" onClick={() => setHistoryFor(null)}
+                className="text-xs font-semibold text-orange-600 hover:text-orange-700">Show all</button>
+            )}
+          </div>
+          {historyRows.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-gray-400">Nothing recorded yet.</p>
+          ) : (
+            <div className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
+              {historyRows.slice(0, 100).map(m => (
+                <div key={m.id} className="flex items-center gap-3 px-4 py-2.5">
+                  <span className={`inline-flex w-20 justify-center rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                    m.kind === 'purchase' ? 'bg-green-50 text-green-700'
+                      : m.kind === 'issue' ? 'bg-orange-50 text-orange-700'
+                      : 'bg-gray-100 text-gray-600'
+                  }`}>
+                    {MOVEMENT_LABEL[m.kind]}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-900 truncate">
+                      <span className="font-semibold">{m.quantity > 0 ? '+' : ''}{fmtQty(m.quantity)}</span>
+                      {' '}
+                      <span className="text-gray-400 text-xs">{m.equipment?.unit}</span>
+                      {' · '}
+                      {m.equipment?.name ?? historyFor?.name}
+                    </p>
+                    {(m.note || m.supplier || m.recordedBy || m.batchId) && (
+                      <p className="text-xs text-gray-400 truncate">
+                        {[m.batchId, m.supplier, m.note, m.recordedBy && `by ${m.recordedBy}`].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                  <span className="text-xs text-gray-400 flex-shrink-0">
+                    {new Date(m.occurredAt).toLocaleDateString('en-RW', { day: 'numeric', month: 'short' })}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </>)}
+
+      {view === 'deliveries' && (
+        deliveryGroups.length === 0 && !batchOpen ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
             <Boxes className="h-8 w-8 text-gray-300 mx-auto" />
-            <p className="mt-3 text-sm font-semibold text-gray-700">Nothing here yet</p>
-            <p className="mt-1 text-xs text-gray-500">Add the supplies this station keeps — soap, slippers, mop sticks.</p>
+            <p className="mt-3 text-sm font-semibold text-gray-700">No deliveries recorded yet</p>
+            <p className="text-sm text-gray-400 mt-1">Use + Record new delivery to add the orange batch row, choose a date, then type each line directly into the table.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-                <tr>
-                  <th className="text-left font-semibold px-4 py-2.5">Item</th>
-                  <th className="text-right font-semibold px-4 py-2.5">On hand</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Reorder at</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Unit cost</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Value</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Record</th>
-                  <th className="px-4 py-2.5" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {visibleItems.map(item => {
-                  const isLow = item.reorderLevel > 0 && item.quantity <= item.reorderLevel
-                  return (
-                    <tr key={item.id} className="hover:bg-gray-50/60">
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-gray-900">{item.name}</span>
-                          {isLow && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-red-50 border border-red-200 px-2 py-0.5 text-[10px] font-bold text-red-600">
-                              <AlertTriangle className="h-3 w-3" /> Low
-                            </span>
-                          )}
-                        </div>
-                        {item.category && <p className="text-xs text-gray-400 mt-0.5">{item.category}</p>}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-bold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
-                        {fmtQty(item.quantity)} <span className="font-normal text-gray-400 text-xs">{item.unit}</span>
-                      </td>
-                      <td className="px-4 py-3 text-right text-gray-500">
-                        {item.reorderLevel > 0 ? fmtQty(item.reorderLevel) : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-right text-gray-500">{item.unitCost > 0 ? fmt(item.unitCost) : '—'}</td>
-                      <td className="px-4 py-3 text-right text-gray-700">{fmt(item.quantity * item.unitCost)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-end gap-1">
-                          <button type="button" onClick={() => openMove(item, 'purchase')} title="Received"
-                            className="rounded-lg border border-gray-200 p-1.5 text-green-600 hover:bg-green-50 hover:border-green-200">
-                            <ArrowDownToLine className="h-4 w-4" />
-                          </button>
-                          <button type="button" onClick={() => openMove(item, 'issue')} title="Issued"
-                            className="rounded-lg border border-gray-200 p-1.5 text-orange-600 hover:bg-orange-50 hover:border-orange-200">
-                            <ArrowUpFromLine className="h-4 w-4" />
-                          </button>
-                          <button type="button" onClick={() => openMove(item, 'adjustment')} title="Correction"
-                            className="rounded-lg border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-100">
-                            <SlidersHorizontal className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-end gap-1">
-                          <button type="button" onClick={() => setHistoryFor(item)} title="History"
-                            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
-                            <History className="h-4 w-4" />
-                          </button>
-                          <button type="button" onClick={() => openEdit(item)} title="Edit"
-                            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                          <button type="button" onClick={() => void removeItem(item)} title="Remove"
-                            className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600">
-                            <Trash2 className="h-4 w-4" />
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto"><table className="w-full text-sm min-w-[860px]">
+              <tbody className="divide-y divide-gray-50">
+                {batchOpen && (
+                  <>
+                    <tr className="bg-orange-400 border-y border-orange-700">
+                      <td colSpan={DELIVERY_COLUMN_LABELS.length} className="px-3 py-1.5">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] font-semibold text-gray-900">
+                            <span>BATCH_ID: {activeBatchId}</span>
+                            <span>|</span>
+                            <label className="flex items-center gap-2 font-medium">
+                              <span>Date</span>
+                              <input type="date" value={batchDate}
+                                onChange={e => setBatchDate(e.target.value)}
+                                disabled={activeBatchLines.length > 0}
+                                className="rounded border border-orange-700 bg-white px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-orange-200 disabled:bg-orange-100 disabled:text-gray-500"/>
+                            </label>
+                            <span>|</span>
+                            <span>{activeBatchLines.length} row{activeBatchLines.length === 1 ? '' : 's'}</span>
+                            <button type="button" onClick={closeBatch} className="font-semibold text-gray-900 underline-offset-2 hover:underline">
+                              Close batch
+                            </button>
+                          </div>
+                          <button type="button" onClick={() => { setRecorderOpen(true); setLineForm(emptyLineForm()) }}
+                            disabled={recorderOpen}
+                            className="rounded-md border border-orange-200 bg-white px-3 py-1 text-xs font-semibold text-orange-600 transition-colors hover:bg-orange-50 disabled:opacity-50">
+                            {recorderOpen ? 'Recording…' : '+ Add item'}
                           </button>
                         </div>
                       </td>
                     </tr>
-                  )
-                })}
+                    {renderDeliveryColumnLabels()}
+                    {recorderOpen && (
+                      <>
+                        <tr className="bg-emerald-50/80">
+                          <td className="px-3 py-2 align-top">
+                            {/* The ghost sits on top of a transparent input, so the
+                                untyped tail of the suggested name reads as a
+                                continuation of what was typed. Both boxes carry
+                                identical text metrics. */}
+                            <div className="relative rounded-md bg-white">
+                              <input value={lineForm.itemName} onChange={e => handleLineNameChange(e.target.value)}
+                                onKeyDown={handleLineNameKeyDown} autoComplete="off" autoFocus
+                                className="relative z-10 w-full rounded-md border border-emerald-300 bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"
+                                placeholder="Item name"/>
+                              {itemSuggestion?.remainder && (
+                                <p aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre rounded-md border border-transparent px-3 py-2 text-sm text-gray-400">
+                                  <span className="invisible">{lineForm.itemName}</span>{itemSuggestion.remainder}
+                                </p>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <input value={lineForm.supplier} onChange={e => setLineForm(f => ({ ...f, supplier: e.target.value }))}
+                              onKeyDown={handleLineKeyDown} placeholder="Supplier"
+                              className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"/>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <input type="number" value={lineForm.quantity} onChange={e => setLineForm(f => ({ ...f, quantity: e.target.value }))}
+                              onKeyDown={handleLineKeyDown} placeholder="0"
+                              className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-right outline-none focus:ring-2 focus:ring-emerald-300"/>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <input value={lineForm.unit} onChange={e => setLineForm(f => ({ ...f, unit: e.target.value }))}
+                              onKeyDown={handleLineKeyDown} placeholder="piece"
+                              className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-300"/>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <input type="number" value={lineForm.unitCost} onChange={e => setLineForm(f => ({ ...f, unitCost: e.target.value }))}
+                              onKeyDown={handleLineKeyDown} placeholder="0"
+                              className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-right outline-none focus:ring-2 focus:ring-emerald-300"/>
+                          </td>
+                          <td className="px-3 py-2 align-top text-right text-sm font-semibold text-gray-700">
+                            {lineTotal == null ? '—' : fmt(lineTotal)}
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <div className="flex items-center gap-1">
+                              <button type="button" onClick={() => void saveLine()} disabled={saving || !lineForm.itemName.trim() || lineForm.quantity === ''}
+                                className="rounded-md bg-emerald-600 px-2.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+                                {saving ? 'Saving…' : 'Save'}
+                              </button>
+                              <button type="button" onClick={closeRecorder}
+                                className="rounded-md border border-gray-200 px-2 py-2 text-xs font-semibold text-gray-500 hover:bg-gray-50">
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                        <tr className="bg-emerald-50/60">
+                          <td colSpan={DELIVERY_COLUMN_LABELS.length} className="px-3 pb-2 text-[11px] text-gray-600">
+                            {itemSuggestion ? (<>
+                              <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Space</span>
+                              <span className="ml-2 mr-4 font-medium">Fill {itemSuggestion.itemName}</span>
+                              <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Esc</span>
+                              <span className="ml-2 mr-4">Ignore it</span>
+                              <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Enter</span>
+                              <span className="ml-2">Save and start the next line</span>
+                            </>) : (<>
+                              {autofillNotice && <span className="mr-4 font-medium">{autofillNotice}</span>}
+                              <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Enter</span>
+                              <span className="ml-2 mr-4">Save and start the next line</span>
+                              <span className="rounded border border-emerald-300 bg-white px-1.5 py-0.5 font-semibold">Esc</span>
+                              <span className="ml-2">Close recorder</span>
+                            </>)}
+                          </td>
+                        </tr>
+                      </>
+                    )}
+                    {activeBatchLines.map(renderDeliveryRow)}
+                  </>
+                )}
+                {deliveryGroups.map(group => (
+                  <Fragment key={group.key}>
+                    <tr className="bg-orange-400 border-y border-orange-700">
+                      <td colSpan={DELIVERY_COLUMN_LABELS.length} className="px-3 py-1.5">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px] font-semibold text-gray-900">
+                            <span>BATCH_ID: {group.batchId || 'NO BATCH ID'}</span>
+                            <span>|</span>
+                            <span>{formatBatchDateLabel(group.occurredAt)}</span>
+                            <span>|</span>
+                            <span>{group.lines.length} row{group.lines.length === 1 ? '' : 's'}</span>
+                          </div>
+                          <button type="button" onClick={() => openRecorderForBatch(group.batchId, group.occurredAt)}
+                            disabled={!group.batchId || batchOpen}
+                            className="rounded-md border border-orange-200 bg-white px-3 py-1 text-xs font-semibold text-orange-600 transition-colors hover:bg-orange-50 disabled:cursor-not-allowed disabled:opacity-50">
+                            + Add item
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {renderDeliveryColumnLabels()}
+                    {group.lines.map(renderDeliveryRow)}
+                  </Fragment>
+                ))}
               </tbody>
-            </table>
+            </table></div>
           </div>
-        )}
-      </div>
-
-      {/* Recent activity — the ledger is the only thing that moves a quantity,
-          so this doubles as the explanation for every number above. */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-          <h2 className="text-sm font-bold text-gray-900">
-            {historyFor ? `History — ${historyFor.name}` : 'Recent activity'}
-          </h2>
-          {historyFor && (
-            <button type="button" onClick={() => setHistoryFor(null)}
-              className="text-xs font-semibold text-orange-600 hover:text-orange-700">Show all</button>
-          )}
-        </div>
-        {historyRows.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-gray-400">Nothing recorded yet.</p>
-        ) : (
-          <div className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
-            {historyRows.slice(0, 100).map(m => (
-              <div key={m.id} className="flex items-center gap-3 px-4 py-2.5">
-                <span className={`inline-flex w-20 justify-center rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                  m.kind === 'purchase' ? 'bg-green-50 text-green-700'
-                    : m.kind === 'issue' ? 'bg-orange-50 text-orange-700'
-                    : 'bg-gray-100 text-gray-600'
-                }`}>
-                  {MOVEMENT_LABEL[m.kind]}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-gray-900 truncate">
-                    <span className="font-semibold">{m.quantity > 0 ? '+' : ''}{fmtQty(m.quantity)}</span>
-                    {' '}
-                    <span className="text-gray-400 text-xs">{m.equipment?.unit}</span>
-                    {' · '}
-                    {m.equipment?.name ?? historyFor?.name}
-                  </p>
-                  {(m.note || m.supplier || m.recordedBy) && (
-                    <p className="text-xs text-gray-400 truncate">
-                      {[m.supplier, m.note, m.recordedBy && `by ${m.recordedBy}`].filter(Boolean).join(' · ')}
-                    </p>
-                  )}
-                </div>
-                <span className="text-xs text-gray-400 flex-shrink-0">
-                  {new Date(m.occurredAt).toLocaleDateString('en-RW', { day: 'numeric', month: 'short' })}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+        )
+      )}
 
       {showItemModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -429,16 +865,6 @@ export default function OperatingEquipment() {
                     placeholder="Cleaning"
                     className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200" />
                 </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                {!editingId && (
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 mb-1">Opening count</label>
-                    <input type="number" value={itemForm.quantity} onChange={e => setItemForm({ ...itemForm, quantity: e.target.value })}
-                      placeholder="0"
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200" />
-                  </div>
-                )}
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 mb-1">Unit cost</label>
                   <input type="number" value={itemForm.unitCost} onChange={e => setItemForm({ ...itemForm, unitCost: e.target.value })}
@@ -458,6 +884,9 @@ export default function OperatingEquipment() {
                   placeholder="Optional"
                   className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200" />
               </div>
+              <p className="text-xs text-gray-400">
+                Stock starts at zero — record what came in from the Deliveries tab.
+              </p>
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-100">
               <button type="button" onClick={() => setShowItemModal(false)}

@@ -3,7 +3,13 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
-import { applyMovement, isMovementKind, nextUnitCost } from '@/lib/operatingEquipment'
+import {
+  applyMovement,
+  isMovementKind,
+  nextUnitCost,
+  normalizeEquipmentName,
+  sanitizeEquipmentName,
+} from '@/lib/operatingEquipment'
 
 // Every change to an equipment quantity goes through here. Nothing else writes
 // OperatingEquipment.quantity, so the number on screen and the ledger behind it
@@ -56,8 +62,12 @@ export async function POST(req: Request) {
   if (!restaurantId || !branchId) return NextResponse.json({ error: 'No restaurant station found' }, { status: 400 })
 
   const body = await req.json()
+  // Either address an item by id, or name it. Naming is how the delivery
+  // recorder works: a line is typed, and whether that item already exists is
+  // the server's problem, not something the person recording has to know.
   const equipmentId = typeof body?.equipmentId === 'string' ? body.equipmentId : null
-  if (!equipmentId) return NextResponse.json({ error: 'Item is required' }, { status: 400 })
+  const typedName = sanitizeEquipmentName(typeof body?.itemName === 'string' ? body.itemName : '')
+  if (!equipmentId && !typedName) return NextResponse.json({ error: 'Item is required' }, { status: 400 })
 
   if (!isMovementKind(body?.kind)) {
     return NextResponse.json({ error: 'Choose received, issued, or correction' }, { status: 400 })
@@ -75,10 +85,52 @@ export async function POST(req: Request) {
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      const item = await tx.operatingEquipment.findFirst({
-        where: { id: equipmentId, restaurantId, branchId, deletedAt: null },
-      })
-      if (!item) throw Object.assign(new Error('Item not found'), { status: 404 })
+      let item = equipmentId
+        ? await tx.operatingEquipment.findFirst({
+            where: { id: equipmentId, restaurantId, branchId, deletedAt: null },
+          })
+        : null
+
+      // Match on the normalised name so a difference in capitalisation or
+      // spacing joins the existing item instead of quietly starting a second
+      // one and splitting the stock level in two.
+      if (!item && typedName) {
+        const candidates = await tx.operatingEquipment.findMany({
+          where: { restaurantId, branchId, deletedAt: null },
+        })
+        const target = normalizeEquipmentName(typedName)
+        item = candidates.find((row) => normalizeEquipmentName(row.name) === target) ?? null
+      }
+
+      let createdItem = false
+      if (!item) {
+        if (!typedName) throw Object.assign(new Error('Item not found'), { status: 404 })
+        // A name nobody has used before is a new item. Created at zero and then
+        // moved by the same ledger entry as everything else, so even its first
+        // unit has a recorded reason behind it.
+        item = await tx.operatingEquipment.create({
+          data: {
+            restaurantId,
+            branchId,
+            name: typedName,
+            unit: cleanText(body?.unit) || 'piece',
+            category: cleanText(body?.category),
+            quantity: 0,
+            unitCost: 0,
+            reorderLevel: parseOptionalNumber(body?.reorderLevel) ?? 0,
+          },
+        })
+        createdItem = true
+      } else if (cleanText(body?.unit) && cleanText(body?.unit) !== item.unit && Number(item.quantity) === 0) {
+        // An empty shelf can change its unit freely; stock on hand cannot,
+        // because the number already counted is expressed in the old one.
+        item = await tx.operatingEquipment.update({
+          where: { id: item.id },
+          data: { unit: cleanText(body?.unit)! },
+        })
+      }
+
+      const equipmentIdResolved = item.id
 
       const outcome = applyMovement({
         kind,
@@ -101,10 +153,11 @@ export async function POST(req: Request) {
       // left the building for nothing.
       const movement = await tx.operatingEquipmentMovement.create({
         data: {
-          equipmentId,
+          equipmentId: equipmentIdResolved,
           restaurantId,
           branchId,
           kind,
+          batchId: cleanText(body?.batchId),
           quantity: delta,
           unitCost: resolvedUnitCost,
           totalCost: resolvedUnitCost * Math.abs(delta),
@@ -116,11 +169,11 @@ export async function POST(req: Request) {
       })
 
       const updated = await tx.operatingEquipment.update({
-        where: { id: equipmentId },
+        where: { id: equipmentIdResolved },
         data: { quantity: nextQuantity, unitCost: resolvedUnitCost },
       })
 
-      return { movement, item: updated }
+      return { movement, item: updated, createdItem }
     })
 
     return NextResponse.json(result, { status: 201 })

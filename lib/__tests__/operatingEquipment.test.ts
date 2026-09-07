@@ -3,8 +3,32 @@ import {
   applyMovement,
   isMovementKind,
   nextUnitCost,
+  normalizeEquipmentName,
+  sanitizeEquipmentName,
   signedMovementQuantity,
 } from '@/lib/operatingEquipment'
+
+describe('equipment name matching', () => {
+  // The delivery recorder resolves a typed line to an item by this key. If it
+  // were case- or space-sensitive, every differently-typed spelling would start
+  // a second item and split the stock level in two with no sign it happened.
+  it('treats capitalisation and spacing as the same item', () => {
+    const target = normalizeEquipmentName('Hand soap')
+    expect(normalizeEquipmentName('hand soap')).toBe(target)
+    expect(normalizeEquipmentName('  Hand   Soap  ')).toBe(target)
+    expect(normalizeEquipmentName('HAND SOAP')).toBe(target)
+  })
+
+  it('keeps genuinely different items apart', () => {
+    expect(normalizeEquipmentName('Hand soap')).not.toBe(normalizeEquipmentName('Hand towel'))
+  })
+
+  // Stored spelling keeps the user's capitalisation — only the key is folded.
+  it('stores the name as typed, just tidied', () => {
+    expect(sanitizeEquipmentName('  Hand   Soap  ')).toBe('Hand Soap')
+    expect(sanitizeEquipmentName('Mop stick')).toBe('Mop stick')
+  })
+})
 
 describe('signedMovementQuantity', () => {
   it('adds to stock on a purchase', () => {

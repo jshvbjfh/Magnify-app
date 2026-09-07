@@ -617,6 +617,14 @@ model OperatingEquipmentMovement {
   // 'issue'    — handed out to the floor, stock goes down.
   // 'adjustment' — a stock take corrected the number, either direction.
   kind         String
+  // Groups the lines that arrived together — one delivery, one invoice, one
+  // date. Nullable because a lone issue or correction belongs to no delivery,
+  // and because every movement recorded before batches existed has none.
+  //
+  // Plain text rather than a Batch table: a batch here has no life of its own
+  // beyond the lines that quote it, exactly as on the stock screen, and a table
+  // would add a row to keep in step for no question it helps answer.
+  batchId      String?
   // SIGNED, and the sign is the single source of truth for direction: positive
   // adds to stock, negative removes. Storing an unsigned magnitude plus a kind
   // would mean every reader re-deriving the sign from the kind, and one reader
@@ -637,6 +645,7 @@ model OperatingEquipmentMovement {
 
   @@index([equipmentId, occurredAt])
   @@index([restaurantId, branchId, occurredAt])
+  @@index([restaurantId, branchId, batchId])
   @@map("operating_equipment_movements")
 }
 
