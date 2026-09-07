@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getRestaurantContextFromSession } from '@/lib/restaurantAccess'
-import { endOfRestaurantDay, startOfRestaurantDay } from '@/lib/restaurantDay'
+import { endOfRestaurantDay, restaurantDayKey, startOfRestaurantDay } from '@/lib/restaurantDay'
 import { ACTIVE_RESTAURANT_ORDER_STATUSES, NO_CHARGE_METHOD_VALUES } from '@/lib/restaurantOrders'
 import { loadFiscalOutlet } from '@/lib/fiscalContext'
 import {
@@ -66,9 +66,12 @@ export async function GET(req: Request) {
   }
   const outlet = outletResult.outlet
 
-  const dateParam = searchParams.get('date')
-  const dayStart = startOfRestaurantDay(dateParam) ?? startOfRestaurantDay(new Date().toISOString().slice(0, 10))!
-  const dayEnd = endOfRestaurantDay(dateParam) ?? endOfRestaurantDay(new Date().toISOString().slice(0, 10))!
+  // Defaults to today AT THE RESTAURANT. toISOString() would read the day in
+  // UTC, which between midnight and 02:00 in Kigali is still yesterday — a Z
+  // report taken at closing time would then summarise the wrong day.
+  const dateParam = searchParams.get('date') ?? restaurantDayKey()
+  const dayStart = startOfRestaurantDay(dateParam) ?? startOfRestaurantDay(restaurantDayKey())!
+  const dayEnd = endOfRestaurantDay(dateParam) ?? endOfRestaurantDay(restaurantDayKey())!
 
   const sinceParam = searchParams.get('since')
   const sinceDate = sinceParam ? new Date(sinceParam) : null
@@ -167,7 +170,10 @@ export async function GET(req: Request) {
     time: stamp.slice(11, 19),
     periodLabel:
       kind === 'Z'
-        ? `Business date ${dayStart.toISOString().slice(0, 10)}`
+        // dateParam, not dayStart — the window's first instant is 22:00 UTC on
+        // the PREVIOUS day, so printing it back would label the report with the
+        // wrong date even though it covers the right one.
+        ? `Business date ${dateParam}`
         : `Since ${windowStart.toISOString().replace('T', ' ').slice(0, 19)}`,
     openingDeposit: floats.reduce((sum, row) => sum + Number(row.amount ?? 0), 0),
     incompleteSalesCount: incompleteSales,

@@ -41,6 +41,27 @@ const RESTAURANT_OFFSET_MINUTES = (() => {
 })()
 
 /**
+ * The calendar day at the restaurant, as `YYYY-MM-DD`.
+ *
+ * `new Date().toISOString().slice(0, 10)` is the trap this replaces. It reads
+ * the day in UTC, and Kigali is two hours ahead — so between midnight and 02:00
+ * local it names YESTERDAY. A report defaulting to "today" would open on the
+ * wrong day for the first two hours of every date, which is precisely the part
+ * of the night a late service is still trading through.
+ *
+ * Pairs with startOfRestaurantDay/endOfRestaurantDay above: this produces the
+ * key, those turn it into a window.
+ */
+export function restaurantDayKey(value: Date | string | number = new Date()): string {
+  const date = value instanceof Date ? value : new Date(value)
+  const time = date.getTime()
+  if (Number.isNaN(time)) return restaurantDayKey(new Date())
+  // Shift the instant into restaurant-local time, then read the date parts off
+  // the UTC face of the shifted value.
+  return new Date(time + RESTAURANT_OFFSET_MINUTES * 60_000).toISOString().slice(0, 10)
+}
+
+/**
  * Clock hour (0–23) at the restaurant for an instant.
  *
  * `getHours()` would read the hour in the SERVER's zone — UTC on Vercel — so an
