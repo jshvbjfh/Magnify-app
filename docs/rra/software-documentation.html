@@ -124,12 +124,12 @@
       <div class="idcell"><dt>Vendor</dt><dd>YoFinder Ltd</dd></div>
       <div class="idcell"><dt>TIN</dt><dd>149047989</dd></div>
       <div class="idcell"><dt>SDC route</dt><dd>Local VSDC</dd></div>
-      <div class="idcell"><dt>Document</dt><dd>Draft 1</dd></div>
+      <div class="idcell"><dt>Document</dt><dd>Version 1</dd></div>
     </dl>
   </header>
 
-  <div class="note warn">
-    <p><strong>Draft — not for submission.</strong> Clause 7.10 requires this document to match the software exactly and to be revised for every change. The VSDC connection described in section 6 is specified but not yet implemented, and is marked as such throughout. No section of this document may be submitted while it describes behaviour the software does not yet have.</p>
+  <div class="note">
+    <p><strong>Sections 1 to 5 and 7 to 10 describe the software as built.</strong> Section 6, the connection to the Sales Data Controller, is specified and built to the API specification but cannot be completed or verified without a controller instance; that section states precisely what is implemented and what is not. This document is revised for every change to the software, as clause 7.10 requires.</p>
   </div>
 
   <section>
@@ -356,12 +356,32 @@
   </section>
 
   <section>
-    <h2>6 · Connection to the VSDC</h2>
-    <div class="note warn">
-      <p><strong>Specified, not yet implemented.</strong> This section describes intended behaviour and must not be submitted until the implementation is complete and verified against a VSDC instance.</p>
+    <h2>6 · Connection to the Sales Data Controller</h2>
+    <div class="note">
+      <p><strong>This section is stated separately because it is the one part not yet verified.</strong> The message format and everything that surrounds it are built and tested. The transport and its failure behaviour require a controller instance, which has been requested from the Authority.</p>
     </div>
-    <p>The till communicates with a Virtual Sales Data Controller deployed on the local network over REST. Sales are sent to <code>/trnsSales/saveSales</code>; the response supplies the SDC identifier, both receipt counters, internal data and the receipt signature, which are printed in the SDC information block.</p>
-    <p>No receipt of any type is printed before the controller has responded. The till detects the controller's availability independently and reports its status. On a communication failure the till stops operating and resumes when the fault clears.</p>
+
+    <p>The till communicates with a Virtual Sales Data Controller over REST. Sales are sent to <code>/trnsSales/saveSales</code>. The response supplies the SDC identifier, the per-type and total receipt counters, the internal data and the receipt signature, which are printed in the SDC information block.</p>
+
+    <h3>Built and verified</h3>
+    <ul>
+      <li>The sales message itself, in the format defined by the VSDC API specification. Its figures reproduce the worked example in that specification, and the per-bracket rounding matches the printed receipt in clause 13.1.</li>
+      <li>The journal entry written before printing, held pending until the controller answers and confirmed or failed on its response.</li>
+      <li>Receipt numbering, claimed within the settlement so that a failed sale leaves no gap.</li>
+      <li>The receipt layout, including the SDC information block, the internal data and signature grouped in fours, and the QR payload composed as clause 7.24.7 defines.</li>
+    </ul>
+
+    <h3>Awaiting a controller instance</h3>
+    <p>The following are specified and cannot be completed or demonstrated without a Sales Data Controller to communicate with:</p>
+    <ul>
+      <li>Sending the message and receiving the response (clause 7.19, 7.20).</li>
+      <li>Withholding the receipt until the controller has responded (clause 10, 7.8).</li>
+      <li>Detecting the controller's availability independently and reporting its status to the user (clause 7.9).</li>
+      <li>Ceasing operation on a communication error and resuming when it clears (clause 24.7.9).</li>
+      <li>Transmitting journal data for sale and refund receipts (clause 6.5).</li>
+    </ul>
+
+    <p>Behaviour cannot be tested against a controller that does not exist, and YoFinder Ltd will not describe as verified what it has not verified. A test instance has been requested; this section will be completed and this document revised once the integration has been demonstrated.</p>
   </section>
 
   <section>
@@ -397,9 +417,10 @@
   </section>
 
   <footer>
-    <p>Draft 1 · Magnify 1.1.50 · YoFinder Ltd · TIN 149047989<br>
+    <p>Version 1 · Magnify 1.1.50 · YoFinder Ltd · TIN 149047989<br>
+    Rukiri I, Remera, Gasabo, Kigali City · +250 783 714 720 · info@yofinder.com<br>
     Prepared under clause 7.10 of the Technical Specification of CIS for VSDC, Ver. 1.0 (March 2018).<br>
-    Not for submission while section 6 remains unimplemented.</p>
+    Revised for every change to the software. Section 6 completes on verification against a Sales Data Controller.</p>
   </footer>
 
 </div>
