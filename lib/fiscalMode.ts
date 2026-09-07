@@ -72,3 +72,22 @@ export function describeFiscalConfigurationGap(config: FiscalConfiguration): str
 export function canIssueFiscalReceipts(config: FiscalConfiguration): boolean {
   return describeFiscalConfigurationGap(config) === null
 }
+
+/**
+ * Service mode (§7.2).
+ *
+ *   "have reprogrammable TIN under its service mode"
+ *
+ * The clause puts the TIN behind a mode that normal operation cannot reach,
+ * because changing it erases the venue's entire fiscal history. So it is an
+ * environment value, set on the machine by whoever is performing the handover
+ * and removed afterwards — not a switch in the settings screen, which is
+ * exactly the thing a manager could find by accident.
+ *
+ * Deliberately NOT the same shape of decision as isFiscalBuild(): that one is
+ * frozen into the installer and must never move, while this one is meant to be
+ * turned on for an afternoon and turned off again.
+ */
+export function isServiceMode(): boolean {
+  return String(process.env.MAGNIFY_SERVICE_MODE ?? '').trim().toLowerCase() === 'on'
+}
