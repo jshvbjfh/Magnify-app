@@ -9,6 +9,8 @@ import { enqueueOrderSync, isNoChargeMethod, syncRestaurantOrderTotals } from '@
 import { finalizeRestaurantOrderPayment } from '@/lib/restaurantOrderPayment'
 import { findRestaurantAction, isRestaurantActionConflict, normalizeRestaurantActionKey, recordRestaurantAction } from '@/lib/restaurantAction'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
+import { describeFiscalVoidRefusal } from '@/lib/fiscalImmutability'
+import { isFiscalBuild } from '@/lib/fiscalMode'
 
 const ORDER_TRANSACTION_OPTIONS = {
   maxWait: 10000,
@@ -215,6 +217,25 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   if (action === 'cancel') {
+    // §7.17 — a settled bill has been declared: it carries a number from a
+    // gap-free sequence and the guest has the paper. Cancelling it would leave
+    // a hole in a sequence RRA audits for holes, and contradict a receipt
+    // already in someone's pocket. The way to undo it is a refund that
+    // references the original, not the original's disappearance.
+    //
+    // Checked before the supervisor PIN, so a fiscal build answers "issue a
+    // refund instead" rather than sending someone to find a manager for an
+    // approval that would be refused anyway. Outside a fiscal build this is
+    // null and every venue keeps the behaviour it has today.
+    const fiscalVoidRefusal = describeFiscalVoidRefusal({
+      fiscalMode: isFiscalBuild(),
+      status: order.status,
+      action: 'cancel',
+    })
+    if (fiscalVoidRefusal) {
+      return NextResponse.json({ error: fiscalVoidRefusal }, { status: 409 })
+    }
+
     const approver = await resolveCancellationApprover({
       restaurantId,
       branchId,
