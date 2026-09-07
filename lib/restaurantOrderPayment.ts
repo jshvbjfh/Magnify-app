@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from '@prisma/client'
 import { recordJournalEntry } from '@/lib/accounting'
 import { recordDishSalesForPaidOrder } from '@/lib/dishSaleRecording'
 import { isHotelBuffetLine } from '@/lib/hotelBuffet'
+import { issueFiscalReceiptForSettlement } from '@/lib/fiscalSettlement'
 import { ACTIVE_RESTAURANT_ORDER_STATUSES, calculateRestaurantOrderTotals, enqueueOrderSync, isNoChargeMethod, syncRestaurantOrderTotals } from '@/lib/restaurantOrders'
 import { enqueueRestaurantTableSync } from '@/lib/restaurantTableSync'
 
@@ -173,6 +174,34 @@ export async function finalizeRestaurantOrderPayment(
   if (!paidOrder) {
     throw new Error('Order not found after payment update')
   }
+
+  // The fiscal receipt (§7.14), on a fiscal build only.
+  //
+  // Before the stock is consumed below, deliberately: §7.30 asks whether the
+  // goods are there at the moment of issuing, and recordDishSalesForPaidOrder
+  // is what takes them off. Asking afterwards would test a store this very sale
+  // had already emptied.
+  //
+  // On a non-fiscal build this returns before running a single query — see
+  // lib/fiscalSettlement. A refusal throws, and the whole settlement rolls
+  // back: a certified system that cannot issue a receipt must refuse the sale,
+  // not take the money quietly.
+  await issueFiscalReceiptForSettlement(db, {
+    restaurantId: params.restaurantId,
+    branchId: params.branchId,
+    orderId: params.orderId,
+    orderNumber: String(currentOrder.orderNumber ?? ''),
+    paymentMethod: normalizedPaymentMethod,
+    businessDate: currentOrder.businessDate ?? paidAt,
+    comped: isComped,
+    lines: currentOrder.items.map((item) => ({
+      dishId: item.dishId,
+      dishName: item.dishName,
+      dishPrice: Number(item.dishPrice),
+      qty: Number(item.qty),
+      discountPercent: item.discountPercent,
+    })),
+  })
 
   await recordDishSalesForPaidOrder(db, {
     restaurantId: params.restaurantId,
