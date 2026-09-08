@@ -33,39 +33,50 @@ model User {
 // ─── RESTAURANT / BRANCH ───────────────────────────────────────────────────
 
 model Restaurant {
-  id                 String    @id @default(cuid())
-  name               String
-  ownerId            String
-  owner              User      @relation("RestaurantOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  managerId          String?
-  manager            User?     @relation("RestaurantManager", fields: [managerId], references: [id], onDelete: SetNull)
-  joinCode           String    @unique
-  billHeader         String?
-  billPrinterIp      String?
-  billPrinterPort    Int?
-  qrOrderingMode     String    @default("order")
-  licenseExpiry      DateTime?
-  licenseActive      Boolean   @default(true)
-  fifoEnabled        Boolean   @default(true)
-  fifoConfiguredAt   DateTime?
+  id                        String    @id @default(cuid())
+  name                      String
+  ownerId                   String
+  owner                     User      @relation("RestaurantOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  managerId                 String?
+  manager                   User?     @relation("RestaurantManager", fields: [managerId], references: [id], onDelete: SetNull)
+  joinCode                  String    @unique
+  billHeader                String?
+  billPrinterIp             String?
+  billPrinterPort           Int?
+  qrOrderingMode            String    @default("order")
+  licenseExpiry             DateTime?
+  licenseActive             Boolean   @default(true)
+  fifoEnabled               Boolean   @default(true)
+  fifoConfiguredAt          DateTime?
   // One stock for the whole restaurant, held by the main station, instead of
   // every station keeping its own. Off by default: it only suits venues whose
   // stations share a physical store, so a customer whose "stations" are
   // separate premises keeps stock per station. Flipping it back restores the
   // per-station behaviour without touching data.
-  sharedStock        Boolean   @default(false)
+  sharedStock               Boolean   @default(false)
   // Whether this venue runs service shifts. On by default, so every existing
   // restaurant keeps the supervisor-opens-the-day flow. Switched off, the
   // waiter app stops gating on a shift and stops stamping orders with one —
   // those orders fall back to paidAt for reporting, exactly as the nullable
   // shiftId/businessDate columns were always designed to allow. Orders already
   // stamped keep their shift, so history stays intact either way.
-  shiftsEnabled      Boolean   @default(true)
+  shiftsEnabled             Boolean   @default(true)
   // Print a payment-confirmation slip automatically every time a bill is
   // settled: the same bill the guest already got, plus the tender it was paid
   // with. Some venues hand it over as the receipt; most do not want a second
   // slip per table, so it is off unless a manager asks for it.
-  printPaymentConfirmation Boolean @default(false)
+  printPaymentConfirmation  Boolean   @default(false)
+  // Whether the manager app shows the Operating Equipments tab: the non-food
+  // supplies a venue buys to run itself — soap, slippers, mop sticks, bin
+  // liners. Off by default because most venues track none of this, and a tab
+  // nobody uses is a tab in the way. Flipping it off only hides the tab; the
+  // items and their movement history stay exactly as they were.
+  operatingEquipmentEnabled Boolean   @default(false)
+  // Whether this venue lets rooms. Off by default — Magnify is a restaurant
+  // system, and the overwhelming majority of its customers have no rooms at
+  // all. Switched on it adds a Rooms tab beside the floor plan; switched back
+  // off it only hides that tab, and every room stays exactly as it was.
+  hotelEnabled              Boolean   @default(false)
   // The taxpayer's TIN, printed on every fiscal receipt.
   //
   // There is deliberately NO "fiscal mode" column beside this. Whether VAT is
@@ -76,15 +87,15 @@ model Restaurant {
   // Null means this venue has not been registered with RRA yet. On a fiscal
   // build that is not "VAT off" — it is "not configured", and the till refuses
   // to trade until it is filled in.
-  tin                String?
+  tin                       String?
   // Hides financial history before this date from the Transactions page without
   // deleting anything — the entries stay in the database (so stock, purchase
   // records and audits remain intact) and clearing this field restores them.
-  historyVisibleFrom DateTime?
-  syncRestaurantId   String?   @unique
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  deletedAt          DateTime?
+  historyVisibleFrom        DateTime?
+  syncRestaurantId          String?   @unique
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+  deletedAt                 DateTime?
 
   branches       Branch[]
   staff          Staff[]
@@ -166,20 +177,22 @@ model Branch {
   updatedAt          DateTime   @updatedAt
   deletedAt          DateTime?
 
-  tables         RestaurantTable[]
-  orders         RestaurantOrder[]
-  dishes         Dish[]
-  inventoryItems InventoryItem[]
-  purchases      InventoryPurchase[]
-  dishSales      DishSale[]
-  wasteLogs      WasteLog[]
-  stockTakes     StockTake[]
-  adjustmentLogs InventoryAdjustmentLog[]
-  staffBranches  StaffBranch[]
-  shifts         EmployeeShift[]
-  kitchenTickets KitchenTicket[]
-  syncCursors    SyncCursor[]
-  syncOutbox     SyncOutbox[]
+  tables             RestaurantTable[]
+  orders             RestaurantOrder[]
+  dishes             Dish[]
+  inventoryItems     InventoryItem[]
+  purchases          InventoryPurchase[]
+  dishSales          DishSale[]
+  wasteLogs          WasteLog[]
+  stockTakes         StockTake[]
+  adjustmentLogs     InventoryAdjustmentLog[]
+  staffBranches      StaffBranch[]
+  shifts             EmployeeShift[]
+  kitchenTickets     KitchenTicket[]
+  syncCursors        SyncCursor[]
+  syncOutbox         SyncOutbox[]
+  operatingEquipment OperatingEquipment[]
+  rooms              Room[]
 
   @@unique([restaurantId, code])
   @@index([restaurantId])
@@ -274,6 +287,56 @@ model RestaurantTable {
   @@map("restaurant_tables")
 }
 
+// ─── ROOMS (LIGHT HOTEL) ───────────────────────────────────────────────────
+
+// A lettable room. This is a room LIST, not a property management system:
+// there is deliberately no reservation, no rate calendar and no night audit.
+// The hotels adopting Magnify already run their restaurant on it and want the
+// rooms visible beside the floor plan — not a second system to learn.
+//
+// Modelled on RestaurantTable on purpose, because a room behaves like a table
+// that is let by the night: a named thing carrying a status a manager taps
+// through, which a bill will eventually attach to. Keeping the two shapes alike
+// means the room grid, its statuses and its sync reuse what the floor plan has
+// already proved in service.
+model Room {
+  id           String    @id @default(cuid())
+  restaurantId String
+  branchId     String
+  branch       Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  // The number painted on the door: "101", "204", "Cottage 2".
+  name         String
+  // single · double · twin · triple · suite · family. Free text so a venue can
+  // name its own room classes without waiting on a migration.
+  type         String    @default("double")
+  // How many guests it sleeps — the room equivalent of a table's seats.
+  capacity     Int       @default(2)
+  // Rack rate per night. Zero means the manager has not set one yet; it does
+  // NOT mean the room is free, and no caller may treat it as a price.
+  rate         Float     @default(0)
+  // vacant · occupied · dirty · maintenance.
+  //
+  // "dirty" earns a state of its own rather than folding into vacant: a room
+  // the guest has just left is neither sellable nor occupied, and collapsing it
+  // into either one is exactly how a hotel double-books a room or loses a night
+  // of revenue on one that was ready all along.
+  status       String    @default("vacant")
+  floor        String?
+  notes        String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  // Rooms belong to the restaurant, not to one branch — the same call the floor
+  // plan makes. A hotel's kitchen, bar and reception are stations of a single
+  // property, and every one of them has to see the same rooms for a guest to be
+  // charged to one. branchId is retained only as origin metadata.
+  @@unique([restaurantId, name])
+  @@index([restaurantId, branchId])
+  @@map("rooms")
+}
+
 model RestaurantOrder {
   id             String           @id @default(cuid())
   restaurantId   String
@@ -327,7 +390,7 @@ model RestaurantOrder {
   // still belong to the waiter who took it. Null on every order settled before
   // this existed, and on orders closed by their own waiter, so read it as
   // "nobody other than the waiter", never as "nobody".
-  settledByName  String?
+  settledByName String?
 
   // The supervisor whose PIN approved the cancellation. cancelReason says why;
   // this says who authorised it, which is the half the cancellation report
@@ -522,7 +585,7 @@ model FiscalCounter {
 // with the receipts they summarise, which they cannot do if the two are
 // computed by different routes.
 model FiscalReceipt {
-  id           String   @id @default(cuid())
+  id           String  @id @default(cuid())
   restaurantId String
   branchId     String
   // Null for a receipt with no order behind it — a training ticket, or a
@@ -530,9 +593,9 @@ model FiscalReceipt {
   orderId      String?
 
   // NS sale · NR refund · CS copy · TS training · PS proforma.
-  receiptType  String
+  receiptType           String
   // The number we claimed and sent to the VSDC.
-  invoiceNumber Int
+  invoiceNumber         Int
   // The invoice this one reverses. Refunds only (§7.17), and an original may be
   // reversed exactly once — enforced by the unique index below.
   originalInvoiceNumber Int?
@@ -552,17 +615,17 @@ model FiscalReceipt {
   totalAmount        Float
   totalTaxableAmount Float
   totalTaxAmount     Float
-  taxableAmtA        Float @default(0)
-  taxableAmtB        Float @default(0)
-  taxableAmtC        Float @default(0)
-  taxableAmtD        Float @default(0)
-  taxAmtA            Float @default(0)
-  taxAmtB            Float @default(0)
-  taxAmtC            Float @default(0)
-  taxAmtD            Float @default(0)
+  taxableAmtA        Float   @default(0)
+  taxableAmtB        Float   @default(0)
+  taxableAmtC        Float   @default(0)
+  taxableAmtD        Float   @default(0)
+  taxAmtA            Float   @default(0)
+  taxAmtB            Float   @default(0)
+  taxAmtC            Float   @default(0)
+  taxAmtD            Float   @default(0)
   // §18.1.13 and §18.1.18 — the report needs both, per receipt.
-  itemCount          Int   @default(0)
-  discountTotal      Float @default(0)
+  itemCount          Int     @default(0)
+  discountTotal      Float   @default(0)
 
   // ── Transmission ────────────────────────────────────────────────────────
   // PENDING until the VSDC answers, SENT once it has, FAILED when it refused.
@@ -639,19 +702,19 @@ model CashMovement {
 // ─── MENU ──────────────────────────────────────────────────────────────────
 
 model Dish {
-  id                  String    @id @default(cuid())
-  restaurantId        String
-  branchId            String
-  branch              Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  name                String
-  category            String?
-  menuType            String?
-  sellingPrice        Float
-  description         String?
-  isActive            Boolean   @default(true)
+  id                    String    @id @default(cuid())
+  restaurantId          String
+  branchId              String
+  branch                Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  name                  String
+  category              String?
+  menuType              String?
+  sellingPrice          Float
+  description           String?
+  isActive              Boolean   @default(true)
   // MEP (mise en place): batch-cooked portions ready to serve; sales consume these first
-  preparedPortions    Float     @default(0)
-  preparedPortionCost Float     @default(0)
+  preparedPortions      Float     @default(0)
+  preparedPortionCost   Float     @default(0)
   // ── RRA item registration ────────────────────────────────────────────────
   // itemCode is what RRA knows this dish as, and it is PERMANENT once issued —
   // it appears on receipts already handed to guests and in declarations already
@@ -687,9 +750,9 @@ model Dish {
   // exemption exists in the clause precisely because prepared food cannot be
   // counted the way a bottle can.
   itemType              String    @default("SERVICE")
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-  deletedAt           DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  deletedAt             DateTime?
 
   ingredients DishIngredient[]
   variants    DishVariant[]
@@ -782,6 +845,94 @@ model PrepIngredient {
   @@unique([prepItemId, ingredientItemId])
   @@index([prepItemId])
   @@map("prep_ingredients")
+}
+
+// ─── OPERATING EQUIPMENT ───────────────────────────────────────────────────
+
+// The non-food supplies a venue buys to run itself: soap, work slippers, mop
+// sticks, bin liners, cleaning cloths.
+//
+// Deliberately NOT an InventoryItem with a third `type`. That table is wired
+// into recipes, FIFO layers, food cost, stock reconciliation, the owner
+// dashboard's stock value and Jesse's purchase totals — and most of those read
+// every row for a restaurant without filtering on type at all, because until
+// now they never had to. A bar of soap arriving in that table would silently
+// land in food cost, and the only defence would be remembering to exclude it
+// in ~27 separate places forever. Here, it cannot reach any of them.
+//
+// The cost of the split is that equipment gets no FIFO layering, no shared-stock
+// pooling and no inter-station transfers. None of those mean anything for soap:
+// you buy it, it sits in a cupboard, it runs out.
+model OperatingEquipment {
+  id           String    @id @default(cuid())
+  restaurantId String
+  branchId     String
+  branch       Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  name         String
+  // Free text on purpose — "piece", "bar", "roll", "litre", "pair". Equipment
+  // is never converted between units the way an ingredient is, so there is
+  // nothing here for a unit table to protect.
+  unit         String    @default("piece")
+  quantity     Float     @default(0)
+  // What one unit last cost. Used to value what is on the shelf; it is not a
+  // costing input to anything else, and nothing downstream reads it.
+  unitCost     Float     @default(0)
+  // Warn below this. Zero means never warn.
+  reorderLevel Float     @default(0)
+  category     String?
+  notes        String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  movements OperatingEquipmentMovement[]
+
+  @@unique([restaurantId, branchId, name])
+  @@index([branchId, deletedAt])
+  @@map("operating_equipment")
+}
+
+// Every change to an equipment quantity, in one ledger: stock received, stock
+// handed out, stock-take corrections.
+//
+// How equipment gets consumed is an open question — nobody has decided yet
+// whether soap is drawn down per shift, per stock take, or issued to a named
+// employee. So this table records only what a human actually did, with no rule
+// inferring anything. When the consumption rule is settled it arrives as
+// another `kind` here rather than as a new table, and every quantity already
+// recorded stays valid.
+model OperatingEquipmentMovement {
+  id           String             @id @default(cuid())
+  equipmentId  String
+  equipment    OperatingEquipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  restaurantId String
+  branchId     String
+  // 'purchase' — bought, stock goes up.
+  // 'issue'    — handed out to the floor, stock goes down.
+  // 'adjustment' — a stock take corrected the number, either direction.
+  kind         String
+  // SIGNED, and the sign is the single source of truth for direction: positive
+  // adds to stock, negative removes. Storing an unsigned magnitude plus a kind
+  // would mean every reader re-deriving the sign from the kind, and one reader
+  // getting it backwards is a stock level that drifts silently.
+  quantity     Float
+  unitCost     Float              @default(0)
+  totalCost    Float              @default(0)
+  supplier     String?
+  note         String?
+  // Free text, not a Staff relation: whoever typed it. Equipment is recorded by
+  // a manager at a desk, and tying it to a Staff row would imply a custody
+  // trail this feature does not yet have.
+  recordedBy   String?
+  occurredAt   DateTime           @default(now())
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  deletedAt    DateTime?
+
+  @@index([equipmentId, occurredAt])
+  @@index([restaurantId, branchId, occurredAt])
+  @@map("operating_equipment_movements")
 }
 
 // A user-made tab for grouping stock on the inventory screen. Purely a lens:

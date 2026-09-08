@@ -16,6 +16,8 @@ const settingsRestaurantSelect = {
   qrOrderingMode: true,
   shiftsEnabled: true,
   printPaymentConfirmation: true,
+  operatingEquipmentEnabled: true,
+  hotelEnabled: true,
   fifoEnabled: true,
   fifoConfiguredAt: true,
   joinCode: true,
@@ -108,7 +110,7 @@ export async function POST(req: Request) {
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const userId = session.user.id
   const body = await req.json()
-  const { name, billHeader, billPrinterIp, billPrinterPort, qrOrderingMode, shiftsEnabled, fifoEnabled, printPaymentConfirmation } = body
+  const { name, billHeader, billPrinterIp, billPrinterPort, qrOrderingMode, shiftsEnabled, fifoEnabled, printPaymentConfirmation, operatingEquipmentEnabled, hotelEnabled } = body
   const qrMenuHeroImageUrl = body?.qrMenuHeroImageUrl === null
     ? null
     : typeof body?.qrMenuHeroImageUrl === 'string'
@@ -143,6 +145,8 @@ export async function POST(req: Request) {
     qrOrderingMode?: 'order' | 'view_only' | 'disabled'
     shiftsEnabled?: boolean
     printPaymentConfirmation?: boolean
+    operatingEquipmentEnabled?: boolean
+    hotelEnabled?: boolean
     fifoEnabled?: boolean
     fifoConfiguredAt?: Date
   } = {}
@@ -159,6 +163,19 @@ export async function POST(req: Request) {
   // touches nothing already recorded.
   if (typeof printPaymentConfirmation === 'boolean') {
     restaurantUpdateData.printPaymentConfirmation = printPaymentConfirmation
+  }
+  // Whether the manager app shows the Operating Equipments tab. Safe both ways
+  // at any time: it only decides whether a tab renders. Switching it off hides
+  // the tab and keeps every item and movement exactly where it is, so a venue
+  // that turns it off and back on finds its cupboard list unchanged.
+  if (typeof operatingEquipmentEnabled === 'boolean') {
+    restaurantUpdateData.operatingEquipmentEnabled = operatingEquipmentEnabled
+  }
+  // Whether the manager app shows the Rooms tab. Same contract as the switch
+  // above: it decides whether a tab renders and nothing else, so switching it
+  // off hides the room list and leaves every room where it is.
+  if (typeof hotelEnabled === 'boolean') {
+    restaurantUpdateData.hotelEnabled = hotelEnabled
   }
   // Turning shifts off mid-service would strand the open orders: they are already
   // stamped with the shift, but the till would stop offering End Shift, leaving
