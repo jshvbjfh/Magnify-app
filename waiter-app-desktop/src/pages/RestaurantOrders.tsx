@@ -7,7 +7,7 @@ import {
 import {
   getDishes, getTables, getOrders, getOrderItems, createOrder, updateOrder, getConfig,
   getMepOutDishIds, addOrderItems, getOrderById, ORDER_SOURCE, markTicketsPushed,
-  setItemDiscount, mergeOrdersLocal, lineNetAmount,
+  setItemDiscount, setOrderDiscount, mergeOrdersLocal, lineNetAmount,
   recordKitchenTicket, moveOrderItemToNewOrder, moveOrderItemToExistingOrder, recordItemMove, getMovedItemIds, findOpenOrderForTable,
   type Dish, type RestaurantTable, type Order, type OrderItem,
 } from '../services/db'
@@ -461,10 +461,14 @@ export default function RestaurantOrders({ mode = 'pos', waiterName = '', isSupe
   const [arCustomerPhone,   setArCustomerPhone]   = useState('')
   const [payingSaving,      setPayingSaving]      = useState(false)
   const [cancelingOrderId,  setCancelingOrderId]  = useState<string | null>(null)
-  // Discount being entered on one line. Held until a supervisor approves it —
-  // the percentage is typed first, the PIN second, and nothing is written until
+  // Discount being entered. Held until a supervisor approves it — the
+  // percentage is typed first, the PIN second, and nothing is written until
   // both are in.
-  const [discountTarget,    setDiscountTarget]    = useState<{ orderId: string; item: OrderItem } | null>(null)
+  //
+  // A null item means the whole bill: the same two steps, the same approval and
+  // the same stored percentage, so a manager waving 20% at a table does not
+  // have to walk down its lines one at a time.
+  const [discountTarget,    setDiscountTarget]    = useState<{ orderId: string; item: OrderItem | null } | null>(null)
   const [discountPct,       setDiscountPct]       = useState('')
   const [discountAwaitingPin, setDiscountAwaitingPin] = useState(false)
   // Moving one line to another table. Same two-step shape as a discount: choose
@@ -1126,20 +1130,28 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
 
   // Write the discount a supervisor has just approved. The percentage was typed
   // before the PIN, so by the time this runs both halves are in hand.
+  //
+  // A whole-bill discount is the same write repeated across the bill's live
+  // lines, not a second kind of discount: it recomputes, prints, syncs and books
+  // through the paths a line discount already goes down.
   async function applyApprovedDiscount(approvedBy: string) {
     if (!discountTarget) return
+    const { orderId, item } = discountTarget
     const raw = Number(discountPct)
     // Blank or 0 clears the discount — that is how a mistake gets undone, and it
     // needs the same approval as setting one.
     const pct = Number.isFinite(raw) && raw > 0 && raw <= 100 ? raw : null
     try {
-      await setItemDiscount(discountTarget.orderId, discountTarget.item.id, pct)
-      await recomputeOrderTotals(discountTarget.orderId)
+      if (item) await setItemDiscount(orderId, item.id, pct)
+      else await setOrderDiscount(orderId, pct)
+      await recomputeOrderTotals(orderId)
       await loadPOS()
       setConfirmSuccess(
         pct === null
-          ? `Discount removed · approved by ${approvedBy}`
-          : `${pct}% off ${discountTarget.item.dish_name} · approved by ${approvedBy}`,
+          ? (item ? `Discount removed · approved by ${approvedBy}` : `Bill discount removed · approved by ${approvedBy}`)
+          : (item
+              ? `${pct}% off ${item.dish_name} · approved by ${approvedBy}`
+              : `${pct}% off the whole bill · approved by ${approvedBy}`),
       )
       setTimeout(() => setConfirmSuccess(null), 4000)
       pushSync().catch(() => {})
@@ -2224,6 +2236,31 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                     )}
                     <span className="text-xs font-bold text-gray-700 truncate">{ord.order_number}</span>
                     <span className="text-xs text-gray-500 truncate ml-auto">{ord.table_name ?? 'Takeaway'}</span>
+                    {/* Discount the whole table in one go. It sits on the bill's
+                        own header rather than in the action stack below because
+                        that is where the bill is identified — and because a
+                        manager waving a percentage at a table of fourteen was
+                        otherwise tapping fourteen times, once per line. The
+                        per-line button stays: the two answer different
+                        questions. */}
+                    {mine && !joinMode && ord.status !== 'UNCONFIRMED' && (
+                      <button
+                        onClick={() => {
+                          setDiscountTarget({ orderId: ord.id, item: null })
+                          // Prefilled only when the whole bill already carries
+                          // ONE percentage — otherwise there is no single number
+                          // to show, and a wrong one in the box invites approving
+                          // a discount nobody meant.
+                          const live = (orderItemsMap[ord.id] ?? []).filter(i => i.status === 'ACTIVE')
+                          const pcts = new Set(live.map(i => i.discount_percent ?? 0))
+                          const one  = live.length > 0 && pcts.size === 1 ? [...pcts][0] : 0
+                          setDiscountPct(one ? String(one) : '')
+                        }}
+                        title="Discount the whole bill"
+                        className="flex-shrink-0 rounded-lg border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-bold text-gray-500 transition-colors hover:border-orange-300 hover:text-orange-600">
+                        Discount bill
+                      </button>
+                    )}
                   </div>
                   <div className="px-3 py-2 space-y-1.5">
                     {oi.map(item => (
@@ -2366,16 +2403,46 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
 
         {/* Discount: the percentage is typed first, then a supervisor approves
             it. Nothing is written until both are in, so an unapproved discount
-            never reaches a bill. */}
-        {discountTarget && !discountAwaitingPin && (
+            never reaches a bill.
+
+            One dialog serves both buttons. A line prices itself; a whole bill
+            prices from its ACTIVE lines — the same lines setOrderDiscount writes
+            to and the only ones any total counts, so the figure quoted here is
+            the figure the guest is asked for. */}
+        {discountTarget && !discountAwaitingPin && (() => {
+          const target = discountTarget.item
+          const ord    = pendingOrders.find(o => o.id === discountTarget.orderId)
+          const lines  = target
+            ? [target]
+            : (orderItemsMap[discountTarget.orderId] ?? []).filter(i => i.status === 'ACTIVE')
+          const gross  = lines.reduce((sum, i) => sum + i.dish_price * i.qty, 0)
+          // Priced through lineNetAmount rather than one multiplication, so the
+          // preview stays the money that will actually be stored even if the
+          // per-line rule ever gains a rounding step.
+          const netAt  = (pct: number) => lines.reduce((sum, i) => sum + lineNetAmount({ ...i, discount_percent: pct }), 0)
+          const already = target ? 0 : lines.filter(i => i.discount_percent).length
+          return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
-              <h3 className="font-bold text-gray-900">Discount this line</h3>
+              <h3 className="font-bold text-gray-900">{target ? 'Discount this line' : 'Discount the whole bill'}</h3>
               <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3">
-                <p className="text-sm font-semibold text-gray-900">{discountTarget.item.dish_name}</p>
-                <p className="text-sm text-gray-600 mt-0.5">
-                  {discountTarget.item.qty} × {fmtRWF(discountTarget.item.dish_price)} = {fmtRWF(discountTarget.item.dish_price * discountTarget.item.qty)} RWF
+                <p className="text-sm font-semibold text-gray-900">
+                  {target ? target.dish_name : `${ord?.order_number ?? 'Bill'} · ${ord?.table_name ?? 'Takeaway'}`}
                 </p>
+                <p className="text-sm text-gray-600 mt-0.5">
+                  {target
+                    ? `${target.qty} × ${fmtRWF(target.dish_price)} = ${fmtRWF(gross)} RWF`
+                    : `${lines.length} item${lines.length === 1 ? '' : 's'} · ${fmtRWF(gross)} RWF at menu price`}
+                </p>
+                {/* Said before the PIN, not after. A bill discount lands the same
+                    percentage on every line, so a discount already given on one
+                    of them is replaced rather than added to — whoever approves
+                    this should know that before they do. */}
+                {already > 0 && (
+                  <p className="mt-1.5 text-xs font-semibold text-amber-700">
+                    Replaces the discount on {already} line{already === 1 ? '' : 's'}.
+                  </p>
+                )}
               </div>
               <div>
                 <label className="text-xs font-semibold text-gray-600 mb-1 block">Discount %</label>
@@ -2391,10 +2458,9 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                 <p className="mt-1.5 text-xs text-gray-500">
                   {(() => {
                     const n = Number(discountPct)
-                    if (!discountPct.trim()) return 'Leave empty to remove the discount.'
+                    if (!discountPct.trim()) return target ? 'Leave empty to remove the discount.' : 'Leave empty to remove every discount on this bill.'
                     if (!Number.isFinite(n) || n <= 0 || n > 100) return 'Enter a number between 1 and 100.'
-                    const net = discountTarget.item.dish_price * discountTarget.item.qty * (1 - n / 100)
-                    return `Guest pays ${fmtRWF(net)} RWF`
+                    return `Guest pays ${fmtRWF(netAt(n))} RWF`
                   })()}
                 </p>
               </div>
@@ -2406,14 +2472,15 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
                 </button>
                 <button
                   onClick={() => setDiscountAwaitingPin(true)}
-                  disabled={Boolean(discountPct.trim()) && !(Number(discountPct) > 0 && Number(discountPct) <= 100)}
+                  disabled={(Boolean(discountPct.trim()) && !(Number(discountPct) > 0 && Number(discountPct) <= 100)) || lines.length === 0}
                   className="flex-1 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-semibold py-3 rounded-xl transition-colors">
                   Get approval
                 </button>
               </div>
             </div>
           </div>
-        )}
+          )
+        })()}
 
         {/* Step 1 — where is this line actually for? Every table is offered, not
             just the free ones: a line often belongs to a table that already has
@@ -2484,8 +2551,8 @@ body{font-family:'Courier New',monospace;font-weight:bold;font-size:${fontPx}px;
             title="Approve discount"
             prompt={
               discountPct.trim()
-                ? `${Number(discountPct)}% off ${discountTarget.item.dish_name}. Enter the supervisor PIN to approve.`
-                : `Remove the discount on ${discountTarget.item.dish_name}. Enter the supervisor PIN to approve.`
+                ? `${Number(discountPct)}% off ${discountTarget.item ? discountTarget.item.dish_name : 'the whole bill'}. Enter the supervisor PIN to approve.`
+                : `Remove the discount on ${discountTarget.item ? discountTarget.item.dish_name : 'the whole bill'}. Enter the supervisor PIN to approve.`
             }
             confirmLabel="Approve"
             busyLabel="Approving…"

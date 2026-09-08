@@ -443,6 +443,41 @@ export async function setItemDiscount(orderId: string, itemId: string, percent: 
   await db.run('UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?', [now, orderId])
 }
 
+// Set or clear ONE percentage across every live line on a bill.
+//
+// A whole-bill discount is stored as the same per-line percentage on each line
+// rather than as a bill-level field. Every path that turns a line into money —
+// the pending card, the printed bill, the journal entry raised at payment and
+// the dish sale — already reads discount_percent, so a bill discount inherits
+// all of them and can never disagree with a line discount about what the guest
+// owes. It also survives a join: lines carry their price with them.
+//
+// Lines that are not ACTIVE are left alone. A canceled line is worth nothing on
+// every total, and repricing it would rewrite what a void said it cost.
+//
+// One executeSet, so a bill is never left half discounted — the guest would be
+// quoted a figure that matches neither the old bill nor the new one.
+//
+// The caller is responsible for having taken a supervisor PIN first; this is
+// only the write.
+export async function setOrderDiscount(orderId: string, percent: number | null): Promise<void> {
+  const db = getDB()
+  const now = new Date().toISOString()
+  // Same guard as setItemDiscount, for the same reason: a bill must never grow
+  // because of a discount, nor go below zero.
+  const clean = percent !== null && Number.isFinite(percent) && percent > 0 && percent <= 100 ? percent : null
+  await db.executeSet([
+    {
+      statement: 'UPDATE order_items SET discount_percent = ?, updated_at = ? WHERE order_id = ? AND status = ?',
+      values: [clean, now, orderId, 'ACTIVE'],
+    },
+    {
+      statement: 'UPDATE orders SET updated_at = ?, synced = 0 WHERE id = ?',
+      values: [now, orderId],
+    },
+  ])
+}
+
 // Join orders: every source order's items move to the target, and each source
 // row stays behind as MERGED pointing at the target.
 //
