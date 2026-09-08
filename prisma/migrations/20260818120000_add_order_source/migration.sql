@@ -4,4 +4,7 @@
 -- history and means switching the feature on never offers to reprint old
 -- tickets. Guest QR orders also stay NULL — they arrive through the web route,
 -- not a waiter app, and are already printed when a waiter confirms them.
-ALTER TABLE "restaurant_orders" ADD COLUMN IF NOT EXISTS "source" TEXT;
+-- Plain ADD COLUMN: SQLite does not support the IF NOT EXISTS form on ALTER
+-- TABLE, and rejects the whole statement as a syntax error. The migration
+-- ledger is what stops this running twice, not the SQL.
+ALTER TABLE "restaurant_orders" ADD COLUMN "source" TEXT;
