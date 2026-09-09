@@ -674,6 +674,91 @@ model FiscalReceipt {
 // Corrections are new rows, never edits. A float counted wrong is fixed by
 // adding the difference, so the drawer's history stays readable rather than
 // being rewritten.
+// One row per attempt to put a receipt on paper (§7.28).
+//
+//   "continue or re-print last line in the case of power failure or after
+//    missing paper recovery"
+//
+// The recovery LOGIC has existed in lib/fiscalPrintRecovery since the fiscal
+// work began; what was missing is anything that remembers a print was in
+// progress. Without this table a till that loses power mid-receipt comes back
+// knowing nothing, and §7.28 cannot be satisfied by a pure function.
+//
+// `originalCompleted` is the field that matters. §7.18 permits exactly ONE
+// original per sale, so recovery has to know whether the guest already got
+// their paper: if they did, anything further prints as a COPY. Storing it here
+// rather than deriving it means a crash between "printed" and "confirmed"
+// cannot silently produce a second original.
+model FiscalPrintJob {
+  id           String @id @default(cuid())
+  restaurantId String
+  branchId     String
+  // Null for a proforma or training ticket, which are not fiscal receipts.
+  fiscalReceiptId String?
+
+  // PENDING · PRINTING · INTERRUPTED · COMPLETED — see lib/fiscalPrintRecovery.
+  state        String @default("PENDING")
+  totalLines   Int    @default(0)
+  // How many lines the printer actually confirmed, so an interrupted job can
+  // resume from the right place instead of starting again.
+  linesPrinted Int    @default(0)
+  // Whether an original has ever finished for this receipt (§7.18).
+  originalCompleted Boolean @default(false)
+  lastError    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The recovery query on startup: "is anything interrupted at this outlet".
+  @@index([branchId, state])
+  @@index([fiscalReceiptId])
+  @@map("fiscal_print_jobs")
+}
+
+// A Z report that was taken, and therefore a trading day that was closed
+// (§7.6).
+//
+// This exists for the X report rather than the Z. §7.6 defines X as covering
+// everything since the last Z — NOT since the last X — and without a record of
+// when a Z was taken there is nothing to measure that from. The X report was
+// opening at the business date instead, which is the same answer only in a
+// venue that never skips a day.
+//
+// Figures are STORED as reported, not recomputed. A Z closes the day; reprinting
+// it next year must reproduce the numbers that were declared, not the numbers a
+// later rounding rule would produce — the same reasoning that governs
+// FiscalReceipt.
+model FiscalDailyReport {
+  id           String @id @default(cuid())
+  restaurantId String
+  branchId     String
+
+  // Only 'Z' is recorded. An X closes nothing and may be taken any number of
+  // times, so recording one would corrupt the very window it is measured from.
+  kind         String @default("Z")
+  businessDate DateTime
+  // The window this report actually covered, so the next X can open where this
+  // one ended rather than at a date boundary that may not match.
+  coveredFrom  DateTime
+  coveredTo    DateTime
+
+  takenAt     DateTime @default(now())
+  takenByName String?
+
+  // As declared, in the report itself.
+  salesCount  Int   @default(0)
+  salesTotal  Float @default(0)
+  refundCount Int   @default(0)
+  refundTotal Float @default(0)
+  totalTax    Float @default(0)
+
+  // A day is closed once. A second Z for the same trading day is refused
+  // rather than allowed to reopen and re-summarise a day already declared.
+  @@unique([branchId, kind, businessDate])
+  @@index([branchId, takenAt])
+  @@map("fiscal_daily_reports")
+}
+
 model CashMovement {
   id           String   @id @default(cuid())
   restaurantId String

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
@@ -37,13 +38,16 @@ export const dynamic = 'force-dynamic'
 // ── The X window ────────────────────────────────────────────────────────────
 //
 // §7.6 defines X as covering everything since the last Z, NOT since the last X.
-// The caller passes `since` because when the last Z was taken is not yet stored
-// anywhere — recording it needs one small table, which is the last piece of
-// F-02. Absent `since`, the window opens at the start of the current business
-// date, which is the same answer in any venue that takes its Z at close of
-// service, and a shorter one than the truth in a venue that skipped a day.
-// Short is the safe direction to be wrong in: it under-reports the window
-// rather than double-counting a day already closed by a Z.
+// Taking X twice in a service would otherwise show the second one as almost
+// empty, which is the mistake the clause is worded to prevent.
+//
+// The window therefore opens at `coveredTo` of the most recent Z — the instant
+// that report actually closed at, not the date boundary it was filed under,
+// because a Z taken at 01:40 covers the night that opened the previous
+// calendar day. Where no Z has ever been taken the window opens at the start
+// of the current business date, which is all there is to go on.
+//
+// `since` overrides both, for an operator reconciling a specific window.
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -73,9 +77,25 @@ export async function GET(req: Request) {
   const dayStart = startOfRestaurantDay(dateParam) ?? startOfRestaurantDay(restaurantDayKey())!
   const dayEnd = endOfRestaurantDay(dateParam) ?? endOfRestaurantDay(restaurantDayKey())!
 
+  // Where the last Z left off. Only consulted for an X — a Z is defined by its
+  // own business date, not by what preceded it.
+  const lastZ =
+    kind === 'X'
+      ? await prisma.fiscalDailyReport.findFirst({
+          where: { branchId, kind: 'Z' },
+          orderBy: { coveredTo: 'desc' },
+          select: { coveredTo: true, businessDate: true, takenAt: true },
+        })
+      : null
+
   const sinceParam = searchParams.get('since')
   const sinceDate = sinceParam ? new Date(sinceParam) : null
-  const windowStart = kind === 'X' && sinceDate && !Number.isNaN(sinceDate.getTime()) ? sinceDate : dayStart
+  const explicitSince = sinceDate && !Number.isNaN(sinceDate.getTime()) ? sinceDate : null
+
+  const windowStart =
+    kind === 'X'
+      ? explicitSince ?? lastZ?.coveredTo ?? dayStart
+      : dayStart
   const windowEnd = kind === 'X' ? new Date() : dayEnd
 
   const [rows, floats, incompleteSales, compedOrders] = await Promise.all([
@@ -174,7 +194,11 @@ export async function GET(req: Request) {
         // the PREVIOUS day, so printing it back would label the report with the
         // wrong date even though it covers the right one.
         ? `Business date ${dateParam}`
-        : `Since ${windowStart.toISOString().replace('T', ' ').slice(0, 19)}`,
+        // An X says what it is measured FROM, because that is the question an
+        // operator taking a second one mid-service is actually asking.
+        : lastZ && !explicitSince
+          ? `Since the Z of ${lastZ.businessDate.toISOString().slice(0, 10)}`
+          : `Since ${windowStart.toISOString().replace('T', ' ').slice(0, 19)}`,
     openingDeposit: floats.reduce((sum, row) => sum + Number(row.amount ?? 0), 0),
     incompleteSalesCount: incompleteSales,
     otherReductions: compedOrders
@@ -203,5 +227,79 @@ export async function GET(req: Request) {
     text: renderDailyReportAsText(input),
     // Not part of §18. Operational truth the person closing the day needs.
     unsent: { pending: pending.length, failed: failed.length },
+    // For an X: which Z it is measured from, so the screen can say so.
+    sinceLastZ: lastZ ? { businessDate: lastZ.businessDate.toISOString(), takenAt: lastZ.takenAt.toISOString() } : null,
   })
+}
+
+// POST — take the Z, and close the trading day (§7.6).
+//
+//   { date?: 'YYYY-MM-DD' }   defaults to today at the restaurant
+//
+// Taking a Z is not the same act as reading one. GET renders the figures as
+// often as anyone likes and changes nothing; this records that the day was
+// closed, which is what every later X measures itself from.
+//
+// The figures are STORED as declared rather than recomputed on demand, for the
+// same reason fiscal_receipts stores its own: reprinting this Z next year must
+// reproduce the numbers that were declared on the night, not the numbers a
+// later rounding rule would produce.
+export async function POST(req: Request) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const context = getRestaurantContextFromSession(session.user as Record<string, unknown>)
+  const restaurantId = context?.restaurantId ?? null
+  const branchId = context?.branchId ?? null
+  if (!restaurantId || !branchId) return NextResponse.json({ error: 'No outlet selected' }, { status: 400 })
+
+  const outletResult = await loadFiscalOutlet(prisma, restaurantId, branchId)
+  if (!outletResult.ok) return NextResponse.json({ error: outletResult.gap }, { status: 409 })
+
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+  const dateKey = typeof body.date === 'string' && body.date.trim() ? body.date.trim() : restaurantDayKey()
+  const from = startOfRestaurantDay(dateKey)
+  const to = endOfRestaurantDay(dateKey)
+  if (!from || !to) return NextResponse.json({ error: 'That is not a date' }, { status: 400 })
+
+  const issued = await prisma.fiscalReceipt.findMany({
+    where: { branchId, businessDate: { gte: from, lte: to }, status: 'SENT' },
+    select: { receiptType: true, totalAmount: true, totalTaxAmount: true },
+  })
+
+  const sales = issued.filter((row) => row.receiptType === 'NS')
+  const refunds = issued.filter((row) => row.receiptType === 'NR')
+  const round2 = (value: number) => Math.round(value * 100) / 100
+
+  try {
+    const record = await prisma.fiscalDailyReport.create({
+      data: {
+        restaurantId,
+        branchId,
+        kind: 'Z',
+        businessDate: from,
+        coveredFrom: from,
+        // Closed at the moment it was taken, not at the end of the calendar
+        // day — a Z taken at 01:40 must not claim to cover the twenty-two
+        // hours that have not happened yet. The next X opens here.
+        coveredTo: new Date(),
+        takenByName: session.user.name?.trim() || null,
+        salesCount: sales.length,
+        salesTotal: round2(sales.reduce((sum, row) => sum + row.totalAmount, 0)),
+        refundCount: refunds.length,
+        refundTotal: round2(refunds.reduce((sum, row) => sum + row.totalAmount, 0)),
+        totalTax: round2(issued.reduce((sum, row) => sum + row.totalTaxAmount, 0)),
+      },
+    })
+
+    return NextResponse.json({ closed: true, report: record }, { status: 201 })
+  } catch (error) {
+    // The unique index on (branchId, kind, businessDate) is the guard: a day is
+    // closed once. A second Z would reopen and re-summarise a day already
+    // declared, and every X taken since would silently change its window.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return NextResponse.json({ error: 'That day has already been closed with a Z report' }, { status: 409 })
+    }
+    throw error
+  }
 }
