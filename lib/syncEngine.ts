@@ -798,8 +798,51 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       break
     }
     case 'restaurantOrder': {
+      // ── A settled sale is finished ────────────────────────────────────────
+      //
+      // Once a bill is paid it has been declared: it carries a fiscal receipt
+      // number from a gap-free sequence and the guest has the paper. Sync must
+      // not be the back door through which it changes.
+      //
+      // The guard is deliberately NARROW, because this same function runs in
+      // both directions — the cloud applying a till's changes, and a till
+      // applying the cloud's. Freezing paid orders outright would stop a
+      // legitimately settled bill from ever reaching the other side. What is
+      // refused is only a LATER, STALER payload overwriting one that is
+      // already settled here.
+      const settledOrderId = String(payload?.id || change.entityId)
+      const existingOrder = await db.restaurantOrder.findUnique({
+        where: { id: settledOrderId },
+        select: { status: true, _count: { select: { items: true } } },
+      })
+      const alreadySettled = String(existingOrder?.status ?? '').toUpperCase() === 'PAID'
+
       if (change.operation === 'delete') {
+        // A settled sale is never deleted by sync. §7.17 permits reversal by a
+        // refund that references the original, not the original's removal —
+        // and a hard delete here would take the row the fiscal receipt points
+        // at, leaving a receipt in a guest's hand with nothing behind it.
+        if (alreadySettled) {
+          console.warn(
+            '[syncEngine] restaurantOrder %s: refused sync delete of a settled sale',
+            settledOrderId,
+          )
+          break
+        }
         await db.restaurantOrder.deleteMany({ where: { id: change.entityId } })
+        break
+      }
+
+      // A paid order being pushed back as OPEN is a stale client that never
+      // learned the bill was settled. Applying it would un-settle the sale and
+      // rewrite its totals, so the whole change is dropped rather than
+      // half-applied.
+      if (alreadySettled && String(payload?.status ?? '').toUpperCase() !== 'PAID') {
+        console.warn(
+          '[syncEngine] restaurantOrder %s: refused stale %s payload over a settled sale',
+          settledOrderId,
+          String(payload?.status ?? 'unknown'),
+        )
         break
       }
 
@@ -869,6 +912,23 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
             payload.items.length,
           )
         }
+        // The lines of a settled sale are frozen. They are what the fiscal
+        // receipt was computed from, and rewriting them would leave the
+        // receipt disagreeing with the order it was printed from — which is
+        // the first thing an auditor reconciles.
+        //
+        // The exception is an order that is settled here but holds NO lines:
+        // nothing is being protected, and this is the repair path for a push
+        // whose items failed to arrive the first time. Skipping it there would
+        // strand the order permanently empty.
+        if (alreadySettled && (existingOrder?._count.items ?? 0) > 0) {
+          console.warn(
+            '[syncEngine] restaurantOrder %s: refused to rewrite the lines of a settled sale',
+            orderId,
+          )
+          break
+        }
+
         if (validItems.length > 0) {
           await db.orderItem.deleteMany({ where: { orderId } })
           await db.orderItem.createMany({

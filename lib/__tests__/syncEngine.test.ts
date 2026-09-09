@@ -104,6 +104,9 @@ function makeMockDb(overrides: Record<string, any> = {}): any {
       upsert: vi.fn().mockResolvedValue({}),
     },
     restaurantOrder: {
+      // Null = the order does not exist here yet, which is the ordinary case
+      // for an incoming change. Tests covering a settled sale override this.
+      findUnique: vi.fn().mockResolvedValue(null),
       upsert: vi.fn().mockResolvedValue({ id: 'order-1' }),
       deleteMany: vi.fn().mockResolvedValue({}),
     },
@@ -550,6 +553,127 @@ describe('applyResolvedSyncChange', () => {
       expect(db.orderItem.deleteMany).toHaveBeenCalled()
       const [createManyArg] = db.orderItem.createMany.mock.calls[0]
       expect(createManyArg.data).toHaveLength(2)
+    })
+
+    // ── a settled sale is finished ──────────────────────────────────────────
+    //
+    // Sync must not be the back door through which a declared sale changes.
+    // The guard is narrow on purpose: this same function runs in both
+    // directions, so a legitimately settled bill must still be able to reach
+    // the other side. What is refused is a later, staler payload landing on a
+    // sale that is already settled here.
+
+    /** An order that exists here, already paid, carrying `items` lines. */
+    const settledHere = (db: ReturnType<typeof makeMockDb>, items = 2) => {
+      db.restaurantOrder.findUnique.mockResolvedValue({
+        status: 'PAID',
+        _count: { items },
+      })
+    }
+
+    it('refuses to rewrite the lines of a settled sale', async () => {
+      // The lines are what the fiscal receipt was computed from. Rewriting
+      // them leaves the receipt disagreeing with the order it was printed
+      // from — the first thing an auditor reconciles.
+      const db = makeMockDb()
+      settledHere(db)
+
+      const change = makeChange('restaurantOrder', 'upsert', {
+        ...baseOrderPayload,
+        status: 'PAID',
+        items: [
+          { id: 'item-9', dishId: 'dish-9', dishName: 'Something else', dishPrice: 999, qty: 1, kitchenStatus: 'new', status: 'ACTIVE' },
+        ],
+      }, { entityId: 'order-1' })
+
+      await applyResolvedSyncChange(db, change)
+
+      expect(db.orderItem.deleteMany).not.toHaveBeenCalled()
+      expect(db.orderItem.createMany).not.toHaveBeenCalled()
+    })
+
+    it('still fills in the lines of a settled sale that has none', async () => {
+      // The repair path: an order whose items failed to arrive the first time
+      // is protecting nothing, and skipping it would strand it empty forever.
+      const db = makeMockDb()
+      settledHere(db, 0)
+
+      const change = makeChange('restaurantOrder', 'upsert', {
+        ...baseOrderPayload,
+        status: 'PAID',
+        items: [
+          { id: 'item-1', dishId: 'dish-1', dishName: 'Rice', dishPrice: 25, qty: 1, kitchenStatus: 'new', status: 'ACTIVE' },
+        ],
+      }, { entityId: 'order-1' })
+
+      await applyResolvedSyncChange(db, change)
+
+      expect(db.orderItem.createMany).toHaveBeenCalled()
+    })
+
+    it('refuses a stale open payload landing on a settled sale', async () => {
+      // A till that never learned the bill was paid. Applying this would
+      // un-settle the sale and rewrite its totals.
+      const db = makeMockDb()
+      settledHere(db)
+
+      const change = makeChange('restaurantOrder', 'upsert', {
+        ...baseOrderPayload,
+        status: 'OPEN',
+        totalAmount: 5,
+        items: [
+          { id: 'item-1', dishId: 'dish-1', dishName: 'Rice', dishPrice: 5, qty: 1, kitchenStatus: 'new', status: 'ACTIVE' },
+        ],
+      }, { entityId: 'order-1' })
+
+      await applyResolvedSyncChange(db, change)
+
+      expect(db.restaurantOrder.upsert).not.toHaveBeenCalled()
+      expect(db.orderItem.deleteMany).not.toHaveBeenCalled()
+    })
+
+    it('refuses to delete a settled sale', async () => {
+      // §7.17 reverses a sale with a refund referencing it, never by removing
+      // the original — which would leave a receipt in a guest's hand with
+      // nothing behind it.
+      const db = makeMockDb()
+      settledHere(db)
+
+      const change = makeChange('restaurantOrder', 'delete', {}, { entityId: 'order-1' })
+
+      await applyResolvedSyncChange(db, change)
+
+      expect(db.restaurantOrder.deleteMany).not.toHaveBeenCalled()
+    })
+
+    it('still deletes an unsettled order', async () => {
+      // The guard must not freeze ordinary housekeeping.
+      const db = makeMockDb()
+
+      const change = makeChange('restaurantOrder', 'delete', {}, { entityId: 'order-1' })
+
+      await applyResolvedSyncChange(db, change)
+
+      expect(db.restaurantOrder.deleteMany).toHaveBeenCalled()
+    })
+
+    it('lets a settled sale reach the other side for the first time', async () => {
+      // The direction that must keep working: nothing here yet, so the paid
+      // bill applies normally.
+      const db = makeMockDb()
+
+      const change = makeChange('restaurantOrder', 'upsert', {
+        ...baseOrderPayload,
+        status: 'PAID',
+        items: [
+          { id: 'item-1', dishId: 'dish-1', dishName: 'Rice', dishPrice: 25, qty: 1, kitchenStatus: 'new', status: 'ACTIVE' },
+        ],
+      }, { entityId: 'order-1' })
+
+      await applyResolvedSyncChange(db, change)
+
+      expect(db.restaurantOrder.upsert).toHaveBeenCalled()
+      expect(db.orderItem.createMany).toHaveBeenCalled()
     })
   })
 
