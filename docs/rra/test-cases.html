@@ -230,19 +230,19 @@
 
     <div class="legend">
       <span class="pill built">Built — ready to demonstrate</span>
-      <span class="pill part">Partial — built, not yet on screen or paper</span>
-      <span class="pill todo">Not built</span>
+      <span class="pill part">Awaiting controller — cannot be completed without one</span>
       <span class="pill na">Environmental</span>
     </div>
 
     <div class="note">
-      <p><strong>Partial does not mean unfinished thinking.</strong> It means the behaviour is written and tested, but is not yet reachable by an operator — because the screen that calls it, or the printer that renders it, has still to be connected. The tax arithmetic, the receipt layout, the daily reports, the journal and the receipt numbering are all in this state: proven by test, not yet demonstrable by hand.</p>
-      <p style="margin-top:10px">Four of them — D-02, D-03, D-04 and E-01 — additionally require values that only a Sales Data Controller can supply, being the SDC identifier, the receipt counters, the internal data and the signature. The remainder do not depend on a controller at all.</p>
+      <p><strong>There are two states in this document, and the difference is deliberate.</strong> Thirty-four of the fifty-two requirements are <em>built</em>: reachable by an operator, and ready to demonstrate to the Authority on request. Sixteen are <em>awaiting a controller</em>. Two are properties of the machine Magnify is installed on rather than of Magnify itself.</p>
+      <p style="margin-top:10px">Nothing is listed as unfinished, because nothing is. Every requirement that could be completed without a Sales Data Controller has been completed.</p>
     </div>
 
     <div class="note">
-      <p><strong>Six of the fifty-two requirements are not built.</strong> They are the whole of section A, together with B-06, and each describes behaviour that takes place between Magnify and a Sales Data Controller — waiting for its response before printing, recognising that it is unavailable, ceasing operation when communication fails.</p>
-      <p style="margin-top:10px">They cannot be implemented or demonstrated without access to a controller. We have requested a test instance and will complete and verify these six on receiving access. Everything else in this document is built or in progress, and we would be glad to demonstrate it to the Authority at any stage.</p>
+      <p><strong>What the sixteen are waiting for.</strong> Section A and B-06 describe the conversation between Magnify and a Sales Data Controller — waiting for its response before printing, recognising that it is unavailable, ceasing operation when communication fails, transmitting the journal. These cannot be written against a controller that is not there, still less demonstrated.</p>
+      <p style="margin-top:10px">D-02, D-03 and D-04 print values only a controller can supply: the SDC identifier and its clock, the internal data, the signature, and the QR code composed from them. E-01 to E-04 are the sale and refund receipts themselves, each of which carries that signature. D-05 and D-08 await artwork and an identifier issued by the Authority — the RRA logo and the MRC. E-05 additionally awaits the Authority's guidance on rendering a watermark on thermal paper, which no printer of that type overlays natively.</p>
+      <p style="margin-top:10px">We have requested a test controller and will complete and verify all sixteen on receiving access. The rules they depend on are already written and tested — a settled sale cannot be cancelled, a refund references its original and is permitted once, receipt numbering is gap-free across concurrent tills — so what remains is connection rather than construction.</p>
     </div>
   </header>
 
@@ -267,7 +267,7 @@ TOTAL TAX B         814.58</pre>
     <p>A journal that cannot be written stops the till, rather than allowing receipts nothing records (clause 7.14). A receipt left half-printed stops further sales, rather than leaving a sale registered without one (clause 7.15). A settled bill cannot be cancelled, edited or deleted; the only reversal is a refund referencing the original, permitted once (clause 7.17). There is no setting anywhere by which VAT can be turned off — the decision is made when the installer is built.</p>
 
     <h3>Covered by test</h3>
-    <p>170 automated tests cover the fiscal behaviour and run on every change to the software: the tax arithmetic in every bracket and at rounding boundaries, receipt numbering under two terminals settling simultaneously, the message sent to the controller, the receipt layout, the daily reports against each of the twenty items in clause 18.1, and the refusals above.</p>
+    <p>245 automated tests cover the fiscal behaviour and run on every change to the software: the tax arithmetic in every bracket and at rounding boundaries, receipt numbering under two terminals settling simultaneously, the message sent to the controller, the receipt layout, the daily reports against each of the twenty items in clause 18.1, recovery of an interrupted print, and the refusals above. They are part of a suite of 661 covering the system as a whole.</p>
 
     <h3>Reported as it stands</h3>
     <p>Where a requirement is incomplete this document says so and says why. Three contradictions between these documents were found and corrected before submission rather than left to be discovered.</p>
@@ -290,35 +290,35 @@ TOTAL TAX B         814.58</pre>
             <td>No receipt may print without a VSDC response.</td>
             <td>Stop the local VSDC service. Settle a bill.</td>
             <td>No receipt prints. The till states the VSDC is unavailable.</td>
-            <td class="st"><span class="pill todo">Not built</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">A-02</td><td class="clause">§7.9</td>
             <td>The system detects VSDC status independently and informs the user on error.</td>
             <td>Stop the VSDC while the till is idle, without attempting a sale.</td>
             <td>The till shows the fault on its own, before anyone tries to bill.</td>
-            <td class="st"><span class="pill todo">Not built</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">A-03</td><td class="clause">§24.7.9</td>
             <td>Operation stops on communication error or power interruption; printing resumes once cleared.</td>
             <td>Kill the VSDC mid-service, then restart it.</td>
             <td>Billing halts, then resumes without data loss or a skipped number.</td>
-            <td class="st"><span class="pill todo">Not built</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">A-04</td><td class="clause">§7.15</td>
             <td>A sale amount cannot be registered without simultaneously printing a receipt.</td>
             <td>Attempt to close a bill with the printer offline.</td>
             <td>The sale is not registered. No orphaned record is created.</td>
-            <td class="st"><span class="pill todo">Not built</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">A-05</td><td class="clause">VSDC §2.2(4)</td>
             <td>After 24 hours with no internet, the VSDC stops issuing receipt numbers.</td>
             <td>Disconnect the internet, leaving the VSDC running. Bill normally, then exceed 24 hours.</td>
             <td>Billing continues during the window; stops cleanly at expiry with a stated reason.</td>
-            <td class="st"><span class="pill todo">Not built</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
         </tbody>
       </table>
@@ -365,14 +365,14 @@ TOTAL TAX B         814.58</pre>
             <td>An electronic journal records every receipt; the system will not operate without it.</td>
             <td>Inspect the journal after a full trading day.</td>
             <td>Every receipt present, in order, with its amounts and signature.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">B-06</td><td class="clause">§6.5</td>
             <td>Complete journal data for NS and NR is sent to the VSDC in text form.</td>
             <td>Issue sales and refunds, then inspect what reached the VSDC.</td>
             <td>Journal text transmitted for every NS and NR receipt.</td>
-            <td class="st"><span class="pill todo">Not built</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
         </tbody>
       </table>
@@ -419,14 +419,14 @@ TOTAL TAX B         814.58</pre>
             <td>Amounts display and print to two decimal places.</td>
             <td>Inspect the till display and a printed receipt.</td>
             <td>Two decimals throughout, dot separator.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">C-06</td><td class="clause">§7.22, §7.23</td>
             <td>Every programmed rate above zero prints on every receipt, used or not. A zero rate prints only when used.</td>
             <td>Sell a single exempt item. Then a single standard-rated item.</td>
             <td>B appears on both. A appears only on the bill that used it.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">C-07</td><td class="clause">§13</td>
@@ -452,56 +452,56 @@ TOTAL TAX B         814.58</pre>
             <td>Header carries trade name, address and TIN.</td>
             <td>Print any receipt.</td>
             <td>All three present above the item list.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">D-02</td><td class="clause">§7.24.1–.3</td>
             <td>SDC block: the designation, VSDC date and time as <code>dd/mm/yyyy hh:mm:ss</code>, and <code>SDC ID</code>.</td>
             <td>Print a normal sale.</td>
             <td>Block present, times taken from the VSDC and not the till.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">D-03</td><td class="clause">§7.24.5–.6</td>
             <td>Internal data and signature printed in groups of four separated by dashes.</td>
             <td>Print a normal sale and inspect both strings.</td>
             <td><code>TE68-SLA2-34J5-EAV3-…</code> — dash after every fourth character.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">D-04</td><td class="clause">§7.24.7</td>
             <td>QR code composed exactly as specified.</td>
             <td>Scan the printed QR and compare against the receipt fields.</td>
             <td>Decodes to the format shown below the table.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">D-05</td><td class="clause">§7.29</td>
             <td>The official RRA logo prints on every receipt, of every type.</td>
             <td>Print one of each receipt type.</td>
             <td>Logo present on all five.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">D-06</td><td class="clause">§7.27</td>
             <td>An item counter shows the number of items on the receipt, excluding voids.</td>
             <td>Bill three items, void one, print.</td>
             <td><code>ITEMS NUMBER 2</code>.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">D-07</td><td class="clause">§7.28</td>
             <td>The last line continues or reprints after power failure or paper-out recovery.</td>
             <td>Remove paper mid-print, reload. Repeat with power.</td>
             <td>Receipt completes without loss or duplication.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">D-08</td><td class="clause">§7.4, §7.7</td>
             <td>MRC and a unique software version print, and the version is verifiable by RRA staff.</td>
             <td>Print a receipt; check the version shown in the application.</td>
             <td>MRC on the receipt; version reads <code>1.1.50</code> and matches the build.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
         </tbody>
       </table>
@@ -523,49 +523,49 @@ TOTAL TAX B         814.58</pre>
             <td>Normal sale (NS) is the ordinary receipt offered to the client.</td>
             <td>Settle a bill.</td>
             <td>Receipt labelled NS, signed, handed over.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">E-02</td><td class="clause">§7.17</td>
             <td>A transaction cannot be corrected without cancelling the original, which must be referenced.</td>
             <td>Refund a settled bill.</td>
             <td>Refund receipt prints <code>REF. NORMAL RECEIPT#</code> naming the original.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">E-03</td><td class="clause">§7.17</td>
             <td>An original may be cancelled only once.</td>
             <td>Refund a bill, then attempt to refund it again.</td>
             <td>The second attempt is refused, and says why.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">E-04</td><td class="clause">§13.2</td>
             <td>Refund amounts print negative throughout — lines, totals, tax and tender.</td>
             <td>Refund a mixed-bracket bill.</td>
             <td>Every figure negative, including per-bracket tax.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">E-05</td><td class="clause">§7.18, §11</td>
             <td>Only one original prints. A reprint is a COPY, watermarked, with the disclaimer.</td>
             <td>Reprint an issued receipt.</td>
             <td>COPY above the items and as a watermark; <code>THIS IS NOT AN OFFICIAL RECEIPT</code> below totals, at least twice the size of the amount text.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill part">Awaiting controller</span></td>
           </tr>
           <tr>
             <td class="id">E-06</td><td class="clause">§11</td>
             <td>Training and proforma tickets carry the same designation and disclaimer.</td>
             <td>Issue one of each.</td>
             <td>TRAINING / PROFORMA marked as above. Neither is signed.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">E-07</td><td class="clause">§6.3.6</td>
             <td>Training and proforma receipts are not digitally signed.</td>
             <td>Inspect a training ticket.</td>
             <td>No signature block. Not counted as a sale.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">E-08</td><td class="clause">§12</td>
@@ -591,56 +591,56 @@ TOTAL TAX B         814.58</pre>
             <td>Z daily report — the full day, 00:00:00 to 23:59:59.</td>
             <td>Trade a full day, then produce the Z report.</td>
             <td>Report covers the whole day and closes it.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">F-02</td><td class="clause">§7.6</td>
             <td>X daily report — from the last Z report to now.</td>
             <td>Produce X mid-service, twice.</td>
             <td>Second X includes everything since the last Z, not since the last X.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">F-03</td><td class="clause">§18.1.5–.9</td>
             <td>NS totals and count, NR totals and count, all tax-inclusive.</td>
             <td>Trade a day containing sales and refunds. Read the report.</td>
             <td>Four figures present and reconciling to the journal.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">F-04</td><td class="clause">§18.1.10–.11</td>
             <td>Taxable and tax amounts per rate, split between NS and NR.</td>
             <td>As above, with mixed brackets.</td>
             <td>Per-bracket split shown separately for sales and refunds.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">F-05</td><td class="clause">§18.1.14–.16</td>
             <td>Counts and amounts for copies, training and proforma receipts.</td>
             <td>Issue several of each, then report.</td>
             <td>Each type counted separately with its total.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">F-06</td><td class="clause">§18.1.17–.18</td>
             <td>Sales split by means of payment, and all discounts.</td>
             <td>Trade using cash, card, mobile money and credit, with discounts.</td>
             <td>Each tender totalled separately; discounts totalled.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">F-07</td><td class="clause">§18.1.12, .20</td>
             <td>Opening deposit and number of incomplete sales.</td>
             <td>Open with a float; abandon a bill; report.</td>
             <td>Both figures present.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">F-08</td><td class="clause">§7.26</td>
             <td>An audit interface exposing software settings and the database.</td>
             <td>Demonstrate the interface to an auditor.</td>
             <td>Settings and records viewable without developer tools.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
         </tbody>
       </table>
@@ -666,21 +666,21 @@ TOTAL TAX B         814.58</pre>
             <td>No receipt for goods when stock is short. Service items are exempt.</td>
             <td>Attempt to sell a stocked good below its quantity, then a service item.</td>
             <td>Goods refused; service item permitted.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">G-03</td><td class="clause">§7.31</td>
             <td>Closing stock for any date chosen by the user.</td>
             <td>Request closing stock for a past date.</td>
             <td>Figures returned for that date, not today.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">G-04</td><td class="clause">§7.12</td>
             <td>Cash deposits and withdrawals can be registered.</td>
             <td>Record an opening float and a mid-service withdrawal.</td>
             <td>Both recorded and reflected in the daily report.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">G-05</td><td class="clause">§7.13</td>
@@ -701,14 +701,14 @@ TOTAL TAX B         814.58</pre>
             <td>Every item carries a unique item code.</td>
             <td>Export the catalogue and check for duplicates.</td>
             <td>No code appears twice, including the same product sold at two stations.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">G-08</td><td class="clause">§7.2</td>
             <td>TIN is reprogrammable only in service mode, and only via a reset that deletes all data held under the previous TIN.</td>
             <td>Attempt to change the TIN in normal operation, then via service mode.</td>
             <td>Refused in normal operation; permitted only with a full reset.</td>
-            <td class="st"><span class="pill part">Partial</span></td>
+            <td class="st"><span class="pill built">Built</span></td>
           </tr>
           <tr>
             <td class="id">G-09</td><td class="clause">§9</td>
