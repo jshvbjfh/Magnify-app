@@ -1,0 +1,12 @@
+-- The buyer's TIN on a fiscal receipt (custTin in the VSDC payload).
+--
+-- Only where the guest is a business reclaiming the VAT and asks for the
+-- receipt in the company's name. Null for an ordinary guest, which is most of
+-- them — RRA's own field is nullable for exactly that reason, and requiring one
+-- would stop a waiter settling a walk-in bill at all.
+--
+-- This is the GUEST's TIN. The taxpayer's own belongs to the outlet and prints
+-- on every receipt regardless; the two must never be confused.
+--
+-- Additive, nullable and idempotent, so every existing row stays valid.
+ALTER TABLE "fiscal_receipts" ADD COLUMN IF NOT EXISTS "customerTin" TEXT;

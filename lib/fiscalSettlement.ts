@@ -74,6 +74,16 @@ export async function issueFiscalReceiptForSettlement(
     businessDate: Date
     /** True for a comp. No money changed hands, so no sale is declared. */
     comped?: boolean
+    /**
+     * The GUEST's TIN, where the buyer is a business reclaiming the VAT.
+     *
+     * Optional, and absent on most bills. Anything that is not nine digits is
+     * dropped rather than declared: a partial or mistyped TIN would attribute
+     * the purchase to the wrong taxpayer, or to none, which is worse than
+     * declaring it against an unidentified buyer as RRA's nullable field
+     * already allows.
+     */
+    customerTin?: string | null
     lines: SettlementLine[]
   },
 ) {
@@ -148,6 +158,10 @@ export async function issueFiscalReceiptForSettlement(
       orderId: params.orderId,
       receiptType: FISCAL_RECEIPT_TYPES.NORMAL_SALE,
       invoiceNumber: numbers.totalNumber,
+      // Nine digits or nothing — see the note on the parameter.
+      customerTin: /^\d{9}$/.test(String(params.customerTin ?? '').trim())
+        ? String(params.customerTin).trim()
+        : null,
       paymentTypeCode: toVsdcPaymentMethod(params.paymentMethod),
       totalAmount: totals.totalAmount,
       totalTaxableAmount: round2(totals.totalAmount - totalTaxAmount),

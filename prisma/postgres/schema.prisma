@@ -611,6 +611,11 @@ model FiscalReceipt {
   receiptSignature     String?
 
   // ── What was declared ───────────────────────────────────────────────────
+  // The GUEST's TIN, where the buyer is a business reclaiming the VAT (custTin
+  // in the VSDC payload). Null for an ordinary guest, which is most of them —
+  // RRA's own field is nullable for exactly that reason. The TAXPAYER's own TIN
+  // is not stored here; it belongs to the outlet and prints on every receipt.
+  customerTin        String?
   paymentTypeCode    String?
   totalAmount        Float
   totalTaxableAmount Float

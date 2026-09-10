@@ -46,7 +46,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const branchId = context.branchId
 
   const { id } = await params
-  const { action, cancelReason, paymentMethod, customerName, customerPhone, noChargeReason, supervisorPin, actionKey } = await req.json()
+  const { action, cancelReason, paymentMethod, customerName, customerPhone, noChargeReason, customerTin, supervisorPin, actionKey } = await req.json()
   const normalizedActionKey = normalizeRestaurantActionKey(actionKey)
 
   // Main is not another station — it oversees them all, so a receivable
@@ -143,6 +143,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
           arCustomerName: customerName || null,
           arCustomerPhone: customerPhone || null,
           noChargeReason: comped ? trimmedNoChargeReason : null,
+          // The GUEST's TIN, where the buyer is a business reclaiming the VAT.
+          // Absent on most bills; validated in lib/fiscalSettlement, which
+          // declares nine digits or nothing.
+          customerTin: typeof customerTin === 'string' ? customerTin.trim() : null,
           // Whoever is signed into the dashboard is the one closing this bill.
           // createdByName is left alone, so the sale stays with the waiter who
           // took the table.

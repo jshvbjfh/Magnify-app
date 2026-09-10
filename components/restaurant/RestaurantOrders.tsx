@@ -177,6 +177,13 @@ export default function RestaurantOrders({
   // Payment state
   const [payingTableKey, setPayingTableKey] = useState<string | null>(null)
   const [payMethod,      setPayMethod]      = useState('Cash')
+  // The GUEST's TIN, for a business buyer who needs the receipt in the
+  // company's name to reclaim the VAT — not the restaurant's own TIN, which is
+  // on every receipt regardless. Optional, and off unless asked for: most
+  // guests are individuals with no TIN, and prompting every table would cost
+  // seconds on every bill to serve a small minority. Magnify Fiscal only.
+  const [wantsCompanyReceipt, setWantsCompanyReceipt] = useState(false)
+  const [customerTin,    setCustomerTin]    = useState('')
   const [arCustomerName, setArCustomerName] = useState('')
   // Why nothing was charged. Required before a Complementary bill can be closed.
   const [noChargeReason, setNoChargeReason] = useState('')
@@ -944,7 +951,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
     try {
       const res = await fetch(`/api/restaurant/orders/${orderId}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-        body: JSON.stringify({ action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, customerPhone: payMethod === 'Credit' ? (arCustomerPhone.trim() || null) : null, noChargeReason: payMethod === NO_CHARGE_METHOD_LABEL ? noChargeReason.trim() : null, actionKey })
+        body: JSON.stringify({ action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, customerPhone: payMethod === 'Credit' ? (arCustomerPhone.trim() || null) : null, noChargeReason: payMethod === NO_CHARGE_METHOD_LABEL ? noChargeReason.trim() : null, customerTin: wantsCompanyReceipt ? customerTin.trim() : null, actionKey })
       })
       if (!res.ok) {
         const payload = await res.json().catch(() => null)
@@ -972,7 +979,7 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
           request: {
             url: `/api/restaurant/orders/${orderId}`,
             method: 'PATCH',
-            body: { action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, customerPhone: payMethod === 'Credit' ? (arCustomerPhone.trim() || null) : null, noChargeReason: payMethod === NO_CHARGE_METHOD_LABEL ? noChargeReason.trim() : null, actionKey },
+            body: { action: 'pay', paymentMethod: payMethod, customerName: payMethod === 'Credit' ? arCustomerName.trim() : null, customerPhone: payMethod === 'Credit' ? (arCustomerPhone.trim() || null) : null, noChargeReason: payMethod === NO_CHARGE_METHOD_LABEL ? noChargeReason.trim() : null, customerTin: wantsCompanyReceipt ? customerTin.trim() : null, actionKey },
           },
           projection: {
             type: 'remove-order',
@@ -1139,6 +1146,34 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
               ))}
             </div>
           </div>
+          {isFiscalClient() && payMethod !== NO_CHARGE_METHOD_LABEL && (
+            <div>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !wantsCompanyReceipt
+                  setWantsCompanyReceipt(next)
+                  if (!next) setCustomerTin('')
+                }}
+                className={`w-full rounded-xl border px-3 py-2.5 text-sm font-medium transition-all ${wantsCompanyReceipt ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:border-blue-400'}`}
+              >
+                {wantsCompanyReceipt ? 'Company receipt — TIN below' : 'Company receipt?'}
+              </button>
+              {wantsCompanyReceipt && (
+                <>
+                  <label className="text-xs font-semibold text-gray-600 mb-1.5 mt-3 block">Customer TIN</label>
+                  <input
+                    value={customerTin}
+                    onChange={e => setCustomerTin(e.target.value.replace(/\D/g, '').slice(0, 9))}
+                    inputMode="numeric"
+                    placeholder="9 digits"
+                    className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-300 ${customerTin.length !== 9 ? 'border-red-300' : 'border-gray-300'}`}
+                  />
+                  <p className="mt-1 text-xs text-blue-700">Prints on the receipt so the company can reclaim the VAT. Leave this off for an ordinary guest.</p>
+                </>
+              )}
+            </div>
+          )}
           {payMethod === 'Credit' && (
             <div>
               <label className="text-xs font-semibold text-gray-600 mb-1.5 block">Customer / Account Name <span className="text-red-500">*</span></label>
@@ -1178,7 +1213,11 @@ ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${tem
             <button onClick={() => collectPayment(tableKey)}
               disabled={payingSaving
                 || (payMethod === 'Credit' && !arCustomerName.trim())
-                || (payMethod === NO_CHARGE_METHOD_LABEL && !noChargeReason.trim())}
+                || (payMethod === NO_CHARGE_METHOD_LABEL && !noChargeReason.trim())
+                // Asked for a company receipt but the TIN is half-typed. A
+                // nine-digit field is either complete or absent — a partial one
+                // would be declared to RRA against the wrong taxpayer.
+                || (wantsCompanyReceipt && customerTin.trim().length !== 9)}
               className={`flex-1 disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-xl ${payMethod === NO_CHARGE_METHOD_LABEL ? 'bg-purple-600 hover:bg-purple-700' : 'bg-green-500 hover:bg-green-600'}`}>
               {payingSaving ? 'Processing…' : `Confirm ${payMethod}`}
             </button>

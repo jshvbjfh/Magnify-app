@@ -121,3 +121,41 @@ describe('a fiscal build', () => {
     claim.mockRestore()
   })
 })
+
+describe("the guest's TIN", () => {
+  beforeEach(() => { process.env.RRA_FISCAL_MODE = 'on' })
+  afterEach(() => { delete process.env.RRA_FISCAL_MODE })
+
+  const settle = async (customerTin: string | null | undefined) => {
+    const db = fakeDb()
+    const claim = vi.spyOn(await import('@/lib/fiscalCounter'), 'claimFiscalReceiptNumber')
+    claim.mockResolvedValue({ typeNumber: 1, totalNumber: 1 })
+    const receipt = (await issueFiscalReceiptForSettlement(db, { ...BASE, customerTin })) as unknown as Record<string, unknown>
+    claim.mockRestore()
+    return receipt
+  }
+
+  it('declares a nine-digit TIN', async () => {
+    expect((await settle('102030405')).customerTin).toBe('102030405')
+  })
+
+  it('declares none when the guest is an ordinary individual', async () => {
+    // Most bills. RRA's own field is nullable for exactly this reason, and
+    // requiring one would stop a waiter settling a walk-in at all.
+    expect((await settle(null)).customerTin).toBeNull()
+    expect((await settle(undefined)).customerTin).toBeNull()
+    expect((await settle('  ')).customerTin).toBeNull()
+  })
+
+  it('drops anything that is not nine digits rather than declaring it', async () => {
+    // A partial or mistyped TIN attributes the purchase to the wrong taxpayer,
+    // which is worse than declaring it against an unidentified buyer.
+    for (const value of ['12345', '1020304050', '10203040A', 'RW1020304']) {
+      expect((await settle(value)).customerTin).toBeNull()
+    }
+  })
+
+  it('trims what the till sends', async () => {
+    expect((await settle(' 102030405 ')).customerTin).toBe('102030405')
+  })
+})

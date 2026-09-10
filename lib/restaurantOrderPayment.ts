@@ -40,6 +40,9 @@ export async function finalizeRestaurantOrderPayment(
     // free meal with no reason is indistinguishable from a mistake — and it is
     // the only thing the No Charge report can show about why the food went out.
     noChargeReason?: string | null
+    // The GUEST's TIN, where the buyer is a business reclaiming the VAT. Read
+    // only by the fiscal path; ignored entirely in the ordinary product.
+    customerTin?: string | null
     // Who closed the bill when that was not the waiter who took it. On a comp
     // this is the person who authorised it, which is the accountability the
     // report exists for.
@@ -194,6 +197,7 @@ export async function finalizeRestaurantOrderPayment(
     paymentMethod: normalizedPaymentMethod,
     businessDate: currentOrder.businessDate ?? paidAt,
     comped: isComped,
+    customerTin: params.customerTin ?? null,
     lines: currentOrder.items.map((item) => ({
       dishId: item.dishId,
       dishName: item.dishName,
