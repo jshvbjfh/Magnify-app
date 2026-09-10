@@ -7,6 +7,7 @@ import {
   serializeOutboxPayload,
   type SyncChangeEnvelope,
 } from '@/lib/syncOutbox'
+import { isFiscalBuild } from '@/lib/fiscalMode'
 
 type PrismaDb = PrismaClient | Prisma.TransactionClient
 
@@ -810,11 +811,19 @@ export async function applyResolvedSyncChange(db: PrismaDb, change: SyncChangeEn
       // legitimately settled bill from ever reaching the other side. What is
       // refused is only a LATER, STALER payload overwriting one that is
       // already settled here.
+      // Magnify and Magnify Fiscal are two applications built from this one
+      // source tree, so a shared file like this ships in both installers. The
+      // guard is therefore gated: it applies in the certified application and
+      // changes nothing in the ordinary one, where a paid order syncs exactly
+      // as it always has. On a non-fiscal build the lookup below does not even
+      // run.
       const settledOrderId = String(payload?.id || change.entityId)
-      const existingOrder = await db.restaurantOrder.findUnique({
-        where: { id: settledOrderId },
-        select: { status: true, _count: { select: { items: true } } },
-      })
+      const existingOrder = isFiscalBuild()
+        ? await db.restaurantOrder.findUnique({
+            where: { id: settledOrderId },
+            select: { status: true, _count: { select: { items: true } } },
+          })
+        : null
       const alreadySettled = String(existingOrder?.status ?? '').toUpperCase() === 'PAID'
 
       if (change.operation === 'delete') {

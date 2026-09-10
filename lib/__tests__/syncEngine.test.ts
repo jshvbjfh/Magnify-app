@@ -6,7 +6,7 @@
  * All external module imports (syncOutbox, accounting) are vi.mock'd.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { applyResolvedSyncChange, applyIncomingSyncChanges } from '../syncEngine'
 import type { SyncChangeEnvelope } from '../syncOutbox'
 
@@ -555,13 +555,19 @@ describe('applyResolvedSyncChange', () => {
       expect(createManyArg.data).toHaveLength(2)
     })
 
-    // ── a settled sale is finished ──────────────────────────────────────────
+    // ── a settled sale is finished (Magnify Fiscal only) ────────────────────
     //
     // Sync must not be the back door through which a declared sale changes.
     // The guard is narrow on purpose: this same function runs in both
     // directions, so a legitimately settled bill must still be able to reach
     // the other side. What is refused is a later, staler payload landing on a
     // sale that is already settled here.
+    //
+    // Gated to the certified application. Magnify and Magnify Fiscal are two
+    // installers built from one source tree, so an ungated change here would
+    // alter how the venues trading today sync their bills.
+    beforeEach(() => { process.env.RRA_FISCAL_MODE = 'on' })
+    afterEach(() => { delete process.env.RRA_FISCAL_MODE })
 
     /** An order that exists here, already paid, carrying `items` lines. */
     const settledHere = (db: ReturnType<typeof makeMockDb>, items = 2) => {
@@ -655,6 +661,32 @@ describe('applyResolvedSyncChange', () => {
       await applyResolvedSyncChange(db, change)
 
       expect(db.restaurantOrder.deleteMany).toHaveBeenCalled()
+    })
+
+    it('does none of this in the ordinary Magnify build', async () => {
+      // The gate itself. Magnify and Magnify Fiscal are two installers built
+      // from one source tree, so without this the venues trading today would
+      // have their sync behaviour changed by fiscal work. On a non-fiscal
+      // build a paid order syncs exactly as it always has — and the lookup the
+      // guard depends on never even runs.
+      delete process.env.RRA_FISCAL_MODE
+
+      const db = makeMockDb()
+      settledHere(db)
+
+      const change = makeChange('restaurantOrder', 'upsert', {
+        ...baseOrderPayload,
+        status: 'OPEN',
+        items: [
+          { id: 'item-1', dishId: 'dish-1', dishName: 'Rice', dishPrice: 25, qty: 1, kitchenStatus: 'new', status: 'ACTIVE' },
+        ],
+      }, { entityId: 'order-1' })
+
+      await applyResolvedSyncChange(db, change)
+
+      expect(db.restaurantOrder.findUnique).not.toHaveBeenCalled()
+      expect(db.restaurantOrder.upsert).toHaveBeenCalled()
+      expect(db.orderItem.deleteMany).toHaveBeenCalled()
     })
 
     it('lets a settled sale reach the other side for the first time', async () => {
