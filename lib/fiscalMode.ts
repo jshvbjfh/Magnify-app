@@ -32,6 +32,26 @@ export function isFiscalBuild(): boolean {
   return String(process.env.RRA_FISCAL_MODE ?? '').trim().toLowerCase() === 'on'
 }
 
+/**
+ * The same question, asked from the browser.
+ *
+ * `RRA_FISCAL_MODE` is a server value and simply is not present in a client
+ * bundle, which is why no screen has ever behaved differently in the fiscal
+ * application. Next inlines `NEXT_PUBLIC_*` at build time, so this one is.
+ *
+ * Both are set by the SAME build command — see `build:electron:fiscal` — so
+ * they cannot be given different answers by anyone building normally. It is
+ * still a build-time constant either way: nothing at runtime can change it,
+ * which is the property that matters.
+ *
+ * PRESENTATION ONLY. Whether a receipt is actually issued is decided by
+ * isFiscalBuild() on the server, and must never be decided here — a value
+ * inlined into a bundle is a value a determined person can edit.
+ */
+export function isFiscalClient(): boolean {
+  return String(process.env.NEXT_PUBLIC_RRA_FISCAL_MODE ?? '').trim().toLowerCase() === 'on'
+}
+
 export type FiscalConfiguration = {
   tin?: string | null
   sdcId?: string | null

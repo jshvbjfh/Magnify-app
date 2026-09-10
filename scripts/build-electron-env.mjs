@@ -32,6 +32,12 @@ const allowedKeys = [
 	// fiscal mode. A certified system must have no off switch — see
 	// lib/fiscalMode.ts. Never expose this in a settings screen.
 	'RRA_FISCAL_MODE',
+	// The same decision, in the form the browser can read. Next inlines
+	// NEXT_PUBLIC_* into the client bundle at build time, so a screen can tell
+	// which application it is running inside — the server value is not visible
+	// there. Set by the SAME build command as RRA_FISCAL_MODE precisely so the
+	// two cannot be given different answers; see build:electron:fiscal.
+	'NEXT_PUBLIC_RRA_FISCAL_MODE',
 	'OWNER_SYNC_TARGET_URL',
 	'OWNER_SYNC_EMAIL',
 	'OWNER_SYNC_SHARED_SECRET',

@@ -4,6 +4,7 @@ import { useSession } from 'next-auth/react'
 import { Search, X, ShoppingBag, CheckCircle2, Sparkles, Receipt, CreditCard, RefreshCw, ArrowLeftRight, UtensilsCrossed, ArrowLeft, Printer, ClipboardList, Ban, CircleHelp, ChefHat, Clock, Trash2 } from 'lucide-react'
 import { useRestaurantBranch, BranchBadge } from '@/contexts/RestaurantBranchContext'
 import { calculateGrossFromNet } from '@/lib/restaurantVat'
+import { isFiscalClient } from '@/lib/fiscalMode'
 import { parseRestaurantBillTemplate } from '@/lib/restaurantBillTemplate'
 import {
   RESTAURANT_OFFLINE_QUEUE_CHANGED_EVENT,
@@ -633,9 +634,65 @@ export default function RestaurantOrders({
     }
   }
 
+  /** Hands finished HTML to the thermal printer, or to a print window. */
+  function sendBillToPrinter(html: string) {
+    if (typeof window !== 'undefined' && window.electronPrinter) {
+      window.electronPrinter.printCustomerBill(html).catch(() => {})
+      return
+    }
+    const win = window.open('', '_blank', 'width=350,height=600')
+    if (!win) return
+    win.document.write(html)
+    win.document.close()
+    win.focus()
+    win.print()
+  }
+
+  /**
+   * The bill a guest asks for before paying.
+   *
+   * In Magnify Fiscal this is a PROFORMA (§11) rather than the ordinary bill:
+   * the same layout as a receipt, carrying the PROFORMA designation and
+   * watermark and the tax broken out per bracket, but unsigned — §6.3.6 says a
+   * proforma is never signed, which is why it can be produced with no Sales
+   * Data Controller present.
+   *
+   * Returns false when it could not be produced, and the caller must then
+   * print NOTHING. Falling back to the ordinary bill would put a document in a
+   * guest's hand that looks like a receipt and carries no designation, which is
+   * the exact confusion §11 exists to prevent.
+   */
+  async function printFiscalProforma(items: PendingItem[]): Promise<boolean> {
+    const orderIds = [...new Set(items.map(i => i.orderId).filter(Boolean))]
+    // One table, one bill. Several orders on a table means a merge has not
+    // happened yet, and a proforma spanning two of them would misstate both.
+    if (orderIds.length !== 1) {
+      window.alert('This table has more than one open order. Merge them before printing a proforma.')
+      return true
+    }
+
+    try {
+      const res = await fetch(
+        `/api/restaurant/fiscal/receipt?orderId=${encodeURIComponent(orderIds[0])}&type=PS&format=html`,
+        { credentials: 'include', cache: 'no-store' },
+      )
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null)
+        window.alert(payload?.error || 'Could not produce the proforma.')
+        return true
+      }
+      sendBillToPrinter(await res.text())
+      return true
+    } catch {
+      window.alert('Could not reach the till service to produce the proforma.')
+      return true
+    }
+  }
+
   async function printBill(tableKey: string) {
     const items    = pending.filter(p => (p.tableId ?? 'takeaway') === tableKey)
     if (!items.length) return
+    if (isFiscalClient() && await printFiscalProforma(items)) return
     const tName    = tableKey === 'takeaway' ? 'Takeaway' : (tables.find(t => t.id === tableKey)?.name ?? 'Table')
     const sub      = items.reduce((s, i) => s + i.dishPrice * i.qty, 0)
     const tot      = Math.round(calculateGrossFromNet(sub))
@@ -687,16 +744,7 @@ ${headerLines}
 <p class="center" style="margin-top:6px;font-size:9px;color:#888">Powered by Magnify</p>
 ${template.footer2Text ? `<div class="footer" style="white-space:pre-wrap">${template.footer2Text.split('\n').map(l => `<p class="center">${l || '&nbsp;'}</p>`).join('')}</div>` : ''}
 </body></html>`
-    if (typeof window !== 'undefined' && window.electronPrinter) {
-      window.electronPrinter.printCustomerBill(html).catch(() => {})
-      return
-    }
-    const win = window.open('', '_blank', 'width=350,height=600')
-    if (!win) return
-    win.document.write(html)
-    win.document.close()
-    win.focus()
-    win.print()
+    sendBillToPrinter(html)
   }
 
   async function voidOrder(tableKey: string) {

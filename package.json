@@ -26,7 +26,7 @@
     "build:electron:cloud": "cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=cloud node scripts/build-electron-env.mjs && cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=cloud PRISMA_FORCE_PROVIDER=postgresql npm run prisma:generate && cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=cloud next build && node scripts/copy-standalone.mjs",
     "build:electron:local": "cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=local-first node scripts/build-electron-env.mjs && cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=local-first PRISMA_FORCE_PROVIDER=sqlite npm run prisma:generate && cross-env BUILD_TARGET=electron ELECTRON_DATA_MODE=local-first DATABASE_URL=file:./dev.db next build && node scripts/copy-standalone.mjs",
     "build:electron:updater": "cross-env ELECTRON_AUTO_UPDATE=true npm run build:electron",
-    "build:electron:fiscal": "cross-env RRA_FISCAL_MODE=on ELECTRON_AUTO_UPDATE=true npm run build:electron:cloud",
+    "build:electron:fiscal": "cross-env RRA_FISCAL_MODE=on NEXT_PUBLIC_RRA_FISCAL_MODE=on ELECTRON_AUTO_UPDATE=true npm run build:electron:cloud",
     "electron:build:fiscal": "npm run clean:electron && npm run build:electron:fiscal && electron-builder --publish never -c.appId=com.magnify.restaurant.fiscal -c.productName=\"Magnify Fiscal\" -c.publish.repo=magnify-fiscal-releases",
     "clean:electron": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "start": "next start -p $PORT -H 0.0.0.0",

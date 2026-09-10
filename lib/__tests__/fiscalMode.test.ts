@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { canIssueFiscalReceipts, describeFiscalConfigurationGap, isFiscalBuild } from '@/lib/fiscalMode'
+import { canIssueFiscalReceipts, describeFiscalConfigurationGap, isFiscalBuild, isFiscalClient } from '@/lib/fiscalMode'
 
 const COMPLETE = {
   tin: '999999991',
@@ -86,5 +86,49 @@ describe('a non-fiscal build', () => {
     // asking for it must not stop them serving.
     expect(describeFiscalConfigurationGap({})).toBeNull()
     expect(canIssueFiscalReceipts({})).toBe(true)
+  })
+})
+
+describe('isFiscalClient', () => {
+  // RRA_FISCAL_MODE is a server value and is simply absent from a client
+  // bundle, which is why no screen behaved differently in the fiscal app until
+  // this existed. Next inlines NEXT_PUBLIC_* at build time; this reads that.
+  const originalPublic = process.env.NEXT_PUBLIC_RRA_FISCAL_MODE
+
+  afterEach(() => {
+    if (originalPublic === undefined) delete process.env.NEXT_PUBLIC_RRA_FISCAL_MODE
+    else process.env.NEXT_PUBLIC_RRA_FISCAL_MODE = originalPublic
+  })
+
+  it('is true only for "on"', () => {
+    process.env.NEXT_PUBLIC_RRA_FISCAL_MODE = 'on'
+    expect(isFiscalClient()).toBe(true)
+  })
+
+  it('tolerates casing and stray whitespace', () => {
+    for (const value of ['ON', ' on ', 'On']) {
+      process.env.NEXT_PUBLIC_RRA_FISCAL_MODE = value
+      expect(isFiscalClient()).toBe(true)
+    }
+  })
+
+  it('is false for anything else, including absent', () => {
+    // The safe direction: a screen that does not know it is fiscal shows the
+    // ordinary bill, rather than a half-fiscal one.
+    for (const value of ['', 'off', 'true', '1', 'yes']) {
+      process.env.NEXT_PUBLIC_RRA_FISCAL_MODE = value
+      expect(isFiscalClient()).toBe(false)
+    }
+    delete process.env.NEXT_PUBLIC_RRA_FISCAL_MODE
+    expect(isFiscalClient()).toBe(false)
+  })
+
+  it('is independent of the server flag', () => {
+    // They are set by one build command and cannot drift in practice, but they
+    // are separate reads — this pins that neither answers for the other.
+    process.env.RRA_FISCAL_MODE = 'on'
+    delete process.env.NEXT_PUBLIC_RRA_FISCAL_MODE
+    expect(isFiscalBuild()).toBe(true)
+    expect(isFiscalClient()).toBe(false)
   })
 })
