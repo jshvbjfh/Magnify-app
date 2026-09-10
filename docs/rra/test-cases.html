@@ -114,6 +114,35 @@
   .pill.todo    { background: var(--brick-bg); color: var(--brick); }
   .pill.na      { background: var(--sunk);     color: var(--muted); }
 
+  /* ── key ──────────────────────────────────────────────────────────────────
+     Read the way a map key is read: the mark, then what it means, then how
+     many carry it. An officer meeting these labels for the first time should
+     not have to infer any of the three. */
+  .keyblock { margin: 26px 0 0; border: 1px solid var(--rule-hard); background: var(--surface); }
+  .keylabel {
+    font-family: var(--f-mono); font-size: 10px;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); margin: 0;
+    padding: 10px 16px; border-bottom: 1px solid var(--rule);
+    background: var(--sunk);
+  }
+  .key { margin: 0; }
+  .keyrow {
+    display: grid; grid-template-columns: 180px 1fr;
+    gap: 16px; padding: 14px 16px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .keyrow:last-child { border-bottom: 0; }
+  .keyrow dt { margin: 0; }
+  .keyrow dd { margin: 0; font-size: 15px; color: var(--ink-soft); max-width: 62ch; }
+  .keyrow dd .count {
+    display: block; margin-top: 5px;
+    font-family: var(--f-mono); font-size: 12px; color: var(--muted);
+  }
+  @media (max-width: 620px) {
+    .keyrow { grid-template-columns: 1fr; gap: 8px; }
+  }
+
   /* ── sections ─────────────────────────────────────── */
   section { padding: 46px 0 0; }
   h2 {
@@ -202,6 +231,10 @@
        of a table is unreadable. */
     thead { display: table-header-group; }
     tr, .note, .legend, .identity, pre { break-inside: avoid; }
+    /* The key is read as one thing. A row stranded overleaf from the mark it
+       defines is the one place this document cannot afford to be split. */
+    .keyblock, .keyrow { break-inside: avoid; }
+    .keylabel { break-after: avoid; }
 
     .pill { font-size: 7.6pt; padding: 3px 6px; }
     .idcell { padding: 9px 11px; }
@@ -228,15 +261,35 @@
       <div class="idcell"><dt>Document</dt><dd>Draft 1</dd></div>
     </dl>
 
-    <div class="legend">
-      <span class="pill built">Built — ready to demonstrate</span>
-      <span class="pill part">Awaiting controller — cannot be completed without one</span>
-      <span class="pill na">Environmental</span>
+    <div class="keyblock">
+      <p class="keylabel">Key</p>
+      <dl class="key">
+        <div class="keyrow">
+          <dt><span class="pill built">Built</span></dt>
+          <dd>
+            Written, covered by test, and ready to demonstrate at the till on request.
+            <span class="count">34 of 52 requirements</span>
+          </dd>
+        </div>
+        <div class="keyrow">
+          <dt><span class="pill part">Awaiting controller</span></dt>
+          <dd>
+            Built as far as it can be, and blocked until the Authority supplies a controller, the RRA logo, an MRC, or watermark guidance.
+            <span class="count">16 of 52 requirements</span>
+          </dd>
+        </div>
+        <div class="keyrow">
+          <dt><span class="pill na">Environmental</span></dt>
+          <dd>
+            A property of the hardware Magnify is installed on, satisfied by the equipment and its certification rather than by software.
+            <span class="count">2 of 52 requirements</span>
+          </dd>
+        </div>
+      </dl>
     </div>
 
     <div class="note">
-      <p><strong>There are two states in this document, and the difference is deliberate.</strong> Thirty-four of the fifty-two requirements are <em>built</em>: reachable by an operator, and ready to demonstrate to the Authority on request. Sixteen are <em>awaiting a controller</em>. Two are properties of the machine Magnify is installed on rather than of Magnify itself.</p>
-      <p style="margin-top:10px">Nothing is listed as unfinished, because nothing is. Every requirement that could be completed without a Sales Data Controller has been completed.</p>
+      <p><strong>There is no fourth status.</strong> Every requirement that could be met without something issued by the Authority has been met.</p>
     </div>
 
     <div class="note">
