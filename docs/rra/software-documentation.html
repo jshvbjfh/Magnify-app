@@ -350,13 +350,21 @@
       </table>
     </div>
 
-    <h3>5.4 Immutability</h3>
+    <h3>5.4 The buyer's TIN</h3>
+    <p>Where the guest is a business and asks for the receipt in the company's name, the operator records the buyer's TIN at settlement. It prints on the receipt as the client identifier and is carried to the controller as <code>custTin</code>.</p>
+    <p>It is optional and no operator is prompted for it, because most guests are individuals who have none — the field in the VSDC specification is likewise nullable. A value is accepted only as nine digits: the till will not settle on a partial entry, and the server independently declines anything that is not nine digits rather than declare a purchase against a taxpayer who may not exist. This is the buyer's TIN alone; the taxpayer's own is held against the outlet and prints on every receipt regardless.</p>
+
+    <h3>5.5 Recovering an interrupted print</h3>
+    <p>Each attempt to print a receipt is recorded with the number of lines the printer confirmed. Where printing stops part-way — paper exhausted, power lost, printer offline — the till resumes the same receipt from the line reached, or reprints it where nothing reached the paper (clause 7.28).</p>
+    <p>Whether an original ever completed is recorded rather than inferred, because clause 7.18 permits one original for each sale. Where an original did complete, any further printing of that receipt is marked as a copy. Where a sale's receipt never completed, the till does not open a further sale until the matter is resolved: a sale registered without a receipt is the condition clause 7.15 forbids.</p>
+
+    <h3>5.6 Immutability</h3>
     <p>A settled bill cannot be cancelled, deleted or edited. The only means of reversing a sale is a refund receipt referencing the original, and an original may be reversed once only.</p>
 
-    <h3>5.5 Journal</h3>
+    <h3>5.7 Journal</h3>
     <p>Every receipt is recorded before it is printed. Should the journal be unwritable, or should any printed receipt be unrecorded, the till stops trading (clause 7.14).</p>
 
-    <h3>5.6 Stock</h3>
+    <h3>5.8 Stock</h3>
     <p>A receipt is not issued for goods when the recorded stock is less than the quantity requested. Service items are exempt (clause 7.30). Items whose stock has never been counted are not treated as out of stock.</p>
   </section>
 
