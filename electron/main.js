@@ -27,13 +27,23 @@ const DESKTOP_PRISMA_COMMAND_TIMEOUT_MS = 120000
 const DESKTOP_LEGACY_BASELINE_MIGRATION = '20260518090155_init'
 const DESKTOP_BRANCH_FOUNDATION_MIGRATION = '20260518090155_init'
 const DESKTOP_INVENTORY_BRANCH_SCOPED_UNIQUE_MIGRATION = '20260518090155_init'
+// A server that is going to answer answers in seconds, so the connect deadline is short:
+// a blackholed route (a carrier dropping the SYN) must not hold the manager on the splash
+// for a minute. Overshooting only costs a retry — and once the server responds the
+// deadline is dropped entirely, so a slow-but-working load is never cut off.
+const REMOTE_PROBE_TIMEOUT_MS = 5000
+const REMOTE_PROBE_RETRY_TIMEOUT_MS = 4000
+const REMOTE_LOAD_TIMEOUT_MS = 10000
+const REMOTE_RENDER_FALLBACK_MS = 30000
+const REMOTE_LOAD_AUTO_RETRIES = 2
+const REMOTE_LOAD_RETRY_DELAY_MS = 1500
 
 let desktopUpdateDeferredTimer = null
 let desktopUpdatePollInterval = null
 let desktopUpdateCheckInFlight = false
 let desktopUpdateDownloaded = false
 let offlineRetryCallback = null
-let isOfflineFallback = false
+let usingBundledFallback = false
 
 function appendStartupLog(message) {
 	try {
@@ -1235,7 +1245,7 @@ function createLoadingWindow() {
 			${loadingIconSrc ? `<img src="${loadingIconSrc}" alt="Magnify" style="width:72px;height:72px;border-radius:18px;object-fit:cover;margin-bottom:16px;box-shadow:0 10px 30px rgba(249,115,22,0.28);" />` : '<div style="font-size:48px;margin-bottom:16px">🍽️</div>'}
 			<div style="font-size:22px;font-weight:bold;margin-bottom:4px">Magnify</div>
 			<div style="font-size:13px;color:#f97316;font-weight:600;margin-bottom:16px">Restaurant</div>
-			<div style="font-size:13px;color:#9ca3af;margin-bottom:24px">Starting server, please wait...</div>
+			<div id="magnify-loading-status" style="font-size:13px;color:#9ca3af;margin-bottom:24px">Starting server, please wait...</div>
 			<div style="width:200px;height:4px;background:#374151;border-radius:4px;overflow:hidden">
 				<div style="width:40%;height:100%;background:linear-gradient(to right,#f97316,#dc2626);border-radius:4px;animation:slide 1.2s ease-in-out infinite" id="bar"></div>
 			</div>
@@ -1260,8 +1270,35 @@ function createWindow(loadUrl) {
 		autoHideMenuBar: true
 	})
 
-	mainWindow.loadURL(loadUrl)
+	const isRemote = isRemoteAppUrl(loadUrl)
+	let readyToShowFired = false
+	let contentLoaded = !isRemote
+	let windowRevealed = false
+
+	mainWindow.loadURL(loadUrl).catch(() => {})
 	mainWindow.maximize()
+
+	// A cloud load can fail or hang on a weak link — a phone hotspot, captive Wi-Fi, a
+	// carrier resolver that won't answer for the app domain — and Electron paints nothing
+	// but a blank white page when it does. Hold the splash until the page really loads,
+	// retry quietly, then say what went wrong instead of leaving an empty window.
+	if (isRemote) {
+		watchRemoteAppLoad(
+			mainWindow,
+			loadUrl,
+			() => {
+				contentLoaded = true
+				revealMainWindow()
+			},
+			() => {
+				// The failure page must be seen even if the window never painted a first
+				// frame, so reveal it without waiting on ready-to-show.
+				contentLoaded = true
+				readyToShowFired = true
+				revealMainWindow()
+			}
+		)
+	}
 
 	// Open external links (target="_blank") in the system browser, not a child Electron window —
 	// but allow same-origin popups (localhost in local-server mode, the real app domain in
@@ -1278,6 +1315,16 @@ function createWindow(loadUrl) {
 	})
 
 	mainWindow.once('ready-to-show', () => {
+		readyToShowFired = true
+		revealMainWindow()
+	})
+
+	function revealMainWindow() {
+		if (windowRevealed) return
+		if (!readyToShowFired || !contentLoaded) return
+		if (!mainWindow || mainWindow.isDestroyed()) return
+		windowRevealed = true
+
 		if (loadingWindow) {
 			loadingWindow.close()
 			loadingWindow = null
@@ -1329,8 +1376,14 @@ function createWindow(loadUrl) {
 
 		mainWindow.show()
 
+		// Say plainly which copy is running, so nobody debugs a "missing" feature that simply
+		// has not shipped into this installer yet.
+		if (usingBundledFallback) {
+			setTimeout(() => showBundledFallbackBanner(), 3500)
+		}
+
 		startDesktopUpdateChecks()
-	})
+	}
 
 	mainWindow.on('closed', () => {
 		mainWindow = null
@@ -1449,6 +1502,217 @@ function createOfflineWindow() {
 ipcMain.on('offline-retry', () => {
 	if (offlineRetryCallback) offlineRetryCallback()
 })
+
+// Ask whether the deployed copy is actually reachable, using Electron's own network stack
+// so the answer matches what the window would experience — same DNS (including secure DNS),
+// same proxy, same routes. A Node TCP probe would not: it resolves through the OS and says
+// nothing about the route the browser engine takes.
+function probeRemoteApp(url, timeoutMs) {
+	return new Promise((resolve) => {
+		let settled = false
+		let timer = null
+		const done = (result) => {
+			if (settled) return
+			settled = true
+			if (timer) clearTimeout(timer)
+			resolve(result)
+		}
+
+		try {
+			const request = require('electron').net.request({ method: 'HEAD', url })
+			timer = setTimeout(() => {
+				try { request.abort() } catch { /* already finished */ }
+				done(false)
+			}, timeoutMs)
+			request.on('response', (response) => done(response.statusCode > 0))
+			request.on('error', () => done(false))
+			request.end()
+		} catch {
+			done(false)
+		}
+	})
+}
+
+// One-line notice that the manager is on the built-in copy rather than the deployed one.
+// The data is the same live cloud database; only the app code can lag a release behind.
+function showBundledFallbackBanner() {
+	if (!mainWindow) return
+	const js = `
+		(function() {
+			if (document.getElementById('magnify-bundled-banner')) return;
+			var bar = document.createElement('div');
+			bar.id = 'magnify-bundled-banner';
+			bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#eff6ff;border-bottom:2px solid #3b82f6;padding:9px 20px;display:flex;align-items:center;justify-content:space-between;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:13px;color:#1e40af;';
+			bar.innerHTML = '<span><strong>Built-in copy</strong> — the online copy could not be reached, so Magnify is running from this computer on your live data.</span>'
+				+ '<button onclick="document.getElementById(\\'magnify-bundled-banner\\').remove()" style="margin-left:16px;padding:3px 12px;border:1px solid #3b82f6;border-radius:5px;background:#dbeafe;color:#1e40af;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">Dismiss</button>';
+			document.body.prepend(bar);
+		})();
+	`
+	mainWindow.webContents.executeJavaScript(js).catch(() => {})
+}
+
+function isRemoteAppUrl(candidateUrl) {
+	try {
+		const { protocol, hostname } = new URL(candidateUrl)
+		if (protocol !== 'http:' && protocol !== 'https:') return false
+		return hostname !== 'localhost' && hostname !== '127.0.0.1'
+	} catch {
+		return false
+	}
+}
+
+function setLoadingStatus(text) {
+	if (!loadingWindow || loadingWindow.isDestroyed()) return
+	loadingWindow.webContents
+		.executeJavaScript(`(function(){var el=document.getElementById('magnify-loading-status');if(el)el.textContent=${JSON.stringify(text)};})();`)
+		.catch(() => {})
+}
+
+// Full-screen "we couldn't reach the app" page, loaded into the main window itself so the
+// manager always sees something actionable instead of blank white. Try Again is a plain
+// link back to the app URL — no preload bridge needed — and the meta refresh keeps
+// re-checking on its own so a connection that comes back is picked up unattended.
+function buildConnectionFailureUrl(loadUrl, detail) {
+	const safeUrl = escHtml(loadUrl)
+	const safeDetail = escHtml(detail || 'Unknown network error')
+	return 'data:text/html;charset=utf-8,' + encodeURIComponent(`
+		<html>
+		<head><meta http-equiv="refresh" content="20;url=${safeUrl}"></head>
+		<body style="margin:0;background:#111827;color:#f9fafb;font-family:Segoe UI,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px;box-sizing:border-box;">
+			<div style="max-width:540px;width:100%;text-align:center;">
+				<div style="width:60px;height:60px;background:#1f2937;border:1px solid #374151;border-radius:16px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:20px;">
+					<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+						<circle cx="12" cy="12" r="9"></circle>
+						<line x1="12" y1="8" x2="12" y2="13"></line>
+						<circle cx="12" cy="16.5" r="0.9" fill="#6b7280"></circle>
+					</svg>
+				</div>
+				<div style="font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#6b7280;margin-bottom:10px;">Connection Problem</div>
+				<h1 style="font-size:24px;font-weight:700;margin:0 0 12px;line-height:1.3;">Magnify could not be reached</h1>
+				<p style="font-size:14px;color:#9ca3af;line-height:1.7;margin:0 0 20px;">This network dropped or blocked the connection to Magnify.</p>
+				<div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:10px 14px;margin-bottom:24px;font-family:Consolas,monospace;font-size:12px;color:#94a3b8;word-break:break-word;">${safeDetail}</div>
+				<a href="${safeUrl}"
+					onclick="this.style.opacity='0.6';this.textContent='Checking...';"
+					style="display:inline-block;padding:11px 32px;background:#f97316;color:#fff;border-radius:9px;font-size:14px;font-weight:600;text-decoration:none;letter-spacing:0.02em;">
+					Try Again
+				</a>
+				<div style="font-size:12px;color:#6b7280;line-height:1.7;margin-top:20px;">Retrying on its own every 20 seconds. On a phone hotspot, switching to Wi-Fi usually clears it.<br/>The Waiter App keeps working offline — tables and orders continue as normal.</div>
+			</div>
+		</body>
+		</html>
+	`)
+}
+
+// Guard a cloud (remote URL) load. Electron has no built-in error page: a failed
+// navigation just leaves the window white forever, which is what a hotspot's failing DNS
+// produced. Retry quietly first — these failures are usually transient — then show the
+// failure page, and re-arm when the manager retries from it.
+function watchRemoteAppLoad(win, loadUrl, onLoaded, onFailed) {
+	const wc = win.webContents
+	const appOrigin = (() => {
+		try { return new URL(loadUrl).origin } catch { return null }
+	})()
+	let phase = 'loading' // loading | ready | failed
+	let attempt = 0
+	let timer = null
+	// Chromium commits an error page after a failed navigation and then fires
+	// did-finish-load for it, so a finished load only counts while no failure is
+	// outstanding — otherwise the blank error page is mistaken for the real app.
+	let failurePending = false
+
+	setLoadingStatus('Connecting to Magnify...')
+
+	function clearTimer() {
+		if (timer) { clearTimeout(timer); timer = null }
+	}
+
+	// The deadline covers reaching the server only — DNS, TCP, TLS, first response. A slow
+	// link that is genuinely working must never be torn down mid-load, so the moment the
+	// server answers this is swapped for a plain reveal fallback.
+	function armTimeout() {
+		clearTimer()
+		timer = setTimeout(
+			() => handleFailure(`No response after ${Math.round(REMOTE_LOAD_TIMEOUT_MS / 1000)}s (net::ERR_TIMED_OUT)`),
+			REMOTE_LOAD_TIMEOUT_MS
+		)
+	}
+
+	function armRevealFallback() {
+		clearTimer()
+		timer = setTimeout(() => {
+			appendStartupLog('Remote app responded but never signalled ready; revealing the window anyway')
+			handleSuccess()
+		}, REMOTE_RENDER_FALLBACK_MS)
+	}
+
+	function handleSuccess() {
+		if (phase !== 'loading' || failurePending) return
+		clearTimer()
+		phase = 'ready'
+		attempt = 0
+		appendStartupLog(`Remote app loaded: ${wc.getURL() || loadUrl}`)
+		onLoaded()
+	}
+
+	function handleFailure(reason, failedUrl) {
+		if (win.isDestroyed() || phase === 'failed') return
+		clearTimer()
+		const target = failedUrl && appOrigin && failedUrl.startsWith(appOrigin) ? failedUrl : loadUrl
+		appendStartupLog(`Remote app load failed (attempt ${attempt + 1}): ${reason}`)
+
+		if (attempt < REMOTE_LOAD_AUTO_RETRIES) {
+			attempt += 1
+			phase = 'loading'
+			failurePending = true
+			setLoadingStatus(`Connection failed — retrying (${attempt + 1} of ${REMOTE_LOAD_AUTO_RETRIES + 1})...`)
+			setTimeout(() => {
+				if (win.isDestroyed() || phase !== 'loading') return
+				appendStartupLog(`Retrying remote app load: ${target}`)
+				failurePending = false
+				armTimeout()
+				wc.loadURL(target).catch(() => {})
+			}, REMOTE_LOAD_RETRY_DELAY_MS)
+			return
+		}
+
+		phase = 'failed'
+		attempt = 0
+		appendStartupLog('Remote app unreachable after retries; showing connection failure screen')
+		wc.loadURL(buildConnectionFailureUrl(target, reason)).catch(() => {})
+		onFailed()
+	}
+
+	// dom-ready lands well before did-finish-load (which waits on every subresource), so the
+	// window appears as soon as there is something real to look at. Both are safe to treat as
+	// success: an error page's own dom-ready arrives while failurePending is still set.
+	wc.on('dom-ready', handleSuccess)
+	wc.on('did-finish-load', handleSuccess)
+	wc.on('did-navigate', (_event, url, httpResponseCode) => {
+		if (phase !== 'loading' || failurePending) return
+		if (!appOrigin || !url.startsWith(appOrigin)) return
+		// A network-error commit reports no HTTP status; a real answer reports one.
+		if (!(httpResponseCode >= 200)) return
+		appendStartupLog(`Remote app responded: HTTP ${httpResponseCode}`)
+		armRevealFallback()
+	})
+	wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+		// -3 is ERR_ABORTED: a redirect or an in-app navigation replacing the current one.
+		if (!isMainFrame || errorCode === -3) return
+		handleFailure(`${errorDescription || 'Load error'} (${errorCode})`, validatedUrl)
+	})
+	wc.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
+		// Only re-arm out of the failure page: never attach a timeout to normal in-app
+		// navigation, which would tear down a working session.
+		if (!isMainFrame || phase !== 'failed') return
+		if (!appOrigin || !url.startsWith(appOrigin)) return
+		appendStartupLog(`Retrying remote app load from failure screen: ${url}`)
+		phase = 'loading'
+		failurePending = false
+		armTimeout()
+	})
+
+	armTimeout()
+}
 
 // ─── Thermal printer support ──────────────────────────────────────────────────
 
@@ -1827,6 +2091,21 @@ getAutoUpdater()?.on('update-downloaded', () => {
 })
 
 app.whenReady().then(async () => {
+	// Phone hotspots and captive Wi-Fi routinely hand out resolvers that never answer for the
+	// app domain (net::ERR_NAME_NOT_RESOLVED) while the link itself works fine — the reason
+	// the manager app opened blank on a hotspot but fine on Wi-Fi. Resolve over HTTPS through
+	// IP-literal endpoints, which need no bootstrap lookup of their own; Chromium falls back
+	// to the network's resolver when DoH is blocked, so locked-down networks still work.
+	let hostResolverStatus = 'secure DNS enabled (automatic mode via 1.1.1.1 + 8.8.8.8)'
+	try {
+		app.configureHostResolver({
+			secureDnsMode: 'automatic',
+			secureDnsServers: ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'],
+		})
+	} catch (e) {
+		hostResolverStatus = `secure DNS unavailable: ${e?.message}`
+	}
+
 	createLoadingWindow()
 
 	const appDir = path.join(__dirname, '..')
@@ -1839,6 +2118,7 @@ app.whenReady().then(async () => {
 	appendStartupLog(`App starting. appDir=${appDir}`)
 	appendStartupLog(`App version=${app.getVersion()} execPath=${process.execPath}`)
 	appendStartupLog(`App packaged=${app.isPackaged} resourcesPath=${process.resourcesPath || ''}`)
+	appendStartupLog(`Host resolver: ${hostResolverStatus}`)
 
 	function hasConfiguredGeminiKeys() {
 		return Object.entries(process.env).some(([key, value]) => /^GEMINI_API_KEY(?:S|(?:_\d+)?)?$/.test(key) && typeof value === 'string' && value.trim())
@@ -1909,52 +2189,55 @@ app.whenReady().then(async () => {
 	const electronDataMode = normalizeElectronDataMode(process.env.ELECTRON_DATA_MODE || 'cloud')
 	appendStartupLog(`Electron data mode=${electronDataMode}`)
 
-	// Probe cloud database reachability before starting the server.
-	// The cloud build uses a PostgreSQL Prisma client that cannot fall back to SQLite,
-	// so if the database is unreachable we show the offline window immediately and skip
-	// the Next.js server entirely.  The retry handler re-probes and relaunches cleanly.
+	// Cloud mode prefers the deployed copy but is never trapped by it: if that host cannot be
+	// reached, this build serves its own copy of the app against the same cloud database.
+	// The Neon probe stays informational and must not gate startup — it resolves through the
+	// OS resolver, which is what a phone hotspot breaks, so a failed probe was blocking work
+	// that both the browser engine and the bundled server can still complete. The definitive
+	// answer about the database comes later from Prisma itself during bootstrap, which falls
+	// through to the offline window when it genuinely cannot connect.
 	if (app.isPackaged && hasCloudDatabaseUrl && electronDataMode === 'cloud') {
 		const neonHostPort = parseDbHostPort(configuredDatabaseUrl)
 		if (neonHostPort) {
 			appendStartupLog(`Probing cloud database at ${neonHostPort.host}:${neonHostPort.port} (timeout 4s)`)
 			const reachable = await probeTcpConnectivity(neonHostPort.host, neonHostPort.port, 4000)
-			if (reachable) {
-				appendStartupLog('Cloud database reachable — using cloud mode')
-
-				// Cloud mode already requires live internet to reach Neon directly — it has
-				// no offline capability to preserve. Loading the real deployed app instead of
-				// spawning a local copy of the server means every business-logic fix (payments,
-				// accounting, inventory) reaches this install the moment it ships, instead of
-				// waiting on someone to notice, rebuild, and reinstall the desktop app.
-				const remoteAppUrl = String(process.env.NEXT_PUBLIC_APP_URL || '').trim() || 'https://magnify-app-tau.vercel.app'
-				appendStartupLog(`Loading remote app directly (cloud mode): ${remoteAppUrl}`)
-				createWindow(remoteAppUrl)
-				return
-			} else {
-				isOfflineFallback = true
-				appendStartupLog('Cloud database unreachable — showing offline window without starting server')
-				offlineRetryCallback = async () => {
-					appendStartupLog('Offline retry: re-probing cloud database connectivity')
-					let retryReachable = false
-					try {
-						retryReachable = await probeTcpConnectivity(neonHostPort.host, neonHostPort.port, 4000)
-					} catch { /* ignore probe errors */ }
-					appendStartupLog(`Offline retry: probe result=${retryReachable}`)
-					if (!retryReachable) {
-						appendStartupLog('Offline retry: still unreachable')
-						createOfflineWindow()
-						return
-					}
-					appendStartupLog('Offline retry: database reachable — relaunching app')
-					app.relaunch()
-					app.exit(0)
-				}
-				createOfflineWindow()
-				return
-			}
+			appendStartupLog(
+				reachable
+					? 'Cloud database reachable'
+					: 'Cloud database probe failed (system resolver or blocked port) — continuing to the remote load anyway'
+			)
 		} else {
 			appendStartupLog('Could not parse cloud database host — proceeding with cloud mode')
 		}
+
+		// Loading the real deployed app instead of spawning a local copy of the server means
+		// every business-logic fix (payments, accounting, inventory) reaches this install the
+		// moment it ships, instead of waiting on someone to notice, rebuild, and reinstall.
+		// That is a preference, not a requirement: this build ships the whole app, so when the
+		// deployed copy cannot be reached — a carrier blackholing the host's IPs on a phone
+		// hotspot, a blocked network, a bad route — the manager must still get a working app
+		// instead of an error. The database is a separate host and is usually still reachable,
+		// so the built-in copy runs against the same live data.
+		const remoteAppUrl = String(process.env.NEXT_PUBLIC_APP_URL || '').trim() || 'https://magnify-app-tau.vercel.app'
+		appendStartupLog(`Probing deployed app at ${remoteAppUrl} (timeout ${REMOTE_PROBE_TIMEOUT_MS}ms)`)
+		let remoteReachable = await probeRemoteApp(remoteAppUrl, REMOTE_PROBE_TIMEOUT_MS)
+		if (!remoteReachable) {
+			appendStartupLog('Deployed app did not answer; probing once more before falling back')
+			setLoadingStatus('Connection slow, checking again...')
+			remoteReachable = await probeRemoteApp(remoteAppUrl, REMOTE_PROBE_RETRY_TIMEOUT_MS)
+		}
+
+		if (remoteReachable) {
+			appendStartupLog(`Loading remote app directly (cloud mode): ${remoteAppUrl}`)
+			createWindow(remoteAppUrl)
+			return
+		}
+
+		usingBundledFallback = true
+		appendStartupLog('Deployed app unreachable — starting the built-in copy against the cloud database')
+		setLoadingStatus('Starting the built-in copy...')
+		// Deliberately no early return: fall through to the bundled server startup below,
+		// which serves this build's own app on localhost against the same DATABASE_URL.
 	}
 
 	const shouldUseLocalDatabase = !hasCloudDatabaseUrl || (app.isPackaged && electronDataMode !== 'cloud')
@@ -2384,6 +2667,15 @@ app.whenReady().then(async () => {
 
 	if (!fs.existsSync(standaloneServer)) {
 		clearTimeout(startupTimeout)
+		if (usingBundledFallback) {
+			// Only here because the deployed copy was unreachable. With no bundled server to
+			// fall back to there is nothing left to run, so explain it and offer a retry
+			// rather than quitting silently on the manager.
+			appendStartupLog(`Bundled server missing at ${standaloneServer}; showing the offline window`)
+			offlineRetryCallback = () => { app.relaunch(); app.exit(0) }
+			createOfflineWindow()
+			return
+		}
 		if (loadingWindow) { loadingWindow.close(); loadingWindow = null }
 		dialog.showErrorBox('Startup Error', `Standalone server not found at:\n${standaloneServer}\n\nPlease rebuild the application.`)
 		app.quit()
